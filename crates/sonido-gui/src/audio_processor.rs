@@ -192,7 +192,7 @@ impl AudioProcessor {
         self.bypass_fade.set_target(bypass_target);
 
         for i in 0..frames {
-            let (in_l, in_r) = if use_file {
+            let (mut in_l, mut in_r) = if use_file {
                 // Drain mic input to keep the ring buffer from overflowing
                 for _ in 0..self.in_ch {
                     let _ = self.input_rx.try_recv();
@@ -212,6 +212,14 @@ impl AudioProcessor {
                     (s, s)
                 }
             };
+
+            // This should fix the issue with the signal feedback.
+            if !in_l.is_finite() {
+                in_l = 0.0;
+            }
+            if !in_r.is_finite() {
+                in_r = 0.0;
+            }
 
             let mut l = in_l * ig;
             let mut r = in_r * ig;

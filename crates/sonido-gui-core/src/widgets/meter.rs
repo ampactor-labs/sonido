@@ -46,6 +46,16 @@ impl LevelMeter {
         }
     }
 
+    fn peak_level_to_color(level: f32) -> Color32 {
+        if level > 0.95 {
+            Color32::from_rgb(255, 100, 100) // Bright Red
+        } else if level > 0.7 {
+            Color32::from_rgb(255, 230, 100) // Bright Yellow
+        } else {
+            Color32::from_rgb(120, 230, 120) // Bright Green
+        }
+    }
+
     fn level_to_color(level: f32) -> Color32 {
         if level > 0.95 {
             Color32::from_rgb(220, 60, 60) // Red - clipping
@@ -122,37 +132,33 @@ impl Widget for LevelMeter {
                 }
             } else {
                 // Vertical meter (default)
-                // RMS bar (main level) - grows from bottom
                 let rms_height = (self.rms.min(1.0) * inner.height()).max(0.0);
+                let peak_height = (self.peak.min(1.0) * inner.height()).max(0.0);
+
+                // RMS bar
                 if rms_height > 0.0 {
                     let rms_rect = Rect::from_min_max(
                         pos2(inner.left(), inner.bottom() - rms_height),
                         inner.max,
                     );
-
-                    // Draw segmented meter for visual appeal
-                    let segment_height = 3.0;
-                    let gap = 1.0;
-                    let mut y = rms_rect.bottom();
-                    while y > rms_rect.top() {
-                        let seg_top = (y - segment_height).max(rms_rect.top());
-                        let level = 1.0 - (seg_top - inner.top()) / inner.height();
-                        let color = Self::level_to_color(level);
-                        painter.rect_filled(
-                            Rect::from_min_max(pos2(inner.left(), seg_top), pos2(inner.right(), y)),
-                            0.0,
-                            color,
-                        );
-                        y -= segment_height + gap;
-                    }
+                    painter.rect_filled(rms_rect, 1.0, Self::level_to_color(self.rms));
                 }
 
-                // Peak indicator line
+                // Peak bar (on top of RMS)
+                if peak_height > rms_height {
+                    let peak_rect = Rect::from_min_max(
+                        pos2(inner.left(), inner.bottom() - peak_height),
+                        pos2(inner.right(), inner.bottom() - rms_height),
+                    );
+                    painter.rect_filled(peak_rect, 1.0, Self::peak_level_to_color(self.peak));
+                }
+
+                // Peak indicator line (thin hold line)
                 if self.peak > 0.01 {
                     let peak_y = inner.bottom() - (self.peak.min(1.0) * inner.height());
                     painter.line_segment(
                         [pos2(inner.left(), peak_y), pos2(inner.right(), peak_y)],
-                        Stroke::new(2.0, Color32::WHITE),
+                        Stroke::new(1.0, Color32::WHITE.gamma_multiply(0.5)),
                     );
                 }
 

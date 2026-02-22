@@ -20,6 +20,7 @@ use clack_plugin::stream::{InputStream, OutputStream};
 use clack_plugin::utils::Cookie;
 use raw_window_handle::HasRawWindowHandle;
 use std::io::{Read, Write};
+use std::sync::{Arc, Mutex};
 
 /// Main-thread state for a sonido CLAP plugin.
 ///
@@ -32,7 +33,7 @@ pub struct SonidoMainThread<'a> {
     /// DPI scale factor from the host (default 1.0).
     scale: f64,
     /// Active editor window (dropped to close).
-    editor: Option<SonidoEditor>,
+    editor: Option<Arc<Mutex<SonidoEditor>>>,
 }
 
 impl<'a> SonidoMainThread<'a> {
@@ -243,7 +244,7 @@ impl PluginGuiImpl for SonidoMainThread<'_> {
     }
 
     fn can_resize(&mut self) -> bool {
-        false
+        true
     }
 
     fn set_parent(&mut self, window: Window) -> Result<(), PluginError> {
@@ -252,7 +253,8 @@ impl PluginGuiImpl for SonidoMainThread<'_> {
 
         // Bitwig expects the child window to exist after set_parent.
         // Create the editor immediately rather than deferring to show().
-        self.editor = SonidoEditor::open(rwh, self.shared.clone(), self.scale);
+        self.editor = SonidoEditor::open(rwh, self.shared.clone(), self.scale)
+            .map(|editor| Arc::new(Mutex::new(editor)));
 
         if self.editor.is_none() {
             return Err(PluginError::Message("Failed to open editor window"));
@@ -270,12 +272,49 @@ impl PluginGuiImpl for SonidoMainThread<'_> {
         Ok(())
     }
 
-    fn set_size(&mut self, _size: GuiSize) -> Result<(), PluginError> {
-        Ok(()) // fixed size, reject host resize commands
+    fn set_size(&mut self, size: GuiSize) -> Result<(), PluginError> {
+        if let Some(editor) = &self.editor {
+            let mut editor = editor.lock().unwrap();
+            // Use baseview's resize method to change the window size
+            editor._window.resize(size.width, size.height)?;
+        }
+        Ok(())
     }
 
-    fn set_transient(&mut self, _window: Window) -> Result<(), PluginError> {
-        Ok(()) // embedded only, no floating window support
+    fn adjust_size(&mut self, size: GuiSize) -> Result<GuiSize, PluginError> {
+        let hints = self.get_resize_hints().unwrap_or_default();
+        let mut adjusted = size;
+
+        if adjusted.width < hints.min_width {
+            adjusted.width = hints.min_width;
+        }
+        if adjusted.height < hints.min_height {
+            adjusted.height = hints.min_height;
+        }
+
+        if adjusted.width > hints.max_width {
+            adjusted.width = hints.max_width;
+        }
+        if adjusted.height > hints.max_height {
+            adjusted.height = hints.max_height;
+        }
+
+        // Apply the adjusted size if it changed
+        if adjusted != size {
+            self.set_size(adjusted)?;
+        }
+
+        Ok(adjusted)
+    }
+
+    fn get_resize_hints(&mut self) -> Option<ResizeHints> {
+        Some(ResizeHints {
+            min_width: MIN_WIDTH,
+            min_height: MIN_HEIGHT,
+            max_width: u32::MAX,
+            max_height: u32::MAX,
+            aspect_locked: false,
+        })
     }
 }
 

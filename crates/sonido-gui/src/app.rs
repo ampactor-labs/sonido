@@ -254,7 +254,7 @@ impl SonidoApp {
 
             // Apply preset selection after borrow ends
             if let Some(idx) = selected_preset {
-                self.preset_manager.select(idx, &*self.bridge);
+                self.apply_preset(idx);
             }
 
             ui.add_space(8.0);
@@ -309,6 +309,44 @@ impl SonidoApp {
         });
     }
 
+    /// Reconfigures the app to use a new preset.
+    ///
+    /// This is a "hard" reset: it stops audio, rebuilds the parameter bridge
+    /// and effect chain from the preset, and restarts audio. This ensures the
+    /// chain exactly matches the preset, adding and removing effects as needed.
+    fn apply_preset(&mut self, preset_idx: usize) {
+        if preset_idx >= self.preset_manager.presets().len() {
+            return;
+        }
+
+        // Set the preset as current in the manager.
+        self.preset_manager.select(preset_idx, &*self.bridge);
+
+        let preset = self.preset_manager.current().unwrap().preset.clone();
+        let effect_ids: Vec<&'static str> = preset
+            .effects
+            .iter()
+            .filter_map(|config| self.registry.get(&config.effect_type).map(|desc| desc.id))
+            .collect();
+
+        // 1. Stop audio
+        self.stop_audio();
+
+        // 2. Create and configure a new bridge for the preset's chain
+        let new_bridge =
+            Arc::new(AtomicParamBridge::new(&self.registry, &effect_ids, self.sample_rate));
+        crate::preset_manager::preset_to_params(&preset, &*new_bridge);
+
+        // 3. Swap in the new bridge
+        self.bridge = new_bridge;
+        self.chain_view.set_bridge(Arc::clone(&self.bridge));
+
+        // 4. Restart audio with the new chain
+        if let Err(e) = self.start_audio() {
+            self.audio_error = Some(e);
+        }
+    }
+
     /// Render the I/O section with meters and gain controls.
     fn render_io_section(&mut self, ui: &mut egui::Ui) {
         ui.group(|ui| {
@@ -335,8 +373,8 @@ impl SonidoApp {
                 let mut gain_val = input_gain.get();
                 if ui
                     .add(
-                        Knob::new(&mut gain_val, -20.0, 20.0, "GAIN")
-                            .default(0.0)
+                        Knob::new(&mut gain_val, input_gain.min(), input_gain.max(), "GAIN")
+                            .default(-120.0)
                             .format_db()
                             .diameter(50.0),
                     )

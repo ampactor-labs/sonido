@@ -35,6 +35,13 @@ impl ChainView {
         }
     }
 
+    pub fn set_bridge(&mut self, bridge: Arc<AtomicParamBridge>) {
+        self.bridge = bridge;
+        self.selected = None;
+        self.dragging = None;
+        self.drag_offset = 0.0;
+    }
+
     /// Get the currently selected slot index.
     pub fn selected(&self) -> Option<SlotIndex> {
         self.selected
@@ -60,11 +67,6 @@ impl ChainView {
         self.pending_remove.take()
     }
 
-    /// Render the chain view.
-    ///
-    /// Returns the currently selected slot index (if any). The caller should
-    /// also poll [`take_pending_add`](Self::take_pending_add) and
-    /// [`take_pending_remove`](Self::take_pending_remove) for user actions.
     pub fn ui(
         &mut self,
         ui: &mut Ui,
@@ -120,6 +122,22 @@ impl ChainView {
 
                     let is_selected = self.selected == Some(slot_idx);
                     let is_bypassed = bridge.is_bypassed(slot_idx);
+                    let is_being_dragged = self.dragging == Some(pos);
+
+                    // Drop target indicator
+                    if self.dragging.is_some() && !is_being_dragged {
+                        if let Some(pointer_pos) = ui.input(|i| i.pointer.latest_pos()) {
+                            let (pedal_rect, _) =
+                                ui.allocate_exact_size(vec2(effect_width, 50.0), Sense::hover());
+                            if pedal_rect.contains(pointer_pos) {
+                                ui.painter().rect_filled(
+                                    pedal_rect.expand(2.0),
+                                    6.0,
+                                    Color32::from_white_alpha(30),
+                                );
+                            }
+                        }
+                    }
 
                     let (response, close_clicked) = self.effect_pedal(
                         ui,
@@ -128,6 +146,7 @@ impl ChainView {
                         is_bypassed,
                         slot_idx,
                         bridge,
+                        is_being_dragged,
                     );
 
                     // Close button → remove; otherwise click → select
@@ -157,29 +176,13 @@ impl ChainView {
                         self.dragging = Some(pos);
                     }
 
-                    // Handle drag — insert-at-position semantics
-                    if self.dragging == Some(pos) && response.dragged() {
-                        let delta = response.drag_delta().x;
-                        self.drag_offset += delta;
-
-                        let step = effect_width + spacing + arrow_width;
-                        let steps = (self.drag_offset / step).round() as isize;
-                        if steps != 0 {
-                            let new_pos = (pos as isize + steps)
-                                .clamp(0, visible.len() as isize - 1)
-                                as usize;
-                            if new_pos != pos {
-                                self.bridge.move_effect(pos, new_pos);
-                                self.dragging = Some(new_pos);
-                                self.drag_offset -= steps as f32 * step;
+                    // On drop, move the effect
+                    if let Some(dragged_pos) = self.dragging {
+                        if response.hovered() && ui.input(|i| i.pointer.any_released()) {
+                            if dragged_pos != pos {
+                                self.bridge.move_effect(dragged_pos, pos);
                             }
                         }
-                    }
-
-                    // Handle drag end
-                    if response.drag_stopped() {
-                        self.dragging = None;
-                        self.drag_offset = 0.0;
                     }
 
                     // Arrow between effects (except last)
@@ -187,6 +190,13 @@ impl ChainView {
                         ui.add_space(spacing / 2.0);
                         self.draw_arrow(ui, arrow_width);
                         ui.add_space(spacing / 2.0);
+                    }
+                }
+
+                // Handle drop outside any pedal
+                if self.dragging.is_some() {
+                    if ui.input(|i| i.pointer.any_released()) {
+                        self.dragging = None;
                     }
                 }
 
@@ -198,7 +208,6 @@ impl ChainView {
 
         self.selected
     }
-
     /// Draw a single effect pedal in the chain.
     ///
     /// Returns `(response, close_clicked)` where `close_clicked` is `true`
@@ -211,6 +220,7 @@ impl ChainView {
         is_bypassed: bool,
         slot_idx: SlotIndex,
         bridge: &dyn ParamBridge,
+        is_being_dragged: bool,
     ) -> (Response, bool) {
         let size = vec2(70.0, 50.0);
         let (rect, response) = ui.allocate_exact_size(size, Sense::click_and_drag());
@@ -218,21 +228,33 @@ impl ChainView {
         if ui.is_rect_visible(rect) {
             let painter = ui.painter();
 
+            // When dragging, leave a ghost of the pedal behind
+            let alpha = if is_being_dragged { 50 } else { 255 };
+
             // Pedal body color based on state
             let body_color = if is_selected {
                 if is_bypassed {
-                    Color32::from_rgb(50, 55, 60)
+                    Color32::from_rgb(50, 55, 60).to_opaque()
                 } else {
-                    Color32::from_rgb(55, 70, 65)
+                    Color32::from_rgb(55, 70, 65).to_opaque()
                 }
             } else if is_bypassed {
-                Color32::from_rgb(35, 35, 42)
+                Color32::from_rgb(35, 35, 42).to_opaque()
             } else {
-                Color32::from_rgb(45, 55, 52)
+                Color32::from_rgb(45, 55, 52).to_opaque()
             };
 
             // Draw pedal body
-            painter.rect_filled(rect, 6.0, body_color);
+            painter.rect_filled(
+                rect,
+                6.0,
+                Color32::from_rgba_premultiplied(
+                    body_color.r(),
+                    body_color.g(),
+                    body_color.b(),
+                    alpha,
+                ),
+            );
 
             // Border (highlighted if selected)
             let border_color = if is_selected {
@@ -243,7 +265,15 @@ impl ChainView {
             painter.rect_stroke(
                 rect,
                 6.0,
-                Stroke::new(if is_selected { 2.0 } else { 1.0 }, border_color),
+                Stroke::new(
+                    if is_selected { 2.0 } else { 1.0 },
+                    Color32::from_rgba_premultiplied(
+                        border_color.r(),
+                        border_color.g(),
+                        border_color.b(),
+                        alpha,
+                    ),
+                ),
                 StrokeKind::Inside,
             );
 
@@ -254,10 +284,23 @@ impl ChainView {
             } else {
                 Color32::from_rgb(40, 50, 40)
             };
-            painter.circle_filled(led_pos, 4.0, led_color);
+            painter.circle_filled(
+                led_pos,
+                4.0,
+                Color32::from_rgba_premultiplied(led_color.r(), led_color.g(), led_color.b(), alpha),
+            );
             if !is_bypassed {
                 // Glow effect
-                painter.circle_filled(led_pos, 7.0, led_color.gamma_multiply(0.25));
+                painter.circle_filled(
+                    led_pos,
+                    7.0,
+                    Color32::from_rgba_premultiplied(
+                        led_color.r(),
+                        led_color.g(),
+                        led_color.b(),
+                        if is_being_dragged { 0 } else { 64 },
+                    ),
+                );
             }
 
             // Effect name
@@ -271,21 +314,16 @@ impl ChainView {
                 egui::Align2::CENTER_CENTER,
                 short_name,
                 egui::FontId::proportional(11.0),
-                text_color,
+                Color32::from_rgba_premultiplied(
+                    text_color.r(),
+                    text_color.g(),
+                    text_color.b(),
+                    alpha,
+                ),
             );
 
-            // Drag indicator
-            if self.dragging.is_some() && response.hovered() {
-                painter.rect_stroke(
-                    rect.expand(2.0),
-                    8.0,
-                    Stroke::new(2.0, Color32::from_rgb(100, 180, 255).gamma_multiply(0.5)),
-                    StrokeKind::Outside,
-                );
-            }
-
             // "×" close button on hover
-            if response.hovered() {
+            if response.hovered() && !is_being_dragged {
                 painter.text(
                     pos2(rect.right() - 8.0, rect.top() + 8.0),
                     egui::Align2::CENTER_CENTER,
@@ -308,7 +346,7 @@ impl ChainView {
         }
 
         let response = response
-            .on_hover_text("Click: select | Double-click: bypass | X: remove | Right-click: menu");
+            .on_hover_text("Click: select | Double-click: bypass | Drag: reorder | X: remove");
         (response, close_clicked)
     }
 

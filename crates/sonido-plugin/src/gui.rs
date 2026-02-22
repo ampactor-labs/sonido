@@ -24,11 +24,17 @@ use crate::shared::SonidoShared;
 
 // ── Fixed window size ──────────────────────────────────────────────────────────
 
-/// Plugin window width in logical pixels.
+/// Plugin window width in logical pixels (default).
 pub const PLUGIN_WIDTH: u32 = 480;
 
-/// Plugin window height in logical pixels.
+/// Plugin window height in logical pixels (default).
 pub const PLUGIN_HEIGHT: u32 = 380;
+
+/// Minimum plugin window width in logical pixels.
+pub const MIN_WIDTH: u32 = 320;
+
+/// Minimum plugin window height in logical pixels.
+pub const MIN_HEIGHT: u32 = 240;
 
 // ── Parameter bridge ──────────────────────────────────────────────────────────
 
@@ -126,7 +132,7 @@ unsafe impl HasRawWindowHandle for ParentWindow {
 /// Dropping this value closes the plugin GUI window (baseview `WindowHandle`
 /// cleanup is handled on drop).
 pub struct SonidoEditor {
-    _window: WindowHandle,
+    window: Arc<Mutex<WindowHandle>>,
 }
 
 impl SonidoEditor {
@@ -169,6 +175,6 @@ impl SonidoEditor {
             },
         );
 
-        Some(Self { _window: window })
+        Some(Self { window: Arc::new(Mutex::new(window)) })
     }
 }

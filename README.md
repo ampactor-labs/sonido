@@ -6,13 +6,12 @@ Production-grade DSP library in Rust for audio effects, plugins, and embedded sy
 
 - **19 audio effects**: distortion, compressor, limiter, chorus, delay, filter, vibrato, tape saturation, bitcrusher, preamp, reverb, tremolo, gate, flanger, phaser, ring modulator, wah, parametric EQ, stage (utility)
 - **Synthesis engine**: Oscillators with PolyBLEP anti-aliasing, ADSR envelopes, voice management, modulation matrix
-- **Cross-frequency coupling analysis**: Phase-amplitude coupling (PAC) for biosignal research (EEG, electric fish, etc.)
-- **CLAP audio plugins**: 19 CLAP effect plugins for use in any DAW (Bitwig, Reaper, etc.)
-- **no_std compatible**: Core primitives work on embedded targets (Daisy Seed, Hothouse pedal) without heap allocation
+- **CLAP audio plugins**: 19 CLAP effect plugins for use in any DAW that supports CLAP (FL Studio, Bitwig, Reaper, etc.) *VST3 coming soon.
+- **no_std compatible**: Core primitives work on embedded targets (Daisy Seed) without heap allocation
 - **Stereo-first processing**: True stereo effects with decorrelated L/R, backwards-compatible mono API
 - **Real-time audio I/O**: Process live audio via the CLI or GUI
-- **Professional GUI**: egui-based interface with real-time metering, preset management, and drag-and-drop effect chaining
-- **Spectral analysis toolkit**: FFT-based tools for reverse engineering hardware effects
+- **Standalone GUI**: egui-based interface with real-time metering, preset management, and drag-and-drop effect chaining
+- **Spectral analysis toolkit**: FFT-based tools for analyzing, decomposing, and reverse-engineering
 - **Zero-cost effect chaining**: Build complex signal chains with static or dynamic composition
 - **Parameter smoothing**: Click-free automation with exponential and linear smoothing
 - **Tempo sync**: Musical note divisions for tempo-synchronized effects

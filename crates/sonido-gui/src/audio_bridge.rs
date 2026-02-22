@@ -124,7 +124,7 @@ impl AudioBridge {
         let (command_tx, command_rx) = unbounded();
         let (transport_tx, transport_rx) = unbounded();
         Self {
-            input_gain: Arc::new(AtomicParam::new(0.0, -20.0, 20.0)),
+            input_gain: Arc::new(AtomicParam::new(-120.0, -120.0, 20.0)),
             master_volume: Arc::new(AtomicParam::new(0.0, -40.0, 6.0)),
             running: Arc::new(AtomicBool::new(false)),
             metering_tx,
