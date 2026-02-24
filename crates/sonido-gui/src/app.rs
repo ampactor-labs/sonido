@@ -139,7 +139,7 @@ impl SonidoApp {
             preset_manager: PresetManager::new(),
             cached_panel: None,
             sample_rate: 48000.0,
-            buffer_size: 2048,  // Default buffer size
+            buffer_size: 2048, // Default buffer size
             cpu_usage: 0.0,
             audio_error: None,
             cpu_history: Vec::with_capacity(60),
@@ -250,21 +250,27 @@ impl SonidoApp {
             // Find closest valid size by absolute difference
             valid_sizes
                 .iter()
-                .min_by_key(|&s| {
-                    (*s).abs_diff(size)
-                })
+                .min_by_key(|&s| (*s).abs_diff(size))
                 .copied()
                 .unwrap_or(2048)
         };
 
         if clamped_size != size {
-            log::warn!("Requested buffer size {} not in valid set, using {}", size, clamped_size);
+            log::warn!(
+                "Requested buffer size {} not in valid set, using {}",
+                size,
+                clamped_size
+            );
         }
 
         self.buffer_size = clamped_size;
         self.stop_audio();
         if let Err(e) = self.start_audio() {
-            log::error!("Failed to restart audio with buffer size {}: {}", clamped_size, e);
+            log::error!(
+                "Failed to restart audio with buffer size {}: {}",
+                clamped_size,
+                e
+            );
         }
     }
 
@@ -281,11 +287,46 @@ impl SonidoApp {
     /// based on the current sample rate.
     pub fn get_buffer_presets(&self) -> Vec<(usize, String, f32)> {
         vec![
-            (256, format!("Low Latency (256 samples, {:.1}ms)", 256.0 / self.sample_rate * 1000.0), 256.0 / self.sample_rate * 1000.0),
-            (512, format!("Very Low (512 samples, {:.1}ms)", 512.0 / self.sample_rate * 1000.0), 512.0 / self.sample_rate * 1000.0),
-            (1024, format!("Balanced (1024 samples, {:.1}ms)", 1024.0 / self.sample_rate * 1000.0), 1024.0 / self.sample_rate * 1000.0),
-            (2048, format!("Stable (2048 samples, {:.1}ms)", 2048.0 / self.sample_rate * 1000.0), 2048.0 / self.sample_rate * 1000.0),
-            (4096, format!("Maximum (4096 samples, {:.1}ms)", 4096.0 / self.sample_rate * 1000.0), 4096.0 / self.sample_rate * 1000.0),
+            (
+                256,
+                format!(
+                    "Low Latency (256 samples, {:.1}ms)",
+                    256.0 / self.sample_rate * 1000.0
+                ),
+                256.0 / self.sample_rate * 1000.0,
+            ),
+            (
+                512,
+                format!(
+                    "Very Low (512 samples, {:.1}ms)",
+                    512.0 / self.sample_rate * 1000.0
+                ),
+                512.0 / self.sample_rate * 1000.0,
+            ),
+            (
+                1024,
+                format!(
+                    "Balanced (1024 samples, {:.1}ms)",
+                    1024.0 / self.sample_rate * 1000.0
+                ),
+                1024.0 / self.sample_rate * 1000.0,
+            ),
+            (
+                2048,
+                format!(
+                    "Stable (2048 samples, {:.1}ms)",
+                    2048.0 / self.sample_rate * 1000.0
+                ),
+                2048.0 / self.sample_rate * 1000.0,
+            ),
+            (
+                4096,
+                format!(
+                    "Maximum (4096 samples, {:.1}ms)",
+                    4096.0 / self.sample_rate * 1000.0
+                ),
+                4096.0 / self.sample_rate * 1000.0,
+            ),
         ]
     }
 
@@ -586,12 +627,23 @@ impl SonidoApp {
 
             // Buffer size selector
             let presets = self.get_buffer_presets();
-            let preset_names: Vec<String> = presets.iter().map(|(_, desc, _)| desc.to_string()).collect();
-            let current_idx = presets.iter().position(|&(size, _, _)| size == self.buffer_size).unwrap_or(2); // Default to "Stable"
+            let preset_names: Vec<String> = presets
+                .iter()
+                .map(|(_, desc, _)| desc.to_string())
+                .collect();
+            let current_idx = presets
+                .iter()
+                .position(|&(size, _, _)| size == self.buffer_size)
+                .unwrap_or(2); // Default to "Stable"
 
             let mut selected_preset = None;
             egui::ComboBox::from_id_salt("buffer_size_selector")
-                .selected_text(preset_names.get(current_idx).cloned().unwrap_or_else(|| "Unknown".to_string()))
+                .selected_text(
+                    preset_names
+                        .get(current_idx)
+                        .cloned()
+                        .unwrap_or_else(|| "Unknown".to_string()),
+                )
                 .width(200.0)
                 .show_ui(ui, |ui| {
                     for (idx, name) in preset_names.iter().enumerate() {
@@ -635,7 +687,11 @@ impl SonidoApp {
                 } else {
                     Color32::from_rgb(255, 200, 80) // Warning - yellow
                 };
-                ui.label(egui::RichText::new(&buffer_status_text).color(buffer_status_color).strong());
+                ui.label(
+                    egui::RichText::new(&buffer_status_text)
+                        .color(buffer_status_color)
+                        .strong(),
+                );
             }
         });
     }
@@ -719,10 +775,7 @@ fn draw_sparkline(ui: &mut egui::Ui, history: &[f32], color: Color32, width: f32
 
     if points.len() >= 2 {
         painter.extend(points.windows(2).map(|window| {
-            egui::Shape::line_segment(
-                [window[0], window[1]],
-                egui::Stroke::new(1.5, color),
-            )
+            egui::Shape::line_segment([window[0], window[1]], egui::Stroke::new(1.5, color))
         }));
     }
 

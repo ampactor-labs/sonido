@@ -225,11 +225,15 @@ impl AudioProcessor {
         // Buffer overrun detection
         if current_processing_time > max_processing_time {
             self.buffer_overrun_count += 1;
-            log::warn!("Buffer overrun detected: processing time {:.2}ms exceeded max {:.2}ms",
-                current_processing_time * 1000.0, max_processing_time * 1000.0);
+            log::warn!(
+                "Buffer overrun detected: processing time {:.2}ms exceeded max {:.2}ms",
+                current_processing_time * 1000.0,
+                max_processing_time * 1000.0
+            );
 
             // Simple recovery: reduce processing load by bypassing effects temporarily
-            if self.buffer_overrun_count > 3 { // Only after multiple overruns
+            if self.buffer_overrun_count > 3 {
+                // Only after multiple overruns
                 log::warn!("Multiple overruns detected, temporarily bypassing effects");
                 self.chain_bypass.store(true, Ordering::Relaxed);
                 self.bypass_fade.set_target(0.0);

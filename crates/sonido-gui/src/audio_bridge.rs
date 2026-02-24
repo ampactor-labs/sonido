@@ -209,7 +209,12 @@ impl AudioBridge {
     /// - 0: Good (processing time < 50% of buffer duration, CPU < 80%)
     /// - 1: Warning (processing time 50-75% of buffer duration, CPU 80-90%)
     /// - 2: Critical (processing time > 75% of buffer duration, CPU > 90%)
-    pub fn get_buffer_status(&self, cpu_usage: f32, processing_time_ms: f32, sample_rate: f32) -> u8 {
+    pub fn get_buffer_status(
+        &self,
+        cpu_usage: f32,
+        processing_time_ms: f32,
+        sample_rate: f32,
+    ) -> u8 {
         let buffer_duration_ms = self.get_buffer_duration_ms(sample_rate);
         let processing_ratio = processing_time_ms / buffer_duration_ms;
 
@@ -225,25 +230,31 @@ impl AudioBridge {
     /// Get buffer health recommendations based on current status.
     ///
     /// Returns a tuple of (recommendation_text, suggested_action).
-    pub fn get_buffer_recommendations(&self, status: u8, _cpu_usage: f32, _processing_time_ms: f32, sample_rate: f32) -> (&'static str, &'static str) {
+    pub fn get_buffer_recommendations(
+        &self,
+        status: u8,
+        _cpu_usage: f32,
+        _processing_time_ms: f32,
+        sample_rate: f32,
+    ) -> (&'static str, &'static str) {
         let _buffer_duration_ms = self.get_buffer_duration_ms(sample_rate);
 
         match status {
             0 => (
                 "Buffer performance is optimal",
-                "No action needed - buffer configuration is working well"
+                "No action needed - buffer configuration is working well",
             ),
             1 => (
                 "Buffer performance is approaching limits",
-                "Consider increasing buffer size or reducing effect load"
+                "Consider increasing buffer size or reducing effect load",
             ),
             2 => (
                 "Buffer performance is critical - audio may stutter",
-                "Increase buffer size immediately or reduce effects"
+                "Increase buffer size immediately or reduce effects",
             ),
             _ => (
                 "Unknown buffer status",
-                "Check system performance and adjust settings"
+                "Check system performance and adjust settings",
             ),
         }
     }
