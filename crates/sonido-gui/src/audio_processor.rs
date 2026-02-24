@@ -110,8 +110,6 @@ pub(crate) struct AudioProcessor {
     buffer_status: u8,
     /// Buffer overrun alert level.
     buffer_alert_level: u8,
-    /// Adaptive processing optimization state.
-    adaptive_mode: bool,
     /// Last CPU usage measurement.
     last_cpu_usage: f32,
     /// Processing time history for trend analysis.
@@ -533,7 +531,6 @@ pub(crate) fn build_audio_streams(
         buffer_size,
         buffer_status: 0,
         buffer_alert_level: 0,
-        adaptive_mode: false,
         last_cpu_usage: 0.0,
         processing_time_history: Vec::with_capacity(60),
         buffer_size_history: Vec::with_capacity(60),

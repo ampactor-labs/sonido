@@ -251,8 +251,7 @@ impl SonidoApp {
             valid_sizes
                 .iter()
                 .min_by_key(|&s| {
-                    let diff = if *s > size { *s - size } else { size - *s };
-                    diff
+                    if *s > size { *s - size } else { size - *s }
                 })
                 .copied()
                 .unwrap_or(2048)
