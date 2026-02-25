@@ -126,13 +126,9 @@ A single CLAP plugin exposing the full effect chain. Requires the DAG routing en
 
 ### Benchmark Baseline Tracking in CI
 
-**Status:** In progress
+**Status:** Complete
 
-Benchmarks run on-demand via `gh workflow run ci-manual.yml -f job=bench`.
-Criterion JSON and bencher-format text stored as CI artifacts (90-day retention).
-Baseline captures: per-effect block processing at 64/128/256/512/1024 samples,
-chain processing at 4 effects, oversampled distortion. Next step: `critcmp`
-comparison between baselines.
+Benchmarks run on-demand via `gh workflow run ci-manual.yml -f job=bench` across all 4 crates (core, effects, synth, analysis). Criterion JSON stored as CI artifacts (90-day retention) and cached via `actions/cache` for cross-run comparison. `critcmp` compares the cached baseline against the current run, producing a `bench-comparison.txt` artifact. No regression gate — reporting only for human review.
 
 ---
 

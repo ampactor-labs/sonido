@@ -41,11 +41,42 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
+      - name: Restore criterion baseline cache
+        id: bench-cache
+        uses: actions/cache@v4
+        with:
+          path: target/criterion
+          key: bench-baseline-${{ github.sha }}
+          restore-keys: |
+            bench-baseline-
+
+      - name: Rename previous baseline for comparison
+        if: steps.bench-cache.outputs.cache-hit == 'true'
+        run: |
+          # Rename cached "current" baselines to "prev" so critcmp can diff them
+          find target/criterion -type d -name "current" -exec sh -c \
+            'mv "$1" "$(dirname "$1")/prev"' _ {} \;
+
       - name: Run core benchmarks
-        run: cargo bench -p sonido-core -- --output-format bencher 2>&1 | tee target/bench-core.txt
+        run: cargo bench -p sonido-core -- --save-baseline current --output-format bencher 2>&1 | tee target/bench-core.txt
 
       - name: Run effects benchmarks
-        run: cargo bench -p sonido-effects -- --output-format bencher 2>&1 | tee target/bench-effects.txt
+        run: cargo bench -p sonido-effects -- --save-baseline current --output-format bencher 2>&1 | tee target/bench-effects.txt
+
+      - name: Run synth benchmarks
+        run: cargo bench -p sonido-synth -- --save-baseline current --output-format bencher 2>&1 | tee target/bench-synth.txt
+
+      - name: Run analysis benchmarks
+        run: cargo bench -p sonido-analysis -- --save-baseline current --output-format bencher 2>&1 | tee target/bench-analysis.txt
+
+      - name: Install critcmp
+        run: cargo install critcmp --locked
+
+      - name: Compare with previous baseline
+        if: steps.bench-cache.outputs.cache-hit == 'true'
+        run: |
+          critcmp prev current 2>&1 | tee target/bench-comparison.txt
+          echo "::notice::Benchmark comparison report generated — see artifacts"
 
       - name: Upload benchmark artifacts
         uses: actions/upload-artifact@v4
@@ -55,6 +86,9 @@ jobs:
           path: |
             target/bench-core.txt
             target/bench-effects.txt
+            target/bench-synth.txt
+            target/bench-analysis.txt
+            target/bench-comparison.txt
             target/criterion/
           retention-days: 90
 

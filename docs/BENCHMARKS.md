@@ -390,7 +390,24 @@ Criterion will show percentage improvement/regression.
 
 ## CI Benchmarks
 
-Benchmarks are not run in CI by default (too variable across runners), but you can run them locally before merging:
+Benchmarks run on-demand via manual dispatch:
+
+```bash
+gh workflow run ci-manual.yml -f job=bench
+```
+
+The CI bench job runs all 4 crates (core, effects, synth, analysis) and uses `critcmp` for cross-run comparison:
+
+1. **Restore** — `actions/cache` restores the previous `target/criterion/` baseline
+2. **Run** — Each crate's benchmarks save results with `--save-baseline current`
+3. **Compare** — `critcmp` diffs the cached baseline against the current run
+4. **Upload** — Bencher-format text, comparison report, and criterion data stored as artifacts (90-day retention)
+
+The comparison report (`bench-comparison.txt`) shows percentage changes per benchmark group. No regression gate — reporting only for human review. Cache key uses `github.sha`; GitHub LRU-evicts old entries within the 10 GB limit.
+
+### Local comparison
+
+Compare against main branch locally:
 
 ```bash
 # Compare against main branch
