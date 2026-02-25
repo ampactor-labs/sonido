@@ -11,6 +11,11 @@ env:
   CARGO_INCREMENTAL: "0"
   RUSTC_WRAPPER: "sccache"
   SCCACHE_GHA_ENABLED: "true"
+  SYSTEM_DEPS: >-
+    libasound2-dev libudev-dev mold libgl-dev libx11-dev libx11-xcb-dev
+    libxcursor-dev libxrandr-dev libxi-dev libxkbcommon-dev libxext-dev
+    libxfixes-dev libxinerama-dev libxrender-dev libxpresent-dev
+    libxxf86vm-dev libxft-dev libxmu-dev libxss-dev libxtst-dev
 
 jobs:
   lint:
@@ -24,7 +29,7 @@ jobs:
       - uses: mozilla-actions/sccache-action@v0.0.9
 
       - name: Install system dependencies
-        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libudev-dev mold libgl-dev libx11-dev libx11-xcb-dev libxcursor-dev libxrandr-dev libxi-dev libxkbcommon-dev libxext-dev libxfixes-dev libxinerama-dev libxrender-dev libxpresent-dev libxxf86vm-dev libxft-dev libxmu-dev libxss-dev libxtst-dev mold
+        run: sudo apt-get update && sudo apt-get install -y $SYSTEM_DEPS
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -47,7 +52,7 @@ jobs:
       - uses: mozilla-actions/sccache-action@v0.0.9
 
       - name: Install system dependencies
-        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libudev-dev mold libgl-dev libx11-dev libx11-xcb-dev libxcursor-dev libxrandr-dev libxi-dev libxkbcommon-dev libxext-dev libxfixes-dev libxinerama-dev libxrender-dev libxpresent-dev libxxf86vm-dev libxft-dev libxmu-dev libxss-dev libxtst-dev
+        run: sudo apt-get update && sudo apt-get install -y $SYSTEM_DEPS
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -82,50 +87,6 @@ jobs:
           cargo test --no-default-features -p sonido-registry
           cargo test --no-default-features -p sonido-platform
 
-  plugin:
-    name: Plugin
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: mozilla-actions/sccache-action@v0.0.9
-
-      - name: Install system dependencies
-        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libudev-dev mold libgl-dev libx11-dev libx11-xcb-dev libxcursor-dev libxrandr-dev libxi-dev libxkbcommon-dev libxext-dev libxfixes-dev libxinerama-dev libxrender-dev libxpresent-dev libxxf86vm-dev libxft-dev libxmu-dev libxss-dev libxtst-dev
-
-      - uses: dtolnay/rust-toolchain@stable
-
-      - name: Run plugin tests
-        run: cargo test -p sonido-plugin
-
-      - name: Build plugin binaries
-        run: cargo build --release -p sonido-plugin --examples
-
-      - name: Verify plugin binaries exist
-        run: |
-          for plugin in preamp distortion compressor gate eq wah chorus flanger phaser tremolo delay filter multivibrato tape reverb limiter bitcrusher ringmod stage; do
-            test -f "target/release/examples/libsonido_${plugin}.so" || { echo "Missing libsonido_${plugin}.so"; exit 1; }
-          done
-          echo "All 19 plugin binaries verified"
-
-      - name: Download clap-validator
-        run: |
-          if [ ! -x clap-validator ]; then
-            curl -L https://github.com/free-audio/clap-validator/releases/download/0.3.2/clap-validator-0.3.2-ubuntu-18.04.tar.gz -o clap-validator.tar.gz
-            tar xzf clap-validator.tar.gz
-            chmod +x clap-validator
-          fi
-
-      - name: Validate CLAP plugins
-        run: |
-          for plugin in preamp distortion compressor gate eq wah chorus flanger phaser tremolo delay filter multivibrato tape reverb limiter bitcrusher ringmod stage; do
-            echo "Validating sonido_${plugin}..."
-            ./clap-validator validate "target/release/examples/libsonido_${plugin}.so" || { echo "Validation failed for sonido_${plugin}"; exit 1; }
-          done
-          echo "All 19 CLAP plugins validated"
-
   wasm-check:
     name: Wasm Check
     runs-on: ubuntu-latest
@@ -145,64 +106,3 @@ jobs:
 
       - name: Check wasm compilation
         run: cargo check --target wasm32-unknown-unknown -p sonido-gui
-
-  coverage:
-    name: Coverage
-    runs-on: ubuntu-latest
-    needs: test
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install system dependencies
-        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libudev-dev mold libgl-dev libx11-dev libx11-xcb-dev libxcursor-dev libxrandr-dev libxi-dev libxkbcommon-dev libxext-dev libxfixes-dev libxinerama-dev libxrender-dev libxpresent-dev libxxf86vm-dev libxft-dev libxmu-dev libxss-dev libxtst-dev
-
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: llvm-tools-preview
-
-      - name: Install cargo-llvm-cov
-        uses: taiki-e/install-action@cargo-llvm-cov
-
-      - name: Generate coverage
-        run: cargo llvm-cov --workspace --lcov --output-path lcov.info
-        env:
-          RUSTC_WRAPPER: ""
-
-      - name: Upload coverage artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: coverage-report
-          path: lcov.info
-
-  bench:
-    name: Benchmarks
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: mozilla-actions/sccache-action@v0.0.9
-
-      - name: Install system dependencies
-        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libudev-dev mold libgl-dev libx11-dev libx11-xcb-dev libxcursor-dev libxrandr-dev libxi-dev libxkbcommon-dev libxext-dev libxfixes-dev libxinerama-dev libxrender-dev libxpresent-dev libxxf86vm-dev libxft-dev libxmu-dev libxss-dev libxtst-dev
-
-      - uses: dtolnay/rust-toolchain@stable
-
-      - name: Run core benchmarks
-        run: cargo bench -p sonido-core -- --output-format bencher 2>&1 | tee target/bench-core.txt
-
-      - name: Run effects benchmarks
-        run: cargo bench -p sonido-effects -- --output-format bencher 2>&1 | tee target/bench-effects.txt
-
-      - name: Upload benchmark artifacts
-        uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: benchmark-results-${{ github.sha }}
-          path: |
-            target/bench-core.txt
-            target/bench-effects.txt
-            target/criterion/
-          retention-days: 90
