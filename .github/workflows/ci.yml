@@ -24,7 +24,7 @@ jobs:
       - uses: mozilla-actions/sccache-action@v0.0.9
 
       - name: Install system dependencies
-        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libudev-dev mold mold
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libudev-dev mold libgl-dev libx11-dev libxcursor-dev libxrandr-dev libxi-dev libxkbcommon-dev mold
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -47,7 +47,7 @@ jobs:
       - uses: mozilla-actions/sccache-action@v0.0.9
 
       - name: Install system dependencies
-        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libudev-dev mold
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libudev-dev mold libgl-dev libx11-dev libxcursor-dev libxrandr-dev libxi-dev libxkbcommon-dev
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -93,7 +93,7 @@ jobs:
       - uses: mozilla-actions/sccache-action@v0.0.9
 
       - name: Install system dependencies
-        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libudev-dev mold
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libudev-dev mold libgl-dev libx11-dev libxcursor-dev libxrandr-dev libxi-dev libxkbcommon-dev
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -154,7 +154,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install system dependencies
-        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libudev-dev mold
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libudev-dev mold libgl-dev libx11-dev libxcursor-dev libxrandr-dev libxi-dev libxkbcommon-dev
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -186,7 +186,7 @@ jobs:
       - uses: mozilla-actions/sccache-action@v0.0.9
 
       - name: Install system dependencies
-        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libudev-dev mold
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libudev-dev mold libgl-dev libx11-dev libxcursor-dev libxrandr-dev libxi-dev libxkbcommon-dev
 
       - uses: dtolnay/rust-toolchain@stable
 
