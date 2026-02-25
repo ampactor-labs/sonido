@@ -5,7 +5,7 @@ Guidelines for contributing to the Sonido project.
 ## Development Setup
 
 ```bash
-git clone https://github.com/suds/sonido
+git clone https://github.com/ampactor-labs/sonido
 cd sonido
 cargo build
 cargo test
@@ -16,36 +16,40 @@ make dev-install
 
 ## Continuous Integration
 
-All pull requests are automatically tested via GitHub Actions:
+CI runs on GitHub Actions with ubuntu-latest runners under the ampactor-labs org (private repo).
 
-- **Test matrix**: Linux, macOS, Windows
-- **no_std checks**: sonido-core, sonido-effects, sonido-registry, sonido-platform
-- **Linting**: `cargo clippy --all-targets -- -D warnings`
-- **Formatting**: `cargo fmt --all -- --check`
+### Jobs
+
+| Job | Timeout | Trigger |
+|-----|---------|---------|
+| Lint | 15 min | push + PR |
+| Test | 20 min | push + PR |
+| no_std | 15 min | push + PR |
+| Plugin | 20 min | push + PR |
+| Wasm | 15 min | push + PR |
+| Coverage | (no limit) | push + PR, after Test |
+| Benchmarks | 45 min | push to main only |
+
+### Infrastructure
+
+- **Caching**: sccache via `mozilla-actions/sccache-action` + GitHub Actions cache backend
+- **System deps**: libasound2-dev, libudev-dev, mold linker, full x11-rs/GL stack
+- **Plugin validation**: clap-validator 0.3.2 validates all 19 CLAP plugin binaries
+- **Coverage**: cargo-llvm-cov, artifact upload (no threshold gate)
 
 ### Running CI Checks Locally
 
 ```bash
-# Run the same checks as CI
 cargo test --workspace
-cargo test --no-default-features -p sonido-core -p sonido-effects
-cargo clippy --workspace --all-targets -- -D warnings
+cargo test --no-default-features -p sonido-core -p sonido-effects -p sonido-synth -p sonido-registry -p sonido-platform
+cargo clippy --workspace --lib --bins --tests --benches -- -D warnings
 cargo fmt --all -- --check
+cargo doc --no-deps --all-features  # check for doc warnings
 ```
 
-## Releases
+## Git Workflow
 
-Releases are built automatically when a version tag is pushed:
-
-```bash
-git tag v0.1.0
-git push --tags
-```
-
-This triggers the release workflow which:
-1. Builds binaries for Linux x64, macOS x64/ARM64, Windows x64
-2. Packages with factory presets and documentation
-3. Creates a GitHub release with downloadable artifacts
+Push directly to main for typical DSP work. Use PRs for CI/infra changes or when CI-specific validation is needed (CLAP validator, wasm target, coverage). Solo dev, private repo — PRs add ceremony without review value for typical work.
 
 ## Documentation Protocol
 
