@@ -102,6 +102,7 @@ pub mod effect;
 pub mod envelope;
 pub mod fast_math;
 pub mod gain;
+pub mod graph;
 pub mod lfo;
 pub mod math;
 pub mod modulation;
@@ -126,6 +127,10 @@ pub use effect::{Chain, Effect, EffectExt};
 pub use envelope::{DetectionMode, EnvelopeFollower};
 pub use fast_math::{
     fast_db_to_linear, fast_exp2, fast_linear_to_db, fast_log2, fast_sin_turns, fast_tan,
+};
+pub use graph::{
+    BufferPool, CompensationDelay, CompiledSchedule, EdgeId, GraphError, NodeId, NodeKind,
+    ProcessStep, ProcessingGraph, StereoBuffer,
 };
 pub use lfo::{Lfo, LfoWaveform};
 pub use math::{

@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+#### DAG Routing Engine (sonido-core, sonido-io)
+- `ProcessingGraph` — compiled DAG for audio effect routing, replaces linear chain limitations
+- Node types: Input, Output, Effect (with per-node bypass crossfade), Split (fan-out), Merge (fan-in)
+- Kahn's topological sort at mutation time, cycle detection at `connect()` time
+- Buffer liveness analysis (register allocation): 20-node chain = 2 buffers, diamond = 3
+- Latency compensation: auto-inserts `CompensationDelay` on shorter parallel paths
+- Click-free schedule swap via `SmoothedParam` crossfade (~5ms) when graph topology changes
+- `no_std` compatible (with `alloc`) — embeddable on Daisy Seed / Hothouse
+- `GraphEngine` in sonido-io wraps `ProcessingGraph` with `from_chain()` for backward-compatible migration
+- 34 unit tests (30 core + 4 integration) verifying graph mutations, compilation, buffer efficiency, execution, and parity with `ProcessingEngine`
+- ADR-025 accepted (docs/DESIGN_DECISIONS.md)
+
 #### Structured Observability (tracing)
 - Migrated std crates (`sonido-gui`, `sonido-cli`, `sonido-io`, `sonido-plugin`) from `log` facade to `tracing` 0.1
 - Added `tracing-subscriber` with `EnvFilter` for runtime log-level control via `RUST_LOG`

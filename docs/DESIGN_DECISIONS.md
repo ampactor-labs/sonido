@@ -28,7 +28,7 @@ Architecture Decision Records (ADRs) for the Sonido DSP framework. Each record c
 - [ADR-022: Parameter System Hardening for Plugin Integration](#adr-022-parameter-system-hardening-for-plugin-integration)
 - [ADR-023: Pluggable Audio Backend Abstraction](#adr-023-pluggable-audio-backend-abstraction)
 - [ADR-024: CLAP Plugin Architecture](#adr-024-clap-plugin-architecture)
-- [ADR-025: DAG Routing Engine](#adr-025-dag-routing-engine) *(planned)*
+- [ADR-025: DAG Routing Engine](#adr-025-dag-routing-engine)
 
 ---
 
@@ -974,30 +974,80 @@ Building plugins requires the `clack`, `baseview`, and `egui_glow` dependencies,
 
 ## ADR-025: DAG Routing Engine
 
-**Status:** Planned
+**Status:** Accepted
 **Supersedes:** ADR-005 (for DAG routing path; ADR-005 remains authoritative for linear chain semantics)
 
 ### Context
 
-The current audio routing model is a linear effect chain: `Vec<usize>` ordering in `ChainManager`, sequential processing in `ProcessingEngine`, indexed parameter access in `AtomicParamBridge`. This model cannot express:
+The linear effect chain model (`Vec<Box<dyn Effect>>` in `ProcessingEngine`, `Vec<usize>` ordering in `ChainManager`) cannot express:
 
 - Parallel signal paths (e.g., dry/wet branches with independent effect chains)
 - Sidechain routing (e.g., compressor keyed by a separate signal)
 - Multiband processing (e.g., split → per-band effects → recombine)
 - Synth-effects hybrid routing (e.g., guitar DI → pitch detector → synth → effects, mixed with dry)
 
-All four patterns are blocked on the linear chain assumption. The multi-effect CLAP plugin, the synth-effects hybrid (Space Station 2.0), and spectral parallel processing all require graph-based routing.
+The multi-effect CLAP plugin, synth-effects hybrid, and spectral parallel processing all require graph-based routing.
 
-### Planned Decisions
+### Decisions
 
-1. **Directed acyclic graph (DAG)** — nodes are effects, edges are audio connections. The `Effect` trait is already node-agnostic and requires no changes.
-2. **Topological sort at graph mutation time** — O(V+E) cost paid once when the graph is edited, not per audio block. The sorted order is a flat `Vec<NodeId>` consumed by the audio thread.
-3. **Pre-allocated buffer pool** — f32 buffers assigned to edges, sized at graph mutation time. No allocations in the audio path.
-4. **Cycle detection at insertion time** — reject cyclic edges immediately, not at audio processing time. Graph mutations are validated before committing.
-5. **Hand-rolled implementation** — no `dasp_graph` dependency. The `Effect` trait semantics (stereo pairs, `ParameterInfo`, `TempoContext`) are specific enough that adapting a generic graph library would cost more than building purpose-fit.
+1. **Directed acyclic graph (DAG)** — nodes are effects, edges are audio connections. The `Effect` trait is node-agnostic; no trait changes needed.
+
+2. **Two-object split** (adapted from Tracktion Engine):
+   - `ProcessingGraph` — owned by mutation thread. Holds topology, performs mutations, runs `compile()`.
+   - `CompiledSchedule` — immutable snapshot shared with audio thread via `Arc`. Holds flat `Vec<ProcessStep>`, `BufferPool`, and compensation delay lines.
+
+3. **Compiled schedule (flat instruction list)** — Kahn's topological sort at mutation time (O(V+E)). The audio thread executes a linear list of `ProcessStep` variants, never traverses the graph.
+
+4. **Buffer liveness analysis (register allocation)** — instead of one buffer per edge (O(edges) memory), compute liveness intervals: first-write to last-read per virtual buffer. Greedy free-list assignment reuses slots. Result: 20-node linear chain = 2 buffers (ping-pong). Diamond = 3 buffers.
+
+5. **Latency compensation** — each node reports `latency_samples()`. During compilation, compute longest-path latency to each Merge node. Insert `CompensationDelay` steps for shorter parallel paths. Matches the universal algorithm in JUCE, Tracktion, Ardour, and REAPER.
+
+6. **Click-free schedule swap** — when `compile()` produces a new schedule, both old and new run simultaneously during a ~5ms crossfade (via `SmoothedParam`). No audible clicks from topology changes.
+
+7. **Cycle detection at insertion time** — DFS reachability check in `connect()`. Defensive Kahn sort validation at `compile()` time catches any edge case.
+
+8. **Hand-rolled implementation** — surveyed 9 major systems (JUCE, Tracktion, Ardour, REAPER, SuperCollider, Faust, Max/gen~, Bitwig, VCV Rack) and 8 Rust crates (fundsp, dasp_graph, auxide, klingt, audiograph, glicol_synth, dsp-chain, pp-audiograph). No crate serves sonido's combination of stereo-first + `no_std` + live mutation + native `Effect` trait + `ParameterInfo` introspection + `TempoContext` broadcast + variable block size.
+
+9. **`no_std` with alloc** — entire graph module compiles without std. `Arc` from `alloc::sync`. Embeddable on Daisy Seed / Hothouse.
+
+### Node Types
+
+| Kind | Inputs | Outputs | Purpose |
+|------|--------|---------|---------|
+| `Input` | 0 | 1+ | External audio entry point (exactly 1 per graph) |
+| `Output` | 1 | 0 | Final audio output (exactly 1 per graph) |
+| `Effect` | 1 | 1 | Wraps `Box<dyn Effect + Send>`, per-node bypass with crossfade |
+| `Split` | 1 | N | Fan-out: copies input to all outputs |
+| `Merge` | N | 1 | Fan-in: sums all inputs |
+
+### ProcessStep Instruction Set
+
+| Variant | Purpose |
+|---------|---------|
+| `WriteInput` | Copy external audio into a buffer slot |
+| `ProcessEffect` | Run effect: read `input_buf`, write `output_buf` |
+| `SplitCopy` | Copy source buffer to N destination buffers |
+| `ClearBuffer` | Zero a buffer before merge accumulation |
+| `AccumulateBuffer` | Add source buffer into destination (merge) |
+| `DelayCompensate` | Apply compensation delay to align parallel paths |
+| `ReadOutput` | Copy buffer to external output |
+
+### Migration Path
+
+`ProcessingEngine` remains for simple linear chains. `GraphEngine` (in `sonido-io`) wraps `ProcessingGraph` with `from_chain()` for drop-in replacement. `ChainManager` (GUI) continues using linear ordering for now — DAG visual editor is a future feature.
+
+### Alternatives Considered
+
+- **dasp_graph / fundsp Net** — generic graph abstractions that don't support sonido's stereo-first `Effect` trait or `ParameterInfo`. Wrapping would add complexity without benefit.
+- **One buffer per edge** — simple but O(edges) memory. Liveness analysis gives O(max-live) which is much smaller for practical topologies.
+- **Multi-threaded parallel execution** — Tracktion's activation-count work-stealing pattern. Deferred to v0.4; the `CompiledSchedule` architecture supports it without structural changes (steps become work units with activation counters).
 
 ### References
 
+- `crates/sonido-core/src/graph/` — implementation (processing.rs, node.rs, edge.rs, buffer.rs, schedule.rs)
+- `crates/sonido-io/src/graph_engine.rs` — `GraphEngine` integration layer
 - `docs/ROADMAP.md` — DAG Routing Engine section (v0.3+)
-- `docs/ARCHITECTURE.md` — to be updated at implementation time with DAG data flow diagrams
+- `docs/ARCHITECTURE.md` — DAG data flow section
 - ADR-005 — original linear chain decision (remains the record for v0.1 architecture)
+- JUCE AudioProcessorGraph — compiled schedule + liveness analysis reference
+- Tracktion Engine — immutable graph + atomic swap pattern reference

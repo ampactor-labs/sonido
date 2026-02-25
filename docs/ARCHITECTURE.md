@@ -376,6 +376,59 @@ Standalone real-time audio effects processor built on egui + cpal.
                 └───────────────┘    └────────────────────┘
 ```
 
+### DAG Processing (ProcessingGraph)
+
+The `ProcessingGraph` in `sonido-core/src/graph/` replaces linear chains with compiled
+directed acyclic graph (DAG) routing. See ADR-025 for full design rationale.
+
+```
+Mutation thread (main/GUI):
+  ┌──────────────────┐
+  │ ProcessingGraph   │  add_effect(), connect(), remove_node()
+  │   nodes: Vec<..> │
+  │   edges: Vec<..> │───▶ compile()
+  └──────────────────┘         │
+                               ▼
+                    ┌──────────────────────┐
+                    │ CompiledSchedule     │  Immutable snapshot
+                    │   steps: Vec<Step>   │  (via Arc)
+                    │   pool: BufferPool   │
+                    │   delay_lines: Vec   │
+                    └──────────────────────┘
+                               │
+                     Arc swap (atomic)
+                               │
+                               ▼
+Audio callback:     ┌──────────────────────┐
+                    │ for step in steps:   │  Zero-allocation loop
+                    │   execute(step,      │
+                    │     effects, bufs)   │
+                    └──────────────────────┘
+```
+
+**Compilation pipeline**: Kahn's topological sort → buffer liveness analysis
+(register allocation) → latency compensation → flat `Vec<ProcessStep>`.
+
+**Buffer efficiency**: Liveness analysis reuses buffer slots. A 20-node linear
+chain needs only 2 buffers (ping-pong). A diamond (split + 2 parallel + merge)
+needs 3.
+
+**Schedule swap**: When `compile()` produces a new schedule, old and new run
+simultaneously during a ~5ms crossfade via `SmoothedParam`. No clicks.
+
+**Example topologies**:
+```
+Linear:     Input → E1 → E2 → E3 → Output         (2 buffers)
+Diamond:    Input → Split → [E1] → Merge → Output  (3 buffers)
+                          → [E2] →
+Fan-out:    Input → Split → [E1] → Merge → Output  (4 buffers)
+                          → [E2] →
+                          → [E3] →
+```
+
+`GraphEngine` in `sonido-io/src/graph_engine.rs` wraps `ProcessingGraph` with
+`from_chain()` for backward-compatible migration from `ProcessingEngine`.
+
 ### CLI Stereo Output
 
 The CLI always produces stereo output:

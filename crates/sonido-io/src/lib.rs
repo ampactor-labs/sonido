@@ -43,10 +43,12 @@
 pub mod backend;
 pub mod cpal_backend;
 mod engine;
+mod graph_engine;
 pub(crate) mod stream;
 mod wav;
 
 pub use engine::ProcessingEngine;
+pub use graph_engine::GraphEngine;
 pub use stream::{
     AudioDevice, AudioStream, StreamConfig, default_device, find_device_by_index,
     find_device_fuzzy, list_devices,
