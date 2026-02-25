@@ -129,6 +129,20 @@ cloned_instead_of_copied = "allow"
 case_sensitive_file_extension_comparisons = "allow"
 unnecessary_debug_formatting = "allow"
 
+[profile.dev]
+split-debuginfo = "unpacked"
+
+# Strip full debuginfo from dependencies — keeps line tables for stack traces,
+# cuts binary sizes 3-5x (280MB GUI → ~60-80MB). Workspace crates keep full debug.
+[profile.dev.package."*"]
+debug = "line-tables-only"
+strip = "debuginfo"
+
+# Optimize proc-macro and build-script compilation — they run at compile time,
+# so opt-level=3 makes derive-heavy builds faster.
+[profile.dev.build-override]
+opt-level = 3
+
 [profile.release]
 lto = true
 codegen-units = 1
