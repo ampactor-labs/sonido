@@ -6,6 +6,11 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  SYSTEM_DEPS: >-
+    libasound2-dev libudev-dev mold libgl-dev libx11-dev libx11-xcb-dev
+    libxcursor-dev libxrandr-dev libxi-dev libxkbcommon-dev libxext-dev
+    libxfixes-dev libxinerama-dev libxrender-dev libxpresent-dev
+    libxxf86vm-dev libxft-dev libxmu-dev libxss-dev libxtst-dev
 
 jobs:
   build:
@@ -41,7 +46,7 @@ jobs:
 
       - name: Install system dependencies (Linux)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libudev-dev
+        run: sudo apt-get update && sudo apt-get install -y $SYSTEM_DEPS
 
       - uses: dtolnay/rust-toolchain@stable
         with:
