@@ -133,6 +133,33 @@ impl BufferPool {
             buf.clear();
         }
     }
+
+    /// Returns a shared reference to one buffer and a mutable reference to another.
+    ///
+    /// Uses `split_at_mut` to satisfy the borrow checker without temporary copies.
+    /// This is the RT-safe alternative to copying into intermediate `Vec`s.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `read_idx == write_idx` (would alias) or if either index is out of bounds.
+    #[inline]
+    pub fn get_ref_and_mut(
+        &mut self,
+        read_idx: usize,
+        write_idx: usize,
+    ) -> (&StereoBuffer, &mut StereoBuffer) {
+        assert_ne!(read_idx, write_idx, "cannot alias buffer slots");
+        if read_idx < write_idx {
+            let (first, second) = self.buffers.split_at_mut(write_idx);
+            (&first[read_idx], &mut second[0])
+        } else {
+            // read_idx > write_idx: split at read_idx
+            // first = [0..read_idx) contains write_idx
+            // second = [read_idx..] where second[0] is the read buffer
+            let (first, second) = self.buffers.split_at_mut(read_idx);
+            (&second[0], &mut first[write_idx])
+        }
+    }
 }
 
 /// Fixed-delay stereo ring buffer for latency compensation.

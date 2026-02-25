@@ -25,3 +25,7 @@ proptest = { workspace = true }
 [[bench]]
 name = "core_bench"
 harness = false
+
+[[bench]]
+name = "graph_bench"
+harness = false

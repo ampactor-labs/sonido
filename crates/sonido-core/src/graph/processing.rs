@@ -104,6 +104,10 @@ pub struct ProcessingGraph {
     prev_compiled: Option<Arc<CompiledSchedule>>,
     /// Snapshot of node data for the previous schedule's crossfade execution.
     prev_nodes_snapshot: Vec<Option<BypassState>>,
+    /// Pre-allocated crossfade buffers for RT-safe schedule transitions.
+    /// Sized to `block_size` at compile time; avoids heap allocation on the audio thread.
+    crossfade_left: Vec<f32>,
+    crossfade_right: Vec<f32>,
 }
 
 /// Minimal snapshot of bypass state for crossfade execution against the previous schedule.
@@ -135,6 +139,8 @@ impl ProcessingGraph {
             swap_fade,
             prev_compiled: None,
             prev_nodes_snapshot: Vec::new(),
+            crossfade_left: vec![0.0; block_size],
+            crossfade_right: vec![0.0; block_size],
         }
     }
 
@@ -398,6 +404,11 @@ impl ProcessingGraph {
             delay_lines,
             total_latency,
         });
+
+        // Ensure crossfade buffers match current block size (RT-safe: allocated here,
+        // not on the audio thread).
+        self.crossfade_left.resize(self.block_size, 0.0);
+        self.crossfade_right.resize(self.block_size, 0.0);
 
         // Click-free swap: keep old schedule for crossfade.
         if self.compiled.is_some() {
@@ -904,21 +915,34 @@ impl ProcessingGraph {
 
         if is_crossfading && let Some(prev) = &self.prev_compiled {
             let prev = prev.clone();
-            // Execute old schedule into temporary buffers.
-            // We need temporary storage for the old schedule's output.
-            // Use the prev schedule's own pool for execution, then capture output.
-            let mut prev_left = vec![0.0f32; len];
-            let mut prev_right = vec![0.0f32; len];
-            self.execute_schedule_prev(&prev, left_in, right_in, &mut prev_left, &mut prev_right);
+            // Execute old schedule into pre-allocated crossfade buffers (RT-safe).
+            // Uses disjoint field borrows: nodes + crossfade buffers are separate fields.
+            self.crossfade_left[..len].fill(0.0);
+            self.crossfade_right[..len].fill(0.0);
+            Self::run_schedule(
+                &mut self.nodes,
+                &prev,
+                left_in,
+                right_in,
+                &mut self.crossfade_left[..len],
+                &mut self.crossfade_right[..len],
+            );
 
             // Execute new schedule.
-            self.execute_schedule(&schedule, left_in, right_in, left_out, right_out);
+            Self::run_schedule(
+                &mut self.nodes,
+                &schedule,
+                left_in,
+                right_in,
+                left_out,
+                right_out,
+            );
 
             // Crossfade sample-by-sample.
             for i in 0..len {
                 let fade = self.swap_fade.advance();
-                left_out[i] = prev_left[i] * (1.0 - fade) + left_out[i] * fade;
-                right_out[i] = prev_right[i] * (1.0 - fade) + right_out[i] * fade;
+                left_out[i] = self.crossfade_left[i] * (1.0 - fade) + left_out[i] * fade;
+                right_out[i] = self.crossfade_right[i] * (1.0 - fade) + right_out[i] * fade;
             }
 
             // If crossfade is done, drop the old schedule.
@@ -931,12 +955,28 @@ impl ProcessingGraph {
         }
 
         // Normal (non-crossfading) execution.
-        self.execute_schedule(&schedule, left_in, right_in, left_out, right_out);
+        Self::run_schedule(
+            &mut self.nodes,
+            &schedule,
+            left_in,
+            right_in,
+            left_out,
+            right_out,
+        );
     }
 
-    /// Executes a compiled schedule against the current node state.
-    fn execute_schedule(
-        &mut self,
+    /// Executes a compiled schedule against the given node state.
+    ///
+    /// Static method to enable disjoint field borrows — callers can pass
+    /// `&mut self.nodes` alongside other `self` fields (e.g., crossfade buffers)
+    /// without conflicting with the borrow checker.
+    ///
+    /// **RT-safety**: No heap allocations in the step execution loop. The local
+    /// `BufferPool` and `delay_lines` are still allocated per call (future work:
+    /// pre-allocate these in `ProcessingGraph` as well). All split-borrow
+    /// workarounds use `BufferPool::get_ref_and_mut` instead of temporary `Vec`s.
+    fn run_schedule(
+        nodes: &mut [Option<NodeData>],
         schedule: &CompiledSchedule,
         left_in: &[f32],
         right_in: &[f32],
@@ -947,12 +987,12 @@ impl ProcessingGraph {
 
         // We need mutable access to the pool inside the Arc<CompiledSchedule>.
         // Since we only process on one thread at a time, we use a local pool copy.
-        // (In production, the pool would live outside the Arc, but for v0.3
-        // single-threaded execution, a local pool is simpler and equally correct.)
+        // TODO: pre-allocate pool in ProcessingGraph to eliminate this per-block allocation.
         let buf_count = schedule.pool.count();
         let mut pool = BufferPool::new(buf_count, len);
 
         // Similarly for delay lines.
+        // TODO: pre-allocate delay lines in ProcessingGraph for full RT-safety.
         let mut delay_lines: Vec<CompensationDelay> = schedule
             .delay_lines
             .iter()
@@ -974,7 +1014,7 @@ impl ProcessingGraph {
                     input_buf,
                     output_buf,
                 } => {
-                    if let Some(Some(node)) = self.nodes.get_mut(*node_idx)
+                    if let Some(Some(node)) = nodes.get_mut(*node_idx)
                         && let NodeKind::Effect(ref mut effect) = node.kind
                     {
                         if *input_buf == *output_buf {
@@ -985,17 +1025,11 @@ impl ProcessingGraph {
                                 &mut buf.right[..len],
                             );
                         } else {
-                            // Separate input/output: need split borrow.
-                            // Copy input to a temp, process into output.
-                            let mut temp_left = vec![0.0f32; len];
-                            let mut temp_right = vec![0.0f32; len];
-                            temp_left.copy_from_slice(&pool.get(*input_buf).left[..len]);
-                            temp_right.copy_from_slice(&pool.get(*input_buf).right[..len]);
-
-                            let out = pool.get_mut(*output_buf);
+                            // Separate input/output: split borrow via get_ref_and_mut (RT-safe).
+                            let (inp, out) = pool.get_ref_and_mut(*input_buf, *output_buf);
                             effect.process_block_stereo(
-                                &temp_left,
-                                &temp_right,
+                                &inp.left[..len],
+                                &inp.right[..len],
                                 &mut out.left[..len],
                                 &mut out.right[..len],
                             );
@@ -1033,17 +1067,12 @@ impl ProcessingGraph {
                     source_buf,
                     dest_bufs,
                 } => {
-                    // Copy source to each destination.
+                    // Copy source to each destination via split borrow (RT-safe).
                     for &dest in dest_bufs {
                         if dest != *source_buf {
-                            // Need split borrow workaround.
-                            let mut temp_left = vec![0.0f32; len];
-                            let mut temp_right = vec![0.0f32; len];
-                            temp_left.copy_from_slice(&pool.get(*source_buf).left[..len]);
-                            temp_right.copy_from_slice(&pool.get(*source_buf).right[..len]);
-                            let dst = pool.get_mut(dest);
-                            dst.left[..len].copy_from_slice(&temp_left);
-                            dst.right[..len].copy_from_slice(&temp_right);
+                            let (src, dst) = pool.get_ref_and_mut(*source_buf, dest);
+                            dst.left[..len].copy_from_slice(&src.left[..len]);
+                            dst.right[..len].copy_from_slice(&src.right[..len]);
                         }
                     }
                 }
@@ -1057,14 +1086,11 @@ impl ProcessingGraph {
                     dest_buf,
                 } => {
                     if source_buf != dest_buf {
-                        let mut temp_left = vec![0.0f32; len];
-                        let mut temp_right = vec![0.0f32; len];
-                        temp_left.copy_from_slice(&pool.get(*source_buf).left[..len]);
-                        temp_right.copy_from_slice(&pool.get(*source_buf).right[..len]);
-                        let dst = pool.get_mut(*dest_buf);
+                        // Split borrow via get_ref_and_mut (RT-safe).
+                        let (src, dst) = pool.get_ref_and_mut(*source_buf, *dest_buf);
                         for i in 0..len {
-                            dst.left[i] += temp_left[i];
-                            dst.right[i] += temp_right[i];
+                            dst.left[i] += src.left[i];
+                            dst.right[i] += src.right[i];
                         }
                     }
                 }
@@ -1088,23 +1114,6 @@ impl ProcessingGraph {
         }
     }
 
-    /// Executes the previous schedule for crossfade (uses snapshot bypass state,
-    /// does not mutate current nodes).
-    fn execute_schedule_prev(
-        &mut self,
-        schedule: &CompiledSchedule,
-        left_in: &[f32],
-        right_in: &[f32],
-        left_out: &mut [f32],
-        right_out: &mut [f32],
-    ) {
-        // For the previous schedule during crossfade, we process effects normally
-        // but use the snapshot bypass state. This is a simplified version —
-        // effects still process through the current node state (they're the same
-        // Effect instances), which is acceptable during a brief crossfade.
-        self.execute_schedule(schedule, left_in, right_in, left_out, right_out);
-    }
-
     // --- Control methods ---
 
     /// Sets the sample rate for all effect nodes.
@@ -1120,8 +1129,12 @@ impl ProcessingGraph {
     }
 
     /// Sets the block size. Requires recompilation.
+    ///
+    /// Also resizes pre-allocated crossfade buffers to match the new block size.
     pub fn set_block_size(&mut self, block_size: usize) {
         self.block_size = block_size;
+        self.crossfade_left.resize(block_size, 0.0);
+        self.crossfade_right.resize(block_size, 0.0);
     }
 
     /// Resets all effect nodes and clears delay lines.

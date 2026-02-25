@@ -122,7 +122,7 @@ All 19 CLAP plugins support host-negotiated window resize via atomic `PendingRes
 
 **Status:** Planned
 
-A single CLAP plugin exposing the full effect chain. Requires the DAG routing engine (see v0.3) for proper signal routing semantics. Blocked on DAG work.
+A single CLAP plugin exposing the full effect chain. Uses the DAG routing engine (`ProcessingGraph`) for signal routing. Unblocked by DAG completion (`a367fb7`).
 
 ### Benchmark Baseline Tracking in CI
 
@@ -197,28 +197,24 @@ Capability expansions that require new crates or significant architectural addit
 
 ### DAG Routing Engine
 
-**What it is:** A directed acyclic graph (DAG) replacing the current linear `Vec<usize>` effect chain. Nodes are effects; edges are audio connections. Topological sort determines processing order; intermediate buffers accumulate branch outputs at merge nodes.
+**Status:** Complete (`a367fb7`)
 
-**Why it matters:** Linear chains cannot express parallel signal paths, sidechains, multiband processing, or wet/dry blend at arbitrary points. Helix, Axe-Fx, and modern modular plugins all route audio as graphs, not chains. Implementing the DAG engine unlocks the full range of these routing patterns without redesigning effects or the `Effect` trait.
+Directed acyclic graph replacing the linear `Vec<usize>` effect chain. Nodes are effects; edges are audio connections. Topological sort determines processing order; intermediate buffers accumulate branch outputs at merge nodes.
 
-**Planned node types:**
-- **Effect node**: wraps any `Box<dyn Effect + Send>` — the existing type
-- **Split node**: routes one input to N outputs (fan-out, no mixing)
-- **Merge node**: sums N inputs to one output (additive mix)
-- **Mixer node**: weighted sum of N inputs
-- **Bypass node**: passthrough with enable/disable
+**Architecture highlights:**
+- **Two-object split**: `ProcessingGraph` (mutation thread) / `CompiledSchedule` (audio thread, immutable via `Arc`)
+- **Kahn's topological sort** at graph mutation time — O(V+E) paid once at edit, not per block
+- **Buffer liveness analysis** (register allocation): 20-node linear chain = 2 buffers (ping-pong), diamond = 3
+- **Latency compensation**: auto-inserted `CompensationDelay` ring buffers on shorter parallel paths
+- **Click-free schedule swap**: `SmoothedParam` crossfade (~5ms) on recompile — no audio glitches
+- **Node types**: Input, Output, Effect (per-node bypass crossfade), Split (fan-out), Merge (fan-in sum)
+- **`ProcessStep` instruction set**: WriteInput, ProcessEffect, SplitCopy, ClearBuffer, AccumulateBuffer, DelayCompensate, ReadOutput
+- **`linear()` convenience**: backward-compatible with `ProcessingEngine` for existing linear chains
+- **no_std with alloc**: embeddable on Daisy Seed
 
-**Key technical decisions:**
-- **Topological sort at graph mutation time** (not per audio buffer) — O(V+E) cost paid once at edit time, not per block
-- **Intermediate buffer pool** — pre-allocated f32 buffers assigned to edges, reused across blocks
-- **Cycle detection** — reject graphs with cycles at insertion time, not audio time
-- **Elastic resource tracking** — per-node estimated CPU cost, total graph budget for load-aware routing
+**Unblocks:** Multi-effect CLAP plugin, synth-effects hybrid (Space Station 2.0), spectral parallel processing.
 
-**Dependencies:** None. Hand-rolled is cleaner than adapting `dasp_graph` to the `Effect` trait semantics.
-
-**Estimated scope:** ~1,500–2,500 LOC for graph engine + buffer pool + routing nodes. Larger than any single effect, smaller than the full effects library.
-
-**Status:** Not started. This is the most impactful architectural item in the roadmap. Multi-effect CLAP plugin, synth-effects hybrid, and spectral parallel processing all depend on it.
+See ADR-025 in `docs/DESIGN_DECISIONS.md` for full architectural rationale.
 
 ---
 
