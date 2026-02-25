@@ -24,7 +24,7 @@ jobs:
       - uses: mozilla-actions/sccache-action@v0.0.9
 
       - name: Install system dependencies
-        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libudev-dev
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libudev-dev mold mold
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -47,7 +47,7 @@ jobs:
       - uses: mozilla-actions/sccache-action@v0.0.9
 
       - name: Install system dependencies
-        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libudev-dev
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libudev-dev mold
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -68,6 +68,9 @@ jobs:
       - uses: actions/checkout@v4
 
       - uses: mozilla-actions/sccache-action@v0.0.9
+
+      - name: Install mold linker
+        run: sudo apt-get update && sudo apt-get install -y mold
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -90,7 +93,7 @@ jobs:
       - uses: mozilla-actions/sccache-action@v0.0.9
 
       - name: Install system dependencies
-        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libudev-dev
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libudev-dev mold
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -133,6 +136,9 @@ jobs:
 
       - uses: mozilla-actions/sccache-action@v0.0.9
 
+      - name: Install mold linker
+        run: sudo apt-get update && sudo apt-get install -y mold
+
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
@@ -148,7 +154,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install system dependencies
-        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libudev-dev
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libudev-dev mold
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -180,7 +186,7 @@ jobs:
       - uses: mozilla-actions/sccache-action@v0.0.9
 
       - name: Install system dependencies
-        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libudev-dev
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libudev-dev mold
 
       - uses: dtolnay/rust-toolchain@stable
 
