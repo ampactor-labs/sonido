@@ -92,7 +92,7 @@ pub enum ChannelMode {
 
 impl ChannelMode {
     /// Convert a float index (0–3) to a `ChannelMode`.
-    fn from_index(v: f32) -> Self {
+    pub fn from_index(v: f32) -> Self {
         match v as u8 {
             0 => Self::Normal,
             1 => Self::Swap,
@@ -115,7 +115,7 @@ pub enum HaasSide {
 
 impl HaasSide {
     /// Convert a float index (0–1) to a `HaasSide`.
-    fn from_index(v: f32) -> Self {
+    pub fn from_index(v: f32) -> Self {
         if v < 0.5 { Self::Left } else { Self::Right }
     }
 }

@@ -3,13 +3,13 @@
 #
 # Usage: ./scripts/generate_demos.sh
 #
-# Requires: cargo build -p sonido-cli --release
+# Requires: cargo build -p sonido-cli --release (or set SONIDO env var)
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-SONIDO="$PROJECT_DIR/target/release/sonido"
+SONIDO="${SONIDO:-$PROJECT_DIR/target/release/sonido}"
 DEMOS="$PROJECT_DIR/demos"
 
 # Build if needed
@@ -52,93 +52,53 @@ echo "  [5/5] White noise..."
 echo ""
 echo "=== Processing through effects ==="
 
-# Distortion -- soft clip
-echo "  [1/18] Distortion (soft clip)..."
-"$SONIDO" process "$DEMOS/src_sine_440.wav" "$DEMOS/fx_distortion_soft.wav" \
-    --effect distortion --param drive=12 --param waveshape=softclip --param tone=4000 --param level=-6
+# Demo table: stem source effect params_csv
+DEMOS_TABLE=(
+    "distortion_soft    src_sine_440   distortion     drive=12,waveshape=softclip,tone=4000,level=-6"
+    "distortion_hard    src_sine_440   distortion     drive=20,waveshape=hardclip,tone=3000,level=-8"
+    "compressor         src_perc_adsr  compressor     threshold=-18,ratio=4,attack=10,release=100,makeup=6"
+    "gate               src_sine_440   gate           threshold=-20,attack=1,release=50,hold=20"
+    "chorus             src_saw_chord  chorus         rate=1.5,depth=0.6,mix=0.5"
+    "flanger            src_sine_440   flanger        rate=0.4,depth=0.7,feedback=0.6,mix=0.5"
+    "phaser             src_saw_chord  phaser         rate=0.3,depth=0.8,stages=6,feedback=0.7,mix=0.5"
+    "tremolo            src_sine_440   tremolo        rate=6,depth=0.8,waveform=sine"
+    "multivibrato       src_saw_chord  multivibrato   depth=0.6"
+    "filter_lowpass     src_sweep      filter         cutoff=2000,resonance=4"
+    "wah                src_saw_chord  wah            frequency=800,resonance=5,sensitivity=0.7,mode=auto"
+    "parametric_eq      src_sweep      eq             mid_freq=1000,mid_gain=8,mid_q=2"
+    "reverb_room        src_perc_adsr  reverb         type=room,decay=0.4,damping=0.5,mix=0.4"
+    "reverb_hall        src_perc_adsr  reverb         type=hall,decay=0.8,damping=0.3,mix=0.5"
+    "delay              src_perc_adsr  delay          time=375,feedback=0.5,mix=0.4"
+    "tape_saturation    src_saw_chord  tape           drive=8,saturation=0.6"
+    "preamp             src_sine_440   preamp         gain=8"
+    "limiter            src_saw_chord  limiter        threshold=-12,ceiling=-0.5,release=80,lookahead=5"
+    "bitcrusher         src_sine_440   bitcrusher     bit_depth=6,downsample=4,mix=1"
+    "ringmod            src_sine_440   ringmod        frequency=220,depth=1,waveform=sine,mix=0.6"
+    "stage              src_saw_chord  stage          width=160,haas_delay=12"
+)
 
-# Distortion -- hard clip
-echo "  [2/18] Distortion (hard clip)..."
-"$SONIDO" process "$DEMOS/src_sine_440.wav" "$DEMOS/fx_distortion_hard.wav" \
-    --effect distortion --param drive=20 --param waveshape=hardclip --param tone=3000 --param level=-8
+TOTAL=${#DEMOS_TABLE[@]}
+IDX=0
 
-# Compressor
-echo "  [3/18] Compressor..."
-"$SONIDO" process "$DEMOS/src_perc_adsr.wav" "$DEMOS/fx_compressor.wav" \
-    --effect compressor --param threshold=-18 --param ratio=4 --param attack=10 --param release=100 --param makeup=6
+for row in "${DEMOS_TABLE[@]}"; do
+    read -r stem source effect params_csv <<< "$row"
+    IDX=$((IDX + 1))
 
-# Noise Gate
-echo "  [4/18] Noise Gate..."
-"$SONIDO" process "$DEMOS/src_sine_440.wav" "$DEMOS/fx_gate.wav" \
-    --effect gate --param threshold=-20 --param attack=1 --param release=50 --param hold=20
+    # Build --param flags from comma-separated k=v pairs
+    PARAM_FLAGS=""
+    IFS=',' read -ra PAIRS <<< "$params_csv"
+    for pair in "${PAIRS[@]}"; do
+        PARAM_FLAGS="$PARAM_FLAGS --param $pair"
+    done
 
-# Chorus
-echo "  [5/18] Chorus..."
-"$SONIDO" process "$DEMOS/src_saw_chord.wav" "$DEMOS/fx_chorus.wav" \
-    --effect chorus --param rate=1.5 --param depth=0.6 --param mix=0.5
-
-# Flanger
-echo "  [6/18] Flanger..."
-"$SONIDO" process "$DEMOS/src_sine_440.wav" "$DEMOS/fx_flanger.wav" \
-    --effect flanger --param rate=0.4 --param depth=0.7 --param feedback=0.6 --param mix=0.5
-
-# Phaser
-echo "  [7/18] Phaser..."
-"$SONIDO" process "$DEMOS/src_saw_chord.wav" "$DEMOS/fx_phaser.wav" \
-    --effect phaser --param rate=0.3 --param depth=0.8 --param stages=6 --param feedback=0.7 --param mix=0.5
-
-# Tremolo
-echo "  [8/18] Tremolo..."
-"$SONIDO" process "$DEMOS/src_sine_440.wav" "$DEMOS/fx_tremolo.wav" \
-    --effect tremolo --param rate=6 --param depth=0.8 --param waveform=sine
-
-# Multi Vibrato
-echo "  [9/18] Multi Vibrato..."
-"$SONIDO" process "$DEMOS/src_saw_chord.wav" "$DEMOS/fx_multivibrato.wav" \
-    --effect multivibrato --param depth=0.6
-
-# Low Pass Filter
-echo "  [10/18] Low Pass Filter..."
-"$SONIDO" process "$DEMOS/src_sweep.wav" "$DEMOS/fx_filter_lowpass.wav" \
-    --effect filter --param cutoff=2000 --param resonance=4
-
-# Auto-Wah
-echo "  [11/18] Auto-Wah..."
-"$SONIDO" process "$DEMOS/src_saw_chord.wav" "$DEMOS/fx_wah.wav" \
-    --effect wah --param frequency=800 --param resonance=5 --param sensitivity=0.7 --param mode=auto
-
-# Parametric EQ
-echo "  [12/18] Parametric EQ..."
-"$SONIDO" process "$DEMOS/src_sweep.wav" "$DEMOS/fx_parametric_eq.wav" \
-    --effect eq --param mid_freq=1000 --param mid_gain=8 --param mid_q=2
-
-# Reverb (room)
-echo "  [13/18] Reverb (room)..."
-"$SONIDO" process "$DEMOS/src_perc_adsr.wav" "$DEMOS/fx_reverb_room.wav" \
-    --effect reverb --param type=room --param decay=0.4 --param damping=0.5 --param mix=0.4
-
-# Reverb (hall)
-echo "  [14/18] Reverb (hall)..."
-"$SONIDO" process "$DEMOS/src_perc_adsr.wav" "$DEMOS/fx_reverb_hall.wav" \
-    --effect reverb --param type=hall --param decay=0.8 --param damping=0.3 --param mix=0.5
-
-# Delay
-echo "  [15/18] Delay..."
-"$SONIDO" process "$DEMOS/src_perc_adsr.wav" "$DEMOS/fx_delay.wav" \
-    --effect delay --param time=375 --param feedback=0.5 --param mix=0.4
-
-# Tape Saturation
-echo "  [16/18] Tape Saturation..."
-"$SONIDO" process "$DEMOS/src_saw_chord.wav" "$DEMOS/fx_tape_saturation.wav" \
-    --effect tape --param drive=8 --param saturation=0.6
-
-# Clean Preamp
-echo "  [17/18] Clean Preamp..."
-"$SONIDO" process "$DEMOS/src_sine_440.wav" "$DEMOS/fx_preamp.wav" \
-    --effect preamp --param gain=8
+    echo "  [$IDX/$TOTAL] $stem..."
+    # shellcheck disable=SC2086
+    "$SONIDO" process "$DEMOS/${source}.wav" "$DEMOS/fx_${stem}.wav" \
+        --effect "$effect" $PARAM_FLAGS
+done
 
 # Full effect chain: preamp -> distortion -> chorus -> delay -> reverb
-echo "  [18/18] Full effect chain..."
+echo "  [chain] Full effect chain..."
 "$SONIDO" process "$DEMOS/src_saw_chord.wav" "$DEMOS/fx_full_chain.wav" \
     --chain "preamp:gain=6|distortion:drive=10,waveshape=softclip,level=-6|chorus:rate=1,depth=0.4,mix=0.3|delay:time=300,feedback=0.3,mix=0.25|reverb:type=hall,decay=0.6,mix=0.3"
 

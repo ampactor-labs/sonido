@@ -30,7 +30,7 @@ fmt:
 doc:
 	cargo doc --no-deps --all-features
 
-# Generate demo WAV files (5 signals + 18 effect demos)
+# Generate demo WAV files (5 signals + 22 effect demos)
 demo:
 	./scripts/generate_demos.sh
 
@@ -90,7 +90,7 @@ plugins:
 	done
 	@echo "All plugins installed to ~/.clap/"
 
-# Full CI check (same subset as pre-push hook)
+# Full local CI check (mirrors remote CI minus no_std/wasm cross-compilation)
 ci:
 	cargo fmt --all -- --check
 	cargo clippy --workspace --all-targets -- -D warnings

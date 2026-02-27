@@ -214,9 +214,9 @@ Resonance Compensation) and `docs/DESIGN_DECISIONS.md` ADR-019 for the math.
 Generate a 0 dBFS, 1 kHz sine for 5 seconds and measure peak output:
 
 ```bash
-sonido generate tone test_audio/test_input.wav --freq 1000 --duration 5.0
-sonido process test_audio/test_input.wav --effect <effect>
-sonido analyze dynamics test_audio/test_input_<effect>.wav
+sonido generate tone demos/test_input.wav --freq 1000 --duration 5.0
+sonido process demos/test_input.wav --effect <effect>
+sonido analyze dynamics demos/test_input_<effect>.wav
 ```
 
 Pass criterion: reported peak <= -1.0 dBFS.
@@ -226,8 +226,8 @@ Pass criterion: reported peak <= -1.0 dBFS.
 Compare RMS of processed vs. dry signal:
 
 ```bash
-sonido process test_audio/test_input.wav --effect <effect>
-sonido compare test_audio/test_input.wav test_audio/test_input_<effect>.wav --detailed
+sonido process demos/test_input.wav --effect <effect>
+sonido compare demos/test_input.wav demos/test_input_<effect>.wav --detailed
 ```
 
 Pass criterion: |RMS_processed - RMS_dry| <= 1.0 dB.
@@ -246,10 +246,10 @@ staging control.
 ### Rule 4: Wet/Dry Exactness Test
 
 ```bash
-sonido process test_audio/test_input.wav --effect <effect> --param mix=0
-sonido compare test_audio/test_input.wav test_audio/test_input_<effect>.wav --detailed
+sonido process demos/test_input.wav --effect <effect> --param mix=0
+sonido compare demos/test_input.wav demos/test_input_<effect>.wav --detailed
 
-sonido process test_audio/test_input.wav --effect <effect> --param mix=1
+sonido process demos/test_input.wav --effect <effect> --param mix=1
 ```
 
 Pass criterion: MSE = 0.0 at mix=0 (bit-exact).
@@ -260,9 +260,9 @@ Drive effect at maximum feedback with sustained input and verify output
 remains bounded:
 
 ```bash
-sonido generate tone test_audio/long_tone.wav --freq 1000 --duration 10.0
-sonido process test_audio/long_tone.wav --effect <effect> --param feedback=0.95
-sonido analyze dynamics test_audio/long_tone_<effect>.wav
+sonido generate tone demos/long_tone.wav --freq 1000 --duration 10.0
+sonido process demos/long_tone.wav --effect <effect> --param feedback=0.95
+sonido analyze dynamics demos/long_tone_<effect>.wav
 ```
 
 Pass criterion: peak remains finite and does not grow monotonically over the
@@ -274,13 +274,13 @@ Process -18 dBFS and 0 dBFS inputs, verify no clipping or NaN:
 
 ```bash
 # Nominal level (-18 dBFS)
-sonido generate tone test_audio/nominal.wav --freq 1000 --duration 5.0 --amplitude 0.125
-sonido process test_audio/nominal.wav --effect <effect>
-sonido analyze dynamics test_audio/nominal_<effect>.wav
+sonido generate tone demos/nominal.wav --freq 1000 --duration 5.0 --amplitude 0.125
+sonido process demos/nominal.wav --effect <effect>
+sonido analyze dynamics demos/nominal_<effect>.wav
 
 # Full-scale (0 dBFS)
-sonido process test_audio/test_input.wav --effect <effect>
-sonido analyze dynamics test_audio/test_input_<effect>.wav
+sonido process demos/test_input.wav --effect <effect>
+sonido analyze dynamics demos/test_input_<effect>.wav
 ```
 
 Pass criterion: no NaN, no Inf, no unexpected clipping artifacts.

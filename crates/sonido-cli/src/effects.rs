@@ -2,9 +2,9 @@
 
 use sonido_core::EffectWithParams;
 use sonido_effects::{
-    Chorus, CleanPreamp, Compressor, Delay, Distortion, Flanger, Gate, LowPassFilter, MultiVibrato,
-    ParametricEq, Phaser, Reverb, ReverbType, TapeSaturation, Tremolo, TremoloWaveform, Wah,
-    WahMode, WaveShape,
+    Bitcrusher, CarrierWaveform, ChannelMode, Chorus, CleanPreamp, Compressor, Delay, Distortion,
+    Flanger, Gate, HaasSide, Limiter, LowPassFilter, MultiVibrato, ParametricEq, Phaser, Reverb,
+    ReverbType, RingMod, Stage, TapeSaturation, Tremolo, TremoloWaveform, Wah, WahMode, WaveShape,
 };
 use std::collections::HashMap;
 
@@ -608,6 +608,192 @@ pub fn available_effects() -> Vec<EffectInfo> {
                 },
             ],
         },
+        EffectInfo {
+            name: "limiter",
+            description: "Brickwall lookahead limiter",
+            parameters: &[
+                ParameterInfo {
+                    name: "threshold",
+                    description: "Threshold in dB",
+                    default: "-6.0",
+                    range: "-30-0",
+                },
+                ParameterInfo {
+                    name: "ceiling",
+                    description: "Output ceiling in dB",
+                    default: "-0.3",
+                    range: "-30-0",
+                },
+                ParameterInfo {
+                    name: "release",
+                    description: "Release time in ms",
+                    default: "100.0",
+                    range: "10-500",
+                },
+                ParameterInfo {
+                    name: "lookahead",
+                    description: "Lookahead time in ms",
+                    default: "5.0",
+                    range: "0-10",
+                },
+                ParameterInfo {
+                    name: "output",
+                    description: "Output level in dB",
+                    default: "0.0",
+                    range: "-20-20",
+                },
+            ],
+        },
+        EffectInfo {
+            name: "bitcrusher",
+            description: "Bit depth and sample rate reduction",
+            parameters: &[
+                ParameterInfo {
+                    name: "bit_depth",
+                    description: "Bit depth (2-16)",
+                    default: "8",
+                    range: "2-16",
+                },
+                ParameterInfo {
+                    name: "downsample",
+                    description: "Downsample factor (1-64)",
+                    default: "1",
+                    range: "1-64",
+                },
+                ParameterInfo {
+                    name: "jitter",
+                    description: "Sample jitter amount (0-1)",
+                    default: "0.0",
+                    range: "0-1",
+                },
+                ParameterInfo {
+                    name: "mix",
+                    description: "Wet/dry mix (0-1)",
+                    default: "1.0",
+                    range: "0-1",
+                },
+                ParameterInfo {
+                    name: "output",
+                    description: "Output level in dB",
+                    default: "0.0",
+                    range: "-20-20",
+                },
+            ],
+        },
+        EffectInfo {
+            name: "ringmod",
+            description: "Ring modulator with sine/triangle/square carrier",
+            parameters: &[
+                ParameterInfo {
+                    name: "frequency",
+                    description: "Carrier frequency in Hz",
+                    default: "440.0",
+                    range: "20-5000",
+                },
+                ParameterInfo {
+                    name: "depth",
+                    description: "Modulation depth (0-1)",
+                    default: "1.0",
+                    range: "0-1",
+                },
+                ParameterInfo {
+                    name: "waveform",
+                    description: "Carrier waveform",
+                    default: "sine",
+                    range: "sine|triangle|square",
+                },
+                ParameterInfo {
+                    name: "mix",
+                    description: "Wet/dry mix (0-1)",
+                    default: "0.5",
+                    range: "0-1",
+                },
+                ParameterInfo {
+                    name: "output",
+                    description: "Output level in dB",
+                    default: "0.0",
+                    range: "-20-20",
+                },
+            ],
+        },
+        EffectInfo {
+            name: "stage",
+            description: "Signal conditioning and stereo utility",
+            parameters: &[
+                ParameterInfo {
+                    name: "gain",
+                    description: "Gain in dB",
+                    default: "0.0",
+                    range: "-20-20",
+                },
+                ParameterInfo {
+                    name: "width",
+                    description: "Stereo width in percent",
+                    default: "100",
+                    range: "0-200",
+                },
+                ParameterInfo {
+                    name: "balance",
+                    description: "L/R balance in percent",
+                    default: "0",
+                    range: "-100-100",
+                },
+                ParameterInfo {
+                    name: "phase_l",
+                    description: "Invert left phase (0 or 1)",
+                    default: "0",
+                    range: "0|1",
+                },
+                ParameterInfo {
+                    name: "phase_r",
+                    description: "Invert right phase (0 or 1)",
+                    default: "0",
+                    range: "0|1",
+                },
+                ParameterInfo {
+                    name: "channel",
+                    description: "Channel routing mode",
+                    default: "0",
+                    range: "0=normal|1=swap|2=mono_l|3=mono_r",
+                },
+                ParameterInfo {
+                    name: "dc_block",
+                    description: "Enable DC blocking filter (0 or 1)",
+                    default: "0",
+                    range: "0|1",
+                },
+                ParameterInfo {
+                    name: "bass_mono",
+                    description: "Sum bass to mono (0 or 1)",
+                    default: "0",
+                    range: "0|1",
+                },
+                ParameterInfo {
+                    name: "bass_freq",
+                    description: "Bass mono crossover frequency in Hz",
+                    default: "200.0",
+                    range: "40-400",
+                },
+                ParameterInfo {
+                    name: "haas_delay",
+                    description: "Haas delay in ms",
+                    default: "0.0",
+                    range: "0-30",
+                },
+                ParameterInfo {
+                    name: "haas_side",
+                    description: "Which channel gets Haas delay",
+                    default: "1",
+                    range: "0=left|1=right",
+                },
+                ParameterInfo {
+                    name: "output",
+                    description: "Output level in dB",
+                    default: "0.0",
+                    range: "-20-20",
+                },
+            ],
+        },
     ]
 }
 
@@ -628,6 +814,12 @@ pub fn create_effect_with_params(
                     "waveshape" | "shape" => effect.set_waveshape(parse_waveshape(value)?),
                     "foldback_threshold" | "foldback" => {
                         effect.set_foldback_threshold(parse_f32(key, value)?);
+                    }
+                    "level" | "output" => {
+                        use sonido_core::ParameterInfo as _;
+                        let db = parse_f32(key, value)?;
+                        let last = effect.param_count() - 1;
+                        effect.set_param(last, db);
                     }
                     _ => {
                         return Err(EffectError::UnknownParameter {
@@ -980,6 +1172,117 @@ pub fn create_effect_with_params(
             }
             Ok(Box::new(effect))
         }
+        "limiter" => {
+            let mut effect = Limiter::new(sample_rate);
+            for (key, value) in params {
+                match key.as_str() {
+                    "threshold" | "thresh" => effect.set_threshold_db(parse_f32(key, value)?),
+                    "ceiling" | "ceil" => effect.set_ceiling_db(parse_f32(key, value)?),
+                    "release" | "rel" => effect.set_release_ms(parse_f32(key, value)?),
+                    "lookahead" | "la" => effect.set_lookahead_ms(parse_f32(key, value)?),
+                    "output" => {
+                        use sonido_core::ParameterInfo as _;
+                        let db = parse_f32(key, value)?;
+                        let last = effect.param_count() - 1;
+                        effect.set_param(last, db);
+                    }
+                    _ => {
+                        return Err(EffectError::UnknownParameter {
+                            effect: name.to_string(),
+                            param: key.to_string(),
+                        });
+                    }
+                }
+            }
+            Ok(Box::new(effect))
+        }
+        "bitcrusher" | "crusher" => {
+            let mut effect = Bitcrusher::new(sample_rate);
+            for (key, value) in params {
+                match key.as_str() {
+                    "bit_depth" | "bits" => effect.set_bit_depth(parse_f32(key, value)?),
+                    "downsample" | "ds" => effect.set_downsample(parse_f32(key, value)?),
+                    "jitter" => effect.set_jitter(parse_f32(key, value)?),
+                    "mix" => effect.set_mix(parse_f32(key, value)?),
+                    "output" => {
+                        use sonido_core::ParameterInfo as _;
+                        let db = parse_f32(key, value)?;
+                        let last = effect.param_count() - 1;
+                        effect.set_param(last, db);
+                    }
+                    _ => {
+                        return Err(EffectError::UnknownParameter {
+                            effect: name.to_string(),
+                            param: key.to_string(),
+                        });
+                    }
+                }
+            }
+            Ok(Box::new(effect))
+        }
+        "ringmod" | "ring" => {
+            let mut effect = RingMod::new(sample_rate);
+            for (key, value) in params {
+                match key.as_str() {
+                    "frequency" | "freq" => effect.set_frequency(parse_f32(key, value)?),
+                    "depth" => effect.set_depth(parse_f32(key, value)?),
+                    "waveform" | "wave" => effect.set_waveform(parse_carrier_waveform(value)?),
+                    "mix" => effect.set_mix(parse_f32(key, value)?),
+                    "output" => {
+                        use sonido_core::ParameterInfo as _;
+                        let db = parse_f32(key, value)?;
+                        let last = effect.param_count() - 1;
+                        effect.set_param(last, db);
+                    }
+                    _ => {
+                        return Err(EffectError::UnknownParameter {
+                            effect: name.to_string(),
+                            param: key.to_string(),
+                        });
+                    }
+                }
+            }
+            Ok(Box::new(effect))
+        }
+        "stage" => {
+            let mut effect = Stage::new(sample_rate);
+            for (key, value) in params {
+                match key.as_str() {
+                    "gain" => effect.set_gain_db(parse_f32(key, value)?),
+                    "width" => effect.set_width(parse_f32(key, value)?),
+                    "balance" | "bal" => effect.set_balance(parse_f32(key, value)?),
+                    "phase_l" => {
+                        effect.set_phase_invert_l(parse_f32(key, value)? > 0.5);
+                    }
+                    "phase_r" => {
+                        effect.set_phase_invert_r(parse_f32(key, value)? > 0.5);
+                    }
+                    "channel" => {
+                        effect.set_channel_mode(ChannelMode::from_index(parse_f32(key, value)?));
+                    }
+                    "dc_block" => effect.set_dc_block(parse_f32(key, value)? > 0.5),
+                    "bass_mono" => effect.set_bass_mono(parse_f32(key, value)? > 0.5),
+                    "bass_freq" => effect.set_bass_mono_freq(parse_f32(key, value)?),
+                    "haas_delay" | "haas" => effect.set_haas_delay_ms(parse_f32(key, value)?),
+                    "haas_side" => {
+                        effect.set_haas_side(HaasSide::from_index(parse_f32(key, value)?));
+                    }
+                    "output" => {
+                        use sonido_core::ParameterInfo as _;
+                        let db = parse_f32(key, value)?;
+                        let last = effect.param_count() - 1;
+                        effect.set_param(last, db);
+                    }
+                    _ => {
+                        return Err(EffectError::UnknownParameter {
+                            effect: name.to_string(),
+                            param: key.to_string(),
+                        });
+                    }
+                }
+            }
+            Ok(Box::new(effect))
+        }
         _ => Err(EffectError::UnknownEffect(name.to_string())),
     }
 }
@@ -1095,6 +1398,21 @@ fn parse_tremolo_waveform(value: &str) -> Result<TremoloWaveform, EffectError> {
             param: "waveform".to_string(),
             message: format!(
                 "'{}' is not a valid waveform (use: sine, triangle, square, samplehold)",
+                value
+            ),
+        }),
+    }
+}
+
+fn parse_carrier_waveform(value: &str) -> Result<CarrierWaveform, EffectError> {
+    match value.to_lowercase().as_str() {
+        "sine" | "sin" => Ok(CarrierWaveform::Sine),
+        "triangle" | "tri" => Ok(CarrierWaveform::Triangle),
+        "square" | "sq" => Ok(CarrierWaveform::Square),
+        _ => Err(EffectError::InvalidValue {
+            param: "waveform".to_string(),
+            message: format!(
+                "'{}' is not a valid carrier waveform (use: sine, triangle, square)",
                 value
             ),
         }),
@@ -1294,7 +1612,7 @@ mod tests {
 
     #[test]
     fn available_effects_count() {
-        assert_eq!(available_effects().len(), 15);
+        assert_eq!(available_effects().len(), 19);
     }
 
     #[test]
@@ -1317,6 +1635,10 @@ mod tests {
             "gate",
             "wah",
             "eq",
+            "limiter",
+            "bitcrusher",
+            "ringmod",
+            "stage",
         ];
         for name in &expected {
             assert!(names.contains(name), "missing effect: {name}");

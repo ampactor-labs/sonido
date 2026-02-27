@@ -6,7 +6,7 @@
 #
 # Usage: ./scripts/measure_all.sh
 #
-# All output goes to test_audio/ (gitignored).
+# All output goes to demos/ (WAVs gitignored).
 # Requires: cargo build -p sonido-cli --release
 
 set -euo pipefail
@@ -14,7 +14,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 SONIDO="$PROJECT_DIR/target/release/sonido"
-OUT="$PROJECT_DIR/test_audio"
+OUT="$PROJECT_DIR/demos"
 
 # Colors
 RED='\033[0;31m'
@@ -66,6 +66,10 @@ EFFECTS=(
     gate
     wah
     eq
+    limiter
+    bitcrusher
+    ringmod
+    stage
 )
 
 # ── Parse helpers ───────────────────────────────────────────────────────
@@ -183,12 +187,12 @@ echo ""
     fi
 } > "$OUT/measurements.txt"
 
-echo "Results saved to test_audio/measurements.txt"
+echo "Results saved to demos/measurements.txt"
 echo ""
 
 # File listing
 NFILES=$(find "$OUT" -name '*.wav' | wc -l)
-echo "$NFILES WAV files in test_audio/"
+echo "$NFILES WAV files in demos/"
 echo "Listen to: *_chord.wav and *_sweep.wav for each effect"
 
 if [[ $FAIL_COUNT -gt 0 ]]; then

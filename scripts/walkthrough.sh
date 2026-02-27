@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # walkthrough.sh -- Unified guided tour of the Sonido DSP framework.
 #
-# Demonstrates the full Sonido experience: CLI signal generation, all 15 effects
-# (18 demos including variants), analysis tools, A/B comparison, presets, and
+# Demonstrates the full Sonido experience: CLI signal generation, all 19 effects
+# (22 demos including variants), analysis tools, A/B comparison, presets, and
 # GUI guidance.
 #
 # Usage:
@@ -135,10 +135,10 @@ if [ -f "$SONIDO" ]; then
     # Effect count check
     cmd_note "sonido effects"
     EFFECT_COUNT=$("$SONIDO" effects 2>&1 | grep -c "│" || true)
-    if [ "$EFFECT_COUNT" -ge 15 ]; then
-        pass "All 15 effects registered ($EFFECT_COUNT found)"
+    if [ "$EFFECT_COUNT" -ge 19 ]; then
+        pass "All 19 effects registered ($EFFECT_COUNT found)"
     elif [ "$EFFECT_COUNT" -gt 0 ]; then
-        fail "Expected 15 effects, found $EFFECT_COUNT"
+        fail "Expected 19 effects, found $EFFECT_COUNT"
     else
         fail "Could not parse effect list"
     fi
@@ -150,7 +150,7 @@ fi
 
 header "2. Demo Generation & Verification"
 
-# Expected outputs: 5 source signals + 18 effect demos
+# Expected outputs: 5 source signals + 22 effect demos
 EXPECTED_WAVS=(
     "src_sine_440.wav:Sine tone 440 Hz"
     "src_saw_chord.wav:Saw chord pad (C major)"
@@ -174,6 +174,10 @@ EXPECTED_WAVS=(
     "fx_delay.wav:Delay"
     "fx_tape_saturation.wav:Tape Saturation"
     "fx_preamp.wav:Clean Preamp"
+    "fx_limiter.wav:Limiter"
+    "fx_bitcrusher.wav:Bitcrusher"
+    "fx_ringmod.wav:Ring Modulator"
+    "fx_stage.wav:Stage (stereo utility)"
     "fx_full_chain.wav:Full effect chain (5 effects)"
 )
 
@@ -379,6 +383,10 @@ echo "  Reverb (hall)      | Long, spacious tail"
 echo "  Delay              | Rhythmic echoes"
 echo "  Tape Saturation    | Analog warmth, gentle compression"
 echo "  Preamp             | Clean volume boost"
+echo "  Limiter            | Transparent peak control, brickwall ceiling"
+echo "  Bitcrusher         | Lo-fi crunch, retro digital artifacts"
+echo "  Ring Modulator     | Metallic, inharmonic sidebands"
+echo "  Stage              | Width adjustment, Haas stereo enhancement"
 echo "  Full Chain         | Layered: gain -> dirt -> width -> echo -> space"
 echo "  ---------------------------------------------------------------"
 echo ""

@@ -4,3 +4,4 @@
 audio-staging
 external-audio
 .claude/worktrees/
+demos/*.wav
