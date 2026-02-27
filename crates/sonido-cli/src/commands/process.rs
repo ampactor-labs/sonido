@@ -2,6 +2,7 @@
 
 use super::common::{load_preset, parse_key_val};
 use crate::effects::{create_effect_with_params, parse_chain};
+use crate::graph_dsl::{build_graph, build_graph_slug, parse_graph_dsl, validate_spec};
 use clap::Args;
 use indicatif::{ProgressBar, ProgressStyle};
 use sonido_analysis::dynamics;
@@ -25,8 +26,12 @@ pub struct ProcessArgs {
     effect: Option<String>,
 
     /// Effect chain specification (e.g., "preamp:gain=6|distortion:drive=15")
-    #[arg(short, long)]
+    #[arg(short, long, conflicts_with = "graph")]
     chain: Option<String>,
+
+    /// Graph topology specification with split/merge (e.g., "split(distortion; -)|limiter")
+    #[arg(short, long, conflicts_with_all = ["effect", "chain", "preset"])]
+    graph: Option<String>,
 
     /// Preset name or path (supports factory presets, user presets, and file paths)
     #[arg(short, long)]
@@ -70,57 +75,80 @@ pub fn run(args: ProcessArgs) -> anyhow::Result<()> {
             &args.input,
             args.effect.as_deref(),
             args.chain.as_deref(),
+            args.graph.as_deref(),
             args.preset.as_deref(),
             &args.param,
         ),
     };
 
-    // Build effect chain
+    // Build effect chain or graph topology
     let block_size = args.block_size;
-    let mut engine = GraphEngine::new_linear(sample_rate, block_size);
+    let is_graph_mode = args.graph.is_some();
 
-    if let Some(preset_name) = &args.preset {
-        // Load preset by name or path using sonido-config
-        let preset = load_preset(preset_name)?;
-
-        println!("Loading preset: {}", preset.name);
-        for effect_cfg in &preset.effects {
-            if effect_cfg.bypassed {
-                continue; // Skip bypassed effects
-            }
-            let effect = create_effect_with_params(
-                &effect_cfg.effect_type,
-                sample_rate,
-                &effect_cfg.params,
-            )?;
-            engine.add_effect(effect);
-        }
-    } else if let Some(chain_spec) = &args.chain {
-        // Parse chain specification
-        let effects = parse_chain(chain_spec, sample_rate)?;
-        for effect in effects {
-            engine.add_effect(effect);
-        }
-    } else if let Some(effect_name) = &args.effect {
-        // Single effect with optional parameters
-        let params: HashMap<String, String> = args.param.into_iter().collect();
-        let effect = create_effect_with_params(effect_name, sample_rate, &params)?;
-        engine.add_effect(effect);
+    let mut engine = if let Some(graph_spec) = &args.graph {
+        // Graph topology mode: parse DSL → build ProcessingGraph
+        let spec = parse_graph_dsl(graph_spec)?;
+        validate_spec(&spec)?;
+        let graph = build_graph(&spec, sample_rate, block_size)?;
+        GraphEngine::new(graph)
     } else {
-        anyhow::bail!("No effect specified. Use --effect, --chain, or --preset");
-    }
+        let mut engine = GraphEngine::new_linear(sample_rate, block_size);
 
-    if engine.is_empty() {
-        anyhow::bail!("No effects to process");
-    }
+        if let Some(preset_name) = &args.preset {
+            // Load preset by name or path using sonido-config
+            let preset = load_preset(preset_name)?;
+
+            println!("Loading preset: {}", preset.name);
+            for effect_cfg in &preset.effects {
+                if effect_cfg.bypassed {
+                    continue; // Skip bypassed effects
+                }
+                let effect = create_effect_with_params(
+                    &effect_cfg.effect_type,
+                    sample_rate,
+                    &effect_cfg.params,
+                )?;
+                engine.add_effect(effect);
+            }
+        } else if let Some(chain_spec) = &args.chain {
+            // Parse chain specification
+            let effects = parse_chain(chain_spec, sample_rate)?;
+            for effect in effects {
+                engine.add_effect(effect);
+            }
+        } else if let Some(effect_name) = &args.effect {
+            // Single effect with optional parameters
+            let params: HashMap<String, String> = args.param.into_iter().collect();
+            let effect = create_effect_with_params(effect_name, sample_rate, &params)?;
+            engine.add_effect(effect);
+        } else {
+            anyhow::bail!("No effect specified. Use --effect, --chain, --graph, or --preset");
+        }
+
+        if engine.is_empty() {
+            anyhow::bail!("No effects to process");
+        }
+
+        engine
+    };
 
     // Determine output mode
     let output_stereo = !args.mono;
-    println!(
-        "Processing with {} effect(s) ({} output)...",
-        engine.effect_count(),
-        if output_stereo { "stereo" } else { "mono" }
-    );
+    if is_graph_mode {
+        // node_count includes Input + Output; subtract 2 for "processing" nodes
+        let processing_nodes = engine.graph().node_count().saturating_sub(2);
+        println!(
+            "Processing graph topology ({} nodes, {} output)...",
+            processing_nodes,
+            if output_stereo { "stereo" } else { "mono" }
+        );
+    } else {
+        println!(
+            "Processing with {} effect(s) ({} output)...",
+            engine.effect_count(),
+            if output_stereo { "stereo" } else { "mono" }
+        );
+    }
 
     // Process with progress bar using stereo processing
     let pb = ProgressBar::new(samples.len() as u64);
@@ -186,12 +214,13 @@ pub fn run(args: ProcessArgs) -> anyhow::Result<()> {
 /// Generate an output file path from input path and effect specification.
 ///
 /// Slug construction: single effect uses `effect_param=val`, chains use
-/// `effect1+effect2`, presets use the preset name. Only user-specified
-/// params appear in the slug.
+/// `effect1+effect2`, graphs use `S[path1+path2]` notation, presets use
+/// the preset name. Only user-specified params appear in the slug.
 fn generate_output_path(
     input: &Path,
     effect: Option<&str>,
     chain: Option<&str>,
+    graph: Option<&str>,
     preset: Option<&str>,
     params: &[(String, String)],
 ) -> PathBuf {
@@ -200,6 +229,8 @@ fn generate_output_path(
 
     let slug = if let Some(preset_name) = preset {
         preset_name.to_string()
+    } else if let Some(graph_spec) = graph {
+        build_graph_slug(graph_spec)
     } else if let Some(chain_spec) = chain {
         build_chain_slug(chain_spec)
     } else if let Some(effect_name) = effect {
@@ -254,8 +285,14 @@ mod tests {
 
     #[test]
     fn output_path_preset_slug() {
-        let path =
-            generate_output_path(Path::new("input.wav"), None, None, Some("clean-boost"), &[]);
+        let path = generate_output_path(
+            Path::new("input.wav"),
+            None,
+            None,
+            None,
+            Some("clean-boost"),
+            &[],
+        );
         assert_eq!(path, PathBuf::from("input_clean-boost.wav"));
     }
 
@@ -264,6 +301,7 @@ mod tests {
         let path = generate_output_path(
             Path::new("input.wav"),
             Some("distortion"),
+            None,
             None,
             None,
             &[("drive".into(), "15".into())],
@@ -278,6 +316,7 @@ mod tests {
             None,
             Some("preamp:gain=6|delay:time=300"),
             None,
+            None,
             &[],
         );
         assert_eq!(
@@ -287,8 +326,21 @@ mod tests {
     }
 
     #[test]
+    fn output_path_graph_slug() {
+        let path = generate_output_path(
+            Path::new("input.wav"),
+            None,
+            None,
+            Some("split(delay:time=300; -) | reverb"),
+            None,
+            &[],
+        );
+        assert_eq!(path, PathBuf::from("input_S[delay_time=300+-]+reverb.wav"));
+    }
+
+    #[test]
     fn output_path_no_effect() {
-        let path = generate_output_path(Path::new("input.wav"), None, None, None, &[]);
+        let path = generate_output_path(Path::new("input.wav"), None, None, None, None, &[]);
         assert_eq!(path, PathBuf::from("input_processed.wav"));
     }
 
@@ -296,7 +348,8 @@ mod tests {
     fn output_path_long_filename_clamped() {
         let long_name = "a".repeat(200);
         let chain = format!("effect:{long_name}=1");
-        let path = generate_output_path(Path::new("input.wav"), None, Some(&chain), None, &[]);
+        let path =
+            generate_output_path(Path::new("input.wav"), None, Some(&chain), None, None, &[]);
         let filename = path.file_name().unwrap().to_string_lossy();
         assert!(
             filename.len() <= 200,

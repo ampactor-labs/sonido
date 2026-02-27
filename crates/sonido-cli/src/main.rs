@@ -2,6 +2,7 @@
 
 mod commands;
 mod effects;
+mod graph_dsl;
 
 use clap::{Parser, Subcommand};
 

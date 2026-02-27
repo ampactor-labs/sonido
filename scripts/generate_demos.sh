@@ -103,6 +103,37 @@ echo "  [chain] Full effect chain..."
     --chain "preamp:gain=6|distortion:drive=10,waveshape=softclip,level=-6|chorus:rate=1,depth=0.4,mix=0.3|delay:time=300,feedback=0.3,mix=0.25|reverb:type=hall,decay=0.6,mix=0.3"
 
 echo ""
+echo "=== Graph topology demos ==="
+
+echo "  [graph] Parallel compression..."
+"$SONIDO" process "$DEMOS/src_saw_chord.wav" "$DEMOS/graph_parallel_comp.wav" \
+    --graph "split(compressor:ratio=4,attack=5; -)"
+
+echo "  [graph] Wet/dry reverb..."
+"$SONIDO" process "$DEMOS/src_saw_chord.wav" "$DEMOS/graph_wetdry_reverb.wav" \
+    --graph "split(reverb:decay=0.9,mix=1.0; -) | limiter"
+
+echo "  [graph] Diamond delay..."
+"$SONIDO" process "$DEMOS/src_saw_chord.wav" "$DEMOS/graph_diamond_delay.wav" \
+    --graph "split(delay:time=250; delay:time=500) | reverb:mix=0.3"
+
+echo "  [graph] Hendrix chain..."
+"$SONIDO" process "$DEMOS/src_saw_chord.wav" "$DEMOS/graph_hendrix_chain.wav" \
+    --graph "preamp:gain=8 | distortion:drive=25 | chorus:rate=0.8 | delay:time=400 | reverb:decay=0.8"
+
+echo "  [graph] Dual path..."
+"$SONIDO" process "$DEMOS/src_saw_chord.wav" "$DEMOS/graph_dual_path.wav" \
+    --graph "preamp | split(distortion:drive=20 | chorus; phaser | flanger) | delay | reverb"
+
+echo "  [graph] Three-way split..."
+"$SONIDO" process "$DEMOS/src_saw_chord.wav" "$DEMOS/graph_three_way.wav" \
+    --graph "split(distortion:drive=30; chorus:depth=6; reverb:mix=1.0) | limiter"
+
+echo "  [graph] Nested split..."
+"$SONIDO" process "$DEMOS/src_saw_chord.wav" "$DEMOS/graph_nested_split.wav" \
+    --graph "split(split(distortion; chorus); reverb:mix=1.0) | limiter"
+
+echo ""
 echo "=== Done ==="
 echo "Generated $(ls -1 "$DEMOS"/*.wav 2>/dev/null | wc -l) WAV files in $DEMOS/"
 ls -lh "$DEMOS"/*.wav

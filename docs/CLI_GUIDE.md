@@ -58,8 +58,9 @@ the effect specification. For example, `sonido process input.wav --effect reverb
 |--------|-------------|
 | `-e, --effect <NAME>` | Single effect to apply |
 | `-c, --chain <SPEC>` | Effect chain specification |
+| `-g, --graph <SPEC>` | Graph topology specification with split/merge |
 | `-p, --preset <FILE>` | Preset file (TOML) |
-| `--param <KEY=VALUE>` | Effect parameter (can repeat) |
+| `--param <KEY=VALUE>` | Effect parameter (can repeat, used with `--effect`) |
 | `--block-size <N>` | Processing block size (default: 512) |
 | `--bit-depth <N>` | Output bit depth: 16, 24, or 32 (default: 32) |
 | `--mono` | Force mono output (default is always stereo, even for mono input) |
@@ -78,6 +79,12 @@ sonido process input.wav output.wav --effect distortion --param drive=15 --param
 sonido process input.wav \
     --chain "preamp:gain=6|distortion:drive=12|delay:time=300,feedback=0.4"
 # -> produces input_preamp_distortion_delay.wav
+
+# Graph topology with parallel compression
+sonido process input.wav --graph "split(compressor:ratio=4; -) | limiter"
+
+# Nested splits
+sonido process input.wav --graph "split(split(distortion; chorus); reverb:mix=1.0) | limiter"
 
 # Using a preset file
 sonido process input.wav output.wav --preset presets/guitar_crunch.toml
@@ -112,6 +119,59 @@ sonido process input.wav --chain "preamp:gain=6 | distortion | delay:time=300"
 
 # Empty segments between pipes are skipped
 sonido process input.wav --chain "preamp:gain=6||distortion"
+```
+
+### Graph Syntax
+
+The `--graph` flag extends chain syntax with `split()` for parallel routing (DAG topologies).
+Mutually exclusive with `--effect`, `--chain`, and `--preset`.
+
+```
+graph       ::= path
+path        ::= segment ( '|' segment )*
+segment     ::= '-' | 'split(' path ( ';' path )+ ')' | effect_spec
+effect_spec ::= name ( ':' key '=' value ( ',' key '=' value )* )?
+```
+
+**Structural characters:**
+
+| Character | Meaning |
+|-----------|---------|
+| `\|` | Chain: connects segments in series |
+| `;` | Path separator inside `split()` |
+| `()` | Split delimiters |
+| `:` | Separates effect name from parameters |
+| `,` | Separates parameters |
+| `=` | Separates parameter key from value |
+| `-` | Dry passthrough (only inside `split()`) |
+
+**Split semantics:** All split paths are summed at the merge point. This doubles amplitude
+for a wet/dry split — use a limiter after the merge or reduce effect output levels.
+
+**Constraints:** `split()` requires 2–16 paths. Empty paths are rejected. `-` is only valid
+inside a split path. Splits can be nested.
+
+```bash
+# Parallel compression (wet + dry summed)
+sonido process input.wav --graph "split(compressor:ratio=4,attack=5; -)"
+
+# Wet/dry reverb blend with post-limiter
+sonido process input.wav --graph "split(reverb:decay=0.9,mix=1.0; -) | limiter"
+
+# Diamond delay (two different delay times merged)
+sonido process input.wav --graph "split(delay:time=250; delay:time=500) | reverb:mix=0.3"
+
+# Chains inside split paths
+sonido process input.wav --graph "preamp | split(distortion:drive=20 | chorus; phaser | flanger) | reverb"
+
+# Three-way split
+sonido process input.wav --graph "split(distortion:drive=30; chorus:depth=6; reverb:mix=1.0) | limiter"
+
+# Nested splits
+sonido process input.wav --graph "split(split(distortion; chorus); reverb:mix=1.0) | limiter"
+
+# Linear chains work too (backward compatible with --chain)
+sonido process input.wav --graph "preamp:gain=8 | distortion:drive=25 | reverb:decay=0.8"
 ```
 
 ---

@@ -1317,7 +1317,9 @@ pub fn parse_chain(
 /// Parse a single effect specification.
 ///
 /// Format: "effect_name:param1=value1,param2=value2"
-fn parse_effect_spec(spec: &str) -> Result<(String, HashMap<String, String>), EffectError> {
+pub(crate) fn parse_effect_spec(
+    spec: &str,
+) -> Result<(String, HashMap<String, String>), EffectError> {
     let parts: Vec<&str> = spec.splitn(2, ':').collect();
     let name = parts[0].trim().to_string();
 
