@@ -10,7 +10,9 @@
 #![allow(missing_docs)]
 
 use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
-use sonido_core::{Effect, graph::ProcessingGraph};
+use sonido_core::{
+    Effect, EffectWithParams, ParamDescriptor, ParameterInfo, graph::ProcessingGraph,
+};
 
 const SAMPLE_RATE: f32 = 48000.0;
 const BLOCK_SIZE: usize = 256;
@@ -36,13 +38,29 @@ impl Effect for Gain {
     fn reset(&mut self) {}
 }
 
+impl ParameterInfo for Gain {
+    fn param_count(&self) -> usize {
+        0
+    }
+
+    fn param_info(&self, _index: usize) -> Option<ParamDescriptor> {
+        None
+    }
+
+    fn get_param(&self, _index: usize) -> f32 {
+        0.0
+    }
+
+    fn set_param(&mut self, _index: usize, _value: f32) {}
+}
+
 // ---------------------------------------------------------------------------
 // Graph constructors
 // ---------------------------------------------------------------------------
 
 fn make_linear(n: usize) -> ProcessingGraph {
-    let effects: Vec<Box<dyn Effect + Send>> = (0..n)
-        .map(|_| Box::new(Gain(0.9)) as Box<dyn Effect + Send>)
+    let effects: Vec<Box<dyn EffectWithParams + Send>> = (0..n)
+        .map(|_| Box::new(Gain(0.9)) as Box<dyn EffectWithParams + Send>)
         .collect();
     ProcessingGraph::linear(effects, SAMPLE_RATE, BLOCK_SIZE).unwrap()
 }
@@ -75,8 +93,8 @@ fn bench_compile(c: &mut Criterion) {
     // 5-node linear chain
     group.bench_function("linear_5", |b| {
         b.iter(|| {
-            let effects: Vec<Box<dyn Effect + Send>> = (0..5)
-                .map(|_| Box::new(Gain(0.9)) as Box<dyn Effect + Send>)
+            let effects: Vec<Box<dyn EffectWithParams + Send>> = (0..5)
+                .map(|_| Box::new(Gain(0.9)) as Box<dyn EffectWithParams + Send>)
                 .collect();
             let mut graph = ProcessingGraph::new(SAMPLE_RATE, BLOCK_SIZE);
             let input = graph.add_input();
@@ -95,8 +113,8 @@ fn bench_compile(c: &mut Criterion) {
     // 20-node linear chain — exercises sort + liveness at larger scale
     group.bench_function("linear_20", |b| {
         b.iter(|| {
-            let effects: Vec<Box<dyn Effect + Send>> = (0..20)
-                .map(|_| Box::new(Gain(0.9)) as Box<dyn Effect + Send>)
+            let effects: Vec<Box<dyn EffectWithParams + Send>> = (0..20)
+                .map(|_| Box::new(Gain(0.9)) as Box<dyn EffectWithParams + Send>)
                 .collect();
             let mut graph = ProcessingGraph::new(SAMPLE_RATE, BLOCK_SIZE);
             let input = graph.add_input();
@@ -211,8 +229,8 @@ fn bench_block_sweep(c: &mut Criterion) {
         let mut left_out = vec![0.0f32; block_size];
         let mut right_out = vec![0.0f32; block_size];
 
-        let effects: Vec<Box<dyn Effect + Send>> = (0..5)
-            .map(|_| Box::new(Gain(0.9)) as Box<dyn Effect + Send>)
+        let effects: Vec<Box<dyn EffectWithParams + Send>> = (0..5)
+            .map(|_| Box::new(Gain(0.9)) as Box<dyn EffectWithParams + Send>)
             .collect();
         let mut graph = ProcessingGraph::linear(effects, SAMPLE_RATE, block_size).unwrap();
 

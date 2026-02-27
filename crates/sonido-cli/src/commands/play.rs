@@ -3,7 +3,7 @@
 use super::common::{load_preset, parse_key_val};
 use crate::effects::{create_effect_with_params, parse_chain};
 use clap::Args;
-use sonido_io::{AudioStream, ProcessingEngine, StreamConfig, read_wav_stereo};
+use sonido_io::{AudioStream, GraphEngine, StreamConfig, read_wav_stereo};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -59,7 +59,7 @@ pub fn run(args: PlayArgs) -> anyhow::Result<()> {
     );
 
     // Build optional effect chain
-    let mut engine = ProcessingEngine::new(sample_rate);
+    let mut engine = GraphEngine::new_linear(sample_rate, 256);
     let has_effects;
 
     if let Some(preset_name) = &args.preset {
@@ -93,7 +93,7 @@ pub fn run(args: PlayArgs) -> anyhow::Result<()> {
     }
 
     if has_effects {
-        println!("Processing through {} effect(s)", engine.len());
+        println!("Processing through {} effect(s)", engine.effect_count());
     }
 
     let looping = args.r#loop;
@@ -133,6 +133,12 @@ pub fn run(args: PlayArgs) -> anyhow::Result<()> {
     let cb_running = Arc::clone(&running);
     let cb_position = Arc::clone(&position);
 
+    // Scratch buffers for block-based processing (allocated once, grown if needed).
+    let mut left_buf = vec![0.0f32; 256];
+    let mut right_buf = vec![0.0f32; 256];
+    let mut left_out = vec![0.0f32; 256];
+    let mut right_out = vec![0.0f32; 256];
+
     stream.run_output(move |data: &mut [f32]| {
         if !cb_running.load(Ordering::Relaxed) {
             data.fill(0.0);
@@ -142,43 +148,65 @@ pub fn run(args: PlayArgs) -> anyhow::Result<()> {
         let frames = data.len() / channels;
         let mut pos = cb_position.load(Ordering::Relaxed);
 
-        for i in 0..frames {
+        // Grow scratch buffers if callback delivers more frames than expected.
+        if frames > left_buf.len() {
+            left_buf.resize(frames, 0.0);
+            right_buf.resize(frames, 0.0);
+            left_out.resize(frames, 0.0);
+            right_out.resize(frames, 0.0);
+        }
+
+        // Gather source audio into contiguous L/R buffers, handling loop/end.
+        let mut filled = 0;
+        while filled < frames {
             if pos >= total_frames {
                 if looping {
                     pos = 0;
                 } else {
-                    let sample_start = i * channels;
-                    data[sample_start..].fill(0.0);
+                    // Zero remaining output and stop.
+                    let start = filled * channels;
+                    data[start..].fill(0.0);
                     cb_running.store(false, Ordering::Relaxed);
                     break;
                 }
             }
+            let avail = (total_frames - pos).min(frames - filled);
+            left_buf[filled..filled + avail].copy_from_slice(&left[pos..pos + avail]);
+            right_buf[filled..filled + avail].copy_from_slice(&right[pos..pos + avail]);
+            pos += avail;
+            filled += avail;
+        }
 
-            let mut l = left[pos];
-            let mut r = right[pos];
+        // Process entire block through the effect chain.
+        if has_effects && filled > 0 {
+            engine.process_block_stereo(
+                &left_buf[..filled],
+                &right_buf[..filled],
+                &mut left_out[..filled],
+                &mut right_out[..filled],
+            );
+        } else {
+            left_out[..filled].copy_from_slice(&left_buf[..filled]);
+            right_out[..filled].copy_from_slice(&right_buf[..filled]);
+        }
 
-            if has_effects {
-                (l, r) = engine.process_stereo(l, r);
-            }
-
+        // Interleave into output buffer.
+        for i in 0..filled {
             let idx = i * channels;
             match channels {
-                1 => data[idx] = (l + r) * 0.5,
+                1 => data[idx] = (left_out[i] + right_out[i]) * 0.5,
                 2 => {
-                    data[idx] = l;
-                    data[idx + 1] = r;
+                    data[idx] = left_out[i];
+                    data[idx + 1] = right_out[i];
                 }
                 _ => {
-                    // Multi-channel: L/R in first two, silence the rest
-                    data[idx] = l;
-                    data[idx + 1] = r;
+                    data[idx] = left_out[i];
+                    data[idx + 1] = right_out[i];
                     for c in 2..channels {
                         data[idx + c] = 0.0;
                     }
                 }
             }
-
-            pos += 1;
         }
 
         cb_position.store(pos, Ordering::Relaxed);

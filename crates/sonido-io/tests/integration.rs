@@ -1,8 +1,9 @@
-//! Integration tests for sonido-io WAV I/O and processing engine.
+//! Integration tests for sonido-io WAV I/O and graph engine.
 
 use sonido_core::Effect;
+use sonido_core::param_info::{ParamDescriptor, ParameterInfo};
 use sonido_io::{
-    ProcessingEngine, StereoSamples, WavSpec, read_wav, read_wav_info, read_wav_stereo, write_wav,
+    GraphEngine, StereoSamples, WavSpec, read_wav, read_wav_info, read_wav_stereo, write_wav,
     write_wav_stereo,
 };
 use tempfile::NamedTempFile;
@@ -454,7 +455,7 @@ fn read_mono_as_stereo_duplicates_channels() {
 }
 
 // ---------------------------------------------------------------------------
-// ProcessingEngine tests
+// GraphEngine tests
 // ---------------------------------------------------------------------------
 
 /// Simple test effect that multiplies by a constant factor.
@@ -474,10 +475,26 @@ impl Effect for Gain {
     }
 }
 
+impl ParameterInfo for Gain {
+    fn param_count(&self) -> usize {
+        0
+    }
+    fn param_info(&self, _index: usize) -> Option<ParamDescriptor> {
+        None
+    }
+    fn get_param(&self, _index: usize) -> f32 {
+        0.0
+    }
+    fn set_param(&mut self, _index: usize, _value: f32) {}
+}
+
+fn gain(factor: f32) -> Box<dyn sonido_core::EffectWithParams + Send> {
+    Box::new(Gain { factor })
+}
+
 #[test]
 fn engine_process_mono_block() {
-    let mut engine = ProcessingEngine::new(48000.0);
-    engine.add_effect(Box::new(Gain { factor: 0.5 }));
+    let mut engine = GraphEngine::from_chain(vec![gain(0.5)], 48000.0, 512).unwrap();
 
     let input = sine_wave(48000, 440.0, 512);
     let mut output = vec![0.0; 512];
@@ -489,18 +506,8 @@ fn engine_process_mono_block() {
 }
 
 #[test]
-fn engine_process_mono_sample_by_sample() {
-    let mut engine = ProcessingEngine::new(48000.0);
-    engine.add_effect(Box::new(Gain { factor: 2.0 }));
-
-    assert!((engine.process(0.25) - 0.5).abs() < 1e-6);
-    assert!((engine.process(-0.5) - (-1.0)).abs() < 1e-6);
-}
-
-#[test]
 fn engine_process_stereo_block() {
-    let mut engine = ProcessingEngine::new(48000.0);
-    engine.add_effect(Box::new(Gain { factor: 0.5 }));
+    let mut engine = GraphEngine::from_chain(vec![gain(0.5)], 48000.0, 256).unwrap();
 
     let left_in = sine_wave(48000, 440.0, 256);
     let right_in = sine_wave(48000, 880.0, 256);
@@ -518,44 +525,38 @@ fn engine_process_stereo_block() {
 }
 
 #[test]
-fn engine_process_stereo_sample() {
-    let mut engine = ProcessingEngine::new(48000.0);
-    engine.add_effect(Box::new(Gain { factor: 3.0 }));
-
-    let (l, r) = engine.process_stereo(0.1, 0.2);
-    assert!((l - 0.3).abs() < 1e-6);
-    assert!((r - 0.6).abs() < 1e-6);
-}
-
-#[test]
 fn engine_chain_two_effects() {
-    let mut engine = ProcessingEngine::new(48000.0);
-    engine.add_effect(Box::new(Gain { factor: 2.0 }));
-    engine.add_effect(Box::new(Gain { factor: 3.0 }));
+    let mut engine = GraphEngine::from_chain(vec![gain(2.0), gain(3.0)], 48000.0, 4).unwrap();
 
     // 0.1 * 2.0 * 3.0 = 0.6
-    assert!((engine.process(0.1) - 0.6).abs() < 1e-6);
-    assert_eq!(engine.len(), 2);
+    let input = [0.1; 4];
+    let mut output = [0.0; 4];
+    engine.process_block(&input, &mut output);
+    for &s in &output {
+        assert!((s - 0.6).abs() < 1e-6);
+    }
+    assert_eq!(engine.effect_count(), 2);
 }
 
 #[test]
 fn engine_empty_passes_through() {
-    let mut engine = ProcessingEngine::new(48000.0);
+    let mut engine = GraphEngine::new_linear(48000.0, 4);
     assert!(engine.is_empty());
 
-    // Mono pass-through
-    assert!((engine.process(0.42) - 0.42).abs() < 1e-6);
-
     // Stereo pass-through
-    let (l, r) = engine.process_stereo(0.1, 0.9);
-    assert!((l - 0.1).abs() < 1e-6);
-    assert!((r - 0.9).abs() < 1e-6);
+    let left_in = [0.1, 0.2, 0.3, 0.4];
+    let right_in = [0.9, 0.8, 0.7, 0.6];
+    let mut left_out = [0.0; 4];
+    let mut right_out = [0.0; 4];
+
+    engine.process_block_stereo(&left_in, &right_in, &mut left_out, &mut right_out);
+    assert_eq!(left_out, left_in);
+    assert_eq!(right_out, right_in);
 }
 
 #[test]
 fn engine_process_file_mono() {
-    let mut engine = ProcessingEngine::new(48000.0);
-    engine.add_effect(Box::new(Gain { factor: 0.5 }));
+    let mut engine = GraphEngine::from_chain(vec![gain(0.5)], 48000.0, 256).unwrap();
 
     let input = sine_wave(48000, 440.0, 2048);
     let output = engine.process_file(&input, 256);
@@ -568,8 +569,7 @@ fn engine_process_file_mono() {
 
 #[test]
 fn engine_process_file_stereo() {
-    let mut engine = ProcessingEngine::new(48000.0);
-    engine.add_effect(Box::new(Gain { factor: 0.5 }));
+    let mut engine = GraphEngine::from_chain(vec![gain(0.5)], 48000.0, 256).unwrap();
 
     let left = sine_wave(48000, 440.0, 2048);
     let right = sine_wave(48000, 880.0, 2048);
@@ -587,42 +587,23 @@ fn engine_process_file_stereo() {
 }
 
 #[test]
-fn engine_reset_and_clear() {
-    let mut engine = ProcessingEngine::new(48000.0);
-    engine.add_effect(Box::new(Gain { factor: 2.0 }));
-    assert_eq!(engine.len(), 1);
-
-    engine.reset();
-    assert_eq!(engine.len(), 1); // reset does not remove effects
-
-    engine.clear();
-    assert!(engine.is_empty());
-}
-
-#[test]
 fn engine_set_sample_rate() {
-    let mut engine = ProcessingEngine::new(44100.0);
+    let engine = GraphEngine::new_linear(44100.0, 256);
     assert!((engine.sample_rate() - 44100.0).abs() < 1e-6);
-
-    engine.set_sample_rate(96000.0);
-    assert!((engine.sample_rate() - 96000.0).abs() < 1e-6);
 }
 
 #[test]
 fn engine_latency_accumulates() {
-    let mut engine = ProcessingEngine::new(48000.0);
-    // Gain has 0 latency, but we can at least verify the accumulation logic
-    engine.add_effect(Box::new(Gain { factor: 1.0 }));
-    engine.add_effect(Box::new(Gain { factor: 1.0 }));
+    let engine = GraphEngine::from_chain(vec![gain(1.0), gain(1.0)], 48000.0, 256).unwrap();
+    // Gain has 0 latency
     assert_eq!(engine.latency_samples(), 0);
 }
 
 #[test]
 fn engine_process_block_inplace() {
-    let mut engine = ProcessingEngine::new(48000.0);
-    engine.add_effect(Box::new(Gain { factor: 2.0 }));
+    let mut engine = GraphEngine::from_chain(vec![gain(2.0)], 48000.0, 4).unwrap();
 
-    let mut buffer = vec![0.1, 0.2, 0.3, 0.4];
+    let mut buffer = [0.1, 0.2, 0.3, 0.4];
     engine.process_block_inplace(&mut buffer);
 
     assert!((buffer[0] - 0.2).abs() < 1e-6);
@@ -639,10 +620,9 @@ fn engine_process_block_inplace() {
 fn engine_with_real_distortion_effect() {
     use sonido_effects::Distortion;
 
-    let mut engine = ProcessingEngine::new(48000.0);
     let mut dist = Distortion::new(48000.0);
     dist.set_drive_db(20.0);
-    engine.add_effect(Box::new(dist));
+    let mut engine = GraphEngine::from_chain(vec![Box::new(dist)], 48000.0, 256).unwrap();
 
     let input = sine_wave(48000, 440.0, 1024);
     let output = engine.process_file(&input, 256);
@@ -670,11 +650,10 @@ fn engine_with_real_distortion_effect() {
 fn engine_with_real_reverb_stereo() {
     use sonido_effects::Reverb;
 
-    let mut engine = ProcessingEngine::new(48000.0);
     let mut reverb = Reverb::new(48000.0);
     reverb.set_mix(0.5);
     reverb.set_decay(0.8);
-    engine.add_effect(Box::new(reverb));
+    let mut engine = GraphEngine::from_chain(vec![Box::new(reverb)], 48000.0, 256).unwrap();
 
     let left = sine_wave(48000, 440.0, 4096);
     let right = sine_wave(48000, 880.0, 4096);
@@ -728,8 +707,12 @@ fn end_to_end_wav_process_wav() {
     assert_eq!(loaded.len(), sr as usize);
 
     // Process through engine
-    let mut engine = ProcessingEngine::new(spec.sample_rate as f32);
-    engine.add_effect(Box::new(Compressor::new(spec.sample_rate as f32)));
+    let mut engine = GraphEngine::from_chain(
+        vec![Box::new(Compressor::new(spec.sample_rate as f32))],
+        spec.sample_rate as f32,
+        512,
+    )
+    .unwrap();
     let processed = engine.process_file(&loaded, 512);
     assert_eq!(processed.len(), loaded.len());
 

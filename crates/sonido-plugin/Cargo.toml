@@ -15,6 +15,10 @@ name = "sonido_plugin"
 sonido-core = { workspace = true, features = ["std"] }
 sonido-effects = { workspace = true, features = ["std"] }
 sonido-registry = { workspace = true, features = ["std"] }
+sonido-io = { workspace = true }
+
+arc-swap = "1.8"
+parking_lot = "0.12"
 
 clack-plugin = { git = "https://github.com/prokopyl/clack.git", rev = "57e89b3" }
 clack-extensions = { git = "https://github.com/prokopyl/clack.git", rev = "57e89b3", features = [
@@ -116,4 +120,8 @@ crate-type = ["cdylib"]
 
 [[example]]
 name = "sonido-stage"
+crate-type = ["cdylib"]
+
+[[example]]
+name = "sonido-chain"
 crate-type = ["cdylib"]

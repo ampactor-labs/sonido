@@ -979,7 +979,7 @@ Building plugins requires the `clack`, `baseview`, and `egui_glow` dependencies,
 
 ### Context
 
-The linear effect chain model (`Vec<Box<dyn Effect>>` in `ProcessingEngine`, `Vec<usize>` ordering in `ChainManager`) cannot express:
+The linear effect chain model (`Vec<Box<dyn Effect>>` ordering) cannot express:
 
 - Parallel signal paths (e.g., dry/wet branches with independent effect chains)
 - Sidechain routing (e.g., compressor keyed by a separate signal)
@@ -1016,7 +1016,7 @@ The multi-effect CLAP plugin, synth-effects hybrid, and spectral parallel proces
 |------|--------|---------|---------|
 | `Input` | 0 | 1+ | External audio entry point (exactly 1 per graph) |
 | `Output` | 1 | 0 | Final audio output (exactly 1 per graph) |
-| `Effect` | 1 | 1 | Wraps `Box<dyn Effect + Send>`, per-node bypass with crossfade |
+| `Effect` | 1 | 1 | Wraps `Box<dyn EffectWithParams + Send>`, per-node bypass with crossfade |
 | `Split` | 1 | N | Fan-out: copies input to all outputs |
 | `Merge` | N | 1 | Fan-in: sums all inputs |
 
@@ -1034,7 +1034,7 @@ The multi-effect CLAP plugin, synth-effects hybrid, and spectral parallel proces
 
 ### Migration Path
 
-`ProcessingEngine` remains for simple linear chains. `GraphEngine` (in `sonido-io`) wraps `ProcessingGraph` with `from_chain()` for drop-in replacement. `ChainManager` (GUI) continues using linear ordering for now — DAG visual editor is a future feature.
+All consumers now use `GraphEngine` (CLI, GUI) or `ProcessingGraph` directly (plugin chain). `ProcessingEngine` and the `ChainManager` effect chain have been removed. DAG visual editor is a future feature; current consumers use linear chains through `GraphEngine::new_linear()` / `from_chain()`.
 
 ### Alternatives Considered
 
@@ -1051,3 +1051,45 @@ The multi-effect CLAP plugin, synth-effects hybrid, and spectral parallel proces
 - ADR-005 — original linear chain decision (remains the record for v0.1 architecture)
 - JUCE AudioProcessorGraph — compiled schedule + liveness analysis reference
 - Tracktion Engine — immutable graph + atomic swap pattern reference
+
+---
+
+## ADR-026: Multi-Effect Chain CLAP Plugin
+
+**Status:** Accepted
+
+### Context
+
+Single-effect plugins (ADR-024) work well individually, but DAW users need a multi-effect chain in a single plugin instance. This requires dynamic effect add/remove/reorder at runtime while maintaining stable CLAP parameter IDs across sessions.
+
+### Decision
+
+Pre-allocate a flat parameter space: **16 slots × 32 params = 512 CLAP parameter IDs**. Slot metadata (effect ID, descriptors, active flag) is published via `ArcSwap` for wait-free reads. Structural mutations (add/remove/reorder) flow through a `Mutex<VecDeque<ChainCommand>>` drained by the audio thread.
+
+**Key design choices:**
+
+1. **`ClapParamId` validated newtype** — encodes `slot * 32 + local_param_index` in a `u32`. Validated at construction; all flat-space access goes through this type. `const fn` methods are zero-cost.
+
+2. **Direct effect ownership** — the audio processor stores effects as `Vec<Option<Box<dyn EffectWithParams + Send>>>` rather than using `ProcessingGraph`. Reason: `ProcessingGraph::effect_mut()` returns `&mut dyn Effect` which loses the `ParameterInfo` vtable needed for parameter synchronization with the host.
+
+3. **Param cache diffing** — the audio processor maintains a `param_cache: Vec<f32>` mirroring the last-seen shared values. Each process cycle, it diffs against `ChainShared` atomics and emits CLAP `ParamValueEvent` (with gesture begin/end) only for changed parameters. This correctly attributes GUI-originated changes to the host.
+
+4. **`ChainMutator` trait** — abstraction over chain reorder operations shared between standalone GUI (`AtomicParamBridge`) and plugin GUI (`ChainParamBridge`). Minimal surface: `get_order()` + `move_effect()`.
+
+5. **`&'static str` for effect IDs** — `SlotSnapshot::effect_id` is `&'static str` (not `String`) because all effect IDs come from `EffectDescriptor::id` which is `&'static str`. This avoids lifetime issues when `ParamBridge::effect_id()` returns `&str` through an `ArcSwap` guard.
+
+6. **Host callbacks** — `ChainShared` stores both `request_process` (for GUI param changes) and `request_callback` (for structural mutations requiring main-thread rescan). `needs_rescan` atomic flag coordinates rescan dispatch.
+
+### Alternatives Considered
+
+- **Dynamic parameter registration** — CLAP supports `CLAP_PARAM_RESCAN_ALL` to add/remove params at runtime. Rejected: many hosts don't handle this well, and pre-allocation with hidden unused params is the standard approach (CLAP spec §params recommends it for multi-slot instruments).
+- **ProcessingGraph for chain** — would provide latency compensation and buffer optimization. Rejected for v0.2: the `Effect`-only vtable from `effect_mut()` can't drive `ParameterInfo` sync. May revisit in v0.3 with a `EffectWithParams`-aware graph node type.
+- **One parameter map per slot** — cleaner but requires runtime HashMap lookup per param access. The flat array with `ClapParamId` encoding is O(1) with zero allocation.
+
+### References
+
+- `crates/sonido-plugin/src/chain/` — implementation (mod.rs, shared.rs, audio.rs, main_thread.rs, param_bridge.rs, gui.rs)
+- `crates/sonido-plugin/examples/sonido-chain.rs` — CLAP entry point
+- `docs/ARCHITECTURE.md` — plugin section (multi-effect chain)
+- ADR-024 — single-effect CLAP plugin architecture (foundation)
+- CLAP specification §params — parameter pre-allocation pattern for multi-slot instruments

@@ -51,9 +51,10 @@
 extern crate alloc;
 
 #[cfg(not(feature = "std"))]
-use alloc::{boxed::Box, string::String, vec::Vec};
+use alloc::{boxed::Box, vec::Vec};
 
-use sonido_core::{Effect, ParamDescriptor, ParameterInfo};
+// Re-export EffectWithParams from core (moved there to unblock ProcessingGraph).
+pub use sonido_core::EffectWithParams;
 use sonido_effects::{
     Bitcrusher, Chorus, CleanPreamp, Compressor, Delay, Distortion, Flanger, Gate, Limiter,
     LowPassFilter, MultiVibrato, ParametricEq, Phaser, Reverb, RingMod, Stage, TapeSaturation,
@@ -511,64 +512,8 @@ impl EffectRegistry {
     }
 }
 
-/// Helper trait to get parameter info from a boxed effect.
-///
-/// Since `Box<dyn Effect>` doesn't automatically implement `ParameterInfo`,
-/// this trait provides a way to access parameter information if the
-/// underlying effect implements it.
-pub trait EffectWithParams: Effect {
-    /// Get the parameter count.
-    fn effect_param_count(&self) -> usize;
-
-    /// Get parameter info by index.
-    fn effect_param_info(&self, index: usize) -> Option<ParamDescriptor>;
-
-    /// Get parameter value by index.
-    fn effect_get_param(&self, index: usize) -> f32;
-
-    /// Set parameter value by index.
-    fn effect_set_param(&mut self, index: usize, value: f32);
-
-    /// Format a parameter value as display text.
-    ///
-    /// Delegates to [`ParamDescriptor::format_value()`]. Returns `None`
-    /// if the index is out of range.
-    fn effect_format_value(&self, index: usize, value: f32) -> Option<String>;
-
-    /// Parse display text back to a parameter value.
-    ///
-    /// Delegates to [`ParamDescriptor::parse_value()`]. Returns `None`
-    /// if the index is out of range or parsing fails.
-    fn effect_parse_value(&self, index: usize, text: &str) -> Option<f32>;
-}
-
-// Implement EffectWithParams for all types that implement both Effect and ParameterInfo
-impl<T: Effect + ParameterInfo> EffectWithParams for T {
-    fn effect_param_count(&self) -> usize {
-        self.param_count()
-    }
-
-    fn effect_param_info(&self, index: usize) -> Option<ParamDescriptor> {
-        self.param_info(index)
-    }
-
-    fn effect_get_param(&self, index: usize) -> f32 {
-        self.get_param(index)
-    }
-
-    fn effect_set_param(&mut self, index: usize, value: f32) {
-        self.set_param(index, value)
-    }
-
-    fn effect_format_value(&self, index: usize, value: f32) -> Option<String> {
-        self.param_info(index).map(|desc| desc.format_value(value))
-    }
-
-    fn effect_parse_value(&self, index: usize, text: &str) -> Option<f32> {
-        self.param_info(index)
-            .and_then(|desc| desc.parse_value(text))
-    }
-}
+// EffectWithParams trait + blanket impl are in sonido-core::effect_with_params.
+// Re-exported above via `pub use sonido_core::EffectWithParams;`.
 
 #[cfg(test)]
 mod tests {

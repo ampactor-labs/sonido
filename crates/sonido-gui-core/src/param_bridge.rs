@@ -66,6 +66,19 @@ impl From<usize> for ParamIndex {
     }
 }
 
+/// Trait for structural chain mutations (reorder, add, remove).
+///
+/// Decouples [`ChainView`](crate) rendering from the underlying storage
+/// mechanism. In standalone mode, backed by `AtomicParamBridge` (RCU).
+/// In plugin mode, backed by `ChainShared` (command queue to audio thread).
+pub trait ChainMutator: Send + Sync {
+    /// Returns the current processing order as slot indices.
+    fn get_order(&self) -> Vec<usize>;
+
+    /// Move an effect from one position to another in the processing order.
+    fn move_effect(&self, from: usize, to: usize);
+}
+
 /// Trait for bridging parameter values between GUI and audio threads.
 ///
 /// Implementations must be thread-safe — `get` and `set` may be called

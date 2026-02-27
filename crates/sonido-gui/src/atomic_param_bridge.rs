@@ -10,7 +10,7 @@
 
 use arc_swap::ArcSwap;
 use sonido_core::ParamDescriptor;
-use sonido_gui_core::{ParamBridge, ParamIndex, SlotIndex};
+use sonido_gui_core::{ChainMutator, ParamBridge, ParamIndex, SlotIndex};
 use sonido_registry::EffectRegistry;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -110,32 +110,6 @@ impl AtomicParamBridge {
         }
     }
 
-    /// Sync all parameter values from the bridge into the effect chain.
-    ///
-    /// Called once per audio buffer. Reads atomic values and pushes them
-    /// into each effect via `set_param()`. Also syncs bypass states.
-    pub fn sync_to_chain(&self, chain: &mut crate::chain_manager::ChainManager) {
-        let snap = self.state.load();
-        for (slot_raw, slot_state) in snap.slots.iter().enumerate() {
-            // Only update bypass if it changed
-            let bridge_bypassed = slot_state.bypassed.load(Ordering::Relaxed);
-            if chain.is_bypassed(slot_raw) != bridge_bypassed {
-                chain.set_bypassed(slot_raw, bridge_bypassed);
-            }
-
-            // Only push params for slots where the GUI changed something
-            if slot_state.dirty.load(Ordering::Acquire) {
-                slot_state.dirty.store(false, Ordering::Release);
-                if let Some(chain_slot) = chain.slot_mut(slot_raw) {
-                    for (param_raw, atomic_val) in slot_state.values.iter().enumerate() {
-                        let val = f32::from_bits(atomic_val.load(Ordering::Relaxed));
-                        chain_slot.effect.effect_set_param(param_raw, val);
-                    }
-                }
-            }
-        }
-    }
-
     /// Appends a new slot, returning its index.
     ///
     /// Called on the audio thread when processing a `ChainCommand::Add`.
@@ -196,11 +170,7 @@ impl AtomicParamBridge {
     }
 
     // ── Order operations (moved from EffectOrder) ──────────────────────────
-
-    /// Returns a clone of the current processing order.
-    pub fn get_order(&self) -> Vec<usize> {
-        self.state.load().order.clone()
-    }
+    // `get_order()` and `move_effect()` are provided by the `ChainMutator` trait impl.
 
     /// Returns the effect IDs in their current processing order.
     pub fn ordered_static_ids(&self) -> Vec<&'static str> {
@@ -220,10 +190,24 @@ impl AtomicParamBridge {
             .collect()
     }
 
-    /// Move an effect from one position to another in the processing order.
-    ///
-    /// Uses RCU so audio-thread readers are never blocked.
-    pub fn move_effect(&self, from: usize, to: usize) {
+    /// Returns `true` if the order has been mutated since the last
+    /// [`clear_order_dirty`](Self::clear_order_dirty).
+    pub fn order_is_dirty(&self) -> bool {
+        self.order_dirty.load(Ordering::Acquire)
+    }
+
+    /// Clear the order dirty flag (audio thread calls this after caching).
+    pub fn clear_order_dirty(&self) {
+        self.order_dirty.store(false, Ordering::Release);
+    }
+}
+
+impl ChainMutator for AtomicParamBridge {
+    fn get_order(&self) -> Vec<usize> {
+        self.state.load().order.clone()
+    }
+
+    fn move_effect(&self, from: usize, to: usize) {
         self.state.rcu(|old| {
             if from >= old.order.len() || to >= old.order.len() || from == to {
                 return Arc::clone(old);
@@ -237,17 +221,6 @@ impl AtomicParamBridge {
             })
         });
         self.order_dirty.store(true, Ordering::Release);
-    }
-
-    /// Returns `true` if the order has been mutated since the last
-    /// [`clear_order_dirty`](Self::clear_order_dirty).
-    pub fn order_is_dirty(&self) -> bool {
-        self.order_dirty.load(Ordering::Acquire)
-    }
-
-    /// Clear the order dirty flag (audio thread calls this after caching).
-    pub fn clear_order_dirty(&self) {
-        self.order_dirty.store(false, Ordering::Release);
     }
 }
 

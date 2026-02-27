@@ -10,7 +10,7 @@ use alloc::boxed::Box;
 #[cfg(not(feature = "std"))]
 use alloc::vec::Vec;
 
-use crate::effect::Effect;
+use crate::effect_with_params::EffectWithParams;
 use crate::param::SmoothedParam;
 
 /// Unique identifier for a node in the processing graph.
@@ -26,6 +26,12 @@ impl NodeId {
     pub fn index(self) -> u32 {
         self.0
     }
+
+    /// Returns a sentinel value used for uninitialized node references.
+    #[inline]
+    pub fn sentinel() -> Self {
+        Self(u32::MAX)
+    }
 }
 
 /// The role of a node in the processing graph.
@@ -34,8 +40,8 @@ pub enum NodeKind {
     Input,
     /// Produces final audio output. Exactly one per graph.
     Output,
-    /// Wraps a DSP effect implementing the [`Effect`] trait.
-    Effect(Box<dyn Effect + Send>),
+    /// Wraps a DSP effect implementing [`EffectWithParams`].
+    Effect(Box<dyn EffectWithParams + Send>),
     /// Fan-out: copies one input to N outputs.
     Split,
     /// Fan-in: sums N inputs into one output.

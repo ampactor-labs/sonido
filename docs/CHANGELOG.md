@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+#### Multi-Effect Chain CLAP Plugin (sonido-plugin)
+- `ChainPlugin` — single CLAP plugin exposing a full effect chain with runtime add/remove/reorder
+- Pre-allocated parameter space: 16 slots × 32 params = 512 CLAP parameter IDs, stable across sessions
+- `ClapParamId` validated newtype for safe flat parameter indexing
+- `ChainShared` — thread-safe shared state with `AtomicU32` params, `ArcSwap` slot metadata, `Mutex` command queue
+- `ChainAudioProcessor` — owns effects directly, drains structural commands, diffs param cache for CLAP host events
+- `ChainMainThread` — full CLAP params/state/GUI extension support, JSON state save/load
+- `ChainParamBridge` — implements `ParamBridge` + `ChainMutator` for plugin GUI
+- `ChainEditor` — egui-based chain strip with click-to-select, context menu, effect add popup
+- `ChainMutator` trait in sonido-gui-core — abstracts chain reorder for standalone and plugin GUIs
+- ADR-026 accepted (docs/DESIGN_DECISIONS.md)
+
 #### DAG Routing Engine (sonido-core, sonido-io)
 - `ProcessingGraph` — compiled DAG for audio effect routing, replaces linear chain limitations
 - Node types: Input, Output, Effect (with per-node bypass crossfade), Split (fan-out), Merge (fan-in)
@@ -17,8 +29,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Latency compensation: auto-inserts `CompensationDelay` on shorter parallel paths
 - Click-free schedule swap via `SmoothedParam` crossfade (~5ms) when graph topology changes
 - `no_std` compatible (with `alloc`) — embeddable on Daisy Seed / Hothouse
-- `GraphEngine` in sonido-io wraps `ProcessingGraph` with `from_chain()` for backward-compatible migration
-- 34 unit tests (30 core + 4 integration) verifying graph mutations, compilation, buffer efficiency, execution, and parity with `ProcessingEngine`
+- `GraphEngine` in sonido-io wraps `ProcessingGraph` with chain management (add/remove/reorder) and `from_chain()` for linear chains
+- All consumers (CLI, GUI, plugin) migrated to `GraphEngine` / `ProcessingGraph` — `ProcessingEngine` and `ChainManager` removed
+- `EffectWithParams` trait moved from sonido-registry to sonido-core; `ProcessingGraph` now stores `Box<dyn EffectWithParams + Send>` for runtime parameter access
+- 46 graph-related tests (30 core + 16 engine unit + integration)
 - ADR-025 accepted (docs/DESIGN_DECISIONS.md)
 
 #### Structured Observability (tracing)
@@ -633,7 +647,7 @@ Initial release.
 #### sonido-io
 - WAV file reading and writing via hound
 - Real-time audio streaming via cpal
-- `ProcessingEngine` for block-based effect chains
+- `GraphEngine` for DAG-based effect chain processing
 
 #### sonido-cli
 - `process` command for file processing

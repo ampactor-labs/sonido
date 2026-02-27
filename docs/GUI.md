@@ -376,16 +376,16 @@ The audio output callback delegates to `AudioProcessor`, a testable struct extra
 - `process_commands()` — drains transport + chain commands
 - `process_buffer(data)` — parameter sync, effect processing, gain staging, metering
 
-The `AudioProcessor` owns the `ChainManager`, `AtomicParamBridge`, effect order cache, file playback state, and metering sender. This extraction enables unit testing of the audio path without a live audio stream.
+The `AudioProcessor` owns the `GraphEngine`, `AtomicParamBridge`, effect order cache, file playback state, and metering sender. This extraction enables unit testing of the audio path without a live audio stream.
 
 ### Dynamic Effect Chain
 
-Effects are added and removed at runtime via `ChainCommand` messages sent through a `crossbeam_channel`. The `ChainManager` provides transactional operations:
+Effects are added and removed at runtime via `ChainCommand` messages sent through a `crossbeam_channel`. The audio thread drains commands and applies them to the `GraphEngine`:
 
-- `add_transactional(id, effect, bridge, order)` — atomically creates the slot, registers it in the param bridge, and appends to the effect order
-- `remove_transactional(slot, bridge, order)` — atomically removes the slot, deregisters from the bridge, and remaps the order indices
+- `ChainCommand::Add { id, effect, descriptors }` — adds the effect to the graph, registers parameter descriptors in the bridge
+- `ChainCommand::Remove { slot }` — removes the effect from the graph, deregisters from the bridge
 
-These operations ensure the three structures (ChainManager slots, AtomicParamBridge slots, EffectOrder indices) stay consistent.
+The `GraphEngine` handles topology mutations (add/remove/reorder) with automatic recompilation. The `AtomicParamBridge` maintains slot-level parameter storage in lock-free atomics.
 
 ### Widget and Effect UI Consolidation
 

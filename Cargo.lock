@@ -3996,6 +3996,7 @@ dependencies = [
 name = "sonido-plugin"
 version = "0.1.0"
 dependencies = [
+ "arc-swap",
  "baseview",
  "clack-extensions",
  "clack-plugin",
@@ -4003,12 +4004,14 @@ dependencies = [
  "egui_glow",
  "glow",
  "keyboard-types",
+ "parking_lot",
  "raw-window-handle 0.5.2",
  "serde",
  "serde_json",
  "sonido-core",
  "sonido-effects",
  "sonido-gui-core",
+ "sonido-io",
  "sonido-registry",
  "tracing",
 ]

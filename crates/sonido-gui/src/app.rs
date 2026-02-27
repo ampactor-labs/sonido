@@ -118,7 +118,8 @@ impl SonidoApp {
         let audio_bridge = AudioBridge::new();
         let transport_tx = audio_bridge.transport_sender();
 
-        let mut chain_view = ChainView::new(Arc::clone(&bridge));
+        let mut chain_view =
+            ChainView::new(Arc::clone(&bridge) as Arc<dyn sonido_gui_core::ChainMutator>);
         if single_effect {
             chain_view.set_selected(SlotIndex(0));
         }
@@ -464,7 +465,8 @@ impl SonidoApp {
 
         // 3. Swap in the new bridge
         self.bridge = new_bridge;
-        self.chain_view.set_bridge(Arc::clone(&self.bridge));
+        self.chain_view
+            .set_mutator(Arc::clone(&self.bridge) as Arc<dyn sonido_gui_core::ChainMutator>);
 
         // 4. Restart audio with the new chain
         if let Err(e) = self.start_audio() {

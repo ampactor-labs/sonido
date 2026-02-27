@@ -6,7 +6,7 @@ use clap::Args;
 use indicatif::{ProgressBar, ProgressStyle};
 use sonido_analysis::dynamics;
 use sonido_core::linear_to_db;
-use sonido_io::{ProcessingEngine, WavSpec, read_wav_stereo, write_wav, write_wav_stereo};
+use sonido_io::{GraphEngine, WavSpec, read_wav_stereo, write_wav, write_wav_stereo};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
@@ -76,7 +76,8 @@ pub fn run(args: ProcessArgs) -> anyhow::Result<()> {
     };
 
     // Build effect chain
-    let mut engine = ProcessingEngine::new(sample_rate);
+    let block_size = args.block_size;
+    let mut engine = GraphEngine::new_linear(sample_rate, block_size);
 
     if let Some(preset_name) = &args.preset {
         // Load preset by name or path using sonido-config
@@ -117,7 +118,7 @@ pub fn run(args: ProcessArgs) -> anyhow::Result<()> {
     let output_stereo = !args.mono;
     println!(
         "Processing with {} effect(s) ({} output)...",
-        engine.len(),
+        engine.effect_count(),
         if output_stereo { "stereo" } else { "mono" }
     );
 
@@ -130,7 +131,6 @@ pub fn run(args: ProcessArgs) -> anyhow::Result<()> {
             .progress_chars("##-"),
     );
 
-    let block_size = args.block_size;
     let output = engine.process_file_stereo(&samples, block_size);
 
     // Update progress (process_file_stereo handles blocks internally)

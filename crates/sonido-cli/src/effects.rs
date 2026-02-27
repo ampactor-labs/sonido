@@ -1,6 +1,6 @@
 //! Effect factory and parameter parsing.
 
-use sonido_core::Effect;
+use sonido_core::EffectWithParams;
 use sonido_effects::{
     Chorus, CleanPreamp, Compressor, Delay, Distortion, Flanger, Gate, LowPassFilter, MultiVibrato,
     ParametricEq, Phaser, Reverb, ReverbType, TapeSaturation, Tremolo, TremoloWaveform, Wah,
@@ -616,7 +616,7 @@ pub fn create_effect_with_params(
     name: &str,
     sample_rate: f32,
     params: &HashMap<String, String>,
-) -> Result<Box<dyn Effect + Send>, EffectError> {
+) -> Result<Box<dyn EffectWithParams + Send>, EffectError> {
     match name.to_lowercase().as_str() {
         "distortion" => {
             let mut effect = Distortion::new(sample_rate);
@@ -994,7 +994,7 @@ pub fn create_effect_with_params(
 pub fn parse_chain(
     spec: &str,
     sample_rate: f32,
-) -> Result<Vec<Box<dyn Effect + Send>>, EffectError> {
+) -> Result<Vec<Box<dyn EffectWithParams + Send>>, EffectError> {
     let mut effects = Vec::new();
 
     for effect_spec in spec.split('|') {

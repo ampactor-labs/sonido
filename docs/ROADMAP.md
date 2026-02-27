@@ -209,7 +209,7 @@ Directed acyclic graph replacing the linear `Vec<usize>` effect chain. Nodes are
 - **Click-free schedule swap**: `SmoothedParam` crossfade (~5ms) on recompile — no audio glitches
 - **Node types**: Input, Output, Effect (per-node bypass crossfade), Split (fan-out), Merge (fan-in sum)
 - **`ProcessStep` instruction set**: WriteInput, ProcessEffect, SplitCopy, ClearBuffer, AccumulateBuffer, DelayCompensate, ReadOutput
-- **`linear()` convenience**: backward-compatible with `ProcessingEngine` for existing linear chains
+- **`linear()` convenience**: constructs Input→E1→...→En→Output chains
 - **no_std with alloc**: embeddable on Daisy Seed
 
 **Unblocks:** Multi-effect CLAP plugin, synth-effects hybrid (Space Station 2.0), spectral parallel processing.

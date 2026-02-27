@@ -5,7 +5,7 @@
 //! - **WAV file I/O**: [`read_wav`] and [`write_wav`] for loading/saving audio files
 //! - **Real-time streaming**: [`AudioStream`] for live audio input/output
 //! - **Pluggable audio backends**: [`backend::AudioBackend`] trait for platform abstraction
-//! - **Effect processing**: [`ProcessingEngine`] for applying effect chains to audio
+//! - **Effect processing**: [`GraphEngine`] for applying effect chains to audio via DAG routing
 //!
 //! ## Audio Backend Architecture
 //!
@@ -30,24 +30,22 @@
 //! ## Quick Start (File Processing)
 //!
 //! ```rust,ignore
-//! use sonido_io::{read_wav, write_wav, ProcessingEngine};
+//! use sonido_io::{read_wav, write_wav, GraphEngine};
 //! use sonido_effects::Reverb;
 //!
 //! let (samples, spec) = read_wav("input.wav")?;
-//! let mut engine = ProcessingEngine::new(spec.sample_rate as f32);
+//! let mut engine = GraphEngine::new_linear(spec.sample_rate as f32, 256);
 //! engine.add_effect(Box::new(Reverb::new(spec.sample_rate as f32)));
-//! let processed = engine.process_buffer(&samples);
+//! let processed = engine.process_file(&samples, 256);
 //! write_wav("output.wav", &processed, spec)?;
 //! ```
 
 pub mod backend;
 pub mod cpal_backend;
-mod engine;
 mod graph_engine;
 pub(crate) mod stream;
 mod wav;
 
-pub use engine::ProcessingEngine;
 pub use graph_engine::GraphEngine;
 pub use stream::{
     AudioDevice, AudioStream, StreamConfig, default_device, find_device_by_index,

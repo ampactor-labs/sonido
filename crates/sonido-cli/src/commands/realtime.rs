@@ -3,7 +3,7 @@
 use super::common::{load_preset, parse_key_val};
 use crate::effects::{create_effect_with_params, parse_chain};
 use clap::Args;
-use sonido_io::{AudioStream, ProcessingEngine, StreamConfig, default_device};
+use sonido_io::{AudioStream, GraphEngine, StreamConfig, default_device};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -51,7 +51,7 @@ pub fn run(args: RealtimeArgs) -> anyhow::Result<()> {
     let sample_rate = args.sample_rate as f32;
 
     // Build effect chain
-    let mut engine = ProcessingEngine::new(sample_rate);
+    let mut engine = GraphEngine::new_linear(sample_rate, args.buffer_size as usize);
 
     if let Some(preset_name) = &args.preset {
         // Load preset by name or path using sonido-config
@@ -136,7 +136,7 @@ pub fn run(args: RealtimeArgs) -> anyhow::Result<()> {
     println!(
         "Real-time {} processing with {} effect(s)",
         mode,
-        engine.len()
+        engine.effect_count()
     );
     println!("  Input:  {}", input_name);
     println!("  Output: {}", output_name);

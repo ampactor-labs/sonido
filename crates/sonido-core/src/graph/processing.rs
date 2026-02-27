@@ -15,6 +15,7 @@ use alloc::{boxed::Box, format, string::String, sync::Arc, vec, vec::Vec};
 use std::sync::Arc;
 
 use crate::effect::Effect;
+use crate::effect_with_params::EffectWithParams;
 use crate::param::SmoothedParam;
 use crate::tempo::TempoContext;
 
@@ -160,10 +161,10 @@ impl ProcessingGraph {
         self.add_node(NodeKind::Output)
     }
 
-    /// Adds an effect processing node wrapping the given [`Effect`].
+    /// Adds an effect processing node wrapping the given [`EffectWithParams`].
     ///
     /// The effect's sample rate is set to the graph's sample rate.
-    pub fn add_effect(&mut self, mut effect: Box<dyn Effect + Send>) -> NodeId {
+    pub fn add_effect(&mut self, mut effect: Box<dyn EffectWithParams + Send>) -> NodeId {
         effect.set_sample_rate(self.sample_rate);
         self.add_node(NodeKind::Effect(effect))
     }
@@ -281,10 +282,37 @@ impl ProcessingGraph {
         Ok(())
     }
 
-    /// Returns a mutable reference to the effect inside a node.
+    /// Returns a mutable reference to the effect inside a node (as `dyn Effect`).
     ///
+    /// For parameter access, use [`effect_with_params_mut()`](Self::effect_with_params_mut).
     /// Returns `None` if the node doesn't exist or isn't an Effect node.
     pub fn effect_mut(&mut self, id: NodeId) -> Option<&mut (dyn Effect + Send)> {
+        let node = self.nodes.get_mut(id.0 as usize)?.as_mut()?;
+        match &mut node.kind {
+            NodeKind::Effect(effect) => Some(effect.as_mut() as &mut (dyn Effect + Send)),
+            _ => None,
+        }
+    }
+
+    /// Returns a reference to the effect inside a node (as `dyn Effect`).
+    ///
+    /// For parameter access, use [`effect_with_params_ref()`](Self::effect_with_params_ref).
+    /// Returns `None` if the node doesn't exist or isn't an Effect node.
+    pub fn effect_ref(&self, id: NodeId) -> Option<&(dyn Effect + Send)> {
+        let node = self.nodes.get(id.0 as usize)?.as_ref()?;
+        match &node.kind {
+            NodeKind::Effect(effect) => Some(effect.as_ref() as &(dyn Effect + Send)),
+            _ => None,
+        }
+    }
+
+    /// Returns a mutable reference to the effect with parameter access.
+    ///
+    /// Returns `None` if the node doesn't exist or isn't an Effect node.
+    pub fn effect_with_params_mut(
+        &mut self,
+        id: NodeId,
+    ) -> Option<&mut (dyn EffectWithParams + Send)> {
         let node = self.nodes.get_mut(id.0 as usize)?.as_mut()?;
         match &mut node.kind {
             NodeKind::Effect(effect) => Some(effect.as_mut()),
@@ -292,13 +320,34 @@ impl ProcessingGraph {
         }
     }
 
-    /// Returns a reference to the effect inside a node.
+    /// Returns a reference to the effect with parameter access.
     ///
     /// Returns `None` if the node doesn't exist or isn't an Effect node.
-    pub fn effect_ref(&self, id: NodeId) -> Option<&(dyn Effect + Send)> {
+    pub fn effect_with_params_ref(&self, id: NodeId) -> Option<&(dyn EffectWithParams + Send)> {
         let node = self.nodes.get(id.0 as usize)?.as_ref()?;
         match &node.kind {
             NodeKind::Effect(effect) => Some(effect.as_ref()),
+            _ => None,
+        }
+    }
+
+    /// Extracts the effect from a node, replacing it with a passthrough.
+    ///
+    /// Returns `None` if the node doesn't exist or isn't an Effect node.
+    /// The node remains in the graph as a no-op passthrough (the node kind
+    /// becomes `Split` — a single-input/single-output passthrough).
+    pub fn take_effect(&mut self, id: NodeId) -> Option<Box<dyn EffectWithParams + Send>> {
+        let node = self.nodes.get_mut(id.0 as usize)?.as_mut()?;
+        match &mut node.kind {
+            NodeKind::Effect(_) => {
+                // Swap out the effect, replacing with Split (acts as passthrough).
+                let mut replacement = NodeKind::Split;
+                core::mem::swap(&mut node.kind, &mut replacement);
+                match replacement {
+                    NodeKind::Effect(effect) => Some(effect),
+                    _ => unreachable!(),
+                }
+            }
             _ => None,
         }
     }
@@ -1172,7 +1221,7 @@ impl ProcessingGraph {
     ///
     /// Compiles the graph before returning.
     pub fn linear(
-        effects: Vec<Box<dyn Effect + Send>>,
+        effects: Vec<Box<dyn EffectWithParams + Send>>,
         sample_rate: f32,
         block_size: usize,
     ) -> Result<Self, GraphError> {
@@ -1243,16 +1292,20 @@ impl ProcessingGraph {
 
     /// Checks if an edge already exists between two nodes.
     fn has_edge(&self, from: NodeId, to: NodeId) -> bool {
-        if let Some(Some(node)) = self.nodes.get(from.0 as usize) {
-            for edge_id in &node.outgoing {
-                if let Some(edge) = &self.edges[edge_id.0 as usize]
-                    && edge.to == to
-                {
-                    return true;
-                }
+        self.find_edge(from, to).is_some()
+    }
+
+    /// Finds the edge ID connecting `from` to `to`, if one exists.
+    pub fn find_edge(&self, from: NodeId, to: NodeId) -> Option<EdgeId> {
+        let node = self.nodes.get(from.0 as usize)?.as_ref()?;
+        for &edge_id in &node.outgoing {
+            if let Some(edge) = &self.edges[edge_id.0 as usize]
+                && edge.to == to
+            {
+                return Some(edge_id);
             }
         }
-        false
+        None
     }
 
     /// Validates structural constraints for a connection.
@@ -1388,6 +1441,7 @@ enum RawStep {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::param_info::{ParamDescriptor, ParameterInfo};
 
     // Simple test effect that multiplies by a factor.
     struct Gain {
@@ -1400,6 +1454,19 @@ mod tests {
         }
         fn set_sample_rate(&mut self, _sample_rate: f32) {}
         fn reset(&mut self) {}
+    }
+
+    impl ParameterInfo for Gain {
+        fn param_count(&self) -> usize {
+            0
+        }
+        fn param_info(&self, _index: usize) -> Option<ParamDescriptor> {
+            None
+        }
+        fn get_param(&self, _index: usize) -> f32 {
+            0.0
+        }
+        fn set_param(&mut self, _index: usize, _value: f32) {}
     }
 
     // Effect that reports latency.
@@ -1417,6 +1484,19 @@ mod tests {
         fn latency_samples(&self) -> usize {
             self.latency
         }
+    }
+
+    impl ParameterInfo for LatentGain {
+        fn param_count(&self) -> usize {
+            0
+        }
+        fn param_info(&self, _index: usize) -> Option<ParamDescriptor> {
+            None
+        }
+        fn get_param(&self, _index: usize) -> f32 {
+            0.0
+        }
+        fn set_param(&mut self, _index: usize, _value: f32) {}
     }
 
     // --- Phase 1: Mutation tests ---
@@ -1656,8 +1736,8 @@ mod tests {
     #[test]
     fn test_compile_linear_chain_buffer_efficiency() {
         // A 20-node linear chain should use exactly 2 buffers (ping-pong).
-        let effects: Vec<Box<dyn Effect + Send>> = (0..20)
-            .map(|_| Box::new(Gain { factor: 1.0 }) as Box<dyn Effect + Send>)
+        let effects: Vec<Box<dyn EffectWithParams + Send>> = (0..20)
+            .map(|_| Box::new(Gain { factor: 1.0 }) as Box<dyn EffectWithParams + Send>)
             .collect();
 
         let graph = ProcessingGraph::linear(effects, 48000.0, 256).unwrap();
@@ -1710,7 +1790,7 @@ mod tests {
 
     #[test]
     fn test_process_single_effect() {
-        let effects: Vec<Box<dyn Effect + Send>> = vec![Box::new(Gain { factor: 2.0 })];
+        let effects: Vec<Box<dyn EffectWithParams + Send>> = vec![Box::new(Gain { factor: 2.0 })];
         let mut graph = ProcessingGraph::linear(effects, 48000.0, 4).unwrap();
 
         let left_in = [1.0, 2.0, 3.0, 4.0];
@@ -1726,7 +1806,7 @@ mod tests {
 
     #[test]
     fn test_process_chain() {
-        let effects: Vec<Box<dyn Effect + Send>> = vec![
+        let effects: Vec<Box<dyn EffectWithParams + Send>> = vec![
             Box::new(Gain { factor: 2.0 }),
             Box::new(Gain { factor: 3.0 }),
         ];
@@ -1779,8 +1859,8 @@ mod tests {
 
     #[test]
     fn test_process_20_effect_chain() {
-        let effects: Vec<Box<dyn Effect + Send>> = (0..20)
-            .map(|_| Box::new(Gain { factor: 1.0 }) as Box<dyn Effect + Send>)
+        let effects: Vec<Box<dyn EffectWithParams + Send>> = (0..20)
+            .map(|_| Box::new(Gain { factor: 1.0 }) as Box<dyn EffectWithParams + Send>)
             .collect();
         let mut graph = ProcessingGraph::linear(effects, 48000.0, 4).unwrap();
 
@@ -1802,7 +1882,7 @@ mod tests {
 
     #[test]
     fn test_linear_convenience() {
-        let effects: Vec<Box<dyn Effect + Send>> = vec![Box::new(Gain { factor: 0.5 })];
+        let effects: Vec<Box<dyn EffectWithParams + Send>> = vec![Box::new(Gain { factor: 0.5 })];
         let graph = ProcessingGraph::linear(effects, 48000.0, 256).unwrap();
         assert_eq!(graph.node_count(), 3); // Input + Effect + Output
         assert_eq!(graph.edge_count(), 2);
@@ -1822,7 +1902,7 @@ mod tests {
     #[test]
     fn test_schedule_swap_crossfade() {
         // Build initial graph with gain=1.0.
-        let effects: Vec<Box<dyn Effect + Send>> = vec![Box::new(Gain { factor: 1.0 })];
+        let effects: Vec<Box<dyn EffectWithParams + Send>> = vec![Box::new(Gain { factor: 1.0 })];
         let mut graph = ProcessingGraph::linear(effects, 48000.0, 256).unwrap();
 
         // Process a block to establish baseline.

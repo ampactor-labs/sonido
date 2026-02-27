@@ -66,7 +66,7 @@ impl<'a> PluginMainThread<'a, SonidoShared> for SonidoMainThread<'a> {}
 // ── Parameter Extension ─────────────────────────────────────────────────────
 
 /// Map sonido `ParamFlags` to CLAP `ParamInfoFlags`.
-fn map_flags(flags: sonido_core::ParamFlags) -> ParamInfoFlags {
+pub(crate) fn map_flags(flags: sonido_core::ParamFlags) -> ParamInfoFlags {
     let mut clap_flags = ParamInfoFlags::empty();
 
     if flags.contains(sonido_core::ParamFlags::AUTOMATABLE) {

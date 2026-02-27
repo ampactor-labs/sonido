@@ -99,6 +99,7 @@ pub mod comb;
 pub mod dc_blocker;
 pub mod delay;
 pub mod effect;
+pub mod effect_with_params;
 pub mod envelope;
 pub mod fast_math;
 pub mod gain;
@@ -124,6 +125,7 @@ pub use comb::{CombFilter, ModulatedComb};
 pub use dc_blocker::DcBlocker;
 pub use delay::{FixedDelayLine, InterpolatedDelay, Interpolation};
 pub use effect::{Chain, Effect, EffectExt};
+pub use effect_with_params::EffectWithParams;
 pub use envelope::{DetectionMode, EnvelopeFollower};
 pub use fast_math::{
     fast_db_to_linear, fast_exp2, fast_linear_to_db, fast_log2, fast_sin_turns, fast_tan,

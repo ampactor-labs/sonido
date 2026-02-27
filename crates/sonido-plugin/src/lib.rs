@@ -33,6 +33,7 @@
 //! ```
 
 pub mod audio;
+pub mod chain;
 mod egui_bridge;
 pub mod gui;
 pub mod main_thread;

@@ -154,7 +154,7 @@ Audio I/O layer with pluggable backend abstraction, WAV file I/O, and full stere
 - `read_wav_stereo` / `write_wav_stereo`: Stereo WAV file I/O
 - `StereoSamples`: Helper struct for stereo audio with conversions
 - `AudioStream`: Real-time audio streaming (mono and stereo) — legacy cpal integration
-- `ProcessingEngine`: Block-based effect chain runner with stereo methods
+- `GraphEngine`: DAG-based audio processor with chain management, block/file stereo processing
 
 **Stereo I/O:**
 ```rust
@@ -310,25 +310,33 @@ Shared GUI infrastructure for both standalone and plugin UIs. Contains everythin
 - `widgets/`: Knob, LevelMeter, BypassToggle, FootswitchToggle
 - `theme.rs`: Dark theme shared across all targets
 
-**Why a separate gui-core?** Plugin hosts (CLAP via clack) need effect UIs but not cpal audio streams, preset management, or ChainManager. By isolating widgets, effect panels, and the ParamBridge trait into gui-core, `sonido-plugin` depends on gui-core alone and provides its own `ParamBridge` implementation (`PluginParamBridge`) backed by lock-free atomic host parameters.
+**Why a separate gui-core?** Plugin hosts (CLAP via clack) need effect UIs but not cpal audio streams or preset management. By isolating widgets, effect panels, and the ParamBridge trait into gui-core, `sonido-plugin` depends on gui-core alone and provides its own `ParamBridge` implementation (`PluginParamBridge`) backed by lock-free atomic host parameters.
 
 ### sonido-plugin
 
-CLAP audio plugin adapter via the `clack` safe wrapper. Each of the 19 effects becomes an independent `.clap` plugin binary with full GUI.
+CLAP audio plugin adapter via the `clack` safe wrapper. Two plugin modes: 19 single-effect plugins and 1 multi-effect chain plugin.
 
-**Key modules:**
-- `lib.rs`: `sonido_effect_entry!` macro generates CLAP entry points
+**Single-effect plugins** (`sonido_effect_entry!` macro):
+- `lib.rs`: Macro generates CLAP entry points — one `cdylib` per effect
 - `audio.rs`: Real-time audio processor — parameter sync, stereo block processing
 - `gui.rs`: Plugin GUI — `PluginParamBridge` and `SonidoEditor` window lifecycle
-- `egui_bridge/`: Custom baseview-to-egui bridge (~350 lines), replacing `egui-baseview`
 - `main_thread.rs`: CLAP params, state save/load (JSON), GUI extension, audio ports
 - `shared.rs`: `SonidoShared` — lock-free atomic parameter store shared across threads
 
-**Architecture:**
+**Multi-effect chain plugin** (`chain/` module, ADR-026):
+- `chain/mod.rs`: `ChainPlugin` type with `DefaultPluginFactory`, `ClapParamId` validated newtype
+- `chain/shared.rs`: `ChainShared` — 512-element `AtomicU32` array (16 slots × 32 params), `ArcSwap` slot metadata, `Mutex` command queue
+- `chain/audio.rs`: `ChainAudioProcessor` — owns effects directly, drains structural commands, diffs param cache for host events
+- `chain/main_thread.rs`: `ChainMainThread` — full CLAP params (512), JSON state save/load, GUI lifecycle
+- `chain/param_bridge.rs`: `ChainParamBridge` — implements `ParamBridge` + `ChainMutator` over `ChainShared`
+- `chain/gui.rs`: `ChainEditor` — egui chain strip with click-to-select, context menu, effect panel
+
+**Shared infrastructure:**
+- `egui_bridge/`: Custom baseview-to-egui bridge (~350 lines), replacing `egui-baseview`
 - Custom egui bridge: sonido owns its rendering pipeline (baseview + egui_glow), with no external `egui-baseview` dependency
 - Lock-free parameter sync: `AtomicU32` (f32 bit-cast) per parameter, `AtomicU8` gesture flags
-- Host notification: `host.request_process()` callback ensures GUI changes reach host even when playback is stopped
-- Plugin binaries: each effect is a `cdylib` example target using the `sonido_effect_entry!` macro
+- Host notification: `host.request_process()` / `host.request_callback()` for GUI changes and structural mutations
+- Plugin binaries: 20 `cdylib` example targets (19 single-effect + 1 chain)
 
 ### sonido-gui
 
@@ -339,7 +347,7 @@ Standalone real-time audio effects processor built on egui + cpal.
 - `audio_bridge.rs`: Lock-free communication between UI and audio thread (EffectOrder, AtomicParam)
 - `atomic_param_bridge.rs`: `ParamBridge` implementation using AtomicU32 per parameter
 - `chain_view.rs`: Drag-and-drop effect chain with reorder, bypass, add/remove
-- `chain_manager.rs`: Transactional add/remove/reorder of effects
+- `chain_manager.rs`: `ChainCommand` enum for GUI→audio thread chain mutations
 - `preset_manager.rs`: Preset save/load with categories
 - `file_player.rs`: WAV file playback (native + wasm)
 
@@ -356,7 +364,7 @@ Standalone real-time audio effects processor built on egui + cpal.
 
 ```
 ┌─────────────┐    ┌──────────────────┐    ┌─────────────────────┐    ┌──────────────────┐
-│ WAV input   │───▶│ read_wav_stereo  │───▶│ ProcessingEngine    │───▶│ write_wav_stereo │
+│ WAV input   │───▶│ read_wav_stereo  │───▶│ GraphEngine         │───▶│ write_wav_stereo │
 │ (mono/stereo)│    │  → StereoSamples │    │ process_file_stereo │    └──────────────────┘
 └─────────────┘    └──────────────────┘    └─────────────────────┘           │
                                                                               ▼
@@ -427,7 +435,9 @@ Fan-out:    Input → Split → [E1] → Merge → Output  (4 buffers)
 ```
 
 `GraphEngine` in `sonido-io/src/graph_engine.rs` wraps `ProcessingGraph` with
-`from_chain()` for backward-compatible migration from `ProcessingEngine`.
+high-level chain management (`add_effect`, `remove_effect`, `reorder`) and
+`from_chain()` for linear chain construction. All consumers (CLI, GUI, plugin)
+use `GraphEngine` or `ProcessingGraph` directly.
 
 ### CLI Stereo Output
 

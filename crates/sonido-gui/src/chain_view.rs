@@ -4,15 +4,14 @@
 //! select, double-click to bypass, drag to reorder, right-click to remove,
 //! and press "+" to add new effects.
 
-use crate::atomic_param_bridge::AtomicParamBridge;
 use egui::{Color32, Response, ScrollArea, Sense, Stroke, StrokeKind, Ui, pos2, vec2};
-use sonido_gui_core::{ParamBridge, SlotIndex};
+use sonido_gui_core::{ChainMutator, ParamBridge, SlotIndex};
 use sonido_registry::EffectRegistry;
 use std::sync::Arc;
 
 /// Chain view state for drag-and-drop, selection, and pending commands.
 pub struct ChainView {
-    bridge: Arc<AtomicParamBridge>,
+    mutator: Arc<dyn ChainMutator>,
     dragging: Option<usize>,
     drag_offset: f32,
     selected: Option<SlotIndex>,
@@ -23,10 +22,10 @@ pub struct ChainView {
 }
 
 impl ChainView {
-    /// Create a new chain view backed by the given parameter bridge.
-    pub fn new(bridge: Arc<AtomicParamBridge>) -> Self {
+    /// Create a new chain view backed by the given chain mutator.
+    pub fn new(mutator: Arc<dyn ChainMutator>) -> Self {
         Self {
-            bridge,
+            mutator,
             dragging: None,
             drag_offset: 0.0,
             selected: None,
@@ -35,12 +34,12 @@ impl ChainView {
         }
     }
 
-    /// Replace the current parameter bridge with a new one.
+    /// Replace the current chain mutator.
     ///
     /// This is used when the entire effect chain is rebuilt (e.g. loading a preset).
     /// Clears any active selection or drag state.
-    pub fn set_bridge(&mut self, bridge: Arc<AtomicParamBridge>) {
-        self.bridge = bridge;
+    pub fn set_mutator(&mut self, mutator: Arc<dyn ChainMutator>) {
+        self.mutator = mutator;
         self.selected = None;
         self.dragging = None;
         self.drag_offset = 0.0;
@@ -87,7 +86,7 @@ impl ChainView {
         bridge: &dyn ParamBridge,
         registry: &EffectRegistry,
     ) -> Option<SlotIndex> {
-        let order = self.bridge.get_order();
+        let order = self.mutator.get_order();
         let slot_count = bridge.slot_count();
 
         // Clear selection if the selected slot was removed
@@ -102,11 +101,11 @@ impl ChainView {
             // Find current position of selected slot in the visible order
             if let Some(pos) = order.iter().position(|&idx| idx == selected_slot.0) {
                 if ui.input(|i| i.key_pressed(egui::Key::ArrowLeft)) && pos > 0 {
-                    self.bridge.move_effect(pos, pos - 1);
+                    self.mutator.move_effect(pos, pos - 1);
                 } else if ui.input(|i| i.key_pressed(egui::Key::ArrowRight))
                     && pos < order.len() - 1
                 {
-                    self.bridge.move_effect(pos, pos + 1);
+                    self.mutator.move_effect(pos, pos + 1);
                 }
             }
         }
@@ -209,7 +208,7 @@ impl ChainView {
                     if let Some(dragged_pos) = self.dragging {
                         if response.hovered() && ui.input(|i| i.pointer.any_released()) {
                             if dragged_pos != pos {
-                                self.bridge.move_effect(dragged_pos, pos);
+                                self.mutator.move_effect(dragged_pos, pos);
                             }
                         }
                     }
