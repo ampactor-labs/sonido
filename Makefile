@@ -1,5 +1,5 @@
 .PHONY: build test bench clean check fmt doc demo walkthrough verify-demos
-.PHONY: quick-check verify test-nostd dev-install install plugins ci install-hooks
+.PHONY: quick-check verify test-nostd dev-install install plugins ci install-hooks smoke
 
 # Build
 build:
@@ -96,6 +96,10 @@ ci:
 	cargo clippy --workspace --all-targets -- -D warnings
 	cargo test --workspace
 	@echo "All CI checks passed"
+
+# Exhaustive CLI smoke test (manual, all effects + graphs + edge cases)
+smoke:
+	./scripts/smoke_test.sh
 
 # Install local pre-push git hook
 install-hooks:
