@@ -1,4 +1,5 @@
 /target
+*.rlib
 
 /crates/sonido-gui/dist/
 external-audio
