@@ -11,7 +11,7 @@ name = "sonido"
 path = "src/main.rs"
 
 [dependencies]
-sonido-core = { workspace = true, features = ["std"] }
+sonido-core = { workspace = true, features = ["std", "tracing"] }
 sonido-effects = { workspace = true, features = ["std"] }
 sonido-analysis = { workspace = true }
 sonido-io = { workspace = true }

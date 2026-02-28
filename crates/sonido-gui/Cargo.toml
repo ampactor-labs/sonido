@@ -18,7 +18,7 @@ egui_extras = { workspace = true }
 
 # Audio (workspace)
 cpal.workspace = true
-sonido-core = { workspace = true, features = ["std"] }
+sonido-core = { workspace = true, features = ["std", "tracing"] }
 sonido-effects = { workspace = true, features = ["std"] }
 sonido-config = { workspace = true, features = ["std"] }
 sonido-gui-core = { workspace = true }

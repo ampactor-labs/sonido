@@ -64,14 +64,18 @@ pub enum ProcessStep {
         buffer_idx: usize,
     },
 
-    /// Add (accumulate) a source buffer into a destination buffer.
+    /// Add (accumulate) a source buffer into a destination buffer, scaled by `gain`.
     ///
     /// Used for fan-in at Merge nodes: clear dest, then accumulate each input.
+    /// Gain is `1.0 / path_count` so that N paths sum to unity, preventing
+    /// amplitude doubling on split→merge topologies.
     AccumulateBuffer {
         /// Buffer slot to read from.
         source_buf: usize,
         /// Buffer slot to add into.
         dest_buf: usize,
+        /// Gain applied to each accumulated sample (typically `1.0 / path_count`).
+        gain: f32,
     },
 
     /// Apply latency compensation delay to a buffer.

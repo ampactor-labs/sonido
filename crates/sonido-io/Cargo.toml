@@ -7,7 +7,7 @@ license.workspace = true
 authors.workspace = true
 
 [dependencies]
-sonido-core = { workspace = true, features = ["std"] }
+sonido-core = { workspace = true, features = ["std", "tracing"] }
 cpal.workspace = true
 hound = { workspace = true }
 thiserror = { workspace = true }

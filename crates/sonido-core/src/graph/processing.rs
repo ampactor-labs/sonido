@@ -25,6 +25,53 @@ use super::edge::{Edge, EdgeId};
 use super::node::{NodeData, NodeId, NodeKind};
 use super::schedule::{CompiledSchedule, MAX_SPLIT_TARGETS, ProcessStep};
 
+/// Formats a compiled `ProcessStep` into a human-readable description.
+#[cfg(feature = "tracing")]
+fn format_step(step: &ProcessStep) -> String {
+    match step {
+        ProcessStep::WriteInput { buffer_idx } => {
+            format!("WriteInput → buf[{buffer_idx}]")
+        }
+        ProcessStep::ProcessEffect {
+            node_idx,
+            input_buf,
+            output_buf,
+        } => {
+            format!("ProcessEffect node[{node_idx}] buf[{input_buf}] → buf[{output_buf}]")
+        }
+        ProcessStep::SplitCopy {
+            source_buf,
+            dest_bufs,
+            dest_count,
+        } => {
+            let dests: Vec<String> = dest_bufs[..*dest_count]
+                .iter()
+                .map(|b| format!("buf[{b}]"))
+                .collect();
+            format!("SplitCopy buf[{source_buf}] → [{}]", dests.join(", "))
+        }
+        ProcessStep::ClearBuffer { buffer_idx } => {
+            format!("ClearBuffer buf[{buffer_idx}]")
+        }
+        ProcessStep::AccumulateBuffer {
+            source_buf,
+            dest_buf,
+            gain,
+        } => {
+            format!("AccumulateBuffer buf[{source_buf}] → buf[{dest_buf}] (gain={gain:.2})")
+        }
+        ProcessStep::DelayCompensate {
+            buffer_idx,
+            delay_line_idx,
+        } => {
+            format!("DelayCompensate buf[{buffer_idx}] delay_line[{delay_line_idx}]")
+        }
+        ProcessStep::ReadOutput { buffer_idx } => {
+            format!("ReadOutput ← buf[{buffer_idx}]")
+        }
+    }
+}
+
 /// Errors that can occur during graph operations.
 #[derive(Debug)]
 pub enum GraphError {
@@ -167,6 +214,8 @@ impl ProcessingGraph {
         if let Some(Some(node)) = self.nodes.get_mut(id.0 as usize) {
             node.bypass_buf.resize(self.block_size);
         }
+        #[cfg(feature = "tracing")]
+        tracing::debug!("graph_add: effect node {id}");
         id
     }
 
@@ -174,14 +223,20 @@ impl ProcessingGraph {
     ///
     /// A Split node copies its single input to all connected outputs.
     pub fn add_split(&mut self) -> NodeId {
-        self.add_node(NodeKind::Split)
+        let id = self.add_node(NodeKind::Split);
+        #[cfg(feature = "tracing")]
+        tracing::debug!("graph_add: split node {id}");
+        id
     }
 
     /// Adds a merge (fan-in) node. Returns the new node's ID.
     ///
     /// A Merge node sums all connected inputs into a single output.
     pub fn add_merge(&mut self) -> NodeId {
-        self.add_node(NodeKind::Merge)
+        let id = self.add_node(NodeKind::Merge);
+        #[cfg(feature = "tracing")]
+        tracing::debug!("graph_add: merge node {id}");
+        id
     }
 
     /// Removes a node and all its connected edges.
@@ -208,6 +263,8 @@ impl ProcessingGraph {
         }
 
         self.nodes[idx] = None;
+        #[cfg(feature = "tracing")]
+        tracing::debug!("graph_remove: node {id}");
         Ok(())
     }
 
@@ -260,6 +317,8 @@ impl ProcessingGraph {
             .incoming
             .push(edge_id);
 
+        #[cfg(feature = "tracing")]
+        tracing::debug!("graph_connect: {from} → {to}");
         Ok(edge_id)
     }
 
@@ -276,6 +335,8 @@ impl ProcessingGraph {
             return Err(GraphError::EdgeNotFound(id));
         }
         self.disconnect_internal(id);
+        #[cfg(feature = "tracing")]
+        tracing::debug!("graph_disconnect: edge {id}");
         Ok(())
     }
 
@@ -428,6 +489,8 @@ impl ProcessingGraph {
 
         // Kahn's topological sort.
         let sorted = self.kahn_sort()?;
+        #[cfg(feature = "tracing")]
+        tracing::debug!("graph_sort: {} nodes in topo order", sorted.len());
 
         // Find input and output node indices.
         let input_node_idx = self.find_node_by_kind_is_input();
@@ -440,10 +503,28 @@ impl ProcessingGraph {
         // Buffer liveness analysis: assign buffer slots.
         let (steps, buffer_count) =
             Self::assign_buffers(raw_steps, &edge_first_write, &edge_last_read);
+        #[cfg(feature = "tracing")]
+        tracing::debug!(
+            "graph_buffers: {} steps, {} physical buffers",
+            steps.len(),
+            buffer_count
+        );
 
         // Latency compensation.
         let (final_steps, delay_sample_counts, total_latency) =
             self.compute_latency_compensation(steps, &sorted);
+        #[cfg(feature = "tracing")]
+        tracing::debug!(
+            "graph_latency: {} samples, {} compensation delays",
+            total_latency,
+            delay_sample_counts.len()
+        );
+
+        // Log the compiled schedule step-by-step.
+        #[cfg(feature = "tracing")]
+        for (i, step) in final_steps.iter().enumerate() {
+            tracing::debug!("  step[{i}]: {}", format_step(step));
+        }
 
         // Build the compiled schedule (lightweight — no pool or delay lines).
         let schedule = Arc::new(CompiledSchedule {
@@ -475,6 +556,8 @@ impl ProcessingGraph {
             self.prev_compiled = self.compiled.take();
             self.swap_fade = SmoothedParam::fast(0.0, self.sample_rate);
             self.swap_fade.set_target(1.0);
+            #[cfg(feature = "tracing")]
+            tracing::debug!("graph_swap: crossfade from previous schedule");
         }
 
         self.compiled = Some(Arc::clone(&schedule));
@@ -675,11 +758,16 @@ impl ProcessingGraph {
                             vbuf_first_write[ov] = s;
                         }
 
-                        // Accumulate each input.
+                        // Accumulate each input, scaled by 1/N for unity-sum gain.
+                        let path_count = in_vbufs.len();
+                        let gain = 1.0 / path_count as f32;
+                        #[cfg(feature = "tracing")]
+                        tracing::debug!("  merge_gain: {path_count} paths, gain={gain:.3}");
                         for &iv in &in_vbufs {
                             steps.push(RawStep::AccumulateBuffer {
                                 source_vbuf: iv,
                                 dest_vbuf: ov,
+                                gain,
                             });
                             let s = steps.len() - 1;
                             vbuf_last_read[iv] = vbuf_last_read[iv].max(s);
@@ -797,9 +885,11 @@ impl ProcessingGraph {
                 RawStep::AccumulateBuffer {
                     source_vbuf,
                     dest_vbuf,
+                    gain,
                 } => ProcessStep::AccumulateBuffer {
                     source_buf: vbuf_to_phys[source_vbuf].unwrap_or(0),
                     dest_buf: vbuf_to_phys[dest_vbuf].unwrap_or(0),
+                    gain,
                 },
                 RawStep::ReadOutput { vbuf } => ProcessStep::ReadOutput {
                     buffer_idx: vbuf_to_phys[vbuf].unwrap_or(0),
@@ -882,27 +972,59 @@ impl ProcessingGraph {
             for &(from_idx, lat) in &incoming_latencies {
                 let delay = max_lat - lat;
                 if delay > 0 {
-                    // Find the edge and its buffer index in the steps.
-                    let edge_buf = node.incoming.iter().find_map(|eid| {
-                        let edge = self.edges[eid.0 as usize].as_ref()?;
-                        if edge.from.0 as usize == from_idx {
-                            Some(eid)
+                    // Find the output buffer of the source node by scanning
+                    // ProcessEffect steps. For non-effect nodes (Split/Input),
+                    // find the SplitCopy dest or WriteInput buffer that feeds
+                    // this merge's AccumulateBuffer.
+                    let source_output_buf = steps.iter().find_map(|step| match step {
+                        ProcessStep::ProcessEffect {
+                            node_idx,
+                            output_buf,
+                            ..
+                        } if *node_idx == from_idx => Some(*output_buf),
+                        _ => None,
+                    });
+
+                    // Find the AccumulateBuffer step for this specific merge input
+                    // by matching source_buf against the source node's output buffer.
+                    // Falls back to matching by merge dest_buf if source is a
+                    // passthrough node (Split/Input with no ProcessEffect step).
+                    let merge_dest = steps.iter().find_map(|step| {
+                        if let ProcessStep::ClearBuffer { buffer_idx } = step {
+                            // The ClearBuffer immediately preceding this merge's
+                            // accumulations tells us the merge's dest buffer.
+                            // We check if any AccumulateBuffer has this dest.
+                            Some(*buffer_idx)
                         } else {
                             None
                         }
                     });
 
-                    if let Some(_edge_id) = edge_buf {
-                        // Find the AccumulateBuffer step for this merge input.
-                        // Insert the delay compensation just before it.
-                        for (step_i, step) in steps.iter().enumerate() {
-                            if let ProcessStep::AccumulateBuffer {
-                                source_buf,
-                                dest_buf: _,
-                            } = step
-                            {
+                    for (step_i, step) in steps.iter().enumerate() {
+                        if let ProcessStep::AccumulateBuffer {
+                            source_buf,
+                            dest_buf,
+                            ..
+                        } = step
+                        {
+                            let matches = if let Some(expected_src) = source_output_buf {
+                                // Match by source node's output buffer.
+                                *source_buf == expected_src
+                            } else {
+                                // Passthrough node: match by merge dest buffer
+                                // (less precise, but passthrough nodes don't have
+                                // ProcessEffect steps).
+                                merge_dest.is_some_and(|d| *dest_buf == d)
+                            };
+
+                            if matches {
                                 let delay_line_idx = delay_sample_counts.len();
                                 delay_sample_counts.push(delay);
+                                #[cfg(feature = "tracing")]
+                                tracing::debug!(
+                                    "  merge_delay: node {from_idx} needs {delay} sample delay on buf[{}]",
+                                    *source_buf
+                                );
                                 insert_ops.push((
                                     step_i,
                                     ProcessStep::DelayCompensate {
@@ -1106,12 +1228,13 @@ impl ProcessingGraph {
                 ProcessStep::AccumulateBuffer {
                     source_buf,
                     dest_buf,
+                    gain,
                 } => {
                     if source_buf != dest_buf {
                         let (src, dst) = pool.get_ref_and_mut(*source_buf, *dest_buf);
                         for i in 0..len {
-                            dst.left[i] += src.left[i];
-                            dst.right[i] += src.right[i];
+                            dst.left[i] += src.left[i] * gain;
+                            dst.right[i] += src.right[i] * gain;
                         }
                     }
                 }
@@ -1407,6 +1530,7 @@ enum RawStep {
     AccumulateBuffer {
         source_vbuf: usize,
         dest_vbuf: usize,
+        gain: f32,
     },
     ReadOutput {
         vbuf: usize,
@@ -1842,8 +1966,9 @@ mod tests {
 
         graph.process_block(&left_in, &right_in, &mut left_out, &mut right_out);
 
+        // Merge normalizes by path count: (2.0 + 3.0) / 2 = 2.5
         for &s in &left_out {
-            assert!((s - 5.0).abs() < 1e-6, "expected 5.0, got {s}");
+            assert!((s - 2.5).abs() < 1e-6, "expected 2.5, got {s}");
         }
     }
 
@@ -2122,12 +2247,11 @@ mod tests {
 
         graph.process_block(&left_in, &right_in, &mut left_out, &mut right_out);
 
-        // All 8 paths sum: 1.0 * 8 = 8.0
+        // All 8 paths at gain 1.0, normalized: 8 * 1.0 / 8 = 1.0
         for &s in &left_out {
             assert!(
-                (s - MAX_SPLIT_TARGETS as f32).abs() < 1e-6,
-                "expected {}, got {s}",
-                MAX_SPLIT_TARGETS
+                (s - 1.0).abs() < 1e-6,
+                "expected 1.0 (unity after normalization), got {s}",
             );
         }
     }

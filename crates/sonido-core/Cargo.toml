@@ -11,9 +11,11 @@ categories = ["multimedia::audio", "no-std"]
 [features]
 default = ["std"]
 std = []
+tracing = ["dep:tracing"]
 
 [dependencies]
 libm = { workspace = true }
+tracing = { workspace = true, optional = true }
 
 [lints]
 workspace = true

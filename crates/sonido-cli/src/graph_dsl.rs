@@ -29,6 +29,7 @@
 use crate::effects::{EffectError, create_effect_with_params};
 use sonido_core::graph::{GraphError, MAX_SPLIT_TARGETS, NodeId, ProcessingGraph};
 use std::collections::HashMap;
+use tracing::debug;
 
 // ---------------------------------------------------------------------------
 // IR types
@@ -366,7 +367,9 @@ pub fn parse_graph_dsl(input: &str) -> Result<GraphSpec, DslError> {
         });
     }
     let mut parser = Parser::new(input);
-    parser.parse_graph()
+    let spec = parser.parse_graph()?;
+    debug!("dsl_parse: {} nodes from spec", count_nodes(&spec));
+    Ok(spec)
 }
 
 /// Validate a parsed graph spec.
@@ -413,6 +416,7 @@ pub fn build_graph(
     sample_rate: f32,
     block_size: usize,
 ) -> Result<ProcessingGraph, DslError> {
+    debug!("dsl_build: constructing graph at {sample_rate}Hz, block_size={block_size}");
     let mut graph = ProcessingGraph::new(sample_rate, block_size);
     let input = graph.add_input();
     let output = graph.add_output();
@@ -422,6 +426,11 @@ pub fn build_graph(
     graph.connect(exit, output)?;
 
     graph.compile()?;
+    tracing::info!(
+        "dsl_complete: {} nodes, {} edges",
+        graph.node_count(),
+        graph.edge_count()
+    );
     Ok(graph)
 }
 
@@ -490,6 +499,7 @@ fn build_split(
     paths: &[Vec<GraphNode>],
     sample_rate: f32,
 ) -> Result<(NodeId, NodeId), DslError> {
+    debug!("dsl_split: {} paths", paths.len());
     let split = graph.add_split();
     let merge = graph.add_merge();
 
@@ -505,6 +515,20 @@ fn build_split(
     }
 
     Ok((split, merge))
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/// Counts total nodes in a graph spec (effects + splits, recursively).
+fn count_nodes(spec: &GraphSpec) -> usize {
+    spec.iter()
+        .map(|node| match node {
+            GraphNode::Effect { .. } | GraphNode::Dry => 1,
+            GraphNode::Split { paths } => 1 + paths.iter().map(count_nodes).sum::<usize>(),
+        })
+        .sum()
 }
 
 // ---------------------------------------------------------------------------

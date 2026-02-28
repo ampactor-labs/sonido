@@ -3917,6 +3917,7 @@ dependencies = [
  "criterion",
  "libm",
  "proptest",
+ "tracing",
 ]
 
 [[package]]
