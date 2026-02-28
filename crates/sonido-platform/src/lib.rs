@@ -55,6 +55,8 @@
 
 #![cfg_attr(not(feature = "std"), no_std)]
 
+extern crate alloc;
+
 pub mod control_context;
 pub mod control_mapper;
 pub mod graph_mapper;

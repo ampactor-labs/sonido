@@ -197,7 +197,9 @@ impl<const N: usize> Default for GraphMapper<N> {
 
 #[cfg(test)]
 mod tests {
+    extern crate alloc;
     use super::*;
+    use alloc::boxed::Box;
     use sonido_core::effect::Effect;
     use sonido_core::param_info::{ParamDescriptor, ParameterInfo};
 
