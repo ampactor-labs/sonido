@@ -350,13 +350,12 @@ impl GraphEngine {
     ///
     /// Returns `true` if the parameter was set, `false` if slot or param is out of bounds.
     pub fn set_param_at(&mut self, slot: usize, param: usize, value: f32) -> bool {
-        if let Some(&node_id) = self.chain_order.get(slot) {
-            if let Some(ewp) = self.graph.effect_with_params_mut(node_id) {
-                if param < ewp.effect_param_count() {
-                    ewp.effect_set_param(param, value);
-                    return true;
-                }
-            }
+        if let Some(&node_id) = self.chain_order.get(slot)
+            && let Some(ewp) = self.graph.effect_with_params_mut(node_id)
+            && param < ewp.effect_param_count()
+        {
+            ewp.effect_set_param(param, value);
+            return true;
         }
         false
     }
@@ -414,7 +413,7 @@ impl GraphEngine {
     pub fn is_bypassed_at(&self, slot: usize) -> bool {
         self.chain_order
             .get(slot)
-            .map_or(false, |&id| self.graph.is_bypassed(id))
+            .is_some_and(|&id| self.graph.is_bypassed(id))
     }
 
     /// Captures the current chain state as a [`GraphSnapshot`].
