@@ -9,9 +9,6 @@ git clone https://github.com/ampactor-labs/sonido
 cd sonido
 cargo build
 cargo test
-
-# Symlink debug build to ~/.local/bin for quick iteration
-make dev-install
 ```
 
 ## Continuous Integration
@@ -418,4 +415,6 @@ When reporting bugs, include:
 
 ## License
 
-By contributing, you agree that your contributions will be licensed under the same MIT/Apache-2.0 dual license as the project.
+Sonido is licensed under AGPL-3.0-or-later, with a commercial license available for proprietary use. See [LICENSING.md](../LICENSING.md) for details.
+
+By contributing, you agree that your contributions are licensed under AGPL-3.0-or-later and that Ampactor Labs retains the right to offer contributions under the commercial license (standard CLA terms).

@@ -1,59 +1,39 @@
-# Sonido DSP Framework
+# Sonido
 
-Production-grade DSP library in Rust for audio effects, plugins, and embedded systems.
+Production-grade DSP framework in Rust for audio effects, plugins, and embedded systems.
 
-## Features
+[![CI](https://github.com/ampactor-labs/sonido/actions/workflows/ci.yml/badge.svg)](https://github.com/ampactor-labs/sonido/actions/workflows/ci.yml)
+[![License: AGPL-3.0-or-later](https://img.shields.io/badge/License-AGPL--3.0--or--later-blue.svg)](LICENSE)
+[![Rust Edition](https://img.shields.io/badge/Rust-Edition%202024-orange.svg)](https://doc.rust-lang.org/edition-guide/)
 
-- **19 audio effects**: distortion, compressor, limiter, chorus, delay, filter, vibrato, tape saturation, bitcrusher, preamp, reverb, tremolo, gate, flanger, phaser, ring modulator, wah, parametric EQ, stage (utility)
-- **Synthesis engine**: Oscillators with PolyBLEP anti-aliasing, ADSR envelopes, voice management, modulation matrix
-- **CLAP audio plugins**: 19 CLAP effect plugins for use in any DAW that supports CLAP (Bitwig, Reaper, Ardour, etc.)
-- **no_std compatible**: Core primitives work on embedded targets (Daisy Seed) without heap allocation
-- **Stereo-first processing**: True stereo effects with decorrelated L/R, backwards-compatible mono API
-- **Real-time audio I/O**: Process live audio via the CLI or GUI
-- **GUI**: egui-based interface with real-time metering, preset management, and drag-and-drop effect chaining
-- **Spectral analysis toolkit**: FFT-based tools for analyzing, decomposing, and reverse-engineering
-- **Zero-cost effect chaining**: Build complex signal chains with static or dynamic composition
-- **Parameter smoothing**: Click-free automation with exponential and linear smoothing
-- **Tempo sync**: Musical note divisions for tempo-synchronized effects
+Sonido is a 12-crate Rust workspace implementing 19 audio effects, a synthesis engine, spectral analysis tools, a real-time GUI, and 19 CLAP plugins — all built on a `no_std`-compatible core for embedded deployment on ARM targets like the Electrosmith Daisy Seed.
 
-## Why Sonido?
-
-| Feature | Typical Crates | Sonido |
-|---------|---------------|--------|
-| Parameter smoothing | None or ad-hoc | Two strategies (exponential + linear) |
-| Effect chaining | `Vec<Box<dyn Effect>>` | Zero-cost static `Chain<A,B>` |
-| no_std support | Afterthought | First-class design principle |
-| Oversampling | Per-effect or missing | Generic `Oversampled<N, E>` wrapper |
-| Latency reporting | Missing | Built-in for DAW compensation |
-| Documentation | Sparse | Every public item documented |
-| Plugin support | DIY or nih-plug | 19 CLAP plugins with GUI, zero boilerplate |
-| Testing | Minimal | 1000+ tests |
+<!-- TODO: screenshot of GUI -->
 
 ## Quick Start
 
-Add sonido to your `Cargo.toml`:
+Sonido is not yet published to crates.io. Add it as a git dependency:
 
 ```toml
 [dependencies]
-sonido-core = "0.1"
-sonido-effects = "0.1"
+sonido-core = { git = "https://github.com/ampactor-labs/sonido" }
+sonido-effects = { git = "https://github.com/ampactor-labs/sonido" }
 ```
 
-Create and process audio through an effect:
+Process audio through an effect:
 
 ```rust
 use sonido_core::Effect;
 use sonido_effects::Distortion;
 
-// Create a distortion effect at 48kHz
 let mut distortion = Distortion::new(48000.0);
 distortion.set_drive_db(15.0);
 distortion.set_tone_db(3.0);
 
-// Process audio sample by sample
+// Sample-by-sample
 let output = distortion.process(input_sample);
 
-// Or process blocks for efficiency
+// Block processing
 distortion.process_block(&input_buffer, &mut output_buffer);
 ```
 
@@ -63,212 +43,219 @@ distortion.process_block(&input_buffer, &mut output_buffer);
 use sonido_core::{Effect, EffectExt};
 use sonido_effects::{Distortion, Chorus, Delay, Reverb};
 
-// Create and configure effects
-let dist = Distortion::new(48000.0);
-let chorus = Chorus::new(48000.0);
-let delay = Delay::new(48000.0);
-let reverb = Reverb::new(48000.0);
+// Zero-cost static dispatch (no heap allocation)
+let mut chain = Distortion::new(48000.0)
+    .chain(Chorus::new(48000.0))
+    .chain(Delay::new(48000.0))
+    .chain(Reverb::new(48000.0));
 
-// Chain with zero-cost static dispatch (no heap allocation)
-let mut chain = dist.chain(chorus).chain(delay).chain(reverb);
-
-// Process entire buffer
 chain.process_block(&input, &mut output);
 ```
 
-## Crate Overview
+## Architecture
 
-| Crate | Description | no_std |
-|-------|-------------|--------|
-| `sonido-core` | DSP primitives: Effect trait, parameters, delays, filters, LFOs, tempo | Yes |
-| `sonido-effects` | 19 audio effect implementations: distortion, compressor, chorus, delay, etc. | Yes |
-| `sonido-synth` | Synthesis: oscillators (PolyBLEP), envelopes, voice management, modulation matrix | Yes |
+```mermaid
+graph TD
+    subgraph "no_std (embedded-safe)"
+        core[sonido-core]
+        effects[sonido-effects]
+        synth[sonido-synth]
+        registry[sonido-registry]
+        platform[sonido-platform]
+    end
+
+    subgraph "std required"
+        analysis[sonido-analysis]
+        config[sonido-config]
+        io[sonido-io]
+        gui_core[sonido-gui-core]
+        gui[sonido-gui]
+        cli[sonido-cli]
+        plugin[sonido-plugin]
+    end
+
+    effects --> core
+    synth --> core
+    registry --> core & effects
+    platform --> core
+    config --> core
+    io --> core
+    gui_core --> core
+    gui --> core & effects & registry & config & gui_core & io
+    cli --> core & effects & synth & registry & config & analysis & io
+    plugin --> core & effects & registry & gui_core
+```
+
+| Crate | Purpose | no_std |
+|-------|---------|--------|
+| `sonido-core` | Effect trait, parameters, delays, filters, LFOs, tempo, DAG processing graph | Yes |
+| `sonido-effects` | 19 effect implementations | Yes |
+| `sonido-synth` | PolyBLEP oscillators, ADSR envelopes, voice management, modulation matrix | Yes |
 | `sonido-registry` | Effect factory and discovery by name/category | Yes |
-| `sonido-config` | Configuration, preset, and chain management | Partial |
-| `sonido-platform` | Hardware abstraction: PlatformController trait, ControlMapper, ControlId | Yes |
-| `sonido-analysis` | Spectral analysis, PAC/CFC, adaptive filters (LMS/NLMS), cross-correlation, DDC, phase unwrapping, resampling | No |
-| `sonido-io` | Audio I/O: WAV files (mono/stereo), real-time streaming via cpal | No |
-| `sonido-cli` | Command-line interface for processing and analysis | No |
-| `sonido-gui-core` | Shared GUI widgets, theme, and ParamBridge trait for standalone + plugin UIs | No |
+| `sonido-platform` | Hardware abstraction: PlatformController, ControlMapper | Yes |
+| `sonido-analysis` | FFT, spectral analysis, PAC/CFC, adaptive filters, resampling | No |
+| `sonido-config` | Preset and chain configuration management | Partial |
+| `sonido-io` | WAV I/O, real-time audio streaming via cpal | No |
+| `sonido-gui-core` | Shared GUI widgets, theme, ParamBridge trait | No |
 | `sonido-gui` | egui-based real-time effects GUI with preset management | No |
-| `sonido-plugin` | CLAP audio plugins for DAWs (one per effect, with embedded GUI) | No |
+| `sonido-cli` | Command-line processor and analyzer | No |
+| `sonido-plugin` | CLAP plugin adapter with embedded GUI | No |
 
-## CLI Usage
+## Effects (19)
 
-Install the CLI:
+| Effect | Category | True Stereo | Key Parameters |
+|--------|----------|:-----------:|----------------|
+| Preamp | Dynamics | | gain, tone |
+| Compressor | Dynamics | | threshold, ratio, attack, release, knee, mix |
+| Limiter | Dynamics | | threshold, release |
+| Gate | Dynamics | | threshold, attack, release, hold |
+| Distortion | Drive | | drive, tone, mode (soft/hard/fuzz/tube) |
+| Tape Saturation | Drive | | drive, warmth, wow, flutter, head bump |
+| Bitcrusher | Drive | | bit depth, sample rate reduction |
+| Chorus | Modulation | x | rate, depth, mix, voices |
+| Flanger | Modulation | x | rate, depth, feedback, mix |
+| Phaser | Modulation | x | rate, depth, stages, feedback |
+| Tremolo | Modulation | | rate, depth, waveform |
+| MultiVibrato | Modulation | | rate, depth, voices |
+| Ring Modulator | Modulation | | frequency, mix |
+| Wah | Filter | | frequency, resonance, mode (manual/auto/envelope) |
+| Filter | Filter | | cutoff, resonance, type (LP/HP/BP/notch) |
+| Parametric EQ | Filter | | 3-band frequency, gain, Q |
+| Delay | Time-Based | x | time, feedback, mix, ping-pong, diffusion |
+| Reverb | Time-Based | x | room size, damping, width, mix |
+| Stage | Utility | | phase invert, DC block, bass mono, output |
+
+## CLI
 
 ```bash
+# Install
 cargo install --path crates/sonido-cli
 
-# Or for development (debug build, symlinked to ~/.local/bin)
-make dev-install
-```
-
-### Process audio files
-
-```bash
-# Apply a single effect (output filename auto-generated)
+# Process audio
 sonido process input.wav --effect distortion --param drive=15
-
-# Explicit output filename
-sonido process input.wav output.wav --effect distortion --param drive=15
-
-# Chain multiple effects
 sonido process input.wav --chain "preamp:gain=6|distortion:drive=12|delay:time=300"
-
-# Use a preset file
 sonido process input.wav --preset presets/guitar_crunch.toml
-```
 
-### Real-time processing
-
-```bash
-# Process live audio through effects
+# Real-time processing (live mic input)
 sonido realtime --effect chorus --param rate=2 --param depth=0.6
 
-# Use a preset
-sonido realtime --preset presets/tape_delay.toml
-```
-
-### Generate test signals
-
-```bash
-# Generate a sine sweep for analysis
+# Generate test signals
 sonido generate sweep sweep.wav --start 20 --end 20000 --duration 3.0
-
-# Generate a test tone
 sonido generate tone tone.wav --freq 440 --duration 2.0
-
-# Generate noise
 sonido generate noise noise.wav --duration 1.0 --amplitude 0.5
-```
 
-### Analyze audio
-
-```bash
-# Compute frequency spectrum
+# Analyze audio
 sonido analyze spectrum recording.wav --fft-size 4096 --peaks 10
-
-# Measure transfer function between input and output
 sonido analyze transfer dry.wav wet.wav --output response.json
-
-# Extract impulse response from sweep recording
 sonido analyze ir sweep.wav recorded.wav --output ir.wav
+
+# List effects and devices
+sonido effects
+sonido devices
 ```
 
-### List available effects
+## CLAP Plugins
+
+Sonido builds 19 CLAP audio plugins (one per effect), each with an embedded egui GUI. Compatible with Bitwig, Reaper, Ardour, and any CLAP-compatible DAW.
 
 ```bash
-sonido effects
+# Build and install all 19 plugins
+make plugins
+
+# Or manually
+cargo build --release -p sonido-plugin --examples
+mkdir -p ~/.clap
+cp target/release/examples/libsonido_*.so ~/.clap/
 ```
+
+Plugins: `sonido-preamp`, `sonido-distortion`, `sonido-compressor`, `sonido-gate`, `sonido-eq`, `sonido-wah`, `sonido-chorus`, `sonido-flanger`, `sonido-phaser`, `sonido-tremolo`, `sonido-delay`, `sonido-filter`, `sonido-multivibrato`, `sonido-tape`, `sonido-reverb`, `sonido-limiter`, `sonido-bitcrusher`, `sonido-ringmod`, `sonido-stage`
+
+## Synthesis Engine
+
+PolyBLEP-antialiased oscillators (sine, saw, square, triangle), ADSR envelopes with configurable curves, polyphonic voice management with voice stealing, and a modulation matrix for flexible source→destination routing.
+
+```rust
+use sonido_synth::{PolyphonicSynth, Waveform};
+
+let mut synth = PolyphonicSynth::new(48000.0, 8); // 8 voices
+synth.set_waveform(Waveform::Sawtooth);
+synth.note_on(60, 0.8); // MIDI note 60, velocity 0.8
+synth.process_block(&mut output_buffer);
+```
+
+See [docs/SYNTHESIS.md](docs/SYNTHESIS.md) for the full synthesis guide.
+
+## Analysis Toolkit
+
+FFT-based spectral analysis, transfer function measurement, impulse response extraction, phase-amplitude coupling (PAC) with comodulograms and surrogate statistics, adaptive filters (LMS/NLMS), cross-correlation, digital down-conversion, phase unwrapping, and polyphase resampling.
+
+See [docs/BIOSIGNAL_ANALYSIS.md](docs/BIOSIGNAL_ANALYSIS.md) and [docs/CFC_ANALYSIS.md](docs/CFC_ANALYSIS.md).
 
 ## GUI
-
-Launch the real-time effects processor GUI:
 
 ```bash
 cargo run -p sonido-gui --release
 ```
 
-The GUI provides:
-- Drag-and-drop effect chain builder
-- Real-time input/output metering
-- Professional knob controls for all parameters
-- Preset save/load with categories
-- Dark theme optimized for studio use
+The GUI provides drag-and-drop effect chain building, real-time input/output metering, per-effect knob controls with parameter-scale-aware mapping, preset save/load, and a dark theme optimized for studio use.
 
-## CLAP Plugins
-
-Sonido builds 19 CLAP audio plugins (one per effect), each with an embedded egui GUI. Use them in any CLAP-compatible DAW (Bitwig, Reaper, Ardour, etc.).
-
-### Available plugins
-
-`sonido-preamp`, `sonido-distortion`, `sonido-compressor`, `sonido-gate`, `sonido-eq`, `sonido-wah`, `sonido-chorus`, `sonido-flanger`, `sonido-phaser`, `sonido-tremolo`, `sonido-delay`, `sonido-filter`, `sonido-multivibrato`, `sonido-tape`, `sonido-reverb`, `sonido-limiter`, `sonido-bitcrusher`, `sonido-ringmod`, `sonido-stage`
-
-### Build and install
-
-```bash
-# Build all 19 plugins (release mode)
-cargo build --release -p sonido-plugin --examples
-
-# Install to your CLAP plugin directory
-mkdir -p ~/.clap
-cp target/release/examples/libsonido_*.so ~/.clap/
-
-# Build a single plugin
-cargo build --release -p sonido-plugin --example sonido-reverb
-```
-
-Rescan your DAW's plugin directory to pick up the new plugins.
-
-## Building
-
-```bash
-# Build all crates
-cargo build --release
-
-# Run tests
-cargo test
-
-# Run benchmarks
-cargo bench
-
-# Check no_std compatibility
-cargo test --no-default-features -p sonido-core
-cargo test --no-default-features -p sonido-effects
-```
+<!-- TODO: GUI screenshot -->
 
 ## Performance
 
-Measured on Intel Core i5-6300U @ 2.40 GHz, block size 256 samples at 48 kHz:
+Even on a 2015 mobile CPU (Intel Core i5-6300U @ 2.40 GHz), every effect runs well within real-time budget. Measured at block size 256 samples, 48 kHz:
 
-| Effect | µs/block (256) | ns/sample | CPU % (mono, 48 kHz) |
-|--------|---------------|-----------|---------------------|
-| CleanPreamp | 2.2 | 9 | 0.04% |
-| LowPassFilter | 3.4 | 13 | 0.06% |
+| Effect | µs/block | ns/sample | CPU % (mono) |
+|--------|----------|-----------|:------------:|
+| Preamp | 2.2 | 9 | 0.04% |
+| Filter | 3.4 | 13 | 0.06% |
 | Delay | 3.1 | 12 | 0.06% |
-| TapeSaturation | 6.7 | 26 | 0.13% |
+| Tape Saturation | 6.7 | 26 | 0.13% |
 | Distortion | 14.4 | 56 | 0.27% |
 | Chorus | 20.4 | 80 | 0.38% |
 | Compressor | 29.1 | 113 | 0.54% |
 | Reverb | 44.5 | 174 | 0.83% |
 | MultiVibrato | 73.4 | 287 | 1.38% |
-| EffectChain (5 effects) | 42.8 | 167 | 0.80% |
+| 5-effect chain | 42.8 | 167 | 0.80% |
 
-CPU % = `ns_per_sample / (1e9 / 48000) × 100`. All effects comfortably fit within a real-time audio callback budget. Run your own: `cargo bench -p sonido-effects`
+CPU % = `ns_per_sample / (1e9 / 48000) × 100`. Run benchmarks via CI: `gh workflow run ci-manual.yml -f job=bench`
+
+## Testing
+
+1,300+ tests across the workspace:
+
+- **Golden file regression**: Effect output compared against reference WAV files (MSE < 1e-6, SNR > 60 dB, spectral correlation > 0.9999)
+- **Property-based testing**: Proptest verifies bounded output and reset behavior for all 19 effects
+- **no_std verification**: 5 core crates tested without default features
+- **Doc tests**: All rustdoc examples compile and run
+- **CI**: 4 always-on jobs (lint, test, no_std, wasm) + 3 manual-dispatch (benchmarks, coverage, plugin validation)
+
+```bash
+cargo test                          # Full workspace
+cargo test -p sonido-effects        # Single crate
+cargo test --no-default-features -p sonido-core  # no_std
+```
 
 ## Audio Demos
 
-Pre-generated audio samples demonstrating synthesis and effect processing are in [`demos/`](demos/):
+Demo files are generated locally, not checked into the repo:
 
-| File | Description |
-|------|-------------|
-| `src_sine_440.wav` | Clean 440 Hz sine tone (dry reference) |
-| `src_saw_chord.wav` | PolyBLEP sawtooth C major chord with ADSR envelope |
-| `src_perc_adsr.wav` | Short percussive hit for reverb/delay demos |
-| `src_sweep.wav` | Logarithmic sine sweep from 20 Hz to 20 kHz |
-| `fx_distortion_soft.wav` | Soft-clip distortion -- harmonic generation |
-| `fx_distortion_hard.wav` | Hard-clip distortion -- aggressive saturation |
-| `fx_chorus.wav` | Stereo chorus on saw chord |
-| `fx_flanger.wav` | Flanger on sine tone |
-| `fx_phaser.wav` | Phaser on saw chord |
-| `fx_tremolo.wav` | Tremolo on sine tone |
-| `fx_reverb_room.wav` | Room reverb on percussive transient |
-| `fx_reverb_hall.wav` | Hall reverb on percussive transient |
-| `fx_delay.wav` | Tempo-synced delay with feedback |
-| `fx_full_chain.wav` | 5-effect chain: preamp -> distortion -> chorus -> delay -> reverb |
+```bash
+./scripts/generate_demos.sh
+```
 
-Regenerate all: `./scripts/generate_demos.sh`
+This produces source tones (sine, sawtooth chord, percussive hit, sweep) and processed versions through each effect and a full 5-effect chain.
 
 ## Documentation
 
 ### Design & Theory
-- [DSP Fundamentals](docs/DSP_FUNDAMENTALS.md) -- signal processing theory behind the implementations
-- [Design Decisions](docs/DESIGN_DECISIONS.md) -- architecture decision records with rationale
-- [Architecture Overview](docs/ARCHITECTURE.md) -- crate structure and data flow
+- [DSP Fundamentals](docs/DSP_FUNDAMENTALS.md) — signal processing theory behind the implementations
+- [Design Decisions](docs/DESIGN_DECISIONS.md) — architecture decision records
+- [Architecture Overview](docs/ARCHITECTURE.md) — crate structure and data flow
+- [DSP Quality Standard](docs/DSP_QUALITY_STANDARD.md) — measurement protocol and compliance
 
 ### User Guides
-- [Getting Started Guide](docs/GETTING_STARTED.md)
+- [Getting Started](docs/GETTING_STARTED.md)
 - [CLI Guide](docs/CLI_GUIDE.md)
 - [Effects Reference](docs/EFFECTS_REFERENCE.md)
 - [Synthesis Guide](docs/SYNTHESIS.md)
@@ -286,26 +273,19 @@ Regenerate all: `./scripts/generate_demos.sh`
 - [Benchmarks](docs/BENCHMARKS.md)
 - [Changelog](docs/CHANGELOG.md)
 
-## audioDNA: Reverse-Engineering Reference Implementations
+## Commercial DSP Reference Analysis
 
-Sonido's effect algorithms are informed by analysis of commercial DSP products.
-These are clean-room implementations -- no proprietary code or firmware was used.
-The goal is to demonstrate deep understanding of production DSP architectures.
+Sonido's effect algorithms are informed by analysis of commercial DSP products. These are clean-room implementations — no proprietary code or firmware was used. The goal is to demonstrate deep understanding of production DSP architectures.
 
 | Target Product | DSP Domain | Sonido Implementation |
 |----------------|------------|----------------------|
 | DigiTech Ventura / Modela | Modulation (chorus, vibrato, rotary) | `Chorus`, `MultiVibrato`, LFO engine |
 | DigiTech Obscura | Delay (analog, tape, lo-fi modes) | `Delay` with feedback coloring, `TapeSaturation` |
-| DigiTech Dirty Robot | Envelope-following filter / synth | `Wah` (auto-wah mode), `LowPassFilter`, synth engine |
+| DigiTech Dirty Robot | Envelope-following filter / synth | `Wah` (auto-wah mode), `Filter`, synth engine |
 | DigiTech Polara / Supernatural | Reverb (room, hall, plate, spring) | `Reverb` (Freeverb topology with stereo decorrelation) |
 
 See `sonido compare` CLI command for A/B measurement between hardware captures and Sonido output.
 
 ## License
 
-Licensed under either of:
-
-- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE) or http://www.apache.org/licenses/LICENSE-2.0)
-- MIT license ([LICENSE-MIT](LICENSE-MIT) or http://opensource.org/licenses/MIT)
-
-at your option.
+Sonido is licensed under [AGPL-3.0-or-later](LICENSE). A commercial license is available for proprietary integration (DAW plugins, embedded hardware, closed-source products). See [LICENSING.md](LICENSING.md) for details.
