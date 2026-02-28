@@ -1,5 +1,5 @@
 .PHONY: build test bench clean check fmt doc demo walkthrough verify-demos
-.PHONY: quick-check verify test-nostd dev-install install plugins ci install-hooks smoke
+.PHONY: quick-check verify test-nostd dev-install install plugins ci install-hooks smoke measure overnight-qa
 
 # Build
 build:
@@ -100,6 +100,14 @@ ci:
 # Exhaustive CLI smoke test (manual, all effects + graphs + edge cases)
 smoke:
 	./scripts/smoke_test.sh
+
+# Run measurement suite (all effects, all sample rates)
+measure:
+	./scripts/measure_all.sh
+
+# Run overnight QA battery
+overnight-qa:
+	./scripts/overnight_qa.sh
 
 # Install local pre-push git hook
 install-hooks:

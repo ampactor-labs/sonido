@@ -73,7 +73,7 @@ Full polyphonic synthesis pipeline:
 
 - 48 golden regression baselines (WAV files, MSE < 1e-6, SNR > 60 dB, spectral correlation > 0.9999)
 - Property tests via proptest: bounded output, reset state clearing, parameter roundtrip
-- 7 CI workflows: test, clippy, doc, no_std, fmt, plugin, pages
+- 4 CI workflow files (ci.yml, ci-manual.yml, pages.yml, release.yml) with 9 jobs total
 - Workspace lints: `unsafe_code = deny`, `clippy::pedantic = warn`
 - Edition 2024, resolver 3
 
@@ -101,7 +101,7 @@ Replace `log` facade with `tracing` throughout std crates. `tracing-log` bridge 
 
 - `sonido-gui`, `sonido-cli`, `sonido-io`, `sonido-plugin` migrated to `tracing`
 - Native: `tracing-subscriber` with `EnvFilter` (controlled via `RUST_LOG`)
-- Wasm: `tracing-wasm` for browser console output
+- Wasm: `eframe::WebLogger` for browser console output
 - No per-sample tracing — wrong tool for DSP profiling
 
 ### Coverage Reporting in CI

@@ -1,7 +1,6 @@
 /target
-/test_audio/
+
 /crates/sonido-gui/dist/
-audio-staging
 external-audio
 .claude/worktrees/
 demos/*.wav
