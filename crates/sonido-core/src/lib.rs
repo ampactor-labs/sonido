@@ -104,6 +104,7 @@ pub mod envelope;
 pub mod fast_math;
 pub mod gain;
 pub mod graph;
+pub mod kernel;
 pub mod lfo;
 pub mod math;
 pub mod modulation;
@@ -135,6 +136,7 @@ pub use graph::{
     GraphSnapshot, NodeId, NodeKind, ProcessStep, ProcessingGraph, SnapshotEntry, StereoBuffer,
     StereoSamples,
 };
+pub use kernel::{DspKernel, KernelAdapter, KernelParams, SmoothingStyle};
 pub use lfo::{Lfo, LfoWaveform};
 pub use math::{
     asymmetric_clip, asymmetric_clip_ad, db_to_linear, fast_tanh, flush_denormal, foldback,

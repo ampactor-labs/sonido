@@ -1142,3 +1142,57 @@ Extend `GraphEngine` with a **slot-indexed API** rather than create a separate `
 - `crates/sonido-plugin/src/chain/audio.rs` — CLAP consumer (slot_map bridge)
 - ADR-025 — DAG Routing Engine (foundation)
 - ADR-026 — Multi-Effect Chain CLAP Plugin (parameter space design)
+
+## ADR-028: Kernel Architecture — DSP/Parameter Separation
+
+**Status:** Accepted
+
+**Date:** 2026-02-28
+
+### Context
+
+The original `Effect` trait couples DSP math with parameter ownership — each effect struct owns `SmoothedParam` instances and manages their targets internally. This creates tension when deploying the same effect across platforms:
+
+- **Embedded (Daisy Seed):** ADC inputs have hardware RC filtering; software smoothing is redundant and wastes cycles. `SmoothedParam` and `Vec` require `alloc`.
+- **Plugin hosts (CLAP/VST3):** Parameters live in atomic stores shared with the host; the effect's internal smoothers duplicate the host's own smoothing.
+- **Preset recall:** Parameters should snap instantly, not smooth through a transition.
+- **Preset morphing:** Interpolating between two effect states requires extracting all parameter values, which `SmoothedParam` makes awkward.
+
+Additionally, `impl_params!` macro and the `ParameterInfo` trait impl are manually synchronized with the effect struct — a maintenance burden and source of subtle bugs.
+
+### Decision
+
+Introduce a three-layer kernel architecture:
+
+1. **`DspKernel` trait** — Pure DSP processing. Receives `&Params` each sample. Contains ONLY filter state, delay buffers, ADAA processors, LFO phases. No `SmoothedParam`, no atomics, no platform types.
+
+2. **`KernelParams` trait** — Typed parameter struct. Fields in user-facing units (dB, %, ms, index). Provides `descriptor()`, `smoothing()`, `get()`/`set()`, plus `lerp()` (preset morphing), `from_normalized()` (CLAP bridge), `from_knobs()` (embedded ADC bridge).
+
+3. **`KernelAdapter<K>`** — Platform bridge. Owns per-parameter `SmoothedParam` instances. Implements `Effect + ParameterInfo` automatically. The **only** `Effect` implementor for audio effects.
+
+### Consequences
+
+**Positive:**
+- Identical DSP binary on x86_64 and ARM Cortex-M7 — kernel code is platform-independent
+- One parameter definition serves all platforms (GUI, plugin, preset, embedded)
+- Preset morphing via `KernelParams::lerp()` falls out for free
+- `impl_params!` macro eliminated — `KernelParams` replaces it entirely
+- Adapter is invisible to consumers — `Box<dyn EffectWithParams + Send>` works unchanged
+
+**Negative:**
+- Every effect requires migration (one-time cost, 18 effects)
+- Kernel `process_stereo()` receives params by reference each sample (negligible overhead)
+- Manual `get()/set()` match arms until proc macro `#[derive(KernelParams)]` is built
+
+**Invariants:**
+- Kernels must NOT contain `SmoothedParam`, atomics, `Arc`, or platform types
+- `ParamId` and `string_id` values must match classic effects exactly (plugin API contract)
+- Params store user-facing units; kernels convert internally
+- After migration: classic effect structs deleted, `impl_params!` removed
+
+### References
+
+- `crates/sonido-core/src/kernel/` — `DspKernel`, `KernelParams`, `SmoothingStyle`, `KernelAdapter`
+- `crates/sonido-effects/src/kernels/` — kernel implementations
+- `docs/KERNEL_SPEC.md` — full implementation specification
+- `docs/KERNEL_MIGRATION.md` — step-by-step migration guide

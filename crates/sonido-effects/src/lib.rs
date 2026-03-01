@@ -100,6 +100,7 @@ pub mod distortion;
 pub mod filter;
 pub mod flanger;
 pub mod gate;
+pub mod kernels;
 pub mod limiter;
 pub mod multi_vibrato;
 pub mod parametric_eq;
@@ -132,3 +133,6 @@ pub use stage::{ChannelMode, HaasSide, Stage};
 pub use tape_saturation::TapeSaturation;
 pub use tremolo::{Tremolo, TremoloWaveform};
 pub use wah::{Wah, WahMode};
+
+// Kernel-architecture implementations
+pub use kernels::{DistortionKernel, DistortionParams};
