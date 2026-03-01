@@ -135,4 +135,8 @@ pub use tremolo::{Tremolo, TremoloWaveform};
 pub use wah::{Wah, WahMode};
 
 // Kernel-architecture implementations
-pub use kernels::{DistortionKernel, DistortionParams};
+pub use kernels::{
+    BitcrusherKernel, BitcrusherParams, DistortionKernel, DistortionParams, FilterKernel,
+    FilterParams, GateKernel, GateParams, PreampKernel, PreampParams, RingModKernel, RingModParams,
+    WahKernel, WahParams,
+};

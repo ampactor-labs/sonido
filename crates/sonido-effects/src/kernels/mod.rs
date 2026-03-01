@@ -11,15 +11,29 @@
 //!
 //! # Migration Status
 //!
-//! Effects are being migrated from the classic `Effect`-owns-params pattern to the
-//! kernel architecture. Both patterns coexist — the rest of the system (graph,
-//! registry, plugin, GUI) sees standard `Effect` instances regardless.
-//!
 //! | Effect | Status |
 //! |--------|--------|
-//! | Distortion | ✅ Kernel available (`DistortionKernel`) |
+//! | Distortion | ✅ Kernel |
+//! | CleanPreamp | ✅ Kernel |
+//! | LowPassFilter | ✅ Kernel |
+//! | Gate | ✅ Kernel |
+//! | Bitcrusher | ✅ Kernel |
+//! | RingMod | ✅ Kernel |
+//! | Wah | ✅ Kernel |
 //! | _others_ | 🔲 Classic `Effect` (migration pending) |
 
+pub mod bitcrusher;
 pub mod distortion;
+pub mod filter;
+pub mod gate;
+pub mod preamp;
+pub mod ring_mod;
+pub mod wah;
 
+pub use bitcrusher::{BitcrusherKernel, BitcrusherParams};
 pub use distortion::{DistortionKernel, DistortionParams};
+pub use filter::{FilterKernel, FilterParams};
+pub use gate::{GateKernel, GateParams};
+pub use preamp::{PreampKernel, PreampParams};
+pub use ring_mod::{RingModKernel, RingModParams};
+pub use wah::{WahKernel, WahParams};
