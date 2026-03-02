@@ -734,7 +734,7 @@ The output level is stored internally as linear gain (1.0 = 0 dB) for efficient 
 | Effect | Net Gain at Defaults | Output Default | Strategy |
 |--------|---------------------|----------------|----------|
 | Distortion | +3.7 dB (signal-dependent) | -6.0 dB | Drive compensated by output level |
-| TapeSaturation | ~0 dB | -6.0 dB | Drive compensated by output level |
+| Tape | ~0 dB | -6.0 dB | Drive compensated by output level |
 | Wah | ~0 dB | 0.0 dB | BP normalized by Q (see below) |
 | Compressor | -4.5 dB | makeup 0 dB | Safety-first (user adds makeup) |
 | All others | ~0 dB | 0.0 dB | Unity gain at defaults |
@@ -804,7 +804,7 @@ let limited = soft_limit(sample, 1.0);
 let output = limited * self.output_level.advance();
 ```
 
-Five effects use this pattern: `Preamp`, `Compressor`, `ParametricEq`, `LowPassFilter`, `Wah`. Effects with inherently bounded output (e.g., `wet_dry_mix` with normalized inputs) do not need it.
+Five effects use this pattern: `Preamp`, `Compressor`, `Eq`, `LowPassFilter`, `Wah`. Effects with inherently bounded output (e.g., `wet_dry_mix` with normalized inputs) do not need it.
 
 ### Reference
 
@@ -882,7 +882,7 @@ IEEE 754 precision for predictable cycle counts.
 
 Use fast_math functions in **hot DSP loops on embedded targets** (Cortex-M7) where transcendental calls dominate cycle budget. The error margins are inaudible for all documented use cases (LFO modulation, dynamics, filter coefficients). For offline processing or non-embedded targets, prefer the standard `libm` functions.
 
-Currently used by: LFO, Compressor, Gate, ParametricEq, Phaser (see ADR-020).
+Currently used by: LFO, Compressor, Gate, Eq, Phaser (see ADR-020).
 
 ### References
 

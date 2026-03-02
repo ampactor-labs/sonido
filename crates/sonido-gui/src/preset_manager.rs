@@ -120,7 +120,7 @@ fn to_snake_case(name: &str) -> String {
 /// old preset files still use the original names.
 fn param_alias(descriptor_name: &str) -> &str {
     match descriptor_name {
-        "Depth" => "intensity",   // multivibrato renamed
+        "Depth" => "intensity",   // vibrato renamed
         "Saturation" => "warmth", // tape renamed
         _ => "",
     }
@@ -130,7 +130,11 @@ fn param_alias(descriptor_name: &str) -> &str {
 ///
 /// Handles legacy effect type names for backward compatibility.
 fn effect_type_matches(preset_type: &str, bridge_id: &str) -> bool {
-    preset_type == bridge_id || matches!((preset_type, bridge_id), ("parametriceq", "eq"))
+    preset_type == bridge_id
+        || matches!(
+            (preset_type, bridge_id),
+            ("parametriceq", "eq") | ("multivibrato", "vibrato")
+        )
 }
 
 /// Preset entry for the manager.
@@ -499,11 +503,11 @@ mod tests {
     #[test]
     fn test_param_alias_resolution() {
         let registry = EffectRegistry::new();
-        let bridge = AtomicParamBridge::new(&registry, &["multivibrato"], 48000.0);
+        let bridge = AtomicParamBridge::new(&registry, &["vibrato"], 48000.0);
 
         // Old preset uses "intensity" instead of "depth"
         let preset = Preset::new("Legacy")
-            .with_effect(EffectConfig::new("multivibrato").with_param("intensity", "80"));
+            .with_effect(EffectConfig::new("vibrato").with_param("intensity", "80"));
 
         preset_to_params(&preset, &bridge);
 

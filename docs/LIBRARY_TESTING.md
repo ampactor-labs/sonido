@@ -275,17 +275,17 @@ Default gain behavior for each effect with unit-amplitude input. Use this table 
 |--------|-------------|----------------|-------|
 | CleanPreamp | 0 dB | `output` param | Transparent at defaults |
 | Distortion | +3.7 dB | `level` param | Signal-dependent; clipping adds energy |
-| TapeSaturation | ~0 dB | `output` param | Gain-compensated after saturation |
+| Tape | ~0 dB | `output` param | Gain-compensated after saturation |
 | Compressor | -4.5 dB | `makeup` param | Safety-first default; use makeup to restore |
 | Gate | 0 dB | — | Pass-through when open, silence when closed |
-| ParametricEQ | 0 dB | band gain params | Flat at defaults (all gains 0 dB) |
+| Eq | 0 dB | band gain params | Flat at defaults (all gains 0 dB) |
 | Filter | 0 dB | — | Unity passband gain |
 | Wah | ~0 dB | `output` param | Bandpass normalized by Q |
 | Tremolo | -3 dB avg | `depth` param | Amplitude modulation reduces average level |
 | Chorus | ~0 dB | `output` param | Wet/dry mix preserves level |
 | Flanger | ~0 dB | `output` param | Comb filtering causes signal-dependent variation |
 | Phaser | ~0 dB | `output` param | Allpass summing, ~unity average |
-| MultiVibrato | 0 dB | `mix` param | Pitch shift only, no amplitude change |
+| Vibrato | 0 dB | `mix` param | Pitch shift only, no amplitude change |
 | Delay | 0-2.5 dB | `output` param | Feedback adds energy; signal-dependent |
 | Reverb | ~0 dB | `output` param | Mix control balances dry/wet |
 | Limiter | 0 dB | `ceiling` param | Brickwall limiting to ceiling level |

@@ -181,8 +181,8 @@ tier_1() {
     run_test "tremolo_mild"  --effect tremolo --param rate=4 --param depth=0.5 --param waveform=sine
     run_test "tremolo_heavy" --effect tremolo --param rate=20 --param depth=1.0 --param waveform=samplehold --param spread=1.0
 
-    run_test "multivibrato_mild"  --effect multivibrato --param depth=0.3
-    run_test "multivibrato_heavy" --effect multivibrato --param depth=1.0 --param mix=1.0
+    run_test "vibrato_mild"  --effect vibrato --param depth=0.3
+    run_test "vibrato_heavy" --effect vibrato --param depth=1.0 --param mix=1.0
 
     run_test "delay_mild"  --effect delay --param time=200 --param feedback=0.3 --param mix=0.3
     run_test "delay_heavy" --effect delay --param time=1500 --param feedback=0.9 --param mix=0.8 --param ping_pong=1
@@ -240,7 +240,7 @@ tier_3() {
         --chain "distortion:drive=30|phaser:depth=1|delay:feedback=0.8|reverb:decay=0.9"
 
     run_test "chain_kitchen_sink" \
-        --chain "preamp|distortion|compressor|gate|eq|wah|chorus|flanger|phaser|tremolo|delay|filter|multivibrato|tape|reverb|limiter|bitcrusher|ringmod|stage"
+        --chain "preamp|distortion|compressor|gate|eq|wah|chorus|flanger|phaser|tremolo|delay|filter|vibrato|tape|reverb|limiter|bitcrusher|ringmod|stage"
 }
 
 # ── Tier 4: Graph topologies (8 tests) ───────────────────────────────

@@ -172,8 +172,8 @@ impl FirstOrderAllpass {
 /// | 2 | `stages` | count | 2–12 (step 2) | 6.0 |
 /// | 3 | `feedback_pct` | % | 0–95 | 50.0 |
 /// | 4 | `mix_pct` | % | 0–100 | 50.0 |
-/// | 5 | `min_freq` | Hz | 20–2000 | 200.0 |
-/// | 6 | `max_freq` | Hz | 200–20000 | 4000.0 |
+/// | 5 | `min_freq_hz` | Hz | 20–2000 | 200.0 |
+/// | 6 | `max_freq_hz` | Hz | 200–20000 | 4000.0 |
 /// | 7 | `sync` | index | 0–1 (Off/On) | 0.0 |
 /// | 8 | `division` | index | 0–11 (note division) | 3.0 |
 /// | 9 | `output_db` | dB | −20–20 | 0.0 |
@@ -185,8 +185,8 @@ pub struct PhaserParams {
     pub rate: f32,
     /// Modulation depth in percent.
     ///
-    /// Range: 0–100 %. At 0 % all allpasses are pinned to `min_freq`;
-    /// at 100 % they sweep the full `min_freq`–`max_freq` range.
+    /// Range: 0–100 %. At 0 % all allpasses are pinned to `min_freq_hz`;
+    /// at 100 % they sweep the full `min_freq_hz`–`max_freq_hz` range.
     pub depth_pct: f32,
     /// Number of active allpass stages.
     ///
@@ -204,11 +204,11 @@ pub struct PhaserParams {
     /// Minimum allpass sweep frequency in Hz.
     ///
     /// Range: 20–2000 Hz (Logarithmic scale). Sets the low end of the LFO sweep.
-    pub min_freq: f32,
+    pub min_freq_hz: f32,
     /// Maximum allpass sweep frequency in Hz.
     ///
     /// Range: 200–20000 Hz (Logarithmic scale). Sets the high end of the LFO sweep.
-    pub max_freq: f32,
+    pub max_freq_hz: f32,
     /// Tempo sync enable: 0.0 = Off, 1.0 = On.
     ///
     /// When set to 1.0 the LFO rate is derived from BPM + `division` instead of `rate`.
@@ -232,8 +232,8 @@ impl Default for PhaserParams {
             stages: 6.0,
             feedback_pct: 50.0,
             mix_pct: 50.0,
-            min_freq: 200.0,
-            max_freq: 4000.0,
+            min_freq_hz: 200.0,
+            max_freq_hz: 4000.0,
             sync: 0.0,
             division: 3.0,
             output_db: 0.0,
@@ -254,8 +254,8 @@ impl PhaserParams {
     /// - `stages`   → 2–12         (maps to even integer: 2 4 6 8 10 12)
     /// - `feedback` → 0–95 %       (linear)
     /// - `mix`      → 0–100 %      (linear)
-    /// - `min_freq` → 20–2000 Hz   (linear; log feels more natural but hardware ADC is linear)
-    /// - `max_freq` → 200–20000 Hz (linear)
+    /// - `min_freq_hz` → 20–2000 Hz   (linear; log feels more natural but hardware ADC is linear)
+    /// - `max_freq_hz` → 200–20000 Hz (linear)
     ///
     /// Sync and division are fixed at Off / Quarter for embedded use
     /// (no BPM source available on standalone hardware).
@@ -265,8 +265,8 @@ impl PhaserParams {
         stages: f32,
         feedback: f32,
         mix: f32,
-        min_freq: f32,
-        max_freq: f32,
+        min_freq_hz: f32,
+        max_freq_hz: f32,
     ) -> Self {
         // Stages: 6 even steps across [0,1] → 2, 4, 6, 8, 10, 12
         let stages_raw = libm::floorf(stages * 5.99) as u32;
@@ -275,10 +275,10 @@ impl PhaserParams {
             rate: 0.05 + rate * (5.0 - 0.05), // 0.05–5.0 Hz
             depth_pct: depth * 100.0,         // 0–100 %
             stages: stages_val.clamp(2.0, 12.0),
-            feedback_pct: feedback * 95.0,        // 0–95 %
-            mix_pct: mix * 100.0,                 // 0–100 %
-            min_freq: 20.0 + min_freq * 1980.0,   // 20–2000 Hz
-            max_freq: 200.0 + max_freq * 19800.0, // 200–20000 Hz
+            feedback_pct: feedback * 95.0,              // 0–95 %
+            mix_pct: mix * 100.0,                       // 0–100 %
+            min_freq_hz: 20.0 + min_freq_hz * 1980.0,   // 20–2000 Hz
+            max_freq_hz: 200.0 + max_freq_hz * 19800.0, // 200–20000 Hz
             sync: 0.0,
             division: 3.0, // Quarter note — sensible embedded default
             output_db: 0.0,
@@ -359,8 +359,8 @@ impl KernelParams for PhaserParams {
             2 => SmoothingStyle::None,     // stages — discrete/stepped, snap
             3 => SmoothingStyle::Standard, // feedback
             4 => SmoothingStyle::Standard, // mix
-            5 => SmoothingStyle::Slow,     // min_freq — filter coefficient, avoid zipper
-            6 => SmoothingStyle::Slow,     // max_freq — filter coefficient, avoid zipper
+            5 => SmoothingStyle::Slow,     // min_freq_hz — filter coefficient, avoid zipper
+            6 => SmoothingStyle::Slow,     // max_freq_hz — filter coefficient, avoid zipper
             7 => SmoothingStyle::None,     // sync — on/off toggle, snap
             8 => SmoothingStyle::None,     // division — stepped, snap
             9 => SmoothingStyle::Standard, // output level
@@ -375,8 +375,8 @@ impl KernelParams for PhaserParams {
             2 => self.stages,
             3 => self.feedback_pct,
             4 => self.mix_pct,
-            5 => self.min_freq,
-            6 => self.max_freq,
+            5 => self.min_freq_hz,
+            6 => self.max_freq_hz,
             7 => self.sync,
             8 => self.division,
             9 => self.output_db,
@@ -391,8 +391,8 @@ impl KernelParams for PhaserParams {
             2 => self.stages = value,
             3 => self.feedback_pct = value,
             4 => self.mix_pct = value,
-            5 => self.min_freq = value,
-            6 => self.max_freq = value,
+            5 => self.min_freq_hz = value,
+            6 => self.max_freq_hz = value,
             7 => self.sync = value,
             8 => self.division = value,
             9 => self.output_db = value,
@@ -483,7 +483,7 @@ impl DspKernel for PhaserKernel {
     ///    every `COEFF_UPDATE_INTERVAL` samples to save CPU on the expensive
     ///    `fast_tan` calls. Provides ~0.67 ms update granularity at 48 kHz.
     /// 4. **Frequency mapping** — centre freq uses exponential mapping:
-    ///    `f = min_freq · 2^(log2(max/min) · lfo · depth)`.
+    ///    `f = min_freq_hz · 2^(log2(max/min) · lfo · depth)`.
     ///    Each stage is slightly offset by `1 + i·0.1` for a richer sound.
     /// 5. **Feedback + allpass cascade** — input mixed with `feedback_pct`% of the
     ///    previous cascade output, then processed through N active stages.
@@ -515,13 +515,13 @@ impl DspKernel for PhaserKernel {
         if self.coeff_update_counter == 0 {
             self.coeff_update_counter = COEFF_UPDATE_INTERVAL;
 
-            let freq_ratio = params.max_freq / params.min_freq.max(1.0);
+            let freq_ratio = params.max_freq_hz / params.min_freq_hz.max(1.0);
             let log_ratio = fast_log2(freq_ratio);
 
             // Exponential LFO mapping: perceptually natural frequency sweep.
-            // f = min_freq · 2^(log2(max/min) · lfo · depth)
-            let center_freq_l = params.min_freq * fast_exp2(log_ratio * lfo_l * depth);
-            let center_freq_r = params.min_freq * fast_exp2(log_ratio * lfo_r * depth);
+            // f = min_freq_hz · 2^(log2(max/min) · lfo · depth)
+            let center_freq_l = params.min_freq_hz * fast_exp2(log_ratio * lfo_l * depth);
+            let center_freq_r = params.min_freq_hz * fast_exp2(log_ratio * lfo_r * depth);
 
             for i in 0..stages {
                 // Slight per-stage offset creates richer, more complex notch pattern.
@@ -866,8 +866,8 @@ mod tests {
             stages: 2.0,
             feedback_pct: 0.0,
             mix_pct: 0.0,
-            min_freq: 20.0,
-            max_freq: 200.0,
+            min_freq_hz: 20.0,
+            max_freq_hz: 200.0,
             sync: 0.0,
             division: 0.0,
             output_db: -20.0,
@@ -878,8 +878,8 @@ mod tests {
             stages: 12.0,
             feedback_pct: 95.0,
             mix_pct: 100.0,
-            min_freq: 2000.0,
-            max_freq: 20000.0,
+            min_freq_hz: 2000.0,
+            max_freq_hz: 20000.0,
             sync: 0.0, // keep sync Off to avoid bpm dependency in test
             division: 11.0,
             output_db: 20.0,
@@ -916,14 +916,14 @@ mod tests {
         );
         assert!((low.mix_pct - 0.0).abs() < 0.5, "mix low: {}", low.mix_pct);
         assert!(
-            (low.min_freq - 20.0).abs() < 1.0,
-            "min_freq low: {}",
-            low.min_freq
+            (low.min_freq_hz - 20.0).abs() < 1.0,
+            "min_freq_hz low: {}",
+            low.min_freq_hz
         );
         assert!(
-            (low.max_freq - 200.0).abs() < 1.0,
-            "max_freq low: {}",
-            low.max_freq
+            (low.max_freq_hz - 200.0).abs() < 1.0,
+            "max_freq_hz low: {}",
+            low.max_freq_hz
         );
 
         let high = PhaserParams::from_knobs(1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0);
@@ -944,14 +944,14 @@ mod tests {
             high.mix_pct
         );
         assert!(
-            (high.min_freq - 2000.0).abs() < 1.0,
-            "min_freq high: {}",
-            high.min_freq
+            (high.min_freq_hz - 2000.0).abs() < 1.0,
+            "min_freq_hz high: {}",
+            high.min_freq_hz
         );
         assert!(
-            (high.max_freq - 20000.0).abs() < 1.0,
-            "max_freq high: {}",
-            high.max_freq
+            (high.max_freq_hz - 20000.0).abs() < 1.0,
+            "max_freq_hz high: {}",
+            high.max_freq_hz
         );
 
         // Midpoint checks

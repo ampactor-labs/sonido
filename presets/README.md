@@ -41,7 +41,7 @@ param = "value"
 | `chorus` | rate, depth, mix |
 | `delay` | time, feedback, mix |
 | `filter` | cutoff, resonance |
-| `multivibrato` | depth |
+| `vibrato` | depth |
 | `tape` | drive, saturation |
 | `preamp` | gain |
 

@@ -38,14 +38,14 @@ For a full guided tour (build, effects, analysis, presets, GUI):
 | `fx_flanger.wav` | Flanger | sine 440 Hz | rate=0.4 Hz, depth=0.7, feedback=0.6 |
 | `fx_phaser.wav` | Phaser | saw chord | rate=0.3 Hz, depth=0.8, 6 stages, feedback=0.7 |
 | `fx_tremolo.wav` | Tremolo | sine 440 Hz | rate=6 Hz, depth=0.8, sine waveform |
-| `fx_multivibrato.wav` | Multi Vibrato | saw chord | depth=0.6 |
+| `fx_vibrato.wav` | Vibrato | saw chord | depth=0.6 |
 | `fx_filter_lowpass.wav` | Low Pass Filter | sweep | cutoff=2000 Hz, resonance=4 |
 | `fx_wah.wav` | Auto-Wah | saw chord | frequency=800 Hz, resonance=5, sensitivity=0.7, mode=auto |
-| `fx_parametric_eq.wav` | Parametric EQ | sweep | mid_freq=1000 Hz, mid_gain=8 dB, mid_q=2 |
+| `fx_eq.wav` | Parametric EQ | sweep | mid_freq=1000 Hz, mid_gain=8 dB, mid_q=2 |
 | `fx_reverb_room.wav` | Reverb (room) | percussion ADSR | decay=0.4, damping=0.5, mix=0.4 |
 | `fx_reverb_hall.wav` | Reverb (hall) | percussion ADSR | decay=0.8, damping=0.3, mix=0.5 |
 | `fx_delay.wav` | Delay | percussion ADSR | time=375 ms, feedback=0.5, mix=0.4 |
-| `fx_tape_saturation.wav` | Tape Saturation | saw chord | drive=8, saturation=0.6 |
+| `fx_tape.wav` | Tape Saturation | saw chord | drive=8, saturation=0.6 |
 | `fx_preamp.wav` | Clean Preamp | sine 440 Hz | gain=8 dB |
 | `fx_limiter.wav` | Limiter | saw chord | threshold=-12 dB, ceiling=-0.5 dB, release=80 ms, lookahead=5 ms |
 | `fx_bitcrusher.wav` | Bitcrusher | sine 440 Hz | bit_depth=6, downsample=4, mix=1 |

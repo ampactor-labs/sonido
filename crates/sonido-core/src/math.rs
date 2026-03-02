@@ -255,7 +255,7 @@ pub fn hard_clip_ad(x: f32, threshold: f32) -> f32 {
 /// ```
 ///
 /// This is the positive-input branch of the asymmetric tape saturation
-/// transfer function used by `TapeSaturation`.
+/// transfer function used by `Tape`.
 ///
 /// # Reference
 ///
@@ -272,7 +272,7 @@ pub fn tape_sat_pos_ad(x: f32) -> f32 {
 /// ```
 ///
 /// This is the negative-input branch of the asymmetric tape saturation
-/// transfer function used by `TapeSaturation`.
+/// transfer function used by `Tape`.
 ///
 /// # Reference
 ///

@@ -519,8 +519,8 @@ fn get_effect_params(effect_id: &str) -> Vec<ParamValidationInfo> {
                 default: 0.707,
             },
         ],
-        // MultiVibrato: 2 params (Depth, Mix)
-        "multivibrato" => vec![
+        // Vibrato: 2 params (Depth, Mix)
+        "vibrato" => vec![
             ParamValidationInfo {
                 name: "depth".into(),
                 index: 0,
@@ -1147,7 +1147,7 @@ mod tests {
             "phaser",
             "delay",
             "filter",
-            "multivibrato",
+            "vibrato",
             "tape",
             "preamp",
             "reverb",

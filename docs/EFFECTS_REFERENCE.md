@@ -25,7 +25,7 @@ Some effects have alternate names for convenience:
 | Primary Name | Alias | Notes |
 |-------------|-------|-------|
 | `filter` | `lowpass` | Resonant lowpass filter |
-| `multivibrato` | `vibrato` | 6-unit tape wow/flutter |
+| `vibrato` | `multivibrato` | 6-unit tape wow/flutter |
 | `gate` | `noisegate` | Noise gate |
 | `wah` | `autowah` | Auto-wah/manual wah |
 | `eq` | `parametriceq`, `peq` | 3-band parametric EQ |
@@ -234,9 +234,9 @@ sonido process in.wav --effect filter \
 
 ---
 
-## multivibrato
+## vibrato
 
-6-unit tape wow/flutter vibrato. Also available as `vibrato`.
+6-unit tape wow/flutter vibrato. Also available as `multivibrato`.
 
 Simulates the complex pitch modulation of analog tape machines with 6 independent modulation units at different rates.
 
@@ -255,7 +255,7 @@ Simulates the complex pitch modulation of analog tape machines with 6 independen
 ### Example
 
 ```bash
-sonido process in.wav --effect multivibrato --param depth=0.4
+sonido process in.wav --effect vibrato --param depth=0.4
 ```
 
 ---
@@ -828,7 +828,7 @@ effect1:param1=value1,param2=value2|effect2:param=value
 
 **Lo-Fi**
 ```bash
---chain "tape:drive=8,saturation=0.6|filter:cutoff=4000|multivibrato:depth=0.3"
+--chain "tape:drive=8,saturation=0.6|filter:cutoff=4000|vibrato:depth=0.3"
 ```
 
 **Ambient Wash**

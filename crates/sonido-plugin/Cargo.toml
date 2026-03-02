@@ -95,7 +95,7 @@ name = "sonido-filter"
 crate-type = ["cdylib"]
 
 [[example]]
-name = "sonido-multivibrato"
+name = "sonido-vibrato"
 crate-type = ["cdylib"]
 
 [[example]]
