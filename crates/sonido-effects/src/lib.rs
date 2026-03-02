@@ -136,7 +136,9 @@ pub use wah::{Wah, WahMode};
 
 // Kernel-architecture implementations
 pub use kernels::{
-    BitcrusherKernel, BitcrusherParams, DistortionKernel, DistortionParams, FilterKernel,
-    FilterParams, GateKernel, GateParams, PreampKernel, PreampParams, RingModKernel, RingModParams,
-    WahKernel, WahParams,
+    BitcrusherKernel, BitcrusherParams, ChorusKernel, ChorusParams, CompressorKernel,
+    CompressorParams, DistortionKernel, DistortionParams, FilterKernel, FilterParams,
+    FlangerKernel, FlangerParams, GateKernel, GateParams, LimiterKernel, LimiterParams,
+    PhaserKernel, PhaserParams, PreampKernel, PreampParams, RingModKernel, RingModParams,
+    TremoloKernel, TremoloParams, WahKernel, WahParams,
 };
