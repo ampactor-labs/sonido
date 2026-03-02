@@ -601,7 +601,7 @@ After implementing 15 effects, a codebase audit revealed significant duplication
 - 15+ identical `ParamDescriptor` struct literals for common params (Mix, Depth, Feedback)
 - 3 ad-hoc one-pole lowpass implementations (distortion tone, tape HF rolloff)
 - 3 local `db_to_linear`/`linear_to_db` functions (compressor, gate) duplicating core
-- No universal output level control (Wah at +12.5 dB, TapeSaturation at +7.1 dB at defaults)
+- No universal output level control (Wah at +12.5 dB, Tape at +7.1 dB at defaults)
 
 ### Decision
 
@@ -621,13 +621,13 @@ Extract a shared vocabulary into `sonido-core` consisting of:
 
 Fix gain staging bugs at the root:
 - **Wah**: Normalize SVF bandpass by Q for unity peak gain (algebraically exact)
-- **TapeSaturation**: Set default output to -6 dB to compensate for drive gain (matching Distortion's pattern)
+- **Tape**: Set default output to -6 dB to compensate for drive gain (matching Distortion's pattern)
 
 ### Rationale
 
 **Single source of truth**: When the smoothing time convention changes, it changes in one place. When a new effect is added, it uses the vocabulary instead of reinventing it. The vocabulary enforces the project's DSP conventions at the API level.
 
-**Root fixes over compensation**: The Wah's gain bug is fixed by normalizing the transfer function (`filtered / Q`), not by adding an output trim. The TapeSaturation fix matches the Distortion's established drive/level compensation pattern.
+**Root fixes over compensation**: The Wah's gain bug is fixed by normalizing the transfer function (`filtered / Q`), not by adding an output trim. The Tape fix matches the Distortion's established drive/level compensation pattern.
 
 **Industry alignment**: NIH-plug uses `SmoothingStyle::Linear(10.0)` parameter presets, JUCE uses `NormalisableRange` with centralized param definitions, FunDSP uses shared smoothing filters. Our `SmoothedParam::standard()` / `ParamDescriptor::mix()` factories mirror these approaches without macro complexity.
 

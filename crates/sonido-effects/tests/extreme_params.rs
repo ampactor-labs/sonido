@@ -6,10 +6,9 @@
 
 use sonido_core::{Effect, KernelAdapter, ParameterInfo};
 use sonido_effects::kernels::{
-    BitcrusherKernel, ChorusKernel, CompressorKernel, DelayKernel, DistortionKernel, FilterKernel,
-    FlangerKernel, GateKernel, LimiterKernel, MultiVibratoKernel, ParametricEqKernel, PhaserKernel,
-    PreampKernel, ReverbKernel, RingModKernel, StageKernel, TapeSaturationKernel, TremoloKernel,
-    WahKernel,
+    BitcrusherKernel, ChorusKernel, CompressorKernel, DelayKernel, DistortionKernel, EqKernel,
+    FilterKernel, FlangerKernel, GateKernel, LimiterKernel, PhaserKernel, PreampKernel,
+    ReverbKernel, RingModKernel, StageKernel, TapeKernel, TremoloKernel, VibratoKernel, WahKernel,
 };
 
 const DEFAULT_SAMPLE_RATE: f32 = 48000.0;
@@ -155,10 +154,8 @@ fn test_extreme_tremolo() {
 }
 
 #[test]
-fn test_extreme_tape_saturation() {
-    run_extreme_test("TapeSaturation", |sr| {
-        KernelAdapter::new(TapeSaturationKernel::new(sr), sr)
-    });
+fn test_extreme_tape() {
+    run_extreme_test("Tape", |sr| KernelAdapter::new(TapeKernel::new(sr), sr));
 }
 
 #[test]
@@ -169,9 +166,9 @@ fn test_extreme_clean_preamp() {
 }
 
 #[test]
-fn test_extreme_multi_vibrato() {
-    run_extreme_test("MultiVibrato", |sr| {
-        KernelAdapter::new(MultiVibratoKernel::new(sr), sr)
+fn test_extreme_vibrato() {
+    run_extreme_test("Vibrato", |sr| {
+        KernelAdapter::new(VibratoKernel::new(sr), sr)
     });
 }
 
@@ -186,10 +183,8 @@ fn test_extreme_wah() {
 }
 
 #[test]
-fn test_extreme_parametric_eq() {
-    run_extreme_test("ParametricEq", |sr| {
-        KernelAdapter::new(ParametricEqKernel::new(sr), sr)
-    });
+fn test_extreme_eq() {
+    run_extreme_test("Eq", |sr| KernelAdapter::new(EqKernel::new(sr), sr));
 }
 
 #[test]

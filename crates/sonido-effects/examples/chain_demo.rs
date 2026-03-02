@@ -8,7 +8,7 @@
 use sonido_core::{Effect, EffectExt, KernelAdapter, ParameterInfo};
 use sonido_effects::kernels::{
     ChorusKernel, CompressorKernel, DelayKernel, DistortionKernel, FilterKernel, PreampKernel,
-    TapeSaturationKernel,
+    TapeKernel,
 };
 
 const SAMPLE_RATE: f32 = 48000.0;
@@ -44,7 +44,7 @@ fn main() {
     };
 
     let tape = {
-        let mut t = KernelAdapter::new(TapeSaturationKernel::new(SAMPLE_RATE), SAMPLE_RATE);
+        let mut t = KernelAdapter::new(TapeKernel::new(SAMPLE_RATE), SAMPLE_RATE);
         t.set_param(0, 6.0); // drive (dB, range 0-24)
         t.set_param(1, 40.0); // saturation (percent)
         t
@@ -140,7 +140,7 @@ fn main() {
             "Distortion",
             "4 waveshapes: soft/hard clip, foldback, asymmetric",
         ),
-        ("TapeSaturation", "Asymmetric saturation with HF rolloff"),
+        ("Tape", "Asymmetric saturation with HF rolloff"),
         ("Compressor", "Soft-knee dynamics with envelope follower"),
         ("Chorus", "Dual-voice modulated delay"),
         ("Delay", "Feedback delay with smooth parameter changes"),
@@ -151,7 +151,7 @@ fn main() {
         println!("  {} - {}", name, desc);
     }
 
-    println!("\n4. Tape MultiVibrato (Oxide Original)");
+    println!("\n4. Tape Vibrato (Oxide Original)");
     println!("-------------------------------------");
     println!("  10 simultaneous subtle vibratos at different frequencies");
     println!("  Simulates authentic tape wow and flutter");

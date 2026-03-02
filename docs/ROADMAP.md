@@ -25,7 +25,7 @@ Sonido is a production-grade DSP framework in Rust. The following capabilities a
 
 - **Dynamics**: Compressor (11 params, sidechain-capable), Limiter, Gate
 - **Gain/Saturation**: Preamp, Distortion (4 waveshaper modes, ADAA), Tape Saturation (10 params, hysteresis + wow/flutter + head bump)
-- **Modulation**: Chorus, Flanger, Phaser, Tremolo, MultiVibrato
+- **Modulation**: Chorus, Flanger, Phaser, Tremolo, Vibrato
 - **Time**: Delay (ping-pong, diffusion, tempo sync), Reverb (Hadamard FDN, stereo tanks)
 - **Filter**: Filter (SVF-based), Wah, Parametric EQ (3-band)
 - **Special**: Bitcrusher, Ring Modulator, Stage (4-in-1 processor)

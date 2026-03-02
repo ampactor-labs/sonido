@@ -17,7 +17,7 @@
 //!
 //! - [`DistortionKernel`] - Waveshaping distortion with 4 algorithms (soft clip, hard clip, foldback, asymmetric)
 //! - [`BitcrusherKernel`] - Lo-fi bit depth and sample rate reduction with jitter
-//! - [`TapeSaturationKernel`] - Analog tape warmth with asymmetric saturation and HF rolloff
+//! - [`TapeKernel`] - Analog tape warmth with asymmetric saturation and HF rolloff
 //!
 //! ## Modulation
 //!
@@ -26,7 +26,7 @@
 //! - [`PhaserKernel`] - Multi-stage allpass phaser with LFO modulation
 //! - [`RingModKernel`] - Ring modulation with sine, triangle, and square carriers
 //! - [`TremoloKernel`] - Amplitude modulation with multiple waveforms
-//! - [`MultiVibratoKernel`] - 10-unit tape wow/flutter simulation (original algorithm)
+//! - [`VibratoKernel`] - 10-unit tape wow/flutter simulation (original algorithm)
 //!
 //! ## Time-Based
 //!
@@ -103,10 +103,9 @@ pub mod kernels;
 // Re-export all kernel types at crate root
 pub use kernels::{
     BitcrusherKernel, BitcrusherParams, ChorusKernel, ChorusParams, CompressorKernel,
-    CompressorParams, DelayKernel, DelayParams, DistortionKernel, DistortionParams, FilterKernel,
-    FilterParams, FlangerKernel, FlangerParams, GateKernel, GateParams, LimiterKernel,
-    LimiterParams, MultiVibratoKernel, MultiVibratoParams, ParametricEqKernel, ParametricEqParams,
-    PhaserKernel, PhaserParams, PreampKernel, PreampParams, ReverbKernel, ReverbParams,
-    RingModKernel, RingModParams, StageKernel, StageParams, TapeSaturationKernel,
-    TapeSaturationParams, TremoloKernel, TremoloParams, WahKernel, WahParams,
+    CompressorParams, DelayKernel, DelayParams, DistortionKernel, DistortionParams, EqKernel,
+    EqParams, FilterKernel, FilterParams, FlangerKernel, FlangerParams, GateKernel, GateParams,
+    LimiterKernel, LimiterParams, PhaserKernel, PhaserParams, PreampKernel, PreampParams,
+    ReverbKernel, ReverbParams, RingModKernel, RingModParams, StageKernel, StageParams, TapeKernel,
+    TapeParams, TremoloKernel, TremoloParams, VibratoKernel, VibratoParams, WahKernel, WahParams,
 };

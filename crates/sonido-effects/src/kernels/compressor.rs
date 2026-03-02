@@ -97,7 +97,7 @@ const SC_HPF_Q: f32 = 0.707;
 /// | 4 | `makeup_db` | dB | 0–24 | 0.0 |
 /// | 5 | `knee_db` | dB | 0–12 | 6.0 |
 /// | 6 | `detection` | index | 0–1 | 0 (Peak) |
-/// | 7 | `sidechain_freq` | Hz | 20–500 | 80.0 |
+/// | 7 | `sidechain_freq_hz` | Hz | 20–500 | 80.0 |
 /// | 8 | `auto_makeup` | index | 0–1 | 0 (Off) |
 /// | 9 | `output_db` | dB | −20–20 | 0.0 |
 /// | 10 | `mix_pct` | % | 0–100 | 100.0 |
@@ -107,7 +107,7 @@ const SC_HPF_Q: f32 = 0.707;
 /// - `threshold_db`, `ratio`, `knee_db`: Standard (10 ms) — avoid zipper on automation.
 /// - `attack_ms`, `release_ms`: Standard (10 ms) — timing params, smooth transitions.
 /// - `makeup_db`, `output_db`: Standard (10 ms) — level faders.
-/// - `sidechain_freq`: Slow (20 ms) — filter coefficient recalc, avoid zipper.
+/// - `sidechain_freq_hz`: Slow (20 ms) — filter coefficient recalc, avoid zipper.
 /// - `detection`, `auto_makeup`: None — stepped/discrete, snap immediately.
 /// - `mix_pct`: Standard (10 ms) — wet/dry blend.
 #[derive(Debug, Clone, Copy)]
@@ -162,7 +162,7 @@ pub struct CompressorParams {
     /// Range: 20.0–500.0 Hz (default 80.0). Removes low-frequency content
     /// from the detection path to prevent kick drums or bass from pumping
     /// the compressor. Set near 20 Hz to effectively disable.
-    pub sidechain_freq: f32,
+    pub sidechain_freq_hz: f32,
 
     /// Auto makeup gain: 0.0 = Off, 1.0 = On.
     ///
@@ -195,7 +195,7 @@ impl Default for CompressorParams {
             makeup_db: 0.0,
             knee_db: 6.0,
             detection: 0.0,
-            sidechain_freq: 80.0,
+            sidechain_freq_hz: 80.0,
             auto_makeup: 0.0,
             output_db: 0.0,
             mix_pct: 100.0,
@@ -219,7 +219,7 @@ impl CompressorParams {
     /// | `makeup` | `makeup_db` | 0–1 → 0–24 dB |
     /// | `knee` | `knee_db` | 0–1 → 0–12 dB |
     /// | `detect` | `detection` | 0–1 → 0 or 1 (Peak/RMS, snapped) |
-    /// | `sc_freq` | `sidechain_freq` | 0–1 → 20–500 Hz |
+    /// | `sc_freq` | `sidechain_freq_hz` | 0–1 → 20–500 Hz |
     /// | `auto_mu` | `auto_makeup` | 0–1 → 0 or 1 (Off/On, snapped) |
     /// | `output` | `output_db` | 0–1 → −20–20 dB |
     /// | `mix` | `mix_pct` | 0–1 → 0–100 % |
@@ -245,7 +245,7 @@ impl CompressorParams {
             makeup_db: makeup * 24.0,                  // 0–1 → 0–24 dB
             knee_db: knee * 12.0,                      // 0–1 → 0–12 dB
             detection: libm::floorf(detect * 1.99),    // 0 or 1
-            sidechain_freq: sc_freq * 480.0 + 20.0,    // 0–1 → 20–500 Hz
+            sidechain_freq_hz: sc_freq * 480.0 + 20.0, // 0–1 → 20–500 Hz
             auto_makeup: libm::floorf(auto_mu * 1.99), // 0 or 1
             output_db: output * 40.0 - 20.0,           // 0–1 → −20–20 dB
             mix_pct: mix * 100.0,                      // 0–1 → 0–100 %
@@ -369,7 +369,7 @@ impl KernelParams for CompressorParams {
             4 => self.makeup_db,
             5 => self.knee_db,
             6 => self.detection,
-            7 => self.sidechain_freq,
+            7 => self.sidechain_freq_hz,
             8 => self.auto_makeup,
             9 => self.output_db,
             10 => self.mix_pct,
@@ -386,7 +386,7 @@ impl KernelParams for CompressorParams {
             4 => self.makeup_db = value,
             5 => self.knee_db = value,
             6 => self.detection = value,
-            7 => self.sidechain_freq = value,
+            7 => self.sidechain_freq_hz = value,
             8 => self.auto_makeup = value,
             9 => self.output_db = value,
             10 => self.mix_pct = value,
@@ -434,7 +434,7 @@ pub struct CompressorKernel {
     /// Sidechain highpass filter (detection path only).
     ///
     /// Applied to the linked-stereo mid signal `(L + R) / 2` before both
-    /// envelope followers. Coefficients recomputed when `sidechain_freq` changes.
+    /// envelope followers. Coefficients recomputed when `sidechain_freq_hz` changes.
     sidechain_hpf: Biquad,
 
     /// Last computed gain reduction in dB (always ≤ 0.0).
@@ -442,8 +442,8 @@ pub struct CompressorKernel {
     /// Exposed via the adapter as a metering value.
     last_gain_reduction_db: f32,
 
-    /// Cached `sidechain_freq` — invalidates HPF coefficients when changed.
-    last_sidechain_freq: f32,
+    /// Cached `sidechain_freq_hz` — invalidates HPF coefficients when changed.
+    last_sidechain_freq_hz: f32,
 
     /// Cached `attack_ms` — invalidates envelope attack coefficients when changed.
     last_attack_ms: f32,
@@ -467,7 +467,7 @@ impl CompressorKernel {
         // Initialize sidechain HPF at default 80 Hz
         let mut sidechain_hpf = Biquad::new();
         let (b0, b1, b2, a0, a1, a2) =
-            highpass_coefficients(defaults.sidechain_freq, SC_HPF_Q, sample_rate);
+            highpass_coefficients(defaults.sidechain_freq_hz, SC_HPF_Q, sample_rate);
         sidechain_hpf.set_coefficients(b0, b1, b2, a0, a1, a2);
 
         // Slow envelope: user-controlled release
@@ -486,7 +486,7 @@ impl CompressorKernel {
             fast_envelope,
             sidechain_hpf,
             last_gain_reduction_db: 0.0,
-            last_sidechain_freq: defaults.sidechain_freq,
+            last_sidechain_freq_hz: defaults.sidechain_freq_hz,
             last_attack_ms: defaults.attack_ms,
             last_release_ms: defaults.release_ms,
             last_detection: defaults.detection,
@@ -497,17 +497,17 @@ impl CompressorKernel {
     ///
     /// Comparisons use small epsilon thresholds to avoid redundant recalculation
     /// while smoothed parameters are advancing. Only recomputes what actually changed:
-    /// - HPF coefficients when `sidechain_freq` changes.
+    /// - HPF coefficients when `sidechain_freq_hz` changes.
     /// - Attack coefficients for both followers when `attack_ms` changes.
     /// - Slow release coefficient when `release_ms` changes.
     /// - Detection mode on both followers when `detection` changes.
     #[inline]
     fn update_caches(&mut self, params: &CompressorParams) {
-        if (params.sidechain_freq - self.last_sidechain_freq).abs() > 0.5 {
-            let freq = params.sidechain_freq.clamp(20.0, 500.0);
+        if (params.sidechain_freq_hz - self.last_sidechain_freq_hz).abs() > 0.5 {
+            let freq = params.sidechain_freq_hz.clamp(20.0, 500.0);
             let (b0, b1, b2, a0, a1, a2) = highpass_coefficients(freq, SC_HPF_Q, self.sample_rate);
             self.sidechain_hpf.set_coefficients(b0, b1, b2, a0, a1, a2);
-            self.last_sidechain_freq = params.sidechain_freq;
+            self.last_sidechain_freq_hz = params.sidechain_freq_hz;
         }
         if (params.attack_ms - self.last_attack_ms).abs() > 0.001 {
             let attack = params.attack_ms.clamp(0.1, 100.0);
@@ -659,7 +659,7 @@ impl DspKernel for CompressorKernel {
         self.last_gain_reduction_db = 0.0;
         // Invalidate all caches — force recomputation on next process() call.
         // NaN comparisons always fail (NaN != NaN), so every cache will recompute.
-        self.last_sidechain_freq = f32::NAN;
+        self.last_sidechain_freq_hz = f32::NAN;
         self.last_attack_ms = f32::NAN;
         self.last_release_ms = f32::NAN;
         self.last_detection = f32::NAN;
@@ -670,7 +670,7 @@ impl DspKernel for CompressorKernel {
         self.envelope_follower.set_sample_rate(sample_rate);
         self.fast_envelope.set_sample_rate(sample_rate);
         // Invalidate time-dependent caches so they recompute at next process()
-        self.last_sidechain_freq = f32::NAN;
+        self.last_sidechain_freq_hz = f32::NAN;
         self.last_attack_ms = f32::NAN;
         self.last_release_ms = f32::NAN;
     }
@@ -1098,9 +1098,9 @@ mod tests {
         assert!((p.knee_db - 6.0).abs() < 0.1, "knee_db: got {}", p.knee_db);
         assert_eq!(p.detection, 0.0, "detection should be 0.0 (Peak)");
         assert!(
-            (p.sidechain_freq - 260.0).abs() < 1.0,
+            (p.sidechain_freq_hz - 260.0).abs() < 1.0,
             "sc_freq: got {}",
-            p.sidechain_freq
+            p.sidechain_freq_hz
         );
         assert_eq!(p.auto_makeup, 0.0, "auto_makeup should be 0.0 (Off)");
         assert!(
@@ -1128,7 +1128,7 @@ mod tests {
         assert!((hi.makeup_db - 24.0).abs() < 0.1);
         assert!((hi.knee_db - 12.0).abs() < 0.1);
         assert_eq!(hi.detection, 1.0, "detection should snap to 1.0 at full");
-        assert!((hi.sidechain_freq - 500.0).abs() < 1.0);
+        assert!((hi.sidechain_freq_hz - 500.0).abs() < 1.0);
         assert_eq!(
             hi.auto_makeup, 1.0,
             "auto_makeup should snap to 1.0 at full"

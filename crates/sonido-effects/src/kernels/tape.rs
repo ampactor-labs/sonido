@@ -1,14 +1,14 @@
 //! Tape saturation kernel — pure DSP with separated parameter ownership.
 //!
-//! Implements the TapeSaturation effect using the kernel architecture.
+//! Implements the Tape effect using the kernel architecture.
 //! The DSP math is identical; the difference is structural:
 //!
 //! - **Classic `TapeSaturation`**: owns `SmoothedParam` for drive/saturation/output/etc.,
 //!   manages smoothing internally, implements `Effect` + `ParameterInfo` directly.
 //!
-//! - **`TapeSaturationKernel`**: owns ONLY DSP state (ADAA processors, LFOs, delay lines,
+//! - **`TapeKernel`**: owns ONLY DSP state (ADAA processors, LFOs, delay lines,
 //!   hysteresis registers, biquad filters, envelope followers, one-pole filters).
-//!   Parameters are received via `&TapeSaturationParams` on each processing call.
+//!   Parameters are received via `&TapeParams` on each processing call.
 //!   Deployed via [`KernelAdapter`](sonido_core::KernelAdapter) for desktop/plugin,
 //!   or called directly on embedded targets.
 //!
@@ -66,12 +66,12 @@
 //!
 //! ```rust,ignore
 //! // Desktop / Plugin (via adapter)
-//! let adapter = KernelAdapter::new(TapeSaturationKernel::new(48000.0), 48000.0);
+//! let adapter = KernelAdapter::new(TapeKernel::new(48000.0), 48000.0);
 //! let mut effect: Box<dyn Effect> = Box::new(adapter);
 //!
 //! // Embedded / Daisy Seed (direct)
-//! let mut kernel = TapeSaturationKernel::new(48000.0);
-//! let params = TapeSaturationParams::from_knobs(0.25, 0.3, 0.8, 0.0, 0.3, 0.2, 0.15, 0.3, 0.5, 0.3);
+//! let mut kernel = TapeKernel::new(48000.0);
+//! let params = TapeParams::from_knobs(0.25, 0.3, 0.8, 0.0, 0.3, 0.2, 0.15, 0.3, 0.5, 0.3);
 //! let (left, right) = kernel.process_stereo(input_l, input_r, &params);
 //! ```
 
@@ -141,7 +141,7 @@ fn tape_waveshape(x: f32) -> f32 {
 //  Parameters
 // ============================================================================
 
-/// Parameter values for [`TapeSaturationKernel`].
+/// Parameter values for [`TapeKernel`].
 ///
 /// All values in **user-facing units** (dB, %, Hz, normalized 0-1).
 /// The kernel converts internally as needed.
@@ -159,7 +159,7 @@ fn tape_waveshape(x: f32) -> f32 {
 /// | 8 | `bump_freq_hz` | Hz | 40-200 | 80.0 | 1409 | tape_bump_freq |
 /// | 9 | `output_db` | dB | -12-12 | -6.0 | 1402 | tape_output |
 #[derive(Debug, Clone, Copy)]
-pub struct TapeSaturationParams {
+pub struct TapeParams {
     /// Input drive in decibels.
     ///
     /// Range: 0.0 to 24.0 dB. Higher values push the signal harder into the
@@ -219,7 +219,7 @@ pub struct TapeSaturationParams {
     pub output_db: f32,
 }
 
-impl Default for TapeSaturationParams {
+impl Default for TapeParams {
     fn default() -> Self {
         Self {
             drive_db: 6.0,
@@ -236,7 +236,7 @@ impl Default for TapeSaturationParams {
     }
 }
 
-impl TapeSaturationParams {
+impl TapeParams {
     /// Build params from hardware knob readings (0.0-1.0 normalized).
     ///
     /// Convenience for embedded targets where ADC values map linearly to
@@ -281,7 +281,7 @@ impl TapeSaturationParams {
     }
 }
 
-impl KernelParams for TapeSaturationParams {
+impl KernelParams for TapeParams {
     const COUNT: usize = 10;
 
     fn descriptor(index: usize) -> Option<ParamDescriptor> {
@@ -487,7 +487,7 @@ impl KernelParams for TapeSaturationParams {
 /// - Cached coefficient guard values for lazy recomputation
 ///
 /// No `SmoothedParam`, no `AtomicU32`, no platform awareness.
-pub struct TapeSaturationKernel {
+pub struct TapeKernel {
     /// Audio sample rate in Hz.
     sample_rate: f32,
 
@@ -537,7 +537,7 @@ pub struct TapeSaturationKernel {
     last_hf_freq: f32,
 }
 
-impl TapeSaturationKernel {
+impl TapeKernel {
     /// Create a new tape saturation kernel at the given sample rate.
     ///
     /// Allocates all delay buffers at maximum wow/flutter capacity and
@@ -725,8 +725,8 @@ impl TapeSaturationKernel {
     }
 }
 
-impl DspKernel for TapeSaturationKernel {
-    type Params = TapeSaturationParams;
+impl DspKernel for TapeKernel {
+    type Params = TapeParams;
 
     /// Process one stereo sample pair through the full tape machine model.
     ///
@@ -742,12 +742,7 @@ impl DspKernel for TapeSaturationKernel {
     /// 7. Static HF rolloff (one-pole).
     /// 8. Soft limit -> output gain.
     #[inline]
-    fn process_stereo(
-        &mut self,
-        left: f32,
-        right: f32,
-        params: &TapeSaturationParams,
-    ) -> (f32, f32) {
+    fn process_stereo(&mut self, left: f32, right: f32, params: &TapeParams) -> (f32, f32) {
         let drive = db_to_linear(params.drive_db);
         let saturation = params.saturation_pct / 100.0;
         let output = db_to_linear(params.output_db);
@@ -883,8 +878,8 @@ mod tests {
     /// Silence in produces silence out at default settings.
     #[test]
     fn silence_in_silence_out() {
-        let mut kernel = TapeSaturationKernel::new(48000.0);
-        let params = TapeSaturationParams::default();
+        let mut kernel = TapeKernel::new(48000.0);
+        let params = TapeParams::default();
         let (l, r) = kernel.process_stereo(0.0, 0.0, &params);
         assert!(l.abs() < 1e-6, "Expected silence on left, got {l}");
         assert!(r.abs() < 1e-6, "Expected silence on right, got {r}");
@@ -893,8 +888,8 @@ mod tests {
     /// No NaN or Infinity for sustained normal input.
     #[test]
     fn no_nan_or_inf() {
-        let mut kernel = TapeSaturationKernel::new(48000.0);
-        let params = TapeSaturationParams::default();
+        let mut kernel = TapeKernel::new(48000.0);
+        let params = TapeParams::default();
         for _ in 0..1000 {
             let (l, r) = kernel.process_stereo(0.5, -0.3, &params);
             assert!(l.is_finite(), "Left output not finite: {l}");
@@ -905,15 +900,15 @@ mod tests {
     /// COUNT is 10 and every index 0..COUNT has a descriptor.
     #[test]
     fn params_descriptor_count() {
-        assert_eq!(TapeSaturationParams::COUNT, 10, "Expected 10 parameters");
-        for i in 0..TapeSaturationParams::COUNT {
+        assert_eq!(TapeParams::COUNT, 10, "Expected 10 parameters");
+        for i in 0..TapeParams::COUNT {
             assert!(
-                TapeSaturationParams::descriptor(i).is_some(),
+                TapeParams::descriptor(i).is_some(),
                 "Missing descriptor at index {i}",
             );
         }
         assert!(
-            TapeSaturationParams::descriptor(TapeSaturationParams::COUNT).is_none(),
+            TapeParams::descriptor(TapeParams::COUNT).is_none(),
             "Descriptor beyond COUNT should be None",
         );
     }
@@ -921,7 +916,7 @@ mod tests {
     /// KernelAdapter exposes the kernel as a standard Effect.
     #[test]
     fn adapter_wraps_as_effect() {
-        let kernel = TapeSaturationKernel::new(48000.0);
+        let kernel = TapeKernel::new(48000.0);
         let mut adapter = KernelAdapter::new(kernel, 48000.0);
         adapter.reset();
         let output = adapter.process(0.3);
@@ -931,10 +926,10 @@ mod tests {
     /// The adapter exposes 10 params with the correct ParamIds.
     #[test]
     fn adapter_param_info_matches() {
-        let kernel = TapeSaturationKernel::new(48000.0);
+        let kernel = TapeKernel::new(48000.0);
         let adapter = KernelAdapter::new(kernel, 48000.0);
 
-        assert_eq!(adapter.param_count(), TapeSaturationParams::COUNT);
+        assert_eq!(adapter.param_count(), TapeParams::COUNT);
 
         assert_eq!(adapter.param_info(0).unwrap().id, ParamId(1400), "drive");
         assert_eq!(
@@ -986,9 +981,9 @@ mod tests {
     /// Interpolating between two param snapshots produces finite output at each step.
     #[test]
     fn morph_produces_valid_output() {
-        let mut kernel = TapeSaturationKernel::new(48000.0);
-        let a = TapeSaturationParams::default();
-        let b = TapeSaturationParams {
+        let mut kernel = TapeKernel::new(48000.0);
+        let a = TapeParams::default();
+        let b = TapeParams {
             drive_db: 20.0,
             saturation_pct: 100.0,
             hf_rolloff_hz: 5000.0,
@@ -997,12 +992,12 @@ mod tests {
             hysteresis: 0.4,
             head_bump: 1.0,
             output_db: -12.0,
-            ..TapeSaturationParams::default()
+            ..TapeParams::default()
         };
 
         for i in 0..=10 {
             let t = i as f32 / 10.0;
-            let morphed = TapeSaturationParams::lerp(&a, &b, t);
+            let morphed = TapeParams::lerp(&a, &b, t);
             let (l, r) = kernel.process_stereo(0.3, -0.3, &morphed);
             assert!(
                 l.is_finite() && r.is_finite(),
@@ -1015,24 +1010,21 @@ mod tests {
     /// from_knobs maps all parameters to expected ranges at min, max, and midpoint.
     #[test]
     fn from_knobs_maps_ranges() {
-        let p_min =
-            TapeSaturationParams::from_knobs(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
+        let p_min = TapeParams::from_knobs(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
         assert!((p_min.drive_db - 0.0).abs() < 0.01, "drive at 0");
         assert!((p_min.saturation_pct - 0.0).abs() < 0.01, "sat at 0");
         assert!((p_min.hf_rolloff_hz - 1000.0).abs() < 1.0, "hf min");
         assert!((p_min.bias - (-0.2)).abs() < 0.01, "bias at 0");
         assert!((p_min.output_db - (-12.0)).abs() < 0.01, "output at 0");
 
-        let p_max =
-            TapeSaturationParams::from_knobs(1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0);
+        let p_max = TapeParams::from_knobs(1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0);
         assert!((p_max.drive_db - 24.0).abs() < 0.01, "drive at 1");
         assert!((p_max.saturation_pct - 100.0).abs() < 0.01, "sat at 1");
         assert!((p_max.hf_rolloff_hz - 20000.0).abs() < 1.0, "hf max");
         assert!((p_max.bias - 0.2).abs() < 0.01, "bias at 1");
         assert!((p_max.output_db - 12.0).abs() < 0.01, "output at 1");
 
-        let p_mid =
-            TapeSaturationParams::from_knobs(0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5);
+        let p_mid = TapeParams::from_knobs(0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5);
         assert!((p_mid.drive_db - 12.0).abs() < 0.1, "drive mid");
         assert!((p_mid.saturation_pct - 50.0).abs() < 0.5, "sat mid");
         assert!(p_mid.bias.abs() < 0.01, "bias mid is zero");
@@ -1043,7 +1035,7 @@ mod tests {
     /// Higher drive produces greater output amplitude for a quiet signal.
     #[test]
     fn drive_increases_amplitude() {
-        let low_drive = TapeSaturationParams {
+        let low_drive = TapeParams {
             drive_db: 0.0,
             saturation_pct: 0.0,
             wow: 0.0,
@@ -1051,18 +1043,18 @@ mod tests {
             hysteresis: 0.0,
             head_bump: 0.0,
             output_db: 0.0,
-            ..TapeSaturationParams::default()
+            ..TapeParams::default()
         };
-        let high_drive = TapeSaturationParams {
+        let high_drive = TapeParams {
             drive_db: 18.0,
             ..low_drive
         };
 
         let input = 0.01_f32;
-        let mut k_low = TapeSaturationKernel::new(48000.0);
+        let mut k_low = TapeKernel::new(48000.0);
         let (low_out, _) = k_low.process_stereo(input, input, &low_drive);
 
-        let mut k_high = TapeSaturationKernel::new(48000.0);
+        let mut k_high = TapeKernel::new(48000.0);
         let (high_out, _) = k_high.process_stereo(input, input, &high_drive);
 
         assert!(
@@ -1074,7 +1066,7 @@ mod tests {
     /// The waveshaper is asymmetric: equal-magnitude +/- inputs give different outputs.
     #[test]
     fn asymmetric_saturation() {
-        let params = TapeSaturationParams {
+        let params = TapeParams {
             drive_db: 18.0,
             saturation_pct: 100.0,
             wow: 0.0,
@@ -1082,16 +1074,16 @@ mod tests {
             hysteresis: 0.0,
             head_bump: 0.0,
             output_db: 0.0,
-            ..TapeSaturationParams::default()
+            ..TapeParams::default()
         };
 
-        let mut kernel_pos = TapeSaturationKernel::new(48000.0);
+        let mut kernel_pos = TapeKernel::new(48000.0);
         for _ in 0..200 {
             kernel_pos.process_stereo(0.0, 0.0, &params);
         }
         let (pos, _) = kernel_pos.process_stereo(0.5, 0.5, &params);
 
-        let mut kernel_neg = TapeSaturationKernel::new(48000.0);
+        let mut kernel_neg = TapeKernel::new(48000.0);
         for _ in 0..200 {
             kernel_neg.process_stereo(0.0, 0.0, &params);
         }
@@ -1110,10 +1102,10 @@ mod tests {
     /// which uses an asymmetric exponential and differs from hard-clip.
     #[test]
     fn saturation_distorts() {
-        let mut clean = TapeSaturationKernel::new(48000.0);
-        let mut saturated = TapeSaturationKernel::new(48000.0);
+        let mut clean = TapeKernel::new(48000.0);
+        let mut saturated = TapeKernel::new(48000.0);
 
-        let params_clean = TapeSaturationParams {
+        let params_clean = TapeParams {
             drive_db: 18.0,
             saturation_pct: 0.0,
             wow: 0.0,
@@ -1121,9 +1113,9 @@ mod tests {
             hysteresis: 0.0,
             head_bump: 0.0,
             output_db: 0.0,
-            ..TapeSaturationParams::default()
+            ..TapeParams::default()
         };
-        let params_sat = TapeSaturationParams {
+        let params_sat = TapeParams {
             drive_db: 18.0,
             saturation_pct: 100.0,
             wow: 0.0,
@@ -1131,7 +1123,7 @@ mod tests {
             hysteresis: 0.0,
             head_bump: 0.0,
             output_db: 0.0,
-            ..TapeSaturationParams::default()
+            ..TapeParams::default()
         };
 
         let mut diff_sum = 0.0_f32;
@@ -1167,10 +1159,10 @@ mod tests {
     fn head_bump_boosts_lows() {
         let sr = 48000.0;
 
-        let mut bumped = TapeSaturationKernel::new(sr);
-        let mut flat = TapeSaturationKernel::new(sr);
+        let mut bumped = TapeKernel::new(sr);
+        let mut flat = TapeKernel::new(sr);
 
-        let params_bumped = TapeSaturationParams {
+        let params_bumped = TapeParams {
             head_bump: 1.0,
             bump_freq_hz: 80.0,
             saturation_pct: 0.0,
@@ -1179,9 +1171,9 @@ mod tests {
             hysteresis: 0.0,
             drive_db: 0.0,
             output_db: 0.0,
-            ..TapeSaturationParams::default()
+            ..TapeParams::default()
         };
-        let params_flat = TapeSaturationParams {
+        let params_flat = TapeParams {
             head_bump: 0.0,
             ..params_bumped
         };
@@ -1209,7 +1201,7 @@ mod tests {
     /// get/set round-trip: set() followed by get() returns the stored value.
     #[test]
     fn params_get_set_roundtrip() {
-        let mut params = TapeSaturationParams::default();
+        let mut params = TapeParams::default();
         params.set(0, 18.0);
         assert!((params.get(0) - 18.0).abs() < 1e-6, "drive");
         params.set(1, 75.0);
@@ -1223,18 +1215,18 @@ mod tests {
     /// ParamId 1402 is output (index 9) and ParamId 1403 is hf_rolloff (index 2).
     #[test]
     fn param_id_ordering_correct() {
-        let out_desc = TapeSaturationParams::descriptor(9).unwrap();
+        let out_desc = TapeParams::descriptor(9).unwrap();
         assert_eq!(out_desc.id, ParamId(1402), "output ParamId must be 1402");
-        let hf_desc = TapeSaturationParams::descriptor(2).unwrap();
+        let hf_desc = TapeParams::descriptor(2).unwrap();
         assert_eq!(hf_desc.id, ParamId(1403), "hf_rolloff ParamId must be 1403");
     }
 
     /// Descriptor defaults match the Default impl values.
     #[test]
     fn descriptor_defaults_match_struct() {
-        let p = TapeSaturationParams::default();
-        for i in 0..TapeSaturationParams::COUNT {
-            let desc = TapeSaturationParams::descriptor(i).unwrap();
+        let p = TapeParams::default();
+        for i in 0..TapeParams::COUNT {
+            let desc = TapeParams::descriptor(i).unwrap();
             let struct_val = p.get(i);
             assert!(
                 (struct_val - desc.default).abs() < 0.01,
@@ -1249,11 +1241,11 @@ mod tests {
     /// With wow=0 and flutter=0 the bypass path produces finite output.
     #[test]
     fn wow_flutter_bypass_is_valid() {
-        let mut kernel = TapeSaturationKernel::new(48000.0);
-        let params = TapeSaturationParams {
+        let mut kernel = TapeKernel::new(48000.0);
+        let params = TapeParams {
             wow: 0.0,
             flutter: 0.0,
-            ..TapeSaturationParams::default()
+            ..TapeParams::default()
         };
         for _ in 0..200 {
             let (l, r) = kernel.process_stereo(0.4, -0.4, &params);
@@ -1267,7 +1259,7 @@ mod tests {
     /// Parameters written via set_param() survive a snapshot/restore cycle.
     #[test]
     fn snapshot_roundtrip_through_adapter() {
-        let kernel = TapeSaturationKernel::new(48000.0);
+        let kernel = TapeKernel::new(48000.0);
         let mut adapter = KernelAdapter::new(kernel, 48000.0);
         adapter.set_param(0, 18.0);
         adapter.set_param(1, 80.0);
@@ -1275,7 +1267,7 @@ mod tests {
 
         let saved = adapter.snapshot();
 
-        let kernel2 = TapeSaturationKernel::new(48000.0);
+        let kernel2 = TapeKernel::new(48000.0);
         let mut adapter2 = KernelAdapter::new(kernel2, 48000.0);
         adapter2.load_snapshot(&saved);
 

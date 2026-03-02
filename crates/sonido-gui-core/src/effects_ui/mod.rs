@@ -15,7 +15,6 @@ mod filter;
 mod flanger;
 mod gate;
 mod limiter;
-mod multivibrato;
 mod phaser;
 mod preamp;
 mod reverb;
@@ -23,6 +22,7 @@ mod ringmod;
 mod stage;
 mod tape;
 mod tremolo;
+mod vibrato;
 mod wah;
 
 pub use bitcrusher::BitcrusherPanel;
@@ -35,7 +35,6 @@ pub use filter::FilterPanel;
 pub use flanger::FlangerPanel;
 pub use gate::GatePanel;
 pub use limiter::LimiterPanel;
-pub use multivibrato::MultiVibratoPanel;
 pub use phaser::PhaserPanel;
 pub use preamp::PreampPanel;
 pub use reverb::ReverbPanel;
@@ -43,6 +42,7 @@ pub use ringmod::RingModPanel;
 pub use stage::StagePanel;
 pub use tape::TapePanel;
 pub use tremolo::TremoloPanel;
+pub use vibrato::VibratoPanel;
 pub use wah::WahPanel;
 
 use crate::{ParamBridge, SlotIndex};
@@ -97,7 +97,7 @@ impl_effect_panel!(PhaserPanel, "Phaser", "Phsr");
 impl_effect_panel!(TremoloPanel, "Tremolo", "Trem");
 impl_effect_panel!(DelayPanel, "Delay", "Dly");
 impl_effect_panel!(FilterPanel, "Filter", "Flt");
-impl_effect_panel!(MultiVibratoPanel, "Vibrato", "Vib");
+impl_effect_panel!(VibratoPanel, "Vibrato", "Vib");
 impl_effect_panel!(TapePanel, "Tape", "Tape");
 impl_effect_panel!(ReverbPanel, "Reverb", "Rev");
 impl_effect_panel!(StagePanel, "Stage", "Stge");
@@ -119,7 +119,7 @@ pub fn create_panel(effect_id: &str) -> Option<Box<dyn EffectPanel + Send + Sync
         "tremolo" => Some(Box::new(TremoloPanel::new())),
         "delay" => Some(Box::new(DelayPanel::new())),
         "filter" => Some(Box::new(FilterPanel::new())),
-        "multivibrato" => Some(Box::new(MultiVibratoPanel::new())),
+        "vibrato" => Some(Box::new(VibratoPanel::new())),
         "tape" => Some(Box::new(TapePanel::new())),
         "reverb" => Some(Box::new(ReverbPanel::new())),
         "limiter" => Some(Box::new(LimiterPanel::new())),
@@ -147,7 +147,7 @@ mod tests {
         "tremolo",
         "delay",
         "filter",
-        "multivibrato",
+        "vibrato",
         "tape",
         "reverb",
         "limiter",
@@ -188,7 +188,7 @@ mod tests {
             ("tremolo", "Tremolo"),
             ("delay", "Delay"),
             ("filter", "Filter"),
-            ("multivibrato", "Vibrato"),
+            ("vibrato", "Vibrato"),
             ("tape", "Tape"),
             ("reverb", "Reverb"),
             ("limiter", "Limiter"),
@@ -217,7 +217,7 @@ mod tests {
             ("tremolo", "Trem"),
             ("delay", "Dly"),
             ("filter", "Flt"),
-            ("multivibrato", "Vib"),
+            ("vibrato", "Vib"),
             ("tape", "Tape"),
             ("reverb", "Rev"),
             ("limiter", "Lim"),

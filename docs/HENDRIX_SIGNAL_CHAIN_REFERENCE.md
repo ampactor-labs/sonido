@@ -20,7 +20,7 @@ The Hendrix Systems Lab repo is also a potential **validation target**: its SPIC
 | **Octavia** | Full-wave rectifier → frequency doubling | **Not in Sonido** | `abs(x)` as octave doubler is a distinct waveshaping mode. Not fuzz, not ring mod — it's rectification. Could be a new `Distortion` mode or standalone effect. |
 | **Wah-wah** (Vox V847) | Bandpass filter, 300Hz–2kHz sweep | `Wah` effect | Direct match. Sonido's Wah uses SVF; Hendrix's was inductor-capacitor. Compare Q profiles. |
 | **Uni-Vibe** | 4-stage allpass + LFO-modulated photoresistors | `Phaser` | Sonido's Phaser is allpass-cascade + LFO — structurally identical. Key difference: Uni-Vibe adds AM "throb" (half-rate amplitude modulation on top of phase modulation). Sonido's Phaser may lack this. |
-| **Marshall 100W** (near saturation) | Tube saturation + sustain extension | `TapeSaturation` / `CleanPreamp` | `TapeSaturation` has soft saturation. But tube amp saturation has specific even/odd harmonic ratios and power supply sag dynamics not modeled. |
+| **Marshall 100W** (near saturation) | Tube saturation + sustain extension | `Tape` / `CleanPreamp` | `Tape` has soft saturation. But tube amp saturation has specific even/odd harmonic ratios and power supply sag dynamics not modeled. |
 | **Room acoustics** (feedback loop) | Guitar ↔ speaker coupling, position-dependent | `Reverb` + feedback path | The acoustic feedback loop is the most interesting part: Hendrix tuned oscillation by physical position. In Sonido terms, this is a `Reverb` whose feedback parameter is modulated by an external control signal. |
 
 ---

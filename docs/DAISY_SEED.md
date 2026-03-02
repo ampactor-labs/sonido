@@ -307,7 +307,7 @@ External SDRAM (64 MB, 4-8 wait):
 | Reverb(stereo) + Delay(2s) | ~860 KB | SDRAM required |
 
 **Does not fit (CPU budget exceeded):**
-- ParametricEq or MultiVibrato (>100% CPU alone)
+- Eq or Vibrato (>100% CPU alone)
 - Phaser + Reverb (>124% CPU)
 - See `docs/BENCHMARKS.md` for full Cortex-M7 cycle estimates
 

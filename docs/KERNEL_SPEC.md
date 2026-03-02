@@ -184,11 +184,11 @@ Each effect follows the same pattern documented in `KERNEL_MIGRATION.md`. Here's
 | `Chorus` | `chorus.rs` | rate, depth, mix, voices, output | Modulated delay lines are DSP state |
 | `Flanger` | `flanger.rs` | rate, depth, feedback, mix, output | Similar to chorus |
 | `Phaser` | `phaser.rs` | rate, depth, stages, feedback, mix, output | Allpass chain is DSP state |
-| `RingMod` | `ring_mod.rs` | freq, depth, waveform, mix, output | Carrier oscillator is DSP state |
+| `RingMod` | `ringmod.rs` | freq, depth, waveform, mix, output | Carrier oscillator is DSP state |
 | `Delay` | `delay.rs` | time, feedback, mix, lpf, hpf, sync, division, output | Delay buffer is DSP state. `SmoothingStyle::Interpolated` for time param |
 | `Compressor` | `compressor.rs` | threshold, ratio, attack, release, makeup, output | Envelope state + gain reduction |
 | `Limiter` | `limiter.rs` | ceiling, release, output | Lookahead buffer is DSP state |
-| `TapeSaturation` | `tape_saturation.rs` | drive, warmth, hf_rolloff, mix, output | Asymmetric saturation + filter |
+| `Tape` | `tape.rs` | drive, warmth, hf_rolloff, mix, output | Asymmetric saturation + filter |
 
 #### Complex migrations (many params, complex DSP state):
 
@@ -196,8 +196,8 @@ Each effect follows the same pattern documented in `KERNEL_MIGRATION.md`. Here's
 |--------|------|--------|-------|
 | `Stage` | `stage.rs` | Multiple preamp/tone/cab params | Multi-stage amp sim — most params |
 | `Reverb` | `reverb.rs` | predelay, decay, size, damping, mix, width, output | Comb bank + allpass chain is substantial DSP state. Coefficient caching critical |
-| `ParametricEq` | `parametric_eq.rs` | Per-band freq/gain/Q + global output | Multiple biquads, coefficient recalc per band |
-| `MultiVibrato` | `multi_vibrato.rs` | rate, depth, output | 10-unit modulation bank |
+| `Eq` | `eq.rs` | Per-band freq/gain/Q + global output | Multiple biquads, coefficient recalc per band |
+| `Vibrato` | `vibrato.rs` | rate, depth, output | 10-unit modulation bank |
 
 #### For EACH migration, follow this exact sequence:
 
@@ -573,15 +573,15 @@ crates/sonido-effects/src/kernels/
 ├── chorus.rs       # 🔲 Medium
 ├── flanger.rs      # 🔲 Medium
 ├── phaser.rs       # 🔲 Medium
-├── ring_mod.rs     # 🔲 Medium
+├── ringmod.rs      # 🔲 Medium
 ├── delay.rs        # 🔲 Medium
 ├── compressor.rs   # 🔲 Medium
 ├── limiter.rs      # 🔲 Medium
-├── tape_sat.rs     # 🔲 Medium
+├── tape.rs         # 🔲 Medium
 ├── reverb.rs       # 🔲 Complex
-├── parametric_eq.rs# 🔲 Complex
+├── eq.rs           # 🔲 Complex
 ├── stage.rs        # 🔲 Complex
-└── multi_vibrato.rs# 🔲 Complex
+└── vibrato.rs      # 🔲 Complex
 
 Files to DELETE after all migrations complete:
 ├── crates/sonido-effects/src/distortion.rs       # replaced by kernels/distortion.rs
@@ -759,8 +759,8 @@ The kernel architecture replaces the classic effect system entirely. Nothing is 
 3. Run `cargo check -p sonido-core && cargo test -p sonido-core -- kernel` to verify foundation compiles
 4. Migrate effects one at a time in this order:
    - Easy first: `Tremolo`, `CleanPreamp`, `LowPassFilter`, `Gate`, `Bitcrusher`
-   - Then medium: `Chorus`, `Flanger`, `Phaser`, `RingMod`, `Delay`, `Compressor`, `Limiter`, `TapeSaturation`
-   - Then complex: `Reverb`, `ParametricEq`, `Stage`, `MultiVibrato`
+   - Then medium: `Chorus`, `Flanger`, `Phaser`, `RingMod`, `Delay`, `Compressor`, `Limiter`, `Tape`
+   - Then complex: `Reverb`, `Eq`, `Stage`, `Vibrato`
 5. For each effect: create kernel → write tests → swap registry → delete classic → `cargo test --workspace`
 6. After all 19 are done: clean up `impl_params!` macro, remove dead imports, run full test suite
 7. Verify `cargo test --workspace` passes clean with zero classic effects remaining

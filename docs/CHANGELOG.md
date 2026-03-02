@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+- **Naming standardization**: Shortened type and file names to match registry IDs
+  - `TapeSaturationKernel`/`TapeSaturationParams` → `TapeKernel`/`TapeParams` (file: `tape.rs`)
+  - `ParametricEqKernel`/`ParametricEqParams` → `EqKernel`/`EqParams` (file: `eq.rs`)
+  - `MultiVibratoKernel`/`MultiVibratoParams` → `VibratoKernel`/`VibratoParams` (file: `vibrato.rs`)
+  - `ring_mod.rs` → `ringmod.rs` (types unchanged)
+  - Registry ID: `"multivibrato"` → `"vibrato"` (CLI alias preserves backward compat)
+- **Hz suffix convention**: Frequency struct fields now use `_hz` suffix (`sidechain_freq_hz`, `low_freq_hz`, `mid_freq_hz`, `high_freq_hz`, `min_freq_hz`, `max_freq_hz`)
+
 ## [0.2.0] — In Progress
 
 ### Breaking Changes
@@ -54,7 +65,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `KernelParams` trait — typed parameter struct with indexed access, descriptors, smoothing hints, `lerp()`, `from_normalized()`, `to_normalized()`
 - `SmoothingStyle` enum — None, Fast (5ms), Standard (10ms), Slow (20ms), Interpolated (50ms), Custom(ms)
 - `KernelAdapter<K>` — bridges kernel to `Effect + ParameterInfo`, manages per-parameter `SmoothedParam`
-- 19 kernel implementations: `BitcrusherKernel`, `ChorusKernel`, `CompressorKernel`, `DelayKernel`, `DistortionKernel`, `FilterKernel`, `FlangerKernel`, `GateKernel`, `LimiterKernel`, `MultiVibratoKernel`, `ParametricEqKernel`, `PhaserKernel`, `PreampKernel`, `ReverbKernel`, `RingModKernel`, `StageKernel`, `TapeSaturationKernel`, `TremoloKernel`, `WahKernel`
+- 19 kernel implementations: `BitcrusherKernel`, `ChorusKernel`, `CompressorKernel`, `DelayKernel`, `DistortionKernel`, `EqKernel`, `FilterKernel`, `FlangerKernel`, `GateKernel`, `LimiterKernel`, `PhaserKernel`, `PreampKernel`, `ReverbKernel`, `RingModKernel`, `StageKernel`, `TapeKernel`, `TremoloKernel`, `VibratoKernel`, `WahKernel`
 - Each kernel includes `from_knobs()` for direct ADC mapping on embedded targets
 - Registry switched to `KernelAdapter<XxxKernel>` for all 19 effects
 - 225 kernel-specific tests

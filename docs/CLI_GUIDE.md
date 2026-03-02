@@ -950,7 +950,7 @@ Several effects have shorter alias names that can be used interchangeably:
 | Effect | Alias(es) |
 |--------|-----------|
 | `filter` | `lowpass` |
-| `multivibrato` | `vibrato` |
+| `vibrato` | `multivibrato` |
 | `tape` | `tapesaturation` |
 | `preamp` | `cleanpreamp` |
 | `gate` | `noisegate` |
@@ -964,7 +964,7 @@ sonido process input.wav --effect filter --param cutoff=2000
 sonido process input.wav --effect lowpass --param cutoff=2000
 
 # These are equivalent
-sonido process input.wav --effect multivibrato --param depth=0.6
+sonido process input.wav --effect vibrato --param depth=0.6
 sonido process input.wav --effect vibrato --param depth=0.6
 
 # These are equivalent

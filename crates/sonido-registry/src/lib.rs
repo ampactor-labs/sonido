@@ -57,10 +57,9 @@ use alloc::{boxed::Box, vec::Vec};
 pub use sonido_core::EffectWithParams;
 use sonido_core::KernelAdapter;
 use sonido_effects::kernels::{
-    BitcrusherKernel, ChorusKernel, CompressorKernel, DelayKernel, DistortionKernel, FilterKernel,
-    FlangerKernel, GateKernel, LimiterKernel, MultiVibratoKernel, ParametricEqKernel, PhaserKernel,
-    PreampKernel, ReverbKernel, RingModKernel, StageKernel, TapeSaturationKernel, TremoloKernel,
-    WahKernel,
+    BitcrusherKernel, ChorusKernel, CompressorKernel, DelayKernel, DistortionKernel, EqKernel,
+    FilterKernel, FlangerKernel, GateKernel, LimiterKernel, PhaserKernel, PreampKernel,
+    ReverbKernel, RingModKernel, StageKernel, TapeKernel, TremoloKernel, VibratoKernel, WahKernel,
 };
 
 /// Category of audio effect for organization and filtering.
@@ -255,17 +254,17 @@ impl EffectRegistry {
             |sr| Box::new(KernelAdapter::new(FilterKernel::new(sr), sr)),
         );
 
-        // MultiVibrato
+        // Vibrato
         self.register(
             EffectDescriptor {
-                id: "multivibrato",
-                name: "Multi Vibrato",
-                short_name: "MVIB",
+                id: "vibrato",
+                name: "Vibrato",
+                short_name: "VIB",
                 description: "10-unit tape wow/flutter simulation",
                 category: EffectCategory::Modulation,
                 param_count: 3,
             },
-            |sr| Box::new(KernelAdapter::new(MultiVibratoKernel::new(sr), sr)),
+            |sr| Box::new(KernelAdapter::new(VibratoKernel::new(sr), sr)),
         );
 
         // Tape Saturation
@@ -278,7 +277,7 @@ impl EffectRegistry {
                 category: EffectCategory::Distortion,
                 param_count: 10,
             },
-            |sr| Box::new(KernelAdapter::new(TapeSaturationKernel::new(sr), sr)),
+            |sr| Box::new(KernelAdapter::new(TapeKernel::new(sr), sr)),
         );
 
         // Clean Preamp
@@ -356,7 +355,7 @@ impl EffectRegistry {
                 category: EffectCategory::Filter,
                 param_count: 10,
             },
-            |sr| Box::new(KernelAdapter::new(ParametricEqKernel::new(sr), sr)),
+            |sr| Box::new(KernelAdapter::new(EqKernel::new(sr), sr)),
         );
 
         // Limiter
@@ -495,21 +494,21 @@ impl EffectRegistry {
     /// standard guitar pedalboard convention.
     pub fn default_chain_ids(&self) -> &'static [&'static str] {
         &[
-            "preamp",       // Utility — gain stage
-            "distortion",   // Distortion
-            "compressor",   // Dynamics
-            "gate",         // Dynamics
-            "eq",           // Filter — tone shaping
-            "wah",          // Filter — sweep
-            "chorus",       // Modulation
-            "flanger",      // Modulation
-            "phaser",       // Modulation
-            "tremolo",      // Modulation
-            "delay",        // Time-based
-            "filter",       // Filter — synth-style
-            "multivibrato", // Modulation
-            "tape",         // Distortion — saturation
-            "reverb",       // Time-based — last
+            "preamp",     // Utility — gain stage
+            "distortion", // Distortion
+            "compressor", // Dynamics
+            "gate",       // Dynamics
+            "eq",         // Filter — tone shaping
+            "wah",        // Filter — sweep
+            "chorus",     // Modulation
+            "flanger",    // Modulation
+            "phaser",     // Modulation
+            "tremolo",    // Modulation
+            "delay",      // Time-based
+            "filter",     // Filter — synth-style
+            "vibrato",    // Modulation
+            "tape",       // Distortion — saturation
+            "reverb",     // Time-based — last
         ]
     }
 }
@@ -563,7 +562,7 @@ mod tests {
         let registry = EffectRegistry::new();
 
         let modulation = registry.effects_in_category(EffectCategory::Modulation);
-        assert_eq!(modulation.len(), 6); // Chorus, Flanger, Phaser, MultiVibrato, Tremolo, RingMod
+        assert_eq!(modulation.len(), 6); // Chorus, Flanger, Phaser, Vibrato, Tremolo, RingMod
 
         let dynamics = registry.effects_in_category(EffectCategory::Dynamics);
         assert_eq!(dynamics.len(), 3); // Compressor, Gate, Limiter

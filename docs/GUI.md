@@ -146,7 +146,7 @@ The chain strip shows all 19 effects in processing order:
 | Chorus | CHO | Modulated delay chorus |
 | Flanger | FLG | Classic flanger effect |
 | Phaser | PHAS | Multi-stage phaser |
-| MultiVibrato | VIB | 6-unit tape wow/flutter |
+| Vibrato | VIB | 6-unit tape wow/flutter |
 | Delay | DLY | Tape-style feedback delay |
 | Tape | TAPE | Tape saturation |
 | Reverb | REV | Freeverb-style reverb |
@@ -225,7 +225,7 @@ When an effect is selected, its parameter panel appears below the chain. Each pa
 - **Cutoff**: 20 to 20000 Hz
 - **Resonance**: 0.1 to 10 Q factor
 
-### MultiVibrato
+### Vibrato
 - **Depth**: 0 to 1 overall modulation depth
 - **Mix**: 0 to 100% wet/dry mix
 

@@ -129,7 +129,7 @@ Intel i5-6300U @ 3.0 GHz (turbo).
 | LowPassFilter | cutoff=1kHz, Q=0.707 | 3.69 µs | 14.4 |
 | Tremolo | rate=5Hz, depth=0.8 | 5.05 µs | 19.7 |
 | Delay | time=375ms, fb=0.5 | 5.49 µs | 21.4 |
-| TapeSaturation | drive=2.0, sat=0.6 | 6.88 µs | 26.9 |
+| Tape | drive=2.0, sat=0.6 | 6.88 µs | 26.9 |
 | Gate | thresh=-40dB, atk=1ms | 8.23 µs | 32.2 |
 | Flanger | rate=0.5Hz, depth=0.7 | 11.17 µs | 43.6 |
 | Wah | auto, sensitivity=0.7 | 13.61 µs | 53.2 |
@@ -138,8 +138,8 @@ Intel i5-6300U @ 3.0 GHz (turbo).
 | Reverb | room=0.7, decay=0.8 | 49.22 µs | 192.3 |
 | Phaser | rate=1Hz, 6 stages | 78.25 µs | 305.6 |
 | Compressor | thresh=-20dB, ratio=4:1 | 80.02 µs | 312.6 |
-| ParametricEq | 3-band, typical boosts | 113.06 µs | 441.6 |
-| MultiVibrato | depth=1.0 | 113.43 µs | 443.1 |
+| Eq | 3-band, typical boosts | 113.06 µs | 441.6 |
+| Vibrato | depth=1.0 | 113.43 µs | 443.1 |
 | Limiter | thresh=-6dB, ceil=-0.3dB | TBD | TBD |
 | Bitcrusher | bits=8, ds=4 | TBD | TBD |
 | RingMod | freq=440Hz, depth=1.0 | TBD | TBD |
@@ -211,7 +211,7 @@ Est. cycles/sample = desktop_ns/sample × (desktop_GHz / cortex_GHz) × arch_pen
 | LowPassFilter | 14.4 | 360 | 3.6% |
 | Tremolo | 19.7 | 493 | 4.9% |
 | Delay | 21.4 | 535 | 5.4% |
-| TapeSaturation | 26.9 | 673 | 6.7% |
+| Tape | 26.9 | 673 | 6.7% |
 | Gate | 32.2 | 805 | 8.1% |
 | Flanger | 43.6 | 1,090 | 10.9% |
 | Wah | 53.2 | 1,330 | 13.3% |
@@ -220,8 +220,8 @@ Est. cycles/sample = desktop_ns/sample × (desktop_GHz / cortex_GHz) × arch_pen
 | Reverb | 192.3 | 4,808 | 48.1% |
 | Phaser (6-stage) | 305.6 | 7,640 | 76.4% |
 | Compressor | 312.6 | 7,815 | 78.2% |
-| ParametricEq (3-band) | 441.6 | 11,040 | 110.4% |
-| MultiVibrato | 443.1 | 11,078 | 110.8% |
+| Eq (3-band) | 441.6 | 11,040 | 110.4% |
+| Vibrato | 443.1 | 11,078 | 110.8% |
 | Limiter | TBD | TBD | TBD |
 | Bitcrusher | TBD | TBD | TBD |
 | RingMod | TBD | TBD | TBD |
@@ -242,7 +242,7 @@ Est. cycles/sample = desktop_ns/sample × (desktop_GHz / cortex_GHz) × arch_pen
 
 **Comfortable chains (< 50% CPU at 48kHz):**
 - Preamp → Distortion → Chorus → Delay: ~30% CPU
-- Preamp → TapeSaturation → Flanger → Delay: ~22% CPU
+- Preamp → Tape → Flanger → Delay: ~22% CPU
 - Gate → Distortion → Tremolo → Delay: ~20% CPU
 - Preamp → Wah → Distortion → Chorus: ~32% CPU
 
@@ -251,7 +251,7 @@ Est. cycles/sample = desktop_ns/sample × (desktop_GHz / cortex_GHz) × arch_pen
 - Compressor → Distortion → Reverb: ~77% CPU
 
 **Does NOT fit at 48kHz mono:**
-- Any chain with ParametricEq or MultiVibrato (>100% alone)
+- Any chain with Eq or Vibrato (>100% alone)
 - Any chain with Phaser + Reverb (>124%)
 - Compressor + Phaser (>154%)
 

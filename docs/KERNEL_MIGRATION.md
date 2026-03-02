@@ -401,14 +401,14 @@ crates/sonido-effects/src/kernels/
 ├── flanger.rs      # FlangerKernel + FlangerParams
 ├── gate.rs         # GateKernel + GateParams
 ├── limiter.rs      # LimiterKernel + LimiterParams
-├── multi_vibrato.rs # MultiVibratoKernel + MultiVibratoParams
-├── parametric_eq.rs # ParametricEqKernel + ParametricEqParams
+├── vibrato.rs      # VibratoKernel + VibratoParams
+├── eq.rs           # EqKernel + EqParams
 ├── phaser.rs       # PhaserKernel + PhaserParams
 ├── preamp.rs       # PreampKernel + PreampParams
 ├── reverb.rs       # ReverbKernel + ReverbParams
-├── ring_mod.rs     # RingModKernel + RingModParams
+├── ringmod.rs      # RingModKernel + RingModParams
 ├── stage.rs        # StageKernel + StageParams
-├── tape_saturation.rs # TapeSaturationKernel + TapeSaturationParams
+├── tape.rs         # TapeKernel + TapeParams
 ├── tremolo.rs      # TremoloKernel + TremoloParams
 └── wah.rs          # WahKernel + WahParams
 ```
@@ -430,9 +430,9 @@ All 19 effects have been migrated. Classic `Effect` implementations have been de
 | Phaser | Complete -- classic deleted | Multi-stage allpass |
 | Preamp | Complete -- classic deleted | Simple gain stage |
 | Gate | Complete -- classic deleted | Noise gate |
-| Parametric EQ | Complete -- classic deleted | 3-band EQ |
-| Tape Saturation | Complete -- classic deleted | ADAA + hysteresis |
-| MultiVibrato | Complete -- classic deleted | Multi-voice pitch |
+| Eq | Complete -- classic deleted | 3-band EQ |
+| Tape | Complete -- classic deleted | ADAA + hysteresis |
+| Vibrato | Complete -- classic deleted | Multi-voice pitch |
 | Wah | Complete -- classic deleted | SVF bandpass |
 | Limiter | Complete -- classic deleted | Lookahead brickwall |
 | Bitcrusher | Complete -- classic deleted | Bit/sample reduction |

@@ -129,7 +129,7 @@ graph TD
 | Flanger | Modulation | x | rate, depth, feedback, mix |
 | Phaser | Modulation | x | rate, depth, stages, feedback |
 | Tremolo | Modulation | | rate, depth, waveform |
-| MultiVibrato | Modulation | | rate, depth, voices |
+| Vibrato | Modulation | | rate, depth, voices |
 | Ring Modulator | Modulation | | frequency, mix |
 | Wah | Filter | | frequency, resonance, mode (manual/auto/envelope) |
 | Filter | Filter | | cutoff, resonance, type (LP/HP/BP/notch) |
@@ -181,7 +181,7 @@ mkdir -p ~/.clap
 cp target/release/examples/libsonido_*.so ~/.clap/
 ```
 
-Plugins: `sonido-preamp`, `sonido-distortion`, `sonido-compressor`, `sonido-gate`, `sonido-eq`, `sonido-wah`, `sonido-chorus`, `sonido-flanger`, `sonido-phaser`, `sonido-tremolo`, `sonido-delay`, `sonido-filter`, `sonido-multivibrato`, `sonido-tape`, `sonido-reverb`, `sonido-limiter`, `sonido-bitcrusher`, `sonido-ringmod`, `sonido-stage`
+Plugins: `sonido-preamp`, `sonido-distortion`, `sonido-compressor`, `sonido-gate`, `sonido-eq`, `sonido-wah`, `sonido-chorus`, `sonido-flanger`, `sonido-phaser`, `sonido-tremolo`, `sonido-delay`, `sonido-filter`, `sonido-vibrato`, `sonido-tape`, `sonido-reverb`, `sonido-limiter`, `sonido-bitcrusher`, `sonido-ringmod`, `sonido-stage`
 
 ## Synthesis Engine
 
@@ -228,7 +228,7 @@ Even on a 2015 mobile CPU (Intel Core i5-6300U @ 2.40 GHz), every effect runs we
 | Chorus | 20.4 | 80 | 0.38% |
 | Compressor | 29.1 | 113 | 0.54% |
 | Reverb | 44.5 | 174 | 0.83% |
-| MultiVibrato | 73.4 | 287 | 1.38% |
+| Vibrato | 73.4 | 287 | 1.38% |
 | 5-effect chain | 42.8 | 167 | 0.80% |
 
 CPU % = `ns_per_sample / (1e9 / 48000) × 100`. Run benchmarks via CI: `gh workflow run ci-manual.yml -f job=bench`
@@ -292,8 +292,8 @@ Sonido's effect algorithms are informed by analysis of commercial DSP products. 
 
 | Target Product | DSP Domain | Sonido Implementation |
 |----------------|------------|----------------------|
-| DigiTech Ventura / Modela | Modulation (chorus, vibrato, rotary) | `Chorus`, `MultiVibrato`, LFO engine |
-| DigiTech Obscura | Delay (analog, tape, lo-fi modes) | `Delay` with feedback coloring, `TapeSaturation` |
+| DigiTech Ventura / Modela | Modulation (chorus, vibrato, rotary) | `Chorus`, `Vibrato`, LFO engine |
+| DigiTech Obscura | Delay (analog, tape, lo-fi modes) | `Delay` with feedback coloring, `Tape` |
 | DigiTech Dirty Robot | Envelope-following filter / synth | `Wah` (auto-wah mode), `Filter`, synth engine |
 | DigiTech Polara / Supernatural | Reverb (room, hall, plate, spring) | `Reverb` (Freeverb topology with stereo decorrelation) |
 

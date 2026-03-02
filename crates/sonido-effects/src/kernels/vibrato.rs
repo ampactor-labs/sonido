@@ -1,13 +1,13 @@
 //! Multi-Vibrato kernel — pure DSP with separated parameter ownership.
 //!
-//! Implements the MultiVibrato effect using the kernel architecture.
+//! Implements the Vibrato effect using the kernel architecture.
 //! The DSP math is identical; the difference is structural:
 //!
 //! - **Classic `MultiVibrato`**: owns `SmoothedParam` for depth/output, stores mix as
 //!   a plain `f32`, implements `Effect` + `ParameterInfo` directly.
 //!
-//! - **`MultiVibratoKernel`**: owns ONLY DSP state (6 × 2 `VibratoUnit` structs).
-//!   Parameters are received via `&MultiVibratoParams` on each processing call.
+//! - **`VibratoKernel`**: owns ONLY DSP state (6 × 2 `VibratoUnit` structs).
+//!   Parameters are received via `&VibratoParams` on each processing call.
 //!   Deployed via [`KernelAdapter`](sonido_core::KernelAdapter) for desktop/plugin,
 //!   or called directly on embedded targets.
 //!
@@ -47,12 +47,12 @@
 //!
 //! ```rust,ignore
 //! // Desktop / Plugin (via adapter — handles smoothing automatically)
-//! let adapter = KernelAdapter::new(MultiVibratoKernel::new(48000.0), 48000.0);
+//! let adapter = KernelAdapter::new(VibratoKernel::new(48000.0), 48000.0);
 //! let mut effect: Box<dyn Effect> = Box::new(adapter);
 //!
 //! // Embedded / Daisy Seed (direct — no smoothing, ADCs are hardware-filtered)
-//! let mut kernel = MultiVibratoKernel::new(48000.0);
-//! let params = MultiVibratoParams::from_knobs(0.5, 1.0, 0.5);
+//! let mut kernel = VibratoKernel::new(48000.0);
+//! let params = VibratoParams::from_knobs(0.5, 1.0, 0.5);
 //! let (left, right) = kernel.process_stereo(input_l, input_r, &params);
 //! ```
 
@@ -163,7 +163,7 @@ impl VibratoUnit {
 //  Parameters
 // ═══════════════════════════════════════════════════════════════════════════
 
-/// Parameter values for [`MultiVibratoKernel`].
+/// Parameter values for [`VibratoKernel`].
 ///
 /// All values are in **user-facing units** — the same units shown in GUIs and
 /// stored in presets. The kernel converts internally as needed.
@@ -174,7 +174,7 @@ impl VibratoUnit {
 /// | 1 | `mix_pct` | % | 0–100 | 100.0 |
 /// | 2 | `output_db` | dB | −20–20 | 0.0 |
 #[derive(Debug, Clone, Copy)]
-pub struct MultiVibratoParams {
+pub struct VibratoParams {
     /// Master vibrato depth as a percentage of the full scale (0–400%).
     ///
     /// Scales all six vibrato units' cent depths proportionally.
@@ -188,7 +188,7 @@ pub struct MultiVibratoParams {
     pub output_db: f32,
 }
 
-impl Default for MultiVibratoParams {
+impl Default for VibratoParams {
     /// Defaults match the classic `MultiVibrato` effect's descriptor defaults exactly.
     fn default() -> Self {
         Self {
@@ -199,7 +199,7 @@ impl Default for MultiVibratoParams {
     }
 }
 
-impl MultiVibratoParams {
+impl VibratoParams {
     /// Build params directly from hardware knob readings (0.0–1.0 normalized).
     ///
     /// Convenience constructor for embedded targets where ADC values map
@@ -219,7 +219,7 @@ impl MultiVibratoParams {
     }
 }
 
-impl KernelParams for MultiVibratoParams {
+impl KernelParams for VibratoParams {
     const COUNT: usize = 3;
 
     fn descriptor(index: usize) -> Option<ParamDescriptor> {
@@ -308,7 +308,7 @@ impl KernelParams for MultiVibratoParams {
 /// are initialized identically, their LFO phases diverge because they are
 /// advanced independently — subtle decorrelation emerges over time, giving the
 /// characteristic "living" quality of real tape.
-pub struct MultiVibratoKernel {
+pub struct VibratoKernel {
     /// Six vibrato units for the left channel.
     vibratos_l: [VibratoUnit; NUM_VIBRATOS],
     /// Six vibrato units for the right channel (independent state from L).
@@ -332,7 +332,7 @@ const VIBRATO_CONFIGS: [(f32, f32, LfoWaveform); NUM_VIBRATOS] = [
     (4.7, 0.4, LfoWaveform::Triangle),  // Fastest, most subtle
 ];
 
-impl MultiVibratoKernel {
+impl VibratoKernel {
     /// Create a new multi-vibrato kernel initialised at `sample_rate`.
     ///
     /// Allocates 12 vibrato units (6 per channel) using the canonical LFO
@@ -352,8 +352,8 @@ impl MultiVibratoKernel {
     }
 }
 
-impl DspKernel for MultiVibratoKernel {
-    type Params = MultiVibratoParams;
+impl DspKernel for VibratoKernel {
+    type Params = VibratoParams;
 
     /// Process a stereo sample pair through all six vibrato units per channel.
     ///
@@ -363,7 +363,7 @@ impl DspKernel for MultiVibratoKernel {
     /// 3. Process the right input through all six R vibrato units and average their outputs
     /// 4. Wet/dry mix the stereo pair
     /// 5. Apply output level gain
-    fn process_stereo(&mut self, left: f32, right: f32, params: &MultiVibratoParams) -> (f32, f32) {
+    fn process_stereo(&mut self, left: f32, right: f32, params: &VibratoParams) -> (f32, f32) {
         // ── Unit conversion (user-facing → internal) ──
         let depth_scale = params.depth_pct / 100.0; // 0–400 % → 0.0–4.0
         let mix = params.mix_pct / 100.0; // 0–100 % → 0.0–1.0
@@ -392,7 +392,7 @@ impl DspKernel for MultiVibratoKernel {
     ///
     /// Used when mono processing is explicitly requested. Routes only through
     /// the L channel vibrato units for efficiency.
-    fn process(&mut self, input: f32, params: &MultiVibratoParams) -> f32 {
+    fn process(&mut self, input: f32, params: &VibratoParams) -> f32 {
         let depth_scale = params.depth_pct / 100.0;
         let mix = params.mix_pct / 100.0;
         let output = fast_db_to_linear(params.output_db);
@@ -455,8 +455,8 @@ mod tests {
     /// zero wet signal; wet/dry mix of zero with zero is zero.
     #[test]
     fn silence_in_silence_out() {
-        let mut kernel = MultiVibratoKernel::new(48000.0);
-        let params = MultiVibratoParams::default();
+        let mut kernel = VibratoKernel::new(48000.0);
+        let params = VibratoParams::default();
 
         // Note: the first sample may not be exactly zero because the delay line
         // starts cleared, but after a call with 0.0 input it should be ≈ 0.
@@ -477,8 +477,8 @@ mod tests {
     /// and verifies all outputs remain IEEE-finite.
     #[test]
     fn no_nan_or_inf() {
-        let mut kernel = MultiVibratoKernel::new(48000.0);
-        let params = MultiVibratoParams {
+        let mut kernel = VibratoKernel::new(48000.0);
+        let params = VibratoParams {
             depth_pct: 200.0,
             mix_pct: 100.0,
             output_db: 0.0,
@@ -510,24 +510,20 @@ mod tests {
         }
     }
 
-    /// `MultiVibratoParams::COUNT` must equal 3 and all descriptor indices must be
+    /// `VibratoParams::COUNT` must equal 3 and all descriptor indices must be
     /// populated with `Some`, while the index beyond `COUNT` returns `None`.
     #[test]
     fn params_descriptor_count() {
-        assert_eq!(
-            MultiVibratoParams::COUNT,
-            3,
-            "Expected exactly 3 parameters"
-        );
+        assert_eq!(VibratoParams::COUNT, 3, "Expected exactly 3 parameters");
 
-        for i in 0..MultiVibratoParams::COUNT {
+        for i in 0..VibratoParams::COUNT {
             assert!(
-                MultiVibratoParams::descriptor(i).is_some(),
+                VibratoParams::descriptor(i).is_some(),
                 "Missing descriptor at index {i}"
             );
         }
         assert!(
-            MultiVibratoParams::descriptor(MultiVibratoParams::COUNT).is_none(),
+            VibratoParams::descriptor(VibratoParams::COUNT).is_none(),
             "Descriptor beyond COUNT should be None"
         );
     }
@@ -535,7 +531,7 @@ mod tests {
     /// The kernel must wrap into a `KernelAdapter` and function as a `dyn Effect`.
     #[test]
     fn adapter_wraps_as_effect() {
-        let mut adapter = KernelAdapter::new(MultiVibratoKernel::new(48000.0), 48000.0);
+        let mut adapter = KernelAdapter::new(VibratoKernel::new(48000.0), 48000.0);
         adapter.reset();
 
         let output = adapter.process(0.3);
@@ -549,12 +545,12 @@ mod tests {
     /// matching the classic `MultiVibrato` effect's parameter contract exactly.
     #[test]
     fn adapter_param_info_matches() {
-        let adapter = KernelAdapter::new(MultiVibratoKernel::new(48000.0), 48000.0);
+        let adapter = KernelAdapter::new(VibratoKernel::new(48000.0), 48000.0);
 
         assert_eq!(
             adapter.param_count(),
-            MultiVibratoParams::COUNT,
-            "Adapter param count must match MultiVibratoParams::COUNT"
+            VibratoParams::COUNT,
+            "Adapter param count must match VibratoParams::COUNT"
         );
 
         // Verify ParamIds match the classic MultiVibrato effect exactly
@@ -586,10 +582,10 @@ mod tests {
     /// This verifies stability when parameters change mid-session (preset transition).
     #[test]
     fn morph_produces_valid_output() {
-        let mut kernel = MultiVibratoKernel::new(48000.0);
+        let mut kernel = VibratoKernel::new(48000.0);
 
-        let a = MultiVibratoParams::default();
-        let b = MultiVibratoParams {
+        let a = VibratoParams::default();
+        let b = VibratoParams {
             depth_pct: 350.0,
             mix_pct: 80.0,
             output_db: -6.0,
@@ -597,7 +593,7 @@ mod tests {
 
         for i in 0..=10 {
             let t = i as f32 / 10.0;
-            let morphed = MultiVibratoParams::lerp(&a, &b, t);
+            let morphed = VibratoParams::lerp(&a, &b, t);
             let (l, r) = kernel.process_stereo(0.3, -0.3, &morphed);
             assert!(
                 l.is_finite() && r.is_finite(),
@@ -612,7 +608,7 @@ mod tests {
     #[test]
     fn from_knobs_maps_ranges() {
         // Maximum deflection: all knobs at 1.0
-        let max = MultiVibratoParams::from_knobs(1.0, 1.0, 1.0);
+        let max = VibratoParams::from_knobs(1.0, 1.0, 1.0);
         assert!(
             (max.depth_pct - 400.0).abs() < 0.01,
             "Depth at 1.0 should be 400 %, got {}",
@@ -630,7 +626,7 @@ mod tests {
         );
 
         // Minimum deflection: all knobs at 0.0
-        let min = MultiVibratoParams::from_knobs(0.0, 0.0, 0.0);
+        let min = VibratoParams::from_knobs(0.0, 0.0, 0.0);
         assert!(
             min.depth_pct.abs() < 0.01,
             "Depth at 0.0 should be 0 %, got {}",
@@ -648,7 +644,7 @@ mod tests {
         );
 
         // Mid-point: depth=0.5, mix=0.5, output=0.5
-        let mid = MultiVibratoParams::from_knobs(0.5, 0.5, 0.5);
+        let mid = VibratoParams::from_knobs(0.5, 0.5, 0.5);
         assert!(
             (mid.depth_pct - 200.0).abs() < 0.01,
             "Depth at 0.5 should be 200 %, got {}",
@@ -673,19 +669,19 @@ mod tests {
     /// with the same input, the two kernels must diverge.
     #[test]
     fn depth_affects_output() {
-        let params_low = MultiVibratoParams {
+        let params_low = VibratoParams {
             depth_pct: 0.0, // No modulation — passes through base delay only
             mix_pct: 100.0,
             output_db: 0.0,
         };
-        let params_high = MultiVibratoParams {
+        let params_high = VibratoParams {
             depth_pct: 400.0, // Maximum modulation
             mix_pct: 100.0,
             output_db: 0.0,
         };
 
-        let mut kernel_low = MultiVibratoKernel::new(48000.0);
-        let mut kernel_high = MultiVibratoKernel::new(48000.0);
+        let mut kernel_low = VibratoKernel::new(48000.0);
+        let mut kernel_high = VibratoKernel::new(48000.0);
 
         // Prime delay lines with the same signal for long enough for differences to emerge.
         let mut acc_low = 0.0_f32;
@@ -713,8 +709,8 @@ mod tests {
     /// signal unchanged. The default output level is 0 dB (unity gain).
     #[test]
     fn mix_at_zero_is_dry() {
-        let mut kernel = MultiVibratoKernel::new(48000.0);
-        let params = MultiVibratoParams {
+        let mut kernel = VibratoKernel::new(48000.0);
+        let params = VibratoParams {
             depth_pct: 200.0,
             mix_pct: 0.0, // Fully dry
             output_db: 0.0,

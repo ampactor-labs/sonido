@@ -132,7 +132,7 @@ Pass = exits OK + auto-named output exists + audible effect when played.
 | 9 | `sonido process demos/sine_440.wav --effect chorus` | `demos/sine_440_chorus.wav` | [ ] |
 | 10 | `sonido process demos/sine_440.wav --effect flanger` | `demos/sine_440_flanger.wav` | [ ] |
 | 11 | `sonido process demos/sine_440.wav --effect phaser` | `demos/sine_440_phaser.wav` | [ ] |
-| 12 | `sonido process demos/sine_440.wav --effect multivibrato` | `demos/sine_440_multivibrato.wav` | [ ] |
+| 12 | `sonido process demos/sine_440.wav --effect vibrato` | `demos/sine_440_vibrato.wav` | [ ] |
 | 13 | `sonido process demos/sine_440.wav --effect delay` | `demos/sine_440_delay.wav` | [ ] |
 | 14 | `sonido process demos/sine_440.wav --effect tape` | `demos/sine_440_tape.wav` | [ ] |
 | 15 | `sonido process demos/sine_440.wav --effect reverb` | `demos/sine_440_reverb.wav` | [ ] |
@@ -158,7 +158,7 @@ Explicit `--param` flags. Validates param parsing and non-default behavior.
 | 9 | `sonido process demos/sine_440.wav --effect chorus --param rate=2 --param depth=0.5` | `demos/sine_440_chorus_rate=2_depth=0.5.wav` | [ ] |
 | 10 | `sonido process demos/sine_440.wav --effect flanger --param rate=0.5 --param depth=0.7` | `demos/sine_440_flanger_rate=0.5_depth=0.7.wav` | [ ] |
 | 11 | `sonido process demos/sine_440.wav --effect phaser --param rate=0.3 --param depth=0.8` | `demos/sine_440_phaser_rate=0.3_depth=0.8.wav` | [ ] |
-| 12 | `sonido process demos/sine_440.wav --effect multivibrato --param depth=0.5` | `demos/sine_440_multivibrato_depth=0.5.wav` | [ ] |
+| 12 | `sonido process demos/sine_440.wav --effect vibrato --param depth=0.5` | `demos/sine_440_vibrato_depth=0.5.wav` | [ ] |
 | 13 | `sonido process demos/sine_440.wav --effect delay --param time=300 --param feedback=0.4` | `demos/sine_440_delay_time=300_feedback=0.4.wav` | [ ] |
 | 14 | `sonido process demos/sine_440.wav --effect tape --param drive=12` | `demos/sine_440_tape_drive=12.wav` | [ ] |
 | 15 | `sonido process demos/sine_440.wav --effect reverb --param mix=0.5 --param room_size=0.8` | `demos/sine_440_reverb_mix=0.5_room_size=0.8.wav` | [ ] |
@@ -175,7 +175,7 @@ These params were added in the CLI UX overhaul. Each must be accepted without er
 |---|---------|---------------|------|
 | 1 | `sonido process demos/noise.wav --effect compressor --param knee=0` | Hard knee (0 dB) | [ ] |
 | 2 | `sonido process demos/sine_440.wav --effect delay --param ping_pong=1` | Ping-pong stereo mode | [ ] |
-| 3 | `sonido process demos/sine_440.wav --effect multivibrato --param mix=0.5` | Vibrato wet/dry mix | [ ] |
+| 3 | `sonido process demos/sine_440.wav --effect vibrato --param mix=0.5` | Vibrato wet/dry mix | [ ] |
 | 4 | `sonido process demos/sine_440.wav --effect tape --param output=-6 --param hf_rolloff=4000 --param bias=0.1` | Tape output, HF rolloff, bias | [ ] |
 | 5 | `sonido process demos/sine_440.wav --effect preamp --param output=-3 --param headroom=10` | Preamp output level, headroom | [ ] |
 | 6 | `sonido process demos/sine_440.wav --effect reverb --param stereo_width=0 --param type=hall` | Stereo width, reverb type | [ ] |
@@ -694,7 +694,7 @@ Click each effect button and test its panel:
 | Chorus | [ ] | [ ] | [ ] | [ ] | [ ] |
 | Flanger | [ ] | [ ] | [ ] | [ ] | [ ] |
 | Phaser | [ ] | [ ] | [ ] | [ ] | [ ] |
-| MultiVibrato | [ ] | [ ] | [ ] | [ ] | [ ] |
+| Vibrato | [ ] | [ ] | [ ] | [ ] | [ ] |
 | Delay | [ ] | [ ] | [ ] | [ ] | [ ] |
 | Tape | [ ] | [ ] | [ ] | [ ] | [ ] |
 | Reverb | [ ] | [ ] | [ ] | [ ] | [ ] |

@@ -55,7 +55,7 @@ EFFECTS=(
     flanger
     phaser
     filter
-    multivibrato
+    vibrato
     tape
     preamp
     reverb

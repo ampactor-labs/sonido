@@ -1,19 +1,19 @@
-//! MultiVibrato effect UI panel.
+//! Vibrato effect UI panel.
 
 use crate::widgets::{BypassToggle, bridged_knob};
 use crate::{ParamBridge, ParamIndex, SlotIndex};
 use egui::Ui;
 
-/// UI panel for the MultiVibrato effect.
-pub struct MultiVibratoPanel;
+/// UI panel for the Vibrato effect.
+pub struct VibratoPanel;
 
-impl MultiVibratoPanel {
-    /// Create a new multi-vibrato panel.
+impl VibratoPanel {
+    /// Create a new vibrato panel.
     pub fn new() -> Self {
         Self
     }
 
-    /// Render the multi-vibrato effect controls.
+    /// Render the vibrato effect controls.
     ///
     /// Param indices: 0 = depth (%).
     pub fn ui(&mut self, ui: &mut Ui, bridge: &dyn ParamBridge, slot: SlotIndex) {
@@ -41,7 +41,7 @@ impl MultiVibratoPanel {
     }
 }
 
-impl Default for MultiVibratoPanel {
+impl Default for VibratoPanel {
     fn default() -> Self {
         Self::new()
     }

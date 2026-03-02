@@ -6,10 +6,9 @@
 use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
 use sonido_core::{Effect, EffectExt, KernelAdapter, Oversampled, ParameterInfo};
 use sonido_effects::kernels::{
-    BitcrusherKernel, ChorusKernel, CompressorKernel, DelayKernel, DistortionKernel, FilterKernel,
-    FlangerKernel, GateKernel, LimiterKernel, MultiVibratoKernel, ParametricEqKernel, PhaserKernel,
-    PreampKernel, ReverbKernel, RingModKernel, StageKernel, TapeSaturationKernel, TremoloKernel,
-    WahKernel,
+    BitcrusherKernel, ChorusKernel, CompressorKernel, DelayKernel, DistortionKernel, EqKernel,
+    FilterKernel, FlangerKernel, GateKernel, LimiterKernel, PhaserKernel, PreampKernel,
+    ReverbKernel, RingModKernel, StageKernel, TapeKernel, TremoloKernel, VibratoKernel, WahKernel,
 };
 
 const SAMPLE_RATE: f32 = 48000.0;
@@ -85,18 +84,18 @@ fn bench_lowpass(c: &mut Criterion) {
     bench_effect(c, "LowPassFilter", effect);
 }
 
-fn bench_multi_vibrato(c: &mut Criterion) {
-    let mut effect = KernelAdapter::new(MultiVibratoKernel::new(SAMPLE_RATE), SAMPLE_RATE);
+fn bench_vibrato(c: &mut Criterion) {
+    let mut effect = KernelAdapter::new(VibratoKernel::new(SAMPLE_RATE), SAMPLE_RATE);
     effect.set_param(1, 100.0); // mix (percent)
     effect.set_param(0, 100.0); // depth (percent)
-    bench_effect(c, "MultiVibrato", effect);
+    bench_effect(c, "Vibrato", effect);
 }
 
-fn bench_tape_saturation(c: &mut Criterion) {
-    let mut effect = KernelAdapter::new(TapeSaturationKernel::new(SAMPLE_RATE), SAMPLE_RATE);
+fn bench_tape(c: &mut Criterion) {
+    let mut effect = KernelAdapter::new(TapeKernel::new(SAMPLE_RATE), SAMPLE_RATE);
     effect.set_param(0, 6.0); // drive (dB, range 0-24, default 6)
     effect.set_param(1, 60.0); // saturation (percent)
-    bench_effect(c, "TapeSaturation", effect);
+    bench_effect(c, "Tape", effect);
 }
 
 fn bench_clean_preamp(c: &mut Criterion) {
@@ -159,8 +158,8 @@ fn bench_wah(c: &mut Criterion) {
     bench_effect(c, "Wah", effect);
 }
 
-fn bench_parametric_eq(c: &mut Criterion) {
-    let mut effect = KernelAdapter::new(ParametricEqKernel::new(SAMPLE_RATE), SAMPLE_RATE);
+fn bench_eq(c: &mut Criterion) {
+    let mut effect = KernelAdapter::new(EqKernel::new(SAMPLE_RATE), SAMPLE_RATE);
     effect.set_param(0, 200.0); // low_freq
     effect.set_param(1, 3.0); // low_gain
     effect.set_param(2, 1.0); // low_q
@@ -170,7 +169,7 @@ fn bench_parametric_eq(c: &mut Criterion) {
     effect.set_param(6, 4000.0); // high_freq
     effect.set_param(7, 2.0); // high_gain
     effect.set_param(8, 1.0); // high_q
-    bench_effect(c, "ParametricEq", effect);
+    bench_effect(c, "Eq", effect);
 }
 
 fn bench_limiter(c: &mut Criterion) {
@@ -376,8 +375,8 @@ criterion_group!(
     bench_chorus,
     bench_delay,
     bench_lowpass,
-    bench_multi_vibrato,
-    bench_tape_saturation,
+    bench_vibrato,
+    bench_tape,
     bench_clean_preamp,
     bench_reverb,
     bench_flanger,
@@ -385,7 +384,7 @@ criterion_group!(
     bench_gate,
     bench_tremolo,
     bench_wah,
-    bench_parametric_eq,
+    bench_eq,
     bench_limiter,
     bench_bitcrusher,
     bench_ringmod,

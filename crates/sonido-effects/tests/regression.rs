@@ -18,10 +18,9 @@
 use sonido_analysis::compare::{mse, snr_db, spectral_correlation};
 use sonido_core::{Effect, KernelAdapter, ParameterInfo};
 use sonido_effects::kernels::{
-    BitcrusherKernel, ChorusKernel, CompressorKernel, DelayKernel, DistortionKernel, FilterKernel,
-    FlangerKernel, GateKernel, LimiterKernel, MultiVibratoKernel, ParametricEqKernel, PhaserKernel,
-    PreampKernel, ReverbKernel, RingModKernel, StageKernel, TapeSaturationKernel, TremoloKernel,
-    WahKernel,
+    BitcrusherKernel, ChorusKernel, CompressorKernel, DelayKernel, DistortionKernel, EqKernel,
+    FilterKernel, FlangerKernel, GateKernel, LimiterKernel, PhaserKernel, PreampKernel,
+    ReverbKernel, RingModKernel, StageKernel, TapeKernel, TremoloKernel, VibratoKernel, WahKernel,
 };
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader, BufWriter, Write};
@@ -315,7 +314,7 @@ fn test_tremolo_regression() {
 }
 
 #[test]
-fn test_tape_saturation_regression() {
+fn test_tape_regression() {
     // Tape params: 0=drive_db, 1=saturation_pct, ...
     // Classic: set_drive(2.0) linear -> kernel drive_db
     // Classic: set_saturation(0.6) 0-1 -> kernel saturation_pct 0-100
@@ -323,13 +322,12 @@ fn test_tape_saturation_regression() {
     // isn't directly comparable. We use from_knobs-style conversion: for the test,
     // set drive_db and saturation_pct to reasonable values that represent
     // similar processing characteristics.
-    let mut effect = KernelAdapter::new(TapeSaturationKernel::new(SAMPLE_RATE), SAMPLE_RATE);
+    let mut effect = KernelAdapter::new(TapeKernel::new(SAMPLE_RATE), SAMPLE_RATE);
     effect.set_param(0, 6.0); // drive_db (moderate drive)
     effect.set_param(1, 60.0); // saturation_pct (classic: 0.6 -> 60%)
 
     let input = generate_test_signal(TEST_DURATION_SAMPLES);
-    run_regression_test("tape_saturation", effect, &input)
-        .expect("TapeSaturation regression test failed");
+    run_regression_test("tape", effect, &input).expect("TapeSaturation regression test failed");
 }
 
 #[test]
@@ -345,18 +343,17 @@ fn test_clean_preamp_regression() {
 }
 
 #[test]
-fn test_multi_vibrato_regression() {
+fn test_vibrato_regression() {
     // MultiVibrato params: 0=depth_pct, 1=mix_pct, 2=output_db
     // Classic: set_depth(0.8) 0-4 scale -> depth_pct 0-100
     // Classic depth scale is 0-4, kernel depth_pct is 0-100
     // Classic set_depth(0.8) with clamp 0-4 -> kernel default depth range is 0-100%
-    let mut effect = KernelAdapter::new(MultiVibratoKernel::new(SAMPLE_RATE), SAMPLE_RATE);
+    let mut effect = KernelAdapter::new(VibratoKernel::new(SAMPLE_RATE), SAMPLE_RATE);
     effect.set_param(0, 80.0); // depth_pct (classic: 0.8 -> 80%)
     effect.set_param(1, 100.0); // mix_pct (classic: 1.0 -> 100%)
 
     let input = generate_test_signal(TEST_DURATION_SAMPLES);
-    run_regression_test("multi_vibrato", effect, &input)
-        .expect("MultiVibrato regression test failed");
+    run_regression_test("vibrato", effect, &input).expect("MultiVibrato regression test failed");
 }
 
 #[test]
@@ -383,17 +380,16 @@ fn test_wah_regression() {
 }
 
 #[test]
-fn test_parametric_eq_regression() {
+fn test_eq_regression() {
     // EQ params: 0=low_freq, 1=low_gain_db, 2=low_q, 3=mid_freq, 4=mid_gain_db, ...
-    let mut effect = KernelAdapter::new(ParametricEqKernel::new(SAMPLE_RATE), SAMPLE_RATE);
+    let mut effect = KernelAdapter::new(EqKernel::new(SAMPLE_RATE), SAMPLE_RATE);
     effect.set_param(1, 3.0); // low_gain_db
     effect.set_param(4, -2.0); // mid_gain_db
     effect.set_param(3, 1000.0); // mid_freq
     effect.set_param(7, 2.0); // high_gain_db
 
     let input = generate_test_signal(TEST_DURATION_SAMPLES);
-    run_regression_test("parametric_eq", effect, &input)
-        .expect("ParametricEq regression test failed");
+    run_regression_test("eq", effect, &input).expect("ParametricEq regression test failed");
 }
 
 // Default-parameter regression tests
@@ -475,10 +471,10 @@ fn test_tremolo_defaults_regression() {
 }
 
 #[test]
-fn test_tape_saturation_defaults_regression() {
-    let effect = KernelAdapter::new(TapeSaturationKernel::new(SAMPLE_RATE), SAMPLE_RATE);
+fn test_tape_defaults_regression() {
+    let effect = KernelAdapter::new(TapeKernel::new(SAMPLE_RATE), SAMPLE_RATE);
     let input = generate_test_signal(TEST_DURATION_SAMPLES);
-    run_regression_test("tape_saturation_defaults", effect, &input)
+    run_regression_test("tape_defaults", effect, &input)
         .expect("TapeSaturation defaults regression test failed");
 }
 
@@ -491,10 +487,10 @@ fn test_clean_preamp_defaults_regression() {
 }
 
 #[test]
-fn test_multi_vibrato_defaults_regression() {
-    let effect = KernelAdapter::new(MultiVibratoKernel::new(SAMPLE_RATE), SAMPLE_RATE);
+fn test_vibrato_defaults_regression() {
+    let effect = KernelAdapter::new(VibratoKernel::new(SAMPLE_RATE), SAMPLE_RATE);
     let input = generate_test_signal(TEST_DURATION_SAMPLES);
-    run_regression_test("multi_vibrato_defaults", effect, &input)
+    run_regression_test("vibrato_defaults", effect, &input)
         .expect("MultiVibrato defaults regression test failed");
 }
 
@@ -515,10 +511,10 @@ fn test_wah_defaults_regression() {
 }
 
 #[test]
-fn test_parametric_eq_defaults_regression() {
-    let effect = KernelAdapter::new(ParametricEqKernel::new(SAMPLE_RATE), SAMPLE_RATE);
+fn test_eq_defaults_regression() {
+    let effect = KernelAdapter::new(EqKernel::new(SAMPLE_RATE), SAMPLE_RATE);
     let input = generate_test_signal(TEST_DURATION_SAMPLES);
-    run_regression_test("parametric_eq_defaults", effect, &input)
+    run_regression_test("eq_defaults", effect, &input)
         .expect("ParametricEq defaults regression test failed");
 }
 
@@ -810,7 +806,7 @@ fn test_bitcrusher_defaults_regression() {
 }
 
 #[test]
-fn test_ring_mod_regression() {
+fn test_ringmod_regression() {
     // RingMod params: 0=freq_hz, 1=depth_pct, 2=waveform, 3=mix_pct, 4=output_db
     let mut effect = KernelAdapter::new(RingModKernel::new(SAMPLE_RATE), SAMPLE_RATE);
     effect.set_param(0, 440.0); // freq_hz
@@ -818,14 +814,14 @@ fn test_ring_mod_regression() {
     effect.set_param(3, 100.0); // mix_pct (classic: 1.0 -> 100%)
 
     let input = generate_test_signal(TEST_DURATION_SAMPLES);
-    run_regression_test("ring_mod", effect, &input).expect("RingMod regression test failed");
+    run_regression_test("ringmod", effect, &input).expect("RingMod regression test failed");
 }
 
 #[test]
-fn test_ring_mod_defaults_regression() {
+fn test_ringmod_defaults_regression() {
     let effect = KernelAdapter::new(RingModKernel::new(SAMPLE_RATE), SAMPLE_RATE);
     let input = generate_test_signal(TEST_DURATION_SAMPLES);
-    run_regression_test("ring_mod_defaults", effect, &input)
+    run_regression_test("ringmod_defaults", effect, &input)
         .expect("RingMod defaults regression test failed");
 }
 

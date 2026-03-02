@@ -83,7 +83,7 @@ fn resolve_effect_name<'a>(name: &'a str) -> &'a str {
     let lower = name.to_lowercase();
     match lower.as_str() {
         "lowpass" | "filter" => "filter",
-        "vibrato" | "multivibrato" => "multivibrato",
+        "vibrato" | "multivibrato" | "multi_vibrato" => "vibrato",
         "tape" | "tapesaturation" | "tape_saturation" => "tape",
         "noisegate" | "noise_gate" | "gate" => "gate",
         "autowah" | "auto_wah" | "wah" => "wah",
@@ -561,7 +561,7 @@ mod tests {
             "flanger",
             "phaser",
             "filter",
-            "multivibrato",
+            "vibrato",
             "tape",
             "preamp",
             "reverb",
@@ -583,7 +583,8 @@ mod tests {
     fn effect_name_aliases_resolve() {
         let aliases = vec![
             ("lowpass", "filter"),
-            ("vibrato", "multivibrato"),
+            ("vibrato", "vibrato"),
+            ("multivibrato", "vibrato"),
             ("tapesaturation", "tape"),
             ("noisegate", "gate"),
             ("autowah", "wah"),

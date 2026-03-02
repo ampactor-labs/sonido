@@ -109,12 +109,12 @@ Audio effect implementations built on sonido-core. All `no_std` compatible with 
 - `Limiter`: Look-ahead brickwall limiter with auto-release
 - `Gate`: Noise gate with threshold, attack/release, hold time
 - `Wah`: Auto-wah and manual wah with resonant filter
-- `ParametricEq`: 3-band parametric EQ with Q control
+- `Eq`: 3-band parametric EQ with Q control
 - `Tremolo`: Amplitude modulation with multiple waveforms
-- `TapeSaturation`: J37-style tape warmth with HF rolloff
+- `Tape`: J37-style tape warmth with HF rolloff
 - `CleanPreamp`: Simple gain stage with input/output control
 - `LowPassFilter`: Resonant 2-pole lowpass (SVF-based)
-- `MultiVibrato`: 6-unit tape wow/flutter simulation
+- `Vibrato`: 6-unit tape wow/flutter simulation
 - `Bitcrusher`: Sample rate and bit depth reduction
 - `RingMod`: Ring modulation with variable frequency
 - `Stage`: Signal conditioning and stereo utility
@@ -559,8 +559,8 @@ Effects fall into two categories:
 - `Flanger`: Offset modulation between channels
 
 **Dual-Mono** (`is_true_stereo() -> false`):
-- `Distortion`, `Compressor`, `Gate`, `Wah`, `ParametricEq`
-- `Tremolo`, `TapeSaturation`, `CleanPreamp`, `LowPassFilter`, `MultiVibrato`
+- `Distortion`, `Compressor`, `Gate`, `Wah`, `Eq`
+- `Tremolo`, `Tape`, `CleanPreamp`, `LowPassFilter`, `Vibrato`
 
 Dual-mono effects process each channel independently with the same algorithm.
 
