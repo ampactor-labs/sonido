@@ -272,7 +272,7 @@ impl KernelParams for LimiterParams {
 /// Pure DSP brickwall lookahead limiter kernel.
 ///
 /// Contains ONLY the mutable state required for audio processing:
-/// - Circular delay buffers (L and R) sized for [`MAX_LOOKAHEAD_MS`]
+/// - Circular delay buffers (L and R) sized for `MAX_LOOKAHEAD_MS`
 /// - Current smoothed gain reduction (linear, 1.0 = no reduction)
 /// - Cached release coefficient and lookahead sample count computed from params
 /// - Write position within the circular buffer

@@ -1192,7 +1192,7 @@ Introduce a three-layer kernel architecture:
 
 ### References
 
-- `crates/sonido-core/src/kernel/` — `DspKernel`, `KernelParams`, `SmoothingStyle`, `KernelAdapter`
-- `crates/sonido-effects/src/kernels/` — kernel implementations
-- `docs/KERNEL_SPEC.md` — full implementation specification
-- `docs/KERNEL_MIGRATION.md` — step-by-step migration guide
+- `crates/sonido-core/src/kernel/traits.rs` — `DspKernel`, `KernelParams`, `SmoothingStyle`
+- `crates/sonido-core/src/kernel/adapter.rs` — `KernelAdapter`
+- `crates/sonido-effects/src/kernels/` — 19 kernel implementations (one per effect)
+- `crates/sonido-registry/src/lib.rs` — registry creates `KernelAdapter<XxxKernel>`

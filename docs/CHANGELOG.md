@@ -44,6 +44,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 46 graph-related tests (30 core + 16 engine unit + integration)
 - ADR-025 accepted (docs/DESIGN_DECISIONS.md)
 
+#### Kernel Architecture (sonido-core, sonido-effects, sonido-registry)
+- `DspKernel` trait — pure DSP processing separated from parameter ownership
+- `KernelParams` trait — typed parameter struct with indexed access, descriptors, smoothing hints, `lerp()`, `from_normalized()`, `to_normalized()`
+- `SmoothingStyle` enum — None, Fast (5ms), Standard (10ms), Slow (20ms), Interpolated (50ms), Custom(ms)
+- `KernelAdapter<K>` — bridges kernel to `Effect + ParameterInfo`, manages per-parameter `SmoothedParam`
+- 19 kernel implementations: `BitcrusherKernel`, `ChorusKernel`, `CompressorKernel`, `DelayKernel`, `DistortionKernel`, `FilterKernel`, `FlangerKernel`, `GateKernel`, `LimiterKernel`, `MultiVibratoKernel`, `ParametricEqKernel`, `PhaserKernel`, `PreampKernel`, `ReverbKernel`, `RingModKernel`, `StageKernel`, `TapeSaturationKernel`, `TremoloKernel`, `WahKernel`
+- Each kernel includes `from_knobs()` for direct ADC mapping on embedded targets
+- Registry switched to `KernelAdapter<XxxKernel>` for all 19 effects
+- 225 kernel-specific tests
+- ADR-028 accepted (docs/DESIGN_DECISIONS.md)
+
 #### Structured Observability (tracing)
 - Migrated std crates (`sonido-gui`, `sonido-cli`, `sonido-io`, `sonido-plugin`) from `log` facade to `tracing` 0.1
 - Added `tracing-subscriber` with `EnvFilter` for runtime log-level control via `RUST_LOG`

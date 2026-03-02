@@ -88,8 +88,8 @@ graph TD
 
 | Crate | Purpose | no_std |
 |-------|---------|--------|
-| `sonido-core` | Effect trait, parameters, delays, filters, LFOs, tempo, DAG processing graph | Yes |
-| `sonido-effects` | 19 effect implementations | Yes |
+| `sonido-core` | Effect trait, DspKernel/KernelParams/KernelAdapter, parameters, delays, filters, LFOs, tempo, DAG processing graph | Yes |
+| `sonido-effects` | 19 effects (classic Effect + kernel DspKernel implementations) | Yes |
 | `sonido-synth` | PolyBLEP oscillators, ADSR envelopes, voice management, modulation matrix | Yes |
 | `sonido-registry` | Effect factory and discovery by name/category | Yes |
 | `sonido-platform` | Hardware abstraction: PlatformController, ControlMapper | Yes |

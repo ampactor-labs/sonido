@@ -2,6 +2,22 @@
 
 Complete parameter reference for all Sonido effects.
 
+## Kernel Architecture
+
+All 19 effects have kernel-architecture implementations in `crates/sonido-effects/src/kernels/`. Each effect defines `XxxKernel` (`DspKernel` impl) and `XxxParams` (`KernelParams` impl). The registry creates `KernelAdapter<XxxKernel>` — all consumers (GUI, CLI, plugin) use kernel-backed effects transparently.
+
+Classic `Effect` implementations remain in `crates/sonido-effects/src/` for backwards compatibility.
+
+```rust
+// Desktop/plugin: KernelAdapter handles smoothing
+let adapter = KernelAdapter::new(DistortionKernel::new(48000.0), 48000.0);
+
+// Embedded: call kernel directly, no smoothing overhead
+let mut kernel = DistortionKernel::new(48000.0);
+let params = DistortionParams::from_knobs(adc_drive, adc_tone, adc_output, adc_mix);
+let (l, r) = kernel.process_stereo(input_l, input_r, &params);
+```
+
 ## Effect Aliases
 
 Some effects have alternate names for convenience:

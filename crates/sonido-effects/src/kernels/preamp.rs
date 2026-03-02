@@ -122,7 +122,7 @@ pub struct PreampParams {
     ///
     /// Range: 0.0–40.0 dB. At 0 dB the gain stage is unity.
     pub gain_db: f32,
-    /// Peaking EQ gain at [`TONE_CENTER_HZ`] (3 kHz), in decibels.
+    /// Peaking EQ gain at `TONE_CENTER_HZ` (3 kHz), in decibels.
     ///
     /// Range: −12.0–12.0 dB. Positive values add presence/brightness;
     /// negative values warm/darken the output.
@@ -273,7 +273,7 @@ impl PreampKernel {
     /// Recalculate biquad coefficients for the tone peaking EQ.
     ///
     /// Uses the Audio EQ Cookbook peaking EQ formula centered at
-    /// [`TONE_CENTER_HZ`] with bandwidth [`TONE_Q`].
+    /// `TONE_CENTER_HZ` with bandwidth `TONE_Q`.
     ///
     /// This is called only when `tone_db` changes by more than 0.001 dB,
     /// preventing unnecessary trigonometric computation per sample.

@@ -407,7 +407,7 @@ impl KernelParams for DelayParams {
 ///
 /// LP/HP filter frequencies and the diffusion amount are cached. Coefficients
 /// are only recalculated when the incoming parameter value differs from the
-/// cached value by more than [`COEFF_CHANGE_THRESHOLD`]. This avoids expensive
+/// cached value by more than `COEFF_CHANGE_THRESHOLD`. This avoids expensive
 /// `highpass_coefficients()` calls every sample during steady-state operation.
 pub struct DelayKernel {
     /// Interpolated delay line — left channel.
@@ -494,7 +494,7 @@ impl DelayKernel {
     }
 
     /// Recompute LP/HP filter coefficients and allpass feedback when parameters
-    /// have changed beyond [`COEFF_CHANGE_THRESHOLD`].
+    /// have changed beyond `COEFF_CHANGE_THRESHOLD`.
     ///
     /// Called once per sample inside `process_stereo()`. The threshold check
     /// keeps this practically zero-cost during steady-state operation.

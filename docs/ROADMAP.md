@@ -21,17 +21,20 @@ Sonido is a production-grade DSP framework in Rust. The following capabilities a
 
 ### Effects Library
 
-19 production effects, all implementing `Effect` + `ParameterInfo`:
+19 production effects with dual implementations — classic `Effect` trait and kernel architecture (`DspKernel` + `KernelParams`):
 
 - **Dynamics**: Compressor (11 params, sidechain-capable), Limiter, Gate
 - **Gain/Saturation**: Preamp, Distortion (4 waveshaper modes, ADAA), Tape Saturation (10 params, hysteresis + wow/flutter + head bump)
 - **Modulation**: Chorus, Flanger, Phaser, Tremolo, MultiVibrato
-- **Time**: Delay (ping-pong, diffusion, tempo sync), Reverb (Freeverb topology, stereo tanks)
+- **Time**: Delay (ping-pong, diffusion, tempo sync), Reverb (Hadamard FDN, stereo tanks)
 - **Filter**: Filter (SVF-based), Wah, Parametric EQ (3-band)
 - **Special**: Bitcrusher, Ring Modulator, Stage (4-in-1 processor)
 
 Key DSP quality features active across all effects:
-- SmoothedParam on every automatable parameter (5–50ms, click-free)
+- Kernel architecture: pure DSP separated from parameter ownership (ADR-028)
+- `KernelAdapter` manages per-parameter smoothing (5–50ms, click-free) via `SmoothingStyle`
+- Kernels callable directly on embedded targets without smoothing overhead
+- Preset morphing via `KernelParams::lerp()` between any two parameter snapshots
 - Topology-aware feedback compensation (no uncontrolled gain at high feedback)
 - `soft_limit(1.0)` before output stage in saturation effects
 - Oversampling wrapper (2x/4x/8x const-generic, usable on any effect)
@@ -139,6 +142,22 @@ All 19 CLAP plugins support host-negotiated window resize via atomic `PendingRes
 **Status:** Complete
 
 Benchmarks run on-demand via `gh workflow run ci-manual.yml -f job=bench` across all 4 crates (core, effects, synth, analysis). Criterion JSON stored as CI artifacts (90-day retention) and cached via `actions/cache` for cross-run comparison. `critcmp` compares the cached baseline against the current run, producing a `bench-comparison.txt` artifact. No regression gate — reporting only for human review.
+
+### Kernel Architecture Migration
+
+**Status:** Complete
+
+All 19 effects migrated to `DspKernel` + `KernelParams` pattern, separating pure DSP from parameter ownership. `KernelAdapter<K>` bridges kernels to `Effect + ParameterInfo` with per-parameter smoothing. Registry creates `KernelAdapter<XxxKernel>` for all effects — transparent to all consumers.
+
+Key capabilities unlocked:
+- Kernels callable directly on embedded targets without smoothing overhead or heap allocation
+- Preset morphing via `KernelParams::lerp()` between any two parameter snapshots
+- `from_knobs()` maps normalized ADC readings to parameter ranges (embedded convenience)
+- `from_normalized()` / `to_normalized()` for CLAP/MIDI host bridge
+- `SmoothingStyle` per parameter: None, Fast (5ms), Standard (10ms), Slow (20ms), Interpolated (50ms)
+- 225 kernel-specific tests across all 19 implementations
+
+See ADR-028 in `docs/DESIGN_DECISIONS.md`.
 
 ---
 

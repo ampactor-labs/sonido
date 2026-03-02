@@ -18,7 +18,7 @@
 //!
 //! # Why This Exists
 //!
-//! The original [`Effect`] trait couples DSP math with parameter ownership — each
+//! The original [`Effect`](crate::Effect) trait couples DSP math with parameter ownership — each
 //! effect owns its [`SmoothedParam`](crate::SmoothedParam) instances and manages
 //! their targets internally. This works for a single platform, but creates tension
 //! when the same effect must deploy to:

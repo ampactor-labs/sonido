@@ -422,8 +422,8 @@ impl KernelParams for ParametricEqParams {
 /// - Coefficient decimation counter (recalculate at most every 32 samples)
 ///
 /// No `SmoothedParam`, no `AtomicU32`, no platform awareness. Coefficients
-/// are recomputed at most every [`COEFF_UPDATE_INTERVAL`] samples when any
-/// band's frequency, gain, or Q has changed beyond [`CHANGE_EPSILON`].
+/// are recomputed at most every `COEFF_UPDATE_INTERVAL` samples when any
+/// band's frequency, gain, or Q has changed beyond `CHANGE_EPSILON`.
 ///
 /// The dual L/R biquad pairs implement a dual-mono topology: the same
 /// coefficients are applied to both channels (not true stereo decorrelation),
@@ -473,7 +473,7 @@ pub struct ParametricEqKernel {
     /// Down-counter for block-rate coefficient decimation.
     ///
     /// Decrements each sample. When it reaches zero, pending coefficient
-    /// updates are applied and the counter reloads to [`COEFF_UPDATE_INTERVAL`].
+    /// updates are applied and the counter reloads to `COEFF_UPDATE_INTERVAL`.
     coeff_update_counter: u32,
 }
 

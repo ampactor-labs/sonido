@@ -292,7 +292,7 @@ pub trait KernelParams: Default + Clone + Send {
 /// # Safety Contract
 ///
 /// Implementors **must** override at least one of `process()` or `process_stereo()`.
-/// Failing to override either causes infinite recursion (identical to [`Effect`]).
+/// Failing to override either causes infinite recursion (identical to [`Effect`](crate::Effect)).
 ///
 /// # Block Processing
 ///

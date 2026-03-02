@@ -13,7 +13,7 @@
 //!
 //! # Algorithm
 //!
-//! Six [`VibratoUnit`] oscillators run simultaneously on each channel (L and R),
+//! Six `VibratoUnit` oscillators run simultaneously on each channel (L and R),
 //! each at a different LFO rate and depth. Their outputs are averaged to produce
 //! a single wet signal per channel:
 //!
@@ -41,7 +41,7 @@
 //! # Latency
 //!
 //! The kernel reports 128 samples of latency, reflecting the base delay offset
-//! used by each [`VibratoUnit`] to provide headroom for negative LFO modulation.
+//! used by each `VibratoUnit` to provide headroom for negative LFO modulation.
 //!
 //! # Deployment
 //!
@@ -70,7 +70,7 @@ use sonido_core::{
 /// organic tape wow-and-flutter character when summed.
 const NUM_VIBRATOS: usize = 6;
 
-/// Base delay in samples used by every [`VibratoUnit`].
+/// Base delay in samples used by every `VibratoUnit`.
 ///
 /// This provides headroom so the LFO's negative modulation excursion can never
 /// produce a negative (impossible) delay time. 128 samples ≈ 2.7 ms at 48 kHz.
@@ -293,8 +293,8 @@ impl KernelParams for MultiVibratoParams {
 ///
 /// Contains ONLY the mutable state required for audio processing:
 ///
-/// - Six [`VibratoUnit`] instances for the left channel
-/// - Six [`VibratoUnit`] instances for the right channel (independent state for
+/// - Six `VibratoUnit` instances for the left channel
+/// - Six `VibratoUnit` instances for the right channel (independent state for
 ///   true stereo — each unit's LFO starts at the same phase but diverges over time)
 /// - The current sample rate in Hz
 ///
