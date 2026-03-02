@@ -55,10 +55,12 @@ use alloc::{boxed::Box, vec::Vec};
 
 // Re-export EffectWithParams from core (moved there to unblock ProcessingGraph).
 pub use sonido_core::EffectWithParams;
-use sonido_effects::{
-    Bitcrusher, Chorus, CleanPreamp, Compressor, Delay, Distortion, Flanger, Gate, Limiter,
-    LowPassFilter, MultiVibrato, ParametricEq, Phaser, Reverb, RingMod, Stage, TapeSaturation,
-    Tremolo, Wah,
+use sonido_core::KernelAdapter;
+use sonido_effects::kernels::{
+    BitcrusherKernel, ChorusKernel, CompressorKernel, DelayKernel, DistortionKernel, FilterKernel,
+    FlangerKernel, GateKernel, LimiterKernel, MultiVibratoKernel, ParametricEqKernel, PhaserKernel,
+    PreampKernel, ReverbKernel, RingModKernel, StageKernel, TapeSaturationKernel, TremoloKernel,
+    WahKernel,
 };
 
 /// Category of audio effect for organization and filtering.
@@ -172,7 +174,7 @@ impl EffectRegistry {
                 category: EffectCategory::Distortion,
                 param_count: 5,
             },
-            |sr| Box::new(Distortion::new(sr)),
+            |sr| Box::new(KernelAdapter::new(DistortionKernel::new(sr), sr)),
         );
 
         // Compressor
@@ -185,7 +187,7 @@ impl EffectRegistry {
                 category: EffectCategory::Dynamics,
                 param_count: 11,
             },
-            |sr| Box::new(Compressor::new(sr)),
+            |sr| Box::new(KernelAdapter::new(CompressorKernel::new(sr), sr)),
         );
 
         // Chorus
@@ -198,7 +200,7 @@ impl EffectRegistry {
                 category: EffectCategory::Modulation,
                 param_count: 9,
             },
-            |sr| Box::new(Chorus::new(sr)),
+            |sr| Box::new(KernelAdapter::new(ChorusKernel::new(sr), sr)),
         );
 
         // Flanger
@@ -211,7 +213,7 @@ impl EffectRegistry {
                 category: EffectCategory::Modulation,
                 param_count: 8,
             },
-            |sr| Box::new(Flanger::new(sr)),
+            |sr| Box::new(KernelAdapter::new(FlangerKernel::new(sr), sr)),
         );
 
         // Phaser
@@ -224,7 +226,7 @@ impl EffectRegistry {
                 category: EffectCategory::Modulation,
                 param_count: 10,
             },
-            |sr| Box::new(Phaser::new(sr)),
+            |sr| Box::new(KernelAdapter::new(PhaserKernel::new(sr), sr)),
         );
 
         // Delay
@@ -237,7 +239,7 @@ impl EffectRegistry {
                 category: EffectCategory::TimeBased,
                 param_count: 10,
             },
-            |sr| Box::new(Delay::new(sr)),
+            |sr| Box::new(KernelAdapter::new(DelayKernel::new(sr), sr)),
         );
 
         // LowPass Filter
@@ -250,7 +252,7 @@ impl EffectRegistry {
                 category: EffectCategory::Filter,
                 param_count: 3,
             },
-            |sr| Box::new(LowPassFilter::new(sr)),
+            |sr| Box::new(KernelAdapter::new(FilterKernel::new(sr), sr)),
         );
 
         // MultiVibrato
@@ -263,7 +265,7 @@ impl EffectRegistry {
                 category: EffectCategory::Modulation,
                 param_count: 3,
             },
-            |sr| Box::new(MultiVibrato::new(sr)),
+            |sr| Box::new(KernelAdapter::new(MultiVibratoKernel::new(sr), sr)),
         );
 
         // Tape Saturation
@@ -276,7 +278,7 @@ impl EffectRegistry {
                 category: EffectCategory::Distortion,
                 param_count: 10,
             },
-            |sr| Box::new(TapeSaturation::new(sr)),
+            |sr| Box::new(KernelAdapter::new(TapeSaturationKernel::new(sr), sr)),
         );
 
         // Clean Preamp
@@ -289,7 +291,7 @@ impl EffectRegistry {
                 category: EffectCategory::Utility,
                 param_count: 3,
             },
-            |sr| Box::new(CleanPreamp::new(sr)),
+            |sr| Box::new(KernelAdapter::new(PreampKernel::new(sr), sr)),
         );
 
         // Reverb
@@ -302,7 +304,7 @@ impl EffectRegistry {
                 category: EffectCategory::TimeBased,
                 param_count: 8,
             },
-            |sr| Box::new(Reverb::new(sr)),
+            |sr| Box::new(KernelAdapter::new(ReverbKernel::new(sr), sr)),
         );
 
         // Tremolo
@@ -315,7 +317,7 @@ impl EffectRegistry {
                 category: EffectCategory::Modulation,
                 param_count: 7,
             },
-            |sr| Box::new(Tremolo::new(sr)),
+            |sr| Box::new(KernelAdapter::new(TremoloKernel::new(sr), sr)),
         );
 
         // Gate
@@ -328,7 +330,7 @@ impl EffectRegistry {
                 category: EffectCategory::Dynamics,
                 param_count: 8,
             },
-            |sr| Box::new(Gate::new(sr)),
+            |sr| Box::new(KernelAdapter::new(GateKernel::new(sr), sr)),
         );
 
         // Wah
@@ -341,7 +343,7 @@ impl EffectRegistry {
                 category: EffectCategory::Filter,
                 param_count: 5,
             },
-            |sr| Box::new(Wah::new(sr)),
+            |sr| Box::new(KernelAdapter::new(WahKernel::new(sr), sr)),
         );
 
         // Parametric EQ
@@ -354,7 +356,7 @@ impl EffectRegistry {
                 category: EffectCategory::Filter,
                 param_count: 10,
             },
-            |sr| Box::new(ParametricEq::new(sr)),
+            |sr| Box::new(KernelAdapter::new(ParametricEqKernel::new(sr), sr)),
         );
 
         // Limiter
@@ -367,7 +369,7 @@ impl EffectRegistry {
                 category: EffectCategory::Dynamics,
                 param_count: 5,
             },
-            |sr| Box::new(Limiter::new(sr)),
+            |sr| Box::new(KernelAdapter::new(LimiterKernel::new(sr), sr)),
         );
 
         // Bitcrusher
@@ -380,7 +382,7 @@ impl EffectRegistry {
                 category: EffectCategory::Distortion,
                 param_count: 5,
             },
-            |sr| Box::new(Bitcrusher::new(sr)),
+            |sr| Box::new(KernelAdapter::new(BitcrusherKernel::new(sr), sr)),
         );
 
         // Ring Modulator
@@ -393,7 +395,7 @@ impl EffectRegistry {
                 category: EffectCategory::Modulation,
                 param_count: 5,
             },
-            |sr| Box::new(RingMod::new(sr)),
+            |sr| Box::new(KernelAdapter::new(RingModKernel::new(sr), sr)),
         );
 
         // Stage (signal conditioning / stereo utility)
@@ -406,7 +408,7 @@ impl EffectRegistry {
                 category: EffectCategory::Utility,
                 param_count: 12,
             },
-            |sr| Box::new(Stage::new(sr)),
+            |sr| Box::new(KernelAdapter::new(StageKernel::new(sr), sr)),
         );
     }
 
