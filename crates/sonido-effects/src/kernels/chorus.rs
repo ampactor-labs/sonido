@@ -513,7 +513,7 @@ impl DspKernel for ChorusKernel {
         self.lfo4.set_frequency(rate * VOICE4_RATE_RATIO);
 
         // Clamp voices to valid range; use integer for the match in process_voices_stereo
-        let voices = (params.voices.round() as u8).clamp(2, 4);
+        let voices = (libm::roundf(params.voices) as u8).clamp(2, 4);
 
         // ── Voice processing with feedback ──
         let (wet_l, wet_r) = self.process_voices_stereo(left, right, depth, feedback, voices);

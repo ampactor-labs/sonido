@@ -1,14 +1,12 @@
 # Sonido
 
-Production-grade DSP framework in Rust for audio effects, plugins, and embedded systems.
+Production-grade DSP framework in Rust — 19 audio effects built on a three-layer kernel architecture that runs identically on desktop plugins, CLI tools, and bare-metal ARM (Cortex-M7). Five `no_std` crates, zero-heap audio paths, `libm` for all math, `from_knobs()` on every effect for direct ADC-to-parameter mapping.
 
 [![CI](https://github.com/ampactor-labs/sonido/actions/workflows/ci.yml/badge.svg)](https://github.com/ampactor-labs/sonido/actions/workflows/ci.yml)
 [![License: AGPL-3.0-or-later](https://img.shields.io/badge/License-AGPL--3.0--or--later-blue.svg)](LICENSE)
 [![Rust Edition](https://img.shields.io/badge/Rust-Edition%202024-orange.svg)](https://doc.rust-lang.org/edition-guide/)
 
-Sonido is a 12-crate Rust workspace implementing 19 audio effects, a synthesis engine, spectral analysis tools, a real-time GUI, and 19 CLAP plugins — all built on a `no_std`-compatible core for embedded deployment on ARM targets like the Electrosmith Daisy Seed.
-
-<!-- TODO: screenshot of GUI -->
+12-crate Rust workspace: 19 effects, synthesis engine, spectral analysis, real-time GUI, 20 CLAP plugins — all from a shared `no_std` DSP core targeting Electrosmith Daisy Seed (STM32H750, 480 MHz Cortex-M7).
 
 ## Quick Start
 
@@ -20,50 +18,208 @@ sonido-core = { git = "https://github.com/ampactor-labs/sonido" }
 sonido-effects = { git = "https://github.com/ampactor-labs/sonido" }
 ```
 
-Process audio through an effect:
+### Embedded / Bare-Metal Path
+
+Direct kernel access — no allocator, no smoothing overhead, no trait objects. The kernel receives typed parameters each sample and returns audio:
 
 ```rust
-use sonido_core::{Effect, ParameterInfo};
+use sonido_effects::kernels::{DistortionKernel, DistortionParams};
+use sonido_core::kernel::DspKernel;
+
+let mut kernel = DistortionKernel::new(48000.0);
+
+// from_knobs() maps 0.0–1.0 ADC readings → parameter ranges
+let params = DistortionParams::from_knobs(
+    adc_drive, adc_tone, adc_output, adc_shape, adc_mix,
+);
+let (out_l, out_r) = kernel.process_stereo(in_l, in_r, &params);
+```
+
+### Desktop / Plugin Path
+
+The registry wraps every kernel in `KernelAdapter`, which adds per-parameter smoothing and bridges to `Effect` + `ParameterInfo`:
+
+```rust
 use sonido_registry::EffectRegistry;
+use sonido_core::EffectWithParams;
 
-// Create an effect via the registry (simplest approach)
 let registry = EffectRegistry::new();
-let mut distortion = registry.create("distortion", 48000.0).unwrap();
+let mut effect = registry.create("distortion", 48000.0).unwrap();
+effect.effect_set_param(0, 15.0);  // drive = 15 dB
 
-// Set parameters by index (0=drive, 1=tone, 2=output, 3=shape, 4=mix)
-distortion.effect_set_param(0, 15.0);  // drive = 15 dB
-distortion.effect_set_param(1, 3.0);   // tone = 3 dB
-
-// Sample-by-sample
-let output = distortion.process(input_sample);
-
-// Block processing
-distortion.process_block(&input_buffer, &mut output_buffer);
+let output = effect.process(input_sample);
 ```
 
 ### Effect Chaining
 
 ```rust
-use sonido_core::Effect;
 use sonido_registry::EffectRegistry;
+use sonido_core::EffectWithParams;
 
-// Dynamic chain via registry (runtime-configurable)
 let registry = EffectRegistry::new();
-let mut chain: Vec<Box<dyn Effect + Send>> = vec![
-    Box::new(registry.create("distortion", 48000.0).unwrap()),
-    Box::new(registry.create("chorus", 48000.0).unwrap()),
-    Box::new(registry.create("delay", 48000.0).unwrap()),
-    Box::new(registry.create("reverb", 48000.0).unwrap()),
+let mut chain: Vec<Box<dyn EffectWithParams + Send>> = vec![
+    registry.create("distortion", 48000.0).unwrap(),
+    registry.create("chorus", 48000.0).unwrap(),
+    registry.create("reverb", 48000.0).unwrap(),
 ];
+```
 
-// Process through the chain
-let mut buf = input.to_vec();
-let mut tmp = vec![0.0; buf.len()];
-for effect in &mut chain {
-    effect.process_block(&buf, &mut tmp);
-    std::mem::swap(&mut buf, &mut tmp);
+## Kernel Architecture
+
+Every effect is implemented as a three-layer stack that separates pure DSP from parameter ownership:
+
+```
+┌─────────────────────────────────────────────────────────┐
+│                   KernelAdapter<K>                       │
+│  Bridges to Effect + ParameterInfo traits                │
+│  Manages per-parameter SmoothedParam instances           │
+│  Desktop / Plugin / GUI consumer                         │
+├─────────────────────────────────────────────────────────┤
+│                     XxxKernel                            │
+│  Pure DSP state: filters, delay lines, ADAA stages       │
+│  process_stereo(&mut self, l, r, &Params) → (l, r)      │
+│  No parameter ownership — receives &Params each sample   │
+│  Embedded / Bare-metal consumer                          │
+├─────────────────────────────────────────────────────────┤
+│                     XxxParams                            │
+│  Typed parameter struct with indexed access               │
+│  from_knobs() for ADC mapping, lerp() for morphing       │
+│  from_normalized() / to_normalized() for CLAP/MIDI       │
+│  Doubles as preset format, morph target, serialization   │
+└─────────────────────────────────────────────────────────┘
+```
+
+**Why this matters for embedded**: The kernel never allocates, never owns parameters, and never smooths. On a Cortex-M7, your DMA audio callback calls `kernel.process_stereo()` with parameters constructed directly from ADC readings. The adapter layer — smoothing, trait dispatch, boxing — only exists on desktop where you can afford it.
+
+### Anti-Aliasing
+
+- **ADAA** (Anti-Derivative Anti-Aliasing): First-order ADAA on all nonlinear kernels (distortion, tape saturation). Reference: Parker et al., "Reducing the Aliasing of Nonlinear Waveshaping Using Continuous-Time Convolution" (DAFx-2016).
+- **Oversampled\<N, E\> wrapper**: 2×/4×/8× oversampling with 48-tap FIR filter (>80 dB stopband rejection). Wraps any `Effect` — the inner effect runs at N× the base sample rate.
+
+### Parameter Smoothing
+
+`KernelAdapter` applies per-parameter smoothing based on `SmoothingStyle` declared by each `KernelParams`:
+
+| Style | Time | Use Case |
+|-------|------|----------|
+| `None` | 0 ms | Stepped/enum params — snap immediately |
+| `Fast` | 5 ms | Drive, nonlinear gain — fast response |
+| `Standard` | 10 ms | Most continuous params (rate, depth, mix) |
+| `Slow` | 20 ms | Filter coefficients, EQ bands |
+| `Interpolated` | 50 ms | Delay time, predelay — glitch-free |
+| `Custom(ms)` | arbitrary | Special cases |
+
+The kernel never sees smoothing. On embedded, ADC readings are already hardware-filtered — smoothing is skipped entirely.
+
+### Preset Morphing
+
+All 19 `KernelParams` implement `lerp()` for real-time preset interpolation:
+
+```rust
+let blended = DistortionParams::lerp(&clean_preset, &heavy_preset, 0.5);
+// Continuous params interpolate linearly; stepped params snap at t=0.5
+```
+
+### Algorithm References
+
+| Algorithm | Reference |
+|-----------|-----------|
+| Biquad filters | Robert Bristow-Johnson, "Audio EQ Cookbook" |
+| Freeverb topology | Jezar's Freeverb (Schroeder-Moorer) |
+| ADAA waveshaping | Parker et al., DAFx-2016 |
+| PolyBLEP anti-aliasing | Välimäki et al., "Antialiasing Oscillators in Subtractive Synthesis" |
+| General effects | Zölzer, "DAFX: Digital Audio Effects" |
+
+## Embedded Deployment
+
+Target hardware: **Electrosmith Daisy Seed** (STM32H750, Cortex-M7 @ 480 MHz, 64 MB SDRAM) and **PedalPCB Hothouse** DIY pedal platform (6 knobs, 3 toggles, stereo I/O).
+
+`no_std` across 5 crates (`sonido-core`, `sonido-effects`, `sonido-synth`, `sonido-registry`, `sonido-platform`). All math via `libm`. All 19 effects provide `from_knobs()` for direct 0.0–1.0 ADC-to-parameter mapping.
+
+### DMA Audio Callback Example
+
+```rust
+use sonido_effects::kernels::{DistortionKernel, DistortionParams};
+use sonido_core::kernel::DspKernel;
+
+static mut KERNEL: Option<DistortionKernel> = None;
+
+fn audio_callback(left_in: &[f32], right_in: &[f32],
+                  left_out: &mut [f32], right_out: &mut [f32]) {
+    let kernel = unsafe { KERNEL.as_mut().unwrap() };
+
+    // Read ADC knobs once per block
+    let params = DistortionParams::from_knobs(
+        read_adc(0), read_adc(1), read_adc(2), read_adc(3), read_adc(4),
+    );
+
+    // Block processing — no allocation, no trait dispatch
+    kernel.process_block_stereo(left_in, right_in, left_out, right_out, &params);
 }
 ```
+
+The `PlatformController` trait and `ControlMapper` in `sonido-platform` provide a structured abstraction for mapping hardware controls (knobs, toggles, expression pedals) to kernel parameters. See [docs/DAISY_SEED.md](docs/DAISY_SEED.md) and [docs/HARDWARE.md](docs/HARDWARE.md) for hardware integration details.
+
+## Effects (19)
+
+| Effect | Category | True Stereo | Key Parameters |
+|--------|----------|:-----------:|----------------|
+| Preamp | Utility | x | gain, tone |
+| Distortion | Distortion | | drive, tone, mode (Soft Clip / Hard Clip / Foldback / Asymmetric) |
+| Tape Saturation | Distortion | | drive, warmth, wow, flutter, head bump |
+| Bitcrusher | Distortion | x | bit depth, sample rate reduction |
+| Compressor | Dynamics | | threshold, ratio, attack, release, knee, mix |
+| Limiter | Dynamics | x | threshold, release |
+| Gate | Dynamics | | threshold, attack, release, hold |
+| Chorus | Modulation | x | rate, depth, mix, voices |
+| Flanger | Modulation | x | rate, depth, feedback, mix |
+| Phaser | Modulation | x | rate, depth, stages, feedback |
+| Tremolo | Modulation | x | rate, depth, waveform, stereo spread |
+| Vibrato | Modulation | | depth, mix, output |
+| Ring Modulator | Modulation | x | frequency, mix |
+| Wah | Filter | | frequency, resonance, mode (Auto / Manual) |
+| Filter | Filter | | cutoff, resonance (resonant biquad lowpass) |
+| Parametric EQ | Filter | | 3-band frequency, gain, Q |
+| Delay | Time-Based | x | time, feedback, mix, ping-pong, diffusion |
+| Reverb | Time-Based | x | room size, damping, width, mix |
+| Stage | Utility | x | phase invert, DC block, bass mono, width, Haas delay, output |
+
+**Categories**: Distortion (3), Dynamics (3), Modulation (6), Filter (3), Time-Based (2), Utility (2).
+
+## Processing Graph
+
+DAG-based audio routing via `ProcessingGraph` and `GraphEngine`:
+
+```rust
+use sonido_core::graph::ProcessingGraph;
+
+// Linear chain
+let mut graph = ProcessingGraph::linear(effects, 48000.0, 256)?;
+graph.process_block(&left_in, &right_in, &mut left_out, &mut right_out);
+
+// Arbitrary DAG: parallel paths with split/merge
+let mut graph = ProcessingGraph::new(48000.0, 256);
+let input = graph.add_input();
+let split = graph.add_split();
+let a = graph.add_effect(distortion);
+let b = graph.add_effect(reverb);
+let merge = graph.add_merge();
+let output = graph.add_output();
+
+graph.connect(input, split)?;
+graph.connect(split, a)?;
+graph.connect(split, b)?;
+graph.connect(a, merge)?;
+graph.connect(b, merge)?;
+graph.connect(merge, output)?;
+graph.compile()?;  // Kahn sort → liveness analysis → latency compensation
+```
+
+- **Buffer liveness analysis**: Minimizes memory — a 20-node chain uses only 2 buffers
+- **Latency compensation**: Auto-inserts delay lines on shorter parallel paths
+- **Atomic schedule swap**: Compiled schedules swap via `Arc` with ~5ms crossfade (click-free)
+- **Graph DSL**: `"preamp:gain=6 | distortion:drive=15 | reverb:mix=0.3"`
+- **Parallel split**: `"split(distortion:drive=20; -) | limiter"` (dry path via `-`)
 
 ## Architecture
 
@@ -106,7 +262,7 @@ graph TD
 | `sonido-synth` | PolyBLEP oscillators, ADSR envelopes, voice management, modulation matrix | Yes |
 | `sonido-registry` | Effect factory and discovery by name/category | Yes |
 | `sonido-platform` | Hardware abstraction: PlatformController, ControlMapper | Yes |
-| `sonido-analysis` | FFT, spectral analysis, PAC/CFC, adaptive filters, resampling | No |
+| `sonido-analysis` | FFT, spectral analysis, adaptive filters, resampling | No |
 | `sonido-config` | Preset and chain configuration management | Partial |
 | `sonido-io` | WAV I/O, real-time audio streaming via cpal | No |
 | `sonido-gui-core` | Shared GUI widgets, theme, ParamBridge trait | No |
@@ -114,31 +270,37 @@ graph TD
 | `sonido-cli` | Command-line processor and analyzer | No |
 | `sonido-plugin` | CLAP plugin adapter with embedded GUI | No |
 
-## Effects (19)
+## CLAP Plugins
 
-| Effect | Category | True Stereo | Key Parameters |
-|--------|----------|:-----------:|----------------|
-| Preamp | Dynamics | | gain, tone |
-| Compressor | Dynamics | | threshold, ratio, attack, release, knee, mix |
-| Limiter | Dynamics | | threshold, release |
-| Gate | Dynamics | | threshold, attack, release, hold |
-| Distortion | Drive | | drive, tone, mode (soft/hard/fuzz/tube) |
-| Tape Saturation | Drive | | drive, warmth, wow, flutter, head bump |
-| Bitcrusher | Drive | | bit depth, sample rate reduction |
-| Chorus | Modulation | x | rate, depth, mix, voices |
-| Flanger | Modulation | x | rate, depth, feedback, mix |
-| Phaser | Modulation | x | rate, depth, stages, feedback |
-| Tremolo | Modulation | | rate, depth, waveform |
-| Vibrato | Modulation | | rate, depth, voices |
-| Ring Modulator | Modulation | | frequency, mix |
-| Wah | Filter | | frequency, resonance, mode (manual/auto/envelope) |
-| Filter | Filter | | cutoff, resonance, type (LP/HP/BP/notch) |
-| Parametric EQ | Filter | | 3-band frequency, gain, Q |
-| Delay | Time-Based | x | time, feedback, mix, ping-pong, diffusion |
-| Reverb | Time-Based | x | room size, damping, width, mix |
-| Stage | Utility | | phase invert, DC block, bass mono, output |
+Sonido builds 20 CLAP audio plugins — one per effect plus a multi-effect chain plugin — each with an embedded egui GUI. Compatible with Bitwig, Reaper, Ardour, and any CLAP-compatible DAW.
+
+```bash
+# Build and install all plugins
+make plugins
+```
+
+Plugins: `sonido-preamp`, `sonido-distortion`, `sonido-compressor`, `sonido-gate`, `sonido-eq`, `sonido-wah`, `sonido-chorus`, `sonido-flanger`, `sonido-phaser`, `sonido-tremolo`, `sonido-delay`, `sonido-filter`, `sonido-vibrato`, `sonido-tape`, `sonido-reverb`, `sonido-limiter`, `sonido-bitcrusher`, `sonido-ringmod`, `sonido-stage`, `sonido-chain`
+
+`sonido-chain` is a 16-slot dynamic multi-effect: add, remove, and reorder effects without restarting the host. 512 pre-allocated CLAP parameters cover all slot combinations.
+
+## Synthesis Engine
+
+PolyBLEP-antialiased oscillators (sine, saw, square, triangle), ADSR envelopes with configurable curves, polyphonic voice management with voice stealing, and a modulation matrix for flexible source→destination routing.
+
+```rust
+use sonido_synth::{PolyphonicSynth, OscillatorWaveform};
+
+let mut synth: PolyphonicSynth<8> = PolyphonicSynth::new(48000.0);
+synth.set_osc1_waveform(OscillatorWaveform::Saw);
+synth.note_on(60, 100);  // MIDI note C4, velocity 100
+let sample = synth.process();
+```
+
+See [docs/SYNTHESIS.md](docs/SYNTHESIS.md) for the full synthesis guide.
 
 ## CLI
+
+10 commands for processing, analysis, and real-time audio:
 
 ```bash
 # Install
@@ -148,6 +310,9 @@ cargo install --path crates/sonido-cli
 sonido process input.wav --effect distortion --param drive=15
 sonido process input.wav --chain "preamp:gain=6|distortion:drive=12|delay:time=300"
 sonido process input.wav --preset presets/guitar_crunch.toml
+
+# Parallel split routing via graph DSL
+sonido process input.wav --chain "split(distortion:drive=20; -) | limiter"
 
 # Real-time processing (live mic input)
 sonido realtime --effect chorus --param rate=2 --param depth=0.6
@@ -167,52 +332,13 @@ sonido effects
 sonido devices
 ```
 
-## CLAP Plugins
-
-Sonido builds 19 CLAP audio plugins (one per effect), each with an embedded egui GUI. Compatible with Bitwig, Reaper, Ardour, and any CLAP-compatible DAW.
-
-```bash
-# Build and install all 19 plugins
-make plugins
-
-# Or manually
-cargo build --release -p sonido-plugin --examples
-mkdir -p ~/.clap
-cp target/release/examples/libsonido_*.so ~/.clap/
-```
-
-Plugins: `sonido-preamp`, `sonido-distortion`, `sonido-compressor`, `sonido-gate`, `sonido-eq`, `sonido-wah`, `sonido-chorus`, `sonido-flanger`, `sonido-phaser`, `sonido-tremolo`, `sonido-delay`, `sonido-filter`, `sonido-vibrato`, `sonido-tape`, `sonido-reverb`, `sonido-limiter`, `sonido-bitcrusher`, `sonido-ringmod`, `sonido-stage`
-
-## Synthesis Engine
-
-PolyBLEP-antialiased oscillators (sine, saw, square, triangle), ADSR envelopes with configurable curves, polyphonic voice management with voice stealing, and a modulation matrix for flexible source→destination routing.
-
-```rust
-use sonido_synth::{PolyphonicSynth, Waveform};
-
-let mut synth = PolyphonicSynth::new(48000.0, 8); // 8 voices
-synth.set_waveform(Waveform::Sawtooth);
-synth.note_on(60, 0.8); // MIDI note 60, velocity 0.8
-synth.process_block(&mut output_buffer);
-```
-
-See [docs/SYNTHESIS.md](docs/SYNTHESIS.md) for the full synthesis guide.
-
-## Analysis Toolkit
-
-FFT-based spectral analysis, transfer function measurement, impulse response extraction, phase-amplitude coupling (PAC) with comodulograms and surrogate statistics, adaptive filters (LMS/NLMS), cross-correlation, digital down-conversion, phase unwrapping, and polyphase resampling.
-
-See [docs/BIOSIGNAL_ANALYSIS.md](docs/BIOSIGNAL_ANALYSIS.md) and [docs/CFC_ANALYSIS.md](docs/CFC_ANALYSIS.md).
-
 ## GUI
 
 ```bash
 cargo run -p sonido-gui --release
 ```
 
-The GUI provides drag-and-drop effect chain building, real-time input/output metering, per-effect knob controls with parameter-scale-aware mapping, preset save/load, and a dark theme optimized for studio use.
-
-<!-- TODO: GUI screenshot -->
+The GUI provides drag-and-drop effect chain building, real-time input/output metering, per-effect knob controls with parameter-scale-aware mapping, preset save/load, and a dark theme optimized for studio use. Also builds to `wasm32-unknown-unknown` via Trunk for browser-based demos.
 
 ## Performance
 
@@ -231,16 +357,17 @@ Even on a 2015 mobile CPU (Intel Core i5-6300U @ 2.40 GHz), every effect runs we
 | Vibrato | 73.4 | 287 | 1.38% |
 | 5-effect chain | 42.8 | 167 | 0.80% |
 
-CPU % = `ns_per_sample / (1e9 / 48000) × 100`. Run benchmarks via CI: `gh workflow run ci-manual.yml -f job=bench`
+CPU % = `ns_per_sample / (1e9 / 48000) × 100`. Measured on x86_64. Embedded ARM benchmarks pending (see [docs/DAISY_SEED.md](docs/DAISY_SEED.md) for memory budgets). Run benchmarks via CI: `gh workflow run ci-manual.yml -f job=bench`
 
 ## Testing
 
-1,300+ tests across the workspace:
+1,369 tests across the workspace:
 
 - **Golden file regression**: Effect output compared against reference WAV files (MSE < 1e-6, SNR > 60 dB, spectral correlation > 0.9999)
 - **Property-based testing**: Proptest verifies bounded output and reset behavior for all 19 effects
 - **no_std verification**: 5 core crates tested without default features
 - **Doc tests**: All rustdoc examples compile and run
+- **Algorithm citations**: Every DSP implementation traces to a published reference (Bristow-Johnson Audio EQ Cookbook, Parker et al. DAFx-2016, Jezar Freeverb, Välimäki PolyBLEP, Zölzer DAFX)
 - **CI**: 4 always-on jobs (lint, test, no_std, wasm) + 3 manual-dispatch (benchmarks, coverage, plugin validation)
 
 ```bash
@@ -259,6 +386,17 @@ Demo files are generated locally, not checked into the repo:
 
 This produces source tones (sine, sawtooth chord, percussive hit, sweep) and processed versions through each effect and a full 5-effect chain.
 
+## Commercial DSP Reference
+
+Effect algorithms are informed by clean-room analysis of commercial DSP hardware.
+
+| Target Product | DSP Domain | Sonido Implementation |
+|----------------|------------|----------------------|
+| DigiTech Ventura / Modela | Modulation (chorus, vibrato, tremolo) | `Chorus`, `Vibrato`, `Tremolo`, LFO engine |
+| DigiTech Obscura | Delay (analog, tape, lo-fi modes) | `Delay` with feedback coloring, `Tape` |
+| DigiTech Dirty Robot | Envelope-following filter / synth | `Wah` (auto-wah mode), `Filter`, synth engine |
+| DigiTech Polara / Supernatural | Reverb (room, hall, plate, spring) | `Reverb` (Freeverb topology with stereo decorrelation) |
+
 ## Documentation
 
 ### Design & Theory
@@ -273,10 +411,6 @@ This produces source tones (sine, sawtooth chord, percussive hit, sweep) and pro
 - [Effects Reference](docs/EFFECTS_REFERENCE.md)
 - [Synthesis Guide](docs/SYNTHESIS.md)
 - [GUI Documentation](docs/GUI.md)
-
-### Specialized Topics
-- [CFC/PAC Analysis Guide](docs/CFC_ANALYSIS.md)
-- [Biosignal Analysis](docs/BIOSIGNAL_ANALYSIS.md)
 - [Hardware Targets](docs/HARDWARE.md)
 - [Daisy Seed Integration](docs/DAISY_SEED.md)
 
@@ -285,19 +419,6 @@ This produces source tones (sine, sawtooth chord, percussive hit, sweep) and pro
 - [Testing](docs/TESTING.md)
 - [Benchmarks](docs/BENCHMARKS.md)
 - [Changelog](docs/CHANGELOG.md)
-
-## Commercial DSP Reference Analysis
-
-Sonido's effect algorithms are informed by analysis of commercial DSP products. These are clean-room implementations — no proprietary code or firmware was used. The goal is to demonstrate deep understanding of production DSP architectures.
-
-| Target Product | DSP Domain | Sonido Implementation |
-|----------------|------------|----------------------|
-| DigiTech Ventura / Modela | Modulation (chorus, vibrato, rotary) | `Chorus`, `Vibrato`, LFO engine |
-| DigiTech Obscura | Delay (analog, tape, lo-fi modes) | `Delay` with feedback coloring, `Tape` |
-| DigiTech Dirty Robot | Envelope-following filter / synth | `Wah` (auto-wah mode), `Filter`, synth engine |
-| DigiTech Polara / Supernatural | Reverb (room, hall, plate, spring) | `Reverb` (Freeverb topology with stereo decorrelation) |
-
-See `sonido compare` CLI command for A/B measurement between hardware captures and Sonido output.
 
 ## License
 

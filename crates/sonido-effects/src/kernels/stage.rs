@@ -265,7 +265,7 @@ impl StageParams {
             balance_pct: balance.clamp(0.0, 1.0) * 200.0 - 100.0, // −100 to +100 %
             phase_l: if phase_l >= 0.5 { 1.0 } else { 0.0 },
             phase_r: if phase_r >= 0.5 { 1.0 } else { 0.0 },
-            channel: (channel.clamp(0.0, 1.0) * 3.0).round().clamp(0.0, 3.0),
+            channel: libm::roundf(channel.clamp(0.0, 1.0) * 3.0).clamp(0.0, 3.0),
             dc_block: if dc_block >= 0.5 { 1.0 } else { 0.0 },
             bass_mono: if bass_mono >= 0.5 { 1.0 } else { 0.0 },
             bass_freq_hz: bass_freq_hz.clamp(20.0, 500.0),

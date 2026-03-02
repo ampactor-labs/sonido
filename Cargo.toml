@@ -33,7 +33,7 @@ version = "0.1.0"
 edition = "2024"
 license = "AGPL-3.0-or-later"
 authors = ["Suds"]
-repository = "https://github.com/suds/sonido"
+repository = "https://github.com/ampactor-labs/sonido"
 
 [workspace.dependencies]
 # Core math for no_std
