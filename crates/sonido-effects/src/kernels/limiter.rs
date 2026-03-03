@@ -1,16 +1,9 @@
-//! Limiter kernel — pure DSP with separated parameter ownership.
+//! Limiter kernel — lookahead brickwall limiter with auto-release.
 //!
-//! Implements the Limiter effect using the kernel architecture.
-//! The DSP math is identical; the difference is structural:
-//!
-//! - **Classic `Limiter`**: owns `SmoothedParam` for threshold/output,
-//!   manages smoothing internally, implements `Effect` + `ParameterInfo` directly.
-//!
-//! - **`LimiterKernel`**: owns ONLY DSP state (circular delay buffers, gain
-//!   reduction envelope, cached coefficients). Parameters are received via
-//!   `&LimiterParams` on each processing call. Deployed via
-//!   [`KernelAdapter`](sonido_core::KernelAdapter) for desktop/plugin, or called
-//!   directly on embedded targets.
+//! `LimiterKernel` owns DSP state (circular delay buffers, gain reduction
+//! envelope, cached coefficients). Parameters are received via `&LimiterParams`
+//! each sample. Deployed via [`KernelAdapter`](sonido_core::KernelAdapter) for
+//! desktop/plugin, or called directly on embedded targets.
 //!
 //! # Algorithm
 //!
@@ -72,18 +65,7 @@ use alloc::vec::Vec;
 
 use libm::{expf, fabsf};
 use sonido_core::kernel::{DspKernel, KernelParams, SmoothingStyle};
-use sonido_core::{ParamDescriptor, ParamId, math::db_to_linear};
-
-// ── Unit conversion (inlined, no_std safe) ──
-
-/// Fast dB-to-linear conversion for per-sample use.
-///
-/// Uses `sonido_core::fast_db_to_linear` which is a polynomial approximation
-/// (~0.1 dB accuracy, ~4× faster than `10^(db/20)`).
-#[inline]
-fn db_to_gain(db: f32) -> f32 {
-    sonido_core::fast_db_to_linear(db)
-}
+use sonido_core::{ParamDescriptor, ParamId, fast_db_to_linear, math::db_to_linear};
 
 /// Maximum lookahead in milliseconds — sizes the fixed delay buffers at construction.
 ///
@@ -478,7 +460,7 @@ impl DspKernel for LimiterKernel {
         self.write_pos = (self.write_pos + 1) % len;
 
         // ── Apply smoothed gain and output level ──
-        let output_gain = db_to_gain(params.output_db);
+        let output_gain = fast_db_to_linear(params.output_db);
         let g = self.gain_reduction * output_gain;
         (delayed_l * g, delayed_r * g)
     }

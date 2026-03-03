@@ -4,7 +4,7 @@ This guide walks you through creating your first audio effect with Sonido.
 
 ## Prerequisites
 
-- Rust 1.75 or later
+- Rust 1.85 or later (Edition 2024)
 - For real-time audio: platform audio drivers (ALSA on Linux, CoreAudio on macOS, WASAPI on Windows)
 
 ## Installation
@@ -24,16 +24,12 @@ sonido-effects = "0.1"   # Effect implementations
 Build and install the CLI:
 
 ```bash
-git clone https://github.com/suds/sonido
+git clone https://github.com/ampactor-labs/sonido
 cd sonido
 cargo install --path crates/sonido-cli
 ```
 
-For development (debug build, symlinked to `~/.local/bin`):
-
-```bash
-make dev-install
-```
+For development, use `cargo run -p sonido-cli -- <args>` to build and run from source directly.
 
 ## Quick Start Options
 
@@ -69,7 +65,7 @@ make verify
 
 ### Generate Demos
 
-Generate all demo WAV files (5 source signals + 18 effect demos):
+Generate all demo WAV files (5 source signals + 22 effect demos):
 
 ```bash
 ./scripts/generate_demos.sh
@@ -144,8 +140,8 @@ fn main() {
 
     let mut delay = registry.create("delay", sample_rate).unwrap();
     delay.effect_set_param(0, 300.0);  // time = 300 ms
-    delay.effect_set_param(1, 0.4);    // feedback = 0.4
-    delay.effect_set_param(4, 30.0);   // mix = 30%
+    delay.effect_set_param(1, 40.0);   // feedback = 40%
+    delay.effect_set_param(2, 30.0);   // mix = 30%
 
     // Process through the chain
     let input = vec![0.5f32; 1024];
@@ -163,10 +159,11 @@ fn main() {
 
 ## Dynamic Effect Chains
 
-For runtime-configurable chains, use the registry with `Box<dyn Effect>`:
+For runtime-configurable chains, use the registry with `Box<dyn EffectWithParams + Send>`:
 
 ```rust
 use sonido_core::Effect;
+use sonido_core::EffectWithParams;
 use sonido_registry::EffectRegistry;
 
 fn main() {
@@ -174,10 +171,10 @@ fn main() {
     let registry = EffectRegistry::new();
 
     // Build a dynamic chain via registry
-    let mut chain: Vec<Box<dyn Effect + Send>> = vec![
-        Box::new(registry.create("distortion", sample_rate).unwrap()),
-        Box::new(registry.create("chorus", sample_rate).unwrap()),
-        Box::new(registry.create("delay", sample_rate).unwrap()),
+    let mut chain: Vec<Box<dyn EffectWithParams + Send>> = vec![
+        registry.create("distortion", sample_rate).unwrap(),
+        registry.create("chorus", sample_rate).unwrap(),
+        registry.create("delay", sample_rate).unwrap(),
     ];
 
     // Process through the chain
@@ -511,7 +508,7 @@ Key per-target differences:
 
 ### CI Deployment
 
-CI automatically deploys the wasm build to GitHub Pages on successful main-branch builds. The workflow is in `.github/workflows/pages.yml`.
+The wasm build can be deployed to GitHub Pages via manual workflow dispatch. The workflow is in `.github/workflows/pages.yml` (triggered with `gh workflow run pages.yml`).
 
 ---
 

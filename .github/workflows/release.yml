@@ -81,7 +81,7 @@ jobs:
           cp -r dist-presets ${{ matrix.artifact }}/presets
           cp README.md ${{ matrix.artifact }}/
           cp LICENSE* ${{ matrix.artifact }}/ 2>/dev/null || true
-          cp CHANGELOG.md ${{ matrix.artifact }}/ 2>/dev/null || true
+          cp docs/CHANGELOG.md ${{ matrix.artifact }}/ 2>/dev/null || true
 
       - name: Create release directory (Windows)
         if: runner.os == 'Windows'
@@ -93,7 +93,7 @@ jobs:
           Copy-Item -Recurse dist-presets ${{ matrix.artifact }}/presets
           Copy-Item README.md ${{ matrix.artifact }}/
           if (Test-Path LICENSE*) { Copy-Item LICENSE* ${{ matrix.artifact }}/ }
-          if (Test-Path CHANGELOG.md) { Copy-Item CHANGELOG.md ${{ matrix.artifact }}/ }
+          if (Test-Path docs/CHANGELOG.md) { Copy-Item docs/CHANGELOG.md ${{ matrix.artifact }}/ }
 
       - name: Create archive (Unix)
         if: runner.os != 'Windows'

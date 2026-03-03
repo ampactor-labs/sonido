@@ -1,8 +1,10 @@
 # Sonido Kernel Architecture — Implementation Specification
 
-**Purpose:** This document is the single source of truth for completing the kernel architecture migration. Hand this to Claude Code (or any implementation agent) alongside the codebase. Everything needed to execute is here.
+> **Migration is complete as of v0.2** -- all 19 classic `Effect` implementations have been removed. All effects now use the `DspKernel` + `KernelAdapter` architecture. This document is retained as a reference for the kernel architecture design and patterns. For adding new effects, see [KERNEL_MIGRATION.md](KERNEL_MIGRATION.md).
 
-**Status:** Foundation laid. Distortion proof-of-concept complete. 18 effects to convert. Classic effects will be replaced, not kept alongside — nothing is in production.
+**Purpose:** This document describes the kernel architecture design — the three-layer separation of DSP math, parameter ownership, and runtime bridging.
+
+**Status:** Complete. All 19 effects migrated. Classic effect structs deleted. Registry returns `KernelAdapter<XxxKernel>` for all consumers.
 
 ---
 

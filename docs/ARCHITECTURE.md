@@ -5,7 +5,7 @@
 Sonido is a production-grade DSP library designed for multi-target deployment:
 - **Desktop**: CLI and GUI applications
 - **Embedded**: Electrosmith Daisy / Hothouse hardware
-- **Plugins**: CLAP via clack (future), VST3/AU via clap-wrapper
+- **Plugins**: CLAP via clack (20 plugins: 19 single-effect + 1 chain), VST3/AU via clap-wrapper
 
 The library is built with stereo-first processing and no_std compatibility at its core.
 
@@ -16,7 +16,7 @@ The library is built with stereo-first processing and no_std compatibility at it
 │                           Applications                                     │
 │  ┌─────────────┐  ┌─────────────┐  ┌───────────┐  ┌──────────────┐        │
 │  │ sonido-cli  │  │ sonido-gui  │  │sonido-    │  │sonido-hothouse│        │
-│  │  (binary)   │  │  (egui)     │  │ plugin    │  │  (embedded)   │        │
+│  │  (binary)   │  │  (egui)     │  │ plugin    │  │  (planned)    │        │
 │  │             │  │             │  │(CLAP/egui)│  │               │        │
 │  └──────┬──────┘  └──────┬──────┘  └─────┬─────┘  └──────┬───────┘        │
 └─────────┼────────────────┼───────────────┼───────────────┼────────────────┘
@@ -112,8 +112,8 @@ Audio effect implementations built on sonido-core. All `no_std` compatible with 
 - `Eq`: 3-band parametric EQ with Q control
 - `Tremolo`: Amplitude modulation with multiple waveforms
 - `Tape`: J37-style tape warmth with HF rolloff
-- `CleanPreamp`: Simple gain stage with input/output control
-- `LowPassFilter`: Resonant 2-pole lowpass (SVF-based)
+- `Preamp`: Simple gain stage with input/output control
+- `Filter`: Resonant 2-pole lowpass (SVF-based)
 - `Vibrato`: 6-unit tape wow/flutter simulation
 - `Bitcrusher`: Sample rate and bit depth reduction
 - `RingMod`: Ring modulation with variable frequency
@@ -181,9 +181,9 @@ Audio I/O layer with pluggable backend abstraction, WAV file I/O, and full stere
 **Components:**
 - `read_wav` / `write_wav`: Mono WAV file I/O
 - `read_wav_stereo` / `write_wav_stereo`: Stereo WAV file I/O
-- `StereoSamples`: Helper struct for stereo audio with conversions
 - `AudioStream`: Real-time audio streaming (mono and stereo) — legacy cpal integration
-- `GraphEngine`: DAG-based audio processor with chain management, block/file stereo processing
+
+Note: `StereoSamples` and `GraphEngine` live in `sonido-core` (in `src/graph/`). `sonido-io` re-exports `GraphEngine` for backwards compatibility.
 
 **Stereo I/O:**
 ```rust
@@ -521,7 +521,8 @@ pub trait Effect {
     fn process_stereo(&mut self, left: f32, right: f32) -> (f32, f32);
 
     /// Process stereo block (default: calls process_stereo per sample)
-    fn process_block_stereo(&mut self, input: &[(f32, f32)], output: &mut [(f32, f32)]);
+    fn process_block_stereo(&mut self, left_in: &[f32], right_in: &[f32],
+                            left_out: &mut [f32], right_out: &mut [f32]);
 
     // === MONO (for convenience) ===
 
@@ -560,7 +561,7 @@ Effects fall into two categories:
 
 **Dual-Mono** (`is_true_stereo() -> false`):
 - `Distortion`, `Compressor`, `Gate`, `Wah`, `Eq`
-- `Tremolo`, `Tape`, `CleanPreamp`, `LowPassFilter`, `Vibrato`
+- `Tremolo`, `Tape`, `Preamp`, `Filter`, `Vibrato`
 
 Dual-mono effects process each channel independently with the same algorithm.
 
@@ -695,8 +696,8 @@ cargo test
 cargo test --no-default-features -p sonido-core
 cargo test --no-default-features -p sonido-effects
 
-# Embedded (future)
-cargo build -p sonido-hothouse --target thumbv7em-none-eabihf --release
+# Embedded (planned — sonido-hothouse crate not yet implemented)
+# cargo build -p sonido-hothouse --target thumbv7em-none-eabihf --release
 ```
 
 ## Parameter Threading Model

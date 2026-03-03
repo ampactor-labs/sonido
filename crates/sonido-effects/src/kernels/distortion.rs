@@ -1,15 +1,9 @@
-//! Distortion kernel — pure DSP with separated parameter ownership.
+//! Distortion kernel — ADAA waveshaping with tone shaping and drive control.
 //!
-//! Implements the Distortion effect using the kernel architecture.
-//! The DSP math is identical; the difference is structural:
-//!
-//! - **Classic `Distortion`**: owns `SmoothedParam` for drive/tone/output/mix,
-//!   manages smoothing internally, implements `Effect` + `ParameterInfo` directly.
-//!
-//! - **`DistortionKernel`**: owns ONLY DSP state (filters, ADAA processors).
-//!   Parameters are received via `&DistortionParams` on each processing call.
-//!   Deployed via [`KernelAdapter`](sonido_core::KernelAdapter) for desktop/plugin,
-//!   or called directly on embedded targets.
+//! `DistortionKernel` owns DSP state (filters, ADAA processors). Parameters
+//! are received via `&DistortionParams` each sample. Deployed via
+//! [`KernelAdapter`](sonido_core::KernelAdapter) for desktop/plugin, or called
+//! directly on embedded targets.
 //!
 //! # Signal Flow
 //!
@@ -17,7 +11,7 @@
 //! Input → Drive (gain) → ADAA Waveshaper → Tone EQ → Mix → Soft Limit → Output Level
 //! ```
 //!
-//! Identical to the classic `Distortion` — same ADAA algorithms, same signal path.
+//! ADAA waveshaping minimizes aliasing from the nonlinear clipping stages.
 //!
 //! # Deployment
 //!
@@ -36,20 +30,9 @@ use sonido_core::kernel::{DspKernel, KernelParams, SmoothingStyle};
 use sonido_core::math::soft_limit;
 use sonido_core::{
     Adaa1, Biquad, ParamDescriptor, ParamFlags, ParamId, ParamUnit, asymmetric_clip,
-    asymmetric_clip_ad, foldback, hard_clip, hard_clip_ad, peaking_eq_coefficients, soft_clip,
-    soft_clip_ad, wet_dry_mix_stereo,
+    asymmetric_clip_ad, fast_db_to_linear, foldback, hard_clip, hard_clip_ad,
+    peaking_eq_coefficients, soft_clip, soft_clip_ad, wet_dry_mix_stereo,
 };
-
-// ── Unit conversion (inlined, no_std safe) ──
-
-/// Fast dB-to-linear conversion for per-sample use.
-///
-/// Uses `sonido_core::fast_db_to_linear` which is a polynomial approximation
-/// (~0.1 dB accuracy, ~4x faster than `10^(db/20)`).
-#[inline]
-fn db_to_gain(db: f32) -> f32 {
-    sonido_core::fast_db_to_linear(db)
-}
 
 // ── ADAA function-pointer aliases ──
 
@@ -283,8 +266,8 @@ impl DspKernel for DistortionKernel {
         }
 
         // ── Unit conversion (user-facing → internal) ──
-        let drive = db_to_gain(params.drive_db);
-        let output = db_to_gain(params.output_db);
+        let drive = fast_db_to_linear(params.drive_db);
+        let output = fast_db_to_linear(params.output_db);
         let mix = params.mix_pct / 100.0;
         let shape = params.shape as u8;
 

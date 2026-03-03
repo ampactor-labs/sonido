@@ -1,15 +1,9 @@
-//! Wah kernel — pure DSP with separated parameter ownership.
+//! Wah kernel — auto-wah with SVF bandpass, envelope follower, and resonance control.
 //!
-//! Implements the Wah effect using the kernel architecture.
-//! The DSP math is identical; the difference is structural:
-//!
-//! - **Classic `Wah`**: owns `SmoothedParam` for frequency/resonance/sensitivity/output,
-//!   manages smoothing internally, implements `Effect` + `ParameterInfo` directly.
-//!
-//! - **`WahKernel`**: owns ONLY DSP state (SVF filters, envelope follower, sample_rate).
-//!   Parameters are received via `&WahParams` on each processing call.
-//!   Deployed via [`KernelAdapter`](sonido_core::KernelAdapter) for desktop/plugin,
-//!   or called directly on embedded targets.
+//! `WahKernel` owns DSP state (SVF filters, envelope follower, sample rate).
+//! Parameters are received via `&WahParams` each sample. Deployed via
+//! [`KernelAdapter`](sonido_core::KernelAdapter) for desktop/plugin, or called
+//! directly on embedded targets.
 //!
 //! # Signal Flow
 //!

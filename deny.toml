@@ -1,3 +1,7 @@
+# cargo-deny configuration for sonido.
+# The project itself is AGPL-3.0-or-later, but that isn't listed in [licenses.allow]
+# because the allow list covers *dependency* licenses, not the project's own license.
+
 [advisories]
 vulnerability = "deny"
 unmaintained = "warn"

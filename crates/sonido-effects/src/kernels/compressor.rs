@@ -1,16 +1,10 @@
-//! Compressor kernel — pure DSP with separated parameter ownership.
+//! Compressor kernel — dynamics processing with soft-knee, sidechain HPF, and lookahead.
 //!
-//! Implements the Compressor effect using the kernel architecture.
-//! The DSP math is identical; the difference is structural:
-//!
-//! - **Classic `Compressor`**: owns `SmoothedParam` for makeup/output, manages
-//!   smoothing internally, implements `Effect` + `ParameterInfo` via `impl_params!`.
-//!
-//! - **`CompressorKernel`**: owns ONLY DSP state (envelope followers, sidechain HPF,
-//!   coefficient caches, gain reduction memory). Parameters are received via
-//!   `&CompressorParams` on each processing call. Deployed via
-//!   [`KernelAdapter`](sonido_core::KernelAdapter) for desktop/plugin, or called
-//!   directly on embedded targets.
+//! `CompressorKernel` owns DSP state (envelope followers, sidechain HPF,
+//! coefficient caches, gain reduction memory). Parameters are received via
+//! `&CompressorParams` each sample. Deployed via
+//! [`KernelAdapter`](sonido_core::KernelAdapter) for desktop/plugin, or called
+//! directly on embedded targets.
 //!
 //! # Signal Flow
 //!

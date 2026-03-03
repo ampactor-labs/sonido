@@ -14,6 +14,9 @@ members = [
     "crates/sonido-synth",
     "crates/sonido-plugin",
 ]
+# sonido-plugin is excluded: it depends on clack (C FFI), which requires
+# unsafe_code — incompatible with the workspace-wide unsafe_code = "deny" lint.
+# Build it explicitly: cargo build -p sonido-plugin
 default-members = [
     "crates/sonido-core",
     "crates/sonido-effects",

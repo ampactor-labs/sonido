@@ -1,15 +1,9 @@
-//! Low-pass filter kernel — pure DSP with separated parameter ownership.
+//! Low-pass filter kernel — biquad LPF with cutoff, resonance, and soft limiting.
 //!
-//! Implements the LowPassFilter effect using the kernel architecture.
-//! The DSP math is identical; the difference is structural:
-//!
-//! - **Classic `LowPassFilter`**: owns `SmoothedParam` for cutoff/resonance/output,
-//!   manages smoothing internally, implements `Effect` + `ParameterInfo` directly.
-//!
-//! - **`FilterKernel`**: owns ONLY DSP state (Biquad filters, sample_rate, cached
-//!   coefficients). Parameters are received via `&FilterParams` on each processing
-//!   call. Deployed via [`KernelAdapter`](sonido_core::KernelAdapter) for
-//!   desktop/plugin, or called directly on embedded targets.
+//! `FilterKernel` owns DSP state (biquad filters, sample rate, cached
+//! coefficients). Parameters are received via `&FilterParams` each sample.
+//! Deployed via [`KernelAdapter`](sonido_core::KernelAdapter) for
+//! desktop/plugin, or called directly on embedded targets.
 //!
 //! # Signal Flow
 //!
@@ -17,9 +11,8 @@
 //! Input → Biquad LPF → Soft Limit → Output Level
 //! ```
 //!
-//! Identical to the classic `LowPassFilter` — same biquad algorithm, same
-//! signal path. Coefficients are recomputed only when cutoff or resonance
-//! changes (tracked via cached values).
+//! Coefficients are recomputed only when cutoff or resonance changes
+//! (tracked via cached values).
 //!
 //! # Theory
 //!
@@ -52,18 +45,10 @@
 
 use sonido_core::kernel::{DspKernel, KernelParams, SmoothingStyle};
 use sonido_core::math::soft_limit;
-use sonido_core::{Biquad, ParamDescriptor, ParamId, ParamScale, ParamUnit, lowpass_coefficients};
-
-// ── Unit conversion (inlined, no_std safe) ──
-
-/// Fast dB-to-linear conversion for per-sample use.
-///
-/// Uses `sonido_core::fast_db_to_linear` which is a polynomial approximation
-/// (~0.1 dB accuracy, ~4x faster than `10^(db/20)`).
-#[inline]
-fn db_to_gain(db: f32) -> f32 {
-    sonido_core::fast_db_to_linear(db)
-}
+use sonido_core::{
+    Biquad, ParamDescriptor, ParamId, ParamScale, ParamUnit, fast_db_to_linear,
+    lowpass_coefficients,
+};
 
 // ═══════════════════════════════════════════════════════════════════════════
 //  Parameters
@@ -267,7 +252,7 @@ impl DspKernel for FilterKernel {
         }
 
         // ── Unit conversion (user-facing → internal) ──
-        let output_gain = db_to_gain(params.output_db);
+        let output_gain = fast_db_to_linear(params.output_db);
 
         // ── Biquad filtering → Soft limit → Output level ──
         let out_l = soft_limit(self.biquad_l.process(left), 1.0) * output_gain;

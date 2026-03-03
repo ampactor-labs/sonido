@@ -1,15 +1,9 @@
-//! Tremolo kernel — pure DSP with separated parameter ownership.
+//! Tremolo kernel — amplitude modulation with stereo spread and tempo sync.
 //!
-//! Implements the Tremolo effect using the kernel architecture.
-//! The DSP math is identical; the difference is structural:
-//!
-//! - **Classic `Tremolo`**: owns `SmoothedParam` for rate/depth/output, manages smoothing
-//!   internally, implements `Effect` + `ParameterInfo` directly.
-//!
-//! - **`TremoloKernel`**: owns ONLY DSP state (two `Lfo` instances and a `TempoManager`).
-//!   Parameters are received via `&TremoloParams` on each processing call.
-//!   Deployed via [`KernelAdapter`](sonido_core::KernelAdapter) for desktop/plugin,
-//!   or called directly on embedded targets.
+//! `TremoloKernel` owns DSP state (two `Lfo` instances and a `TempoManager`).
+//! Parameters are received via `&TremoloParams` each sample. Deployed via
+//! [`KernelAdapter`](sonido_core::KernelAdapter) for desktop/plugin, or called
+//! directly on embedded targets.
 //!
 //! # Signal Flow
 //!
@@ -56,20 +50,9 @@
 
 use sonido_core::{
     DIVISION_LABELS, Lfo, LfoWaveform, ParamDescriptor, ParamFlags, ParamId, ParamUnit,
-    TempoManager, index_to_division,
+    TempoManager, fast_db_to_linear, index_to_division,
     kernel::{DspKernel, KernelParams, SmoothingStyle},
 };
-
-// ── Unit conversion (inlined, no_std safe) ──
-
-/// Fast dB-to-linear conversion for per-sample use.
-///
-/// Uses `sonido_core::fast_db_to_linear` which is a polynomial approximation
-/// (~0.1 dB accuracy, ~4x faster than `10^(db/20)`).
-#[inline]
-fn db_to_gain(db: f32) -> f32 {
-    sonido_core::fast_db_to_linear(db)
-}
 
 // ═══════════════════════════════════════════════════════════════════════════
 //  Parameters
@@ -330,7 +313,7 @@ impl DspKernel for TremoloKernel {
     fn process_stereo(&mut self, left: f32, right: f32, params: &TremoloParams) -> (f32, f32) {
         // ── Unit conversion (user-facing → internal) ──
         let depth = params.depth_pct / 100.0; // % → 0.0–1.0
-        let output = db_to_gain(params.output_db);
+        let output = fast_db_to_linear(params.output_db);
         let waveform = Self::waveform_from_index(params.waveform as u8);
         let rate = self.effective_rate(params);
 

@@ -1,16 +1,10 @@
-//! Phaser kernel — pure DSP with separated parameter ownership.
+//! Phaser kernel — multi-stage allpass sweep with feedback and tempo sync.
 //!
-//! Implements the Phaser effect using the kernel architecture.
-//! The DSP math is identical; the difference is structural:
-//!
-//! - **Classic `Phaser`**: owns `SmoothedParam` for rate/depth/feedback/mix/output,
-//!   manages smoothing internally, implements `Effect` + `ParameterInfo` directly.
-//!
-//! - **`PhaserKernel`**: owns ONLY DSP state (allpass arrays, LFOs, feedback samples,
-//!   tempo manager, coefficient decimation counter).
-//!   Parameters are received via `&PhaserParams` on each processing call.
-//!   Deployed via [`KernelAdapter`](sonido_core::KernelAdapter) for desktop/plugin,
-//!   or called directly on embedded targets.
+//! `PhaserKernel` owns DSP state (allpass arrays, LFOs, feedback samples,
+//! tempo manager, coefficient decimation counter). Parameters are received via
+//! `&PhaserParams` each sample. Deployed via
+//! [`KernelAdapter`](sonido_core::KernelAdapter) for desktop/plugin, or called
+//! directly on embedded targets.
 //!
 //! # Signal Flow
 //!
@@ -58,8 +52,8 @@ use core::f32::consts::PI;
 use sonido_core::kernel::{DspKernel, KernelParams, SmoothingStyle};
 use sonido_core::{
     DIVISION_LABELS, Lfo, ParamDescriptor, ParamFlags, ParamId, ParamScale, ParamUnit,
-    TempoContext, TempoManager, fast_exp2, fast_log2, fast_tan, flush_denormal, index_to_division,
-    wet_dry_mix,
+    TempoContext, TempoManager, fast_db_to_linear, fast_exp2, fast_log2, fast_tan, flush_denormal,
+    index_to_division, wet_dry_mix,
 };
 
 // ─── Constants ───────────────────────────────────────────────────────────────
@@ -72,17 +66,6 @@ const MAX_STAGES: usize = 12;
 /// At 48 kHz this gives ~0.67 ms between updates — fast enough that the sweep
 /// sounds continuous while saving 31/32 of the `fast_tan` evaluations.
 const COEFF_UPDATE_INTERVAL: u32 = 32;
-
-// ─── Unit conversion ─────────────────────────────────────────────────────────
-
-/// Fast dB-to-linear conversion for per-sample use.
-///
-/// Uses `sonido_core::fast_db_to_linear` which is a polynomial approximation
-/// (~0.1 dB accuracy, ~4× faster than `10^(db/20)`).
-#[inline]
-fn db_to_gain(db: f32) -> f32 {
-    sonido_core::fast_db_to_linear(db)
-}
 
 // ═══════════════════════════════════════════════════════════════════════════
 //  First-order allpass filter (local — kernel-private)
@@ -493,7 +476,7 @@ impl DspKernel for PhaserKernel {
         let depth = params.depth_pct / 100.0;
         let feedback = params.feedback_pct / 100.0;
         let mix = params.mix_pct / 100.0;
-        let output_gain = db_to_gain(params.output_db);
+        let output_gain = fast_db_to_linear(params.output_db);
         let stages = (params.stages as usize).clamp(2, MAX_STAGES);
 
         // ── LFO rate: either free-running or tempo-synced ──

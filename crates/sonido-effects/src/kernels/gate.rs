@@ -1,17 +1,10 @@
-//! Gate kernel — pure DSP with separated parameter ownership.
+//! Gate kernel — noise gate with hysteresis, hold time, and sidechain HPF.
 //!
-//! Implements the Gate effect using the kernel architecture.
-//! The DSP math is identical; the difference is structural:
-//!
-//! - **Classic `Gate`**: owns `SmoothedParam` for all parameters, manages
-//!   smoothing internally, implements `Effect` + `ParameterInfo` via
-//!   `impl_params!`.
-//!
-//! - **`GateKernel`**: owns ONLY DSP state (envelope follower, sidechain
-//!   biquad, gate state machine, exponential coefficients, linear caches).
-//!   Parameters are received via `&GateParams` on each processing call.
-//!   Deployed via [`KernelAdapter`](sonido_core::KernelAdapter) for
-//!   desktop/plugin, or called directly on embedded targets.
+//! `GateKernel` owns DSP state (envelope follower, sidechain biquad, gate
+//! state machine, exponential coefficients, linear caches). Parameters are
+//! received via `&GateParams` each sample. Deployed via
+//! [`KernelAdapter`](sonido_core::KernelAdapter) for desktop/plugin, or
+//! called directly on embedded targets.
 //!
 //! # Signal Flow
 //!
@@ -61,26 +54,6 @@ use sonido_core::{
     Biquad, EnvelopeFollower, ParamDescriptor, ParamId, ParamScale, ParamUnit, fast_db_to_linear,
     highpass_coefficients, math::db_to_linear,
 };
-
-// ── Unit conversion helpers (no_std safe) ───────────────────────────────────
-
-/// Fast polynomial dB-to-linear approximation for threshold comparisons.
-///
-/// Uses `sonido_core::fast_db_to_linear` (~0.1 dB accuracy, ~4× faster
-/// than `10^(db/20)`). Appropriate for the hot per-sample code path.
-#[inline]
-fn db_to_gain_fast(db: f32) -> f32 {
-    fast_db_to_linear(db)
-}
-
-/// Full-precision dB-to-linear conversion for the floor/range cache.
-///
-/// Uses `10^(db/20)` via `sonido_core::math::db_to_linear`. The floor is
-/// cached and recomputed rarely, so accuracy takes priority over speed here.
-#[inline]
-fn db_to_gain_precise(db: f32) -> f32 {
-    db_to_linear(db)
-}
 
 // ═══════════════════════════════════════════════════════════════════════════
 //  Gate state machine
@@ -449,10 +422,10 @@ pub struct GateKernel {
     /// Exponential release coefficient: `exp(−1 / (release_ms × sr / 1000))`.
     release_coeff: f32,
 
-    /// Cached `db_to_gain_fast(threshold_db)`. Recomputed when threshold changes.
+    /// Cached `fast_db_to_linear(threshold_db)`. Recomputed when threshold changes.
     cached_threshold_linear: f32,
 
-    /// Cached `db_to_gain_precise(range_db)`. Recomputed when range changes.
+    /// Cached `db_to_linear(range_db)`. Recomputed when range changes.
     cached_floor_linear: f32,
 
     /// Last seen `threshold_db` — for cache invalidation.
@@ -498,8 +471,8 @@ impl GateKernel {
         let release_coeff = Self::compute_coeff(defaults.release_ms, sample_rate);
 
         // Compute initial threshold and floor caches
-        let cached_threshold_linear = db_to_gain_fast(defaults.threshold_db);
-        let cached_floor_linear = db_to_gain_precise(defaults.range_db);
+        let cached_threshold_linear = fast_db_to_linear(defaults.threshold_db);
+        let cached_floor_linear = db_to_linear(defaults.range_db);
 
         Self {
             sample_rate,
@@ -547,11 +520,11 @@ impl GateKernel {
     #[inline]
     fn update_caches(&mut self, params: &GateParams) {
         if (params.threshold_db - self.last_threshold_db).abs() > 0.001 {
-            self.cached_threshold_linear = db_to_gain_fast(params.threshold_db);
+            self.cached_threshold_linear = fast_db_to_linear(params.threshold_db);
             self.last_threshold_db = params.threshold_db;
         }
         if (params.range_db - self.last_range_db).abs() > 0.001 {
-            self.cached_floor_linear = db_to_gain_precise(params.range_db);
+            self.cached_floor_linear = db_to_linear(params.range_db);
             self.last_range_db = params.range_db;
         }
         if (params.attack_ms - self.last_attack_ms).abs() > 0.001 {
@@ -600,7 +573,7 @@ impl GateKernel {
         let threshold_linear = self.cached_threshold_linear;
 
         // Close threshold = threshold_db - hysteresis_db (in linear via fast approx)
-        let close_threshold = db_to_gain_fast(self.last_threshold_db - self.last_hysteresis_db);
+        let close_threshold = fast_db_to_linear(self.last_threshold_db - self.last_hysteresis_db);
 
         let above_open = envelope > threshold_linear;
         let above_close = envelope > close_threshold;
@@ -673,7 +646,7 @@ impl DspKernel for GateKernel {
         let hold_samples = ((params.hold_ms / 1000.0) * self.sample_rate) as u32;
         self.advance_gate_state(envelope, hold_samples, floor);
 
-        let output_gain = db_to_gain_fast(params.output_db);
+        let output_gain = fast_db_to_linear(params.output_db);
         input * self.gain * output_gain
     }
 
@@ -694,7 +667,7 @@ impl DspKernel for GateKernel {
         let hold_samples = ((params.hold_ms / 1000.0) * self.sample_rate) as u32;
         self.advance_gate_state(envelope, hold_samples, floor);
 
-        let output_gain = db_to_gain_fast(params.output_db);
+        let output_gain = fast_db_to_linear(params.output_db);
         (
             left * self.gain * output_gain,
             right * self.gain * output_gain,

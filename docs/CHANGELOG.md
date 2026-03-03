@@ -16,6 +16,70 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Registry ID: `"multivibrato"` → `"vibrato"` (CLI alias preserves backward compat)
 - **Hz suffix convention**: Frequency struct fields now use `_hz` suffix (`sidechain_freq_hz`, `low_freq_hz`, `mid_freq_hz`, `high_freq_hz`, `min_freq_hz`, `max_freq_hz`)
 
+### Added — GUI Usability Improvements
+
+#### sonido-gui
+- **Preset loading**: Selecting a preset now performs a "hard reset" — stops audio, rebuilds the entire effect chain to match the preset (adding/removing effects as needed), applies all parameters, and restarts audio. This ensures exact preset reconstruction.
+- **Input gain safety**: Input gain defaults to 0 dB (unity gain). Knob range -20 to +20 dB.
+- **Level meter**: Updated to Ableton-style combined Peak/RMS display. RMS bar shows average level with gradient coloring; Peak bar overlays in brighter colors (green→yellow→red at >0.7→>0.95); thin white line indicates peak hold.
+- **Drag-and-drop reordering**: Effects can now be dragged to any slot in a single motion. A translucent drop target indicator appears when hovering over a slot, and the effect moves directly to the drop position on mouse release. This replaces the previous incremental arrow-step reordering.
+- **NaN guard**: Audio input samples are checked for finiteness; non-finite values are replaced with 0.0 to prevent signal corruption.
+
+#### Buffer Management
+- **Configurable buffer size**: Interactive buffer size selector in the status bar with presets: Low Latency (256), Very Low (512), Balanced (1024), Stable (2048), Maximum (4096). Buffer changes restart audio automatically with validation against hardware limits.
+- **CPU usage monitoring**: CPU sparkline graph displays last 60 frames of audio thread CPU usage for trend visualization. Color-coded based on load: green (<80%), yellow (80-100%), red (>100%).
+
+#### sonido-plugin
+- Plugin GUI remains fixed-size (240×320 minimum) per CLAP specification. Resizable plugin windows may be considered in a future release.
+
+#### Documentation
+- `docs/GUI.md`: Updated with details on preset loading, input gain, meter visuals, and drag-drop behavior.
+- `README.md`: Revised feature list for clarity and professionalism; removed speculative claims.
+
+### Added — Pluggable Audio Backend Abstraction
+
+#### sonido-io
+- `AudioBackend` trait in `backend.rs`: Platform-agnostic interface for device enumeration and stream construction
+- `CpalBackend` in `cpal_backend.rs`: Default backend wrapping cpal (ALSA, CoreAudio, WASAPI, WebAudio)
+- `StreamHandle`: Type-erased RAII stream handle — dropping stops playback
+- `BackendStreamConfig`: Backend-agnostic stream configuration (sample rate, buffer size, channels, device name)
+
+#### Workspace Dependencies
+- Centralized `egui`, `eframe`, `egui_extras`, `egui_glow` in workspace dependencies (was declared independently in 3 crates)
+- Centralized `proptest` and `tempfile` dev-dependencies (3 different version strings unified)
+- Fixed `sonido-ui` using path reference for `sonido-gl` instead of workspace
+- Fixed `sonido-gui` wasm target using bare `hound` dep instead of workspace
+
+### Added — Tempo Sync for Modulation Effects
+
+#### sonido-core
+- Shared division helpers in `tempo.rs`: `DIVISION_LABELS`, `index_to_division()`, `division_to_index()`
+- Exported via `sonido_core::{DIVISION_LABELS, index_to_division, division_to_index}`
+
+#### sonido-effects
+- **Chorus**: Tempo sync via Sync (ParamId 707) and Division (ParamId 708) parameters — 9 total params
+- **Flanger**: Tempo sync via Sync (ParamId 806) and Division (ParamId 807) parameters — 8 total params
+- **Phaser**: Tempo sync via Sync (ParamId 908) and Division (ParamId 909) parameters — 10 total params
+- **Tremolo**: Tempo sync via Sync (ParamId 1005) and Division (ParamId 1006) parameters — 7 total params
+- All four effects implement `set_tempo_context()` for host BPM synchronization
+
+#### sonido-gui-core
+- Updated Chorus, Flanger, Phaser, Tremolo UIs with Sync/Division controls
+- Updated Delay UI to expose all 10 parameters (was showing only 3)
+
+#### sonido-plugin
+- Added Stage effect plugin example (`sonido-stage.rs`, 19 total plugins)
+- Fixed 12 pre-existing compilation errors in `egui_bridge`:
+  - Enabled baseview `"opengl"` feature
+  - Fixed `GlConfig` import path (`baseview::gl::GlConfig`)
+  - Wrapped `make_current()` in unsafe block (baseview API change)
+  - Renamed `paint_and_check_errors` → `paint_and_update_textures` (egui_glow 0.31)
+  - Updated `WheelScrolled` from tuple to struct variant (baseview API change)
+  - Downgraded `keyboard-types` from 0.7 to 0.6 (matching baseview's dependency)
+
+#### sonido-registry
+- Updated param counts: Chorus 7→9, Flanger 6→8, Phaser 8→10, Tremolo 5→7
+
 ## [0.2.0] — In Progress
 
 ### Breaking Changes
@@ -83,72 +147,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added `cargo-llvm-cov` CI job generating `lcov.info` artifact per main-branch build
 - Coverage artifact uploaded for download; no threshold gate (baseline establishment only)
 - Known baseline: DSP core ~100% unit tested, CLI 43 tests, GUI-core 22 tests
-
-## [Unreleased]
-
-### Added — GUI Usability Improvements
-
-#### sonido-gui
-- **Preset loading**: Selecting a preset now performs a "hard reset" — stops audio, rebuilds the entire effect chain to match the preset (adding/removing effects as needed), applies all parameters, and restarts audio. This ensures exact preset reconstruction.
-- **Input gain safety**: Input gain defaults to 0 dB (unity gain). Knob range -20 to +20 dB.
-- **Level meter**: Updated to Ableton-style combined Peak/RMS display. RMS bar shows average level with gradient coloring; Peak bar overlays in brighter colors (green→yellow→red at >0.7→>0.95); thin white line indicates peak hold.
-- **Drag-and-drop reordering**: Effects can now be dragged to any slot in a single motion. A translucent drop target indicator appears when hovering over a slot, and the effect moves directly to the drop position on mouse release. This replaces the previous incremental arrow-step reordering.
-- **NaN guard**: Audio input samples are checked for finiteness; non-finite values are replaced with 0.0 to prevent signal corruption.
-
-#### Buffer Management
-- **Configurable buffer size**: Interactive buffer size selector in the status bar with presets: Low Latency (256), Very Low (512), Balanced (1024), Stable (2048), Maximum (4096). Buffer changes restart audio automatically with validation against hardware limits.
-- **CPU usage monitoring**: CPU sparkline graph displays last 60 frames of audio thread CPU usage for trend visualization. Color-coded based on load: green (<80%), yellow (80-100%), red (>100%).
-
-#### sonido-plugin
-- Plugin GUI remains fixed-size (240×320 minimum) per CLAP specification. Resizable plugin windows may be considered in a future release.
-
-#### Documentation
-- `docs/GUI.md`: Updated with details on preset loading, input gain, meter visuals, and drag-drop behavior.
-- `README.md`: Revised feature list for clarity and professionalism; removed speculative claims.
-
-### Added — Pluggable Audio Backend Abstraction
-
-#### sonido-io
-- `AudioBackend` trait in `backend.rs`: Platform-agnostic interface for device enumeration and stream construction
-- `CpalBackend` in `cpal_backend.rs`: Default backend wrapping cpal (ALSA, CoreAudio, WASAPI, WebAudio)
-- `StreamHandle`: Type-erased RAII stream handle — dropping stops playback
-- `BackendStreamConfig`: Backend-agnostic stream configuration (sample rate, buffer size, channels, device name)
-
-#### Workspace Dependencies
-- Centralized `egui`, `eframe`, `egui_extras`, `egui_glow` in workspace dependencies (was declared independently in 3 crates)
-- Centralized `proptest` and `tempfile` dev-dependencies (3 different version strings unified)
-- Fixed `sonido-ui` using path reference for `sonido-gl` instead of workspace
-- Fixed `sonido-gui` wasm target using bare `hound` dep instead of workspace
-
-### Added — Tempo Sync for Modulation Effects
-
-#### sonido-core
-- Shared division helpers in `tempo.rs`: `DIVISION_LABELS`, `index_to_division()`, `division_to_index()`
-- Exported via `sonido_core::{DIVISION_LABELS, index_to_division, division_to_index}`
-
-#### sonido-effects
-- **Chorus**: Tempo sync via Sync (ParamId 707) and Division (ParamId 708) parameters — 9 total params
-- **Flanger**: Tempo sync via Sync (ParamId 806) and Division (ParamId 807) parameters — 8 total params
-- **Phaser**: Tempo sync via Sync (ParamId 908) and Division (ParamId 909) parameters — 10 total params
-- **Tremolo**: Tempo sync via Sync (ParamId 1005) and Division (ParamId 1006) parameters — 7 total params
-- All four effects implement `set_tempo_context()` for host BPM synchronization
-
-#### sonido-gui-core
-- Updated Chorus, Flanger, Phaser, Tremolo UIs with Sync/Division controls
-- Updated Delay UI to expose all 10 parameters (was showing only 3)
-
-#### sonido-plugin
-- Added Stage effect plugin example (`sonido-stage.rs`, 19 total plugins)
-- Fixed 12 pre-existing compilation errors in `egui_bridge`:
-  - Enabled baseview `"opengl"` feature
-  - Fixed `GlConfig` import path (`baseview::gl::GlConfig`)
-  - Wrapped `make_current()` in unsafe block (baseview API change)
-  - Renamed `paint_and_check_errors` → `paint_and_update_textures` (egui_glow 0.31)
-  - Updated `WheelScrolled` from tuple to struct variant (baseview API change)
-  - Downgraded `keyboard-types` from 0.7 to 0.6 (matching baseview's dependency)
-
-#### sonido-registry
-- Updated param counts: Chorus 7→9, Flanger 6→8, Phaser 8→10, Tremolo 5→7
 
 ### Changed — Custom egui Bridge
 

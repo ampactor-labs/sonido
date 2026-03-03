@@ -128,7 +128,7 @@ jobs:
 
       - name: Verify plugin binaries exist
         run: |
-          for plugin in preamp distortion compressor gate eq wah chorus flanger phaser tremolo delay filter multivibrato tape reverb limiter bitcrusher ringmod stage; do
+          for plugin in preamp distortion compressor gate eq wah chorus flanger phaser tremolo delay filter vibrato tape reverb limiter bitcrusher ringmod stage; do
             test -f "target/release/examples/libsonido_${plugin}.so" || { echo "Missing libsonido_${plugin}.so"; exit 1; }
           done
           echo "All 19 plugin binaries verified"
@@ -144,7 +144,7 @@ jobs:
       - name: Validate CLAP plugins
         run: |
           mkdir -p target/plugin-validation
-          for plugin in preamp distortion compressor gate eq wah chorus flanger phaser tremolo delay filter multivibrato tape reverb limiter bitcrusher ringmod stage; do
+          for plugin in preamp distortion compressor gate eq wah chorus flanger phaser tremolo delay filter vibrato tape reverb limiter bitcrusher ringmod stage; do
             echo "Validating sonido_${plugin}..."
             ./clap-validator validate "target/release/examples/libsonido_${plugin}.so" 2>&1 | tee "target/plugin-validation/${plugin}.txt" || { echo "Validation failed for sonido_${plugin}"; exit 1; }
           done
