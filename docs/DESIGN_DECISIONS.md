@@ -29,6 +29,9 @@ Architecture Decision Records (ADRs) for the Sonido DSP framework. Each record c
 - [ADR-023: Pluggable Audio Backend Abstraction](#adr-023-pluggable-audio-backend-abstraction)
 - [ADR-024: CLAP Plugin Architecture](#adr-024-clap-plugin-architecture)
 - [ADR-025: DAG Routing Engine](#adr-025-dag-routing-engine)
+- [ADR-026: Multi-Effect Chain CLAP Plugin](#adr-026-multi-effect-chain-clap-plugin)
+- [ADR-027: GraphEngine as Universal Chain Host](#adr-027-graphengine-as-universal-chain-host)
+- [ADR-028: Kernel Architecture — DSP/Parameter Separation](#adr-028-kernel-architecture--dspparameter-separation)
 
 ---
 
@@ -1176,7 +1179,7 @@ Introduce a three-layer kernel architecture:
 - Identical DSP binary on x86_64 and ARM Cortex-M7 — kernel code is platform-independent
 - One parameter definition serves all platforms (GUI, plugin, preset, embedded)
 - Preset morphing via `KernelParams::lerp()` falls out for free
-- `impl_params!` macro eliminated — `KernelParams` replaces it entirely
+- `impl_params!` macro still used by `KernelAdapter` for `ParameterInfo` — `KernelParams` provides the underlying data
 - Adapter is invisible to consumers — `Box<dyn EffectWithParams + Send>` works unchanged
 
 **Negative:**
@@ -1188,7 +1191,7 @@ Introduce a three-layer kernel architecture:
 - Kernels must NOT contain `SmoothedParam`, atomics, `Arc`, or platform types
 - `ParamId` and `string_id` values must match classic effects exactly (plugin API contract)
 - Params store user-facing units; kernels convert internally
-- After migration: classic effect structs deleted, `impl_params!` removed
+- After migration: classic effect structs deleted, `impl_params!` retained for `KernelAdapter` ParameterInfo bridging
 
 ### References
 

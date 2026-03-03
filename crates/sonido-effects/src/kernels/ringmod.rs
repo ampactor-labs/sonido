@@ -1,15 +1,9 @@
-//! Ring modulator kernel — pure DSP with separated parameter ownership.
+//! Ring modulator kernel — carrier oscillator multiplication with mix control.
 //!
-//! Implements the RingMod effect using the kernel architecture.
-//! The DSP math is identical; the difference is structural:
-//!
-//! - **Classic `RingMod`**: owns `SmoothedParam` for frequency and output level,
-//!   manages smoothing internally, implements `Effect` + `ParameterInfo` directly.
-//!
-//! - **`RingModKernel`**: owns ONLY DSP state (carrier oscillator phase, sample_rate).
-//!   Parameters are received via `&RingModParams` on each processing call.
-//!   Deployed via [`KernelAdapter`](sonido_core::KernelAdapter) for desktop/plugin,
-//!   or called directly on embedded targets.
+//! `RingModKernel` owns DSP state (carrier oscillator phase, sample rate).
+//! Parameters are received via `&RingModParams` each sample. Deployed via
+//! [`KernelAdapter`](sonido_core::KernelAdapter) for desktop/plugin, or called
+//! directly on embedded targets.
 //!
 //! # Signal Flow
 //!
@@ -52,19 +46,9 @@ use core::f32::consts::TAU;
 use libm::{fabsf, sinf};
 use sonido_core::kernel::{DspKernel, KernelParams, SmoothingStyle};
 use sonido_core::{
-    ParamDescriptor, ParamFlags, ParamId, ParamScale, ParamUnit, wet_dry_mix_stereo,
+    ParamDescriptor, ParamFlags, ParamId, ParamScale, ParamUnit, fast_db_to_linear,
+    wet_dry_mix_stereo,
 };
-
-// ─── Unit conversion ─────────────────────────────────────────────────────────
-
-/// Fast dB-to-linear conversion for per-sample use.
-///
-/// Uses `sonido_core::fast_db_to_linear` which is a polynomial approximation
-/// (~0.1 dB accuracy, ~4x faster than `10^(db/20)`).
-#[inline]
-fn db_to_gain(db: f32) -> f32 {
-    sonido_core::fast_db_to_linear(db)
-}
 
 // ═══════════════════════════════════════════════════════════════════════════
 //  Parameters
@@ -290,7 +274,7 @@ impl DspKernel for RingModKernel {
         // ── Unit conversion (user-facing → internal) ──
         let depth = params.depth_pct / 100.0;
         let mix = params.mix_pct / 100.0;
-        let output = db_to_gain(params.output_db);
+        let output = fast_db_to_linear(params.output_db);
         let waveform = params.waveform as u8;
 
         // ── Carrier: compute once, shared for both channels (dual-mono) ──

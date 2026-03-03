@@ -1,15 +1,9 @@
-//! Flanger kernel — pure DSP with separated parameter ownership.
+//! Flanger kernel — through-zero flanging with feedback and stereo LFO offset.
 //!
-//! Implements the Flanger effect using the kernel architecture.
-//! The DSP math is identical; the difference is structural:
-//!
-//! - **Classic `Flanger`**: owns `SmoothedParam` for rate/depth/feedback/mix/output,
-//!   manages smoothing internally, implements `Effect` + `ParameterInfo` directly.
-//!
-//! - **`FlangerKernel`**: owns ONLY DSP state (delay lines, LFOs, feedback samples).
-//!   Parameters are received via `&FlangerParams` on each processing call.
-//!   Deployed via [`KernelAdapter`](sonido_core::KernelAdapter) for desktop/plugin,
-//!   or called directly on embedded targets.
+//! `FlangerKernel` owns DSP state (delay lines, LFOs, feedback samples).
+//! Parameters are received via `&FlangerParams` each sample. Deployed via
+//! [`KernelAdapter`](sonido_core::KernelAdapter) for desktop/plugin, or called
+//! directly on embedded targets.
 //!
 //! # Signal Flow
 //!
@@ -50,19 +44,9 @@ use libm::ceilf;
 use sonido_core::kernel::{DspKernel, KernelParams, SmoothingStyle};
 use sonido_core::{
     DIVISION_LABELS, InterpolatedDelay, Lfo, NoteDivision, ParamDescriptor, ParamFlags, ParamId,
-    ParamUnit, TempoContext, TempoManager, flush_denormal, index_to_division, wet_dry_mix_stereo,
+    ParamUnit, TempoContext, TempoManager, fast_db_to_linear, flush_denormal, index_to_division,
+    wet_dry_mix_stereo,
 };
-
-// ── Unit conversion (inlined, no_std safe) ──
-
-/// Fast dB-to-linear conversion for per-sample use.
-///
-/// Uses `sonido_core::fast_db_to_linear` — polynomial approximation
-/// (~0.1 dB accuracy, ~4× faster than `10^(db/20)`).
-#[inline]
-fn db_to_gain(db: f32) -> f32 {
-    sonido_core::fast_db_to_linear(db)
-}
 
 // ═══════════════════════════════════════════════════════════════════════════
 //  Parameters
@@ -407,7 +391,7 @@ impl DspKernel for FlangerKernel {
         let depth = params.depth_pct / 100.0; // 0–1 fraction
         let feedback = params.feedback_pct / 100.0; // −0.95–+0.95
         let mix = params.mix_pct / 100.0; // 0–1 fraction
-        let output_gain = db_to_gain(params.output_db);
+        let output_gain = fast_db_to_linear(params.output_db);
         let tzf = params.tzf > 0.5;
 
         // ── LFO advancement ──

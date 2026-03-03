@@ -1,16 +1,10 @@
-//! Tape saturation kernel — pure DSP with separated parameter ownership.
+//! Tape saturation kernel — ADAA hysteresis, wow/flutter, head bump, and HF rolloff.
 //!
-//! Implements the Tape effect using the kernel architecture.
-//! The DSP math is identical; the difference is structural:
-//!
-//! - **Classic `TapeSaturation`**: owns `SmoothedParam` for drive/saturation/output/etc.,
-//!   manages smoothing internally, implements `Effect` + `ParameterInfo` directly.
-//!
-//! - **`TapeKernel`**: owns ONLY DSP state (ADAA processors, LFOs, delay lines,
-//!   hysteresis registers, biquad filters, envelope followers, one-pole filters).
-//!   Parameters are received via `&TapeParams` on each processing call.
-//!   Deployed via [`KernelAdapter`](sonido_core::KernelAdapter) for desktop/plugin,
-//!   or called directly on embedded targets.
+//! `TapeKernel` owns DSP state (ADAA processors, LFOs, delay lines, hysteresis
+//! registers, biquad filters, envelope followers, one-pole filters). Parameters
+//! are received via `&TapeParams` each sample. Deployed via
+//! [`KernelAdapter`](sonido_core::KernelAdapter) for desktop/plugin, or called
+//! directly on embedded targets.
 //!
 //! # Signal Flow
 //!

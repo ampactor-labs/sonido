@@ -154,6 +154,25 @@ fn test_reverb_stereo_decorrelation() {
 }
 ```
 
+## Golden File Regression Tests
+
+The `crates/sonido-effects/tests/regression.rs` test compares effect output against reference WAV files stored in `tests/golden/`. This catches unintended DSP changes.
+
+Three metrics must pass for each effect:
+- **MSE < 1e-6** (sample-level accuracy)
+- **SNR > 60 dB** (signal quality)
+- **Spectral correlation > 0.9999** (frequency content preserved)
+
+```bash
+# Run golden file tests
+cargo test --test regression -p sonido-effects
+
+# Regenerate golden files after intentional DSP changes
+REGENERATE_GOLDEN=1 cargo test --test regression -p sonido-effects
+```
+
+After regenerating, verify the new output sounds correct before committing the updated golden files.
+
 ## no_std Compatibility Testing
 
 Core crates must work without the standard library.
@@ -224,9 +243,9 @@ All tests run automatically on pull requests via GitHub Actions.
 
 | Platform | Tests | no_std |
 |----------|-------|--------|
-| Linux (Ubuntu) | Full workspace | sonido-core, sonido-effects, sonido-registry, sonido-platform |
-| macOS | Full workspace | - |
-| Windows | Full workspace | - |
+| Linux (Ubuntu) | Full workspace | sonido-core, sonido-effects, sonido-synth, sonido-registry, sonido-platform |
+
+CI runs on `ubuntu-latest` only. The four jobs are: lint, test, no_std check, and wasm check. Benchmarks, coverage, and plugin validation run via manual dispatch (`gh workflow run ci-manual.yml`).
 
 ### Running CI Checks Locally
 
@@ -335,15 +354,20 @@ cargo test --doc -p sonido-core
 
 ## Test Coverage
 
-While not required, you can measure test coverage using cargo-tarpaulin:
+You can measure test coverage using `cargo-llvm-cov` (matches CI):
 
 ```bash
-# Install tarpaulin
-cargo install cargo-tarpaulin
+# Install cargo-llvm-cov
+cargo install cargo-llvm-cov
 
-# Run coverage
-cargo tarpaulin --workspace --out Html
+# Run coverage (generates lcov.info)
+cargo llvm-cov --workspace --lcov --output-path lcov.info
+
+# Generate HTML report
+cargo llvm-cov --workspace --html
 ```
+
+CI runs coverage on manual dispatch (`gh workflow run ci-manual.yml -f job=coverage`) and uploads `lcov.info` as an artifact.
 
 ## Adding New Tests
 

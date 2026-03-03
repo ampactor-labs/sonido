@@ -1,3 +1,7 @@
+# Netlify deployment for sonido-gui WASM build.
+# Builds the GUI crate via trunk for wasm32-unknown-unknown and serves the SPA.
+# See also: .github/workflows/pages.yml (GitHub Pages alternative).
+
 [build]
   command = "curl -L https://github.com/trunk-rs/trunk/releases/latest/download/trunk-x86_64-unknown-linux-gnu.tar.gz | tar xz && rustup target add wasm32-unknown-unknown && ./trunk build --release crates/sonido-gui/index.html"
   publish = "crates/sonido-gui/dist"

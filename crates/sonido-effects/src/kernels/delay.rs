@@ -1,16 +1,9 @@
-//! Delay kernel — pure DSP with separated parameter ownership.
+//! Delay kernel — stereo/ping-pong delay with diffusion, filtering, and tempo sync.
 //!
-//! Implements the Delay effect using the kernel architecture.
-//! The DSP math is identical; the difference is structural:
-//!
-//! - **Classic `Delay`**: owns `SmoothedParam` for time/feedback/mix/output,
-//!   manages smoothing internally, implements `Effect` + `ParameterInfo` directly.
-//!
-//! - **`DelayKernel`**: owns ONLY DSP state (delay lines, feedback filters,
-//!   diffusion allpasses, tempo manager). Parameters are received via
-//!   `&DelayParams` on each processing call. Deployed via
-//!   [`KernelAdapter`](sonido_core::KernelAdapter) for desktop/plugin, or
-//!   called directly on embedded targets.
+//! `DelayKernel` owns DSP state (delay lines, feedback filters, diffusion
+//! allpasses, tempo manager). Parameters are received via `&DelayParams` each
+//! sample. Deployed via [`KernelAdapter`](sonido_core::KernelAdapter) for
+//! desktop/plugin, or called directly on embedded targets.
 //!
 //! # Algorithm
 //!

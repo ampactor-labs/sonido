@@ -1,15 +1,9 @@
-//! Multi-Vibrato kernel — pure DSP with separated parameter ownership.
+//! Vibrato kernel — 6-voice pitch modulation simulating tape wow and flutter.
 //!
-//! Implements the Vibrato effect using the kernel architecture.
-//! The DSP math is identical; the difference is structural:
-//!
-//! - **Classic `MultiVibrato`**: owns `SmoothedParam` for depth/output, stores mix as
-//!   a plain `f32`, implements `Effect` + `ParameterInfo` directly.
-//!
-//! - **`VibratoKernel`**: owns ONLY DSP state (6 × 2 `VibratoUnit` structs).
-//!   Parameters are received via `&VibratoParams` on each processing call.
-//!   Deployed via [`KernelAdapter`](sonido_core::KernelAdapter) for desktop/plugin,
-//!   or called directly on embedded targets.
+//! `VibratoKernel` owns DSP state (6 x 2 `VibratoUnit` structs, each with
+//! its own delay line and LFO). Parameters are received via `&VibratoParams`
+//! each sample. Deployed via [`KernelAdapter`](sonido_core::KernelAdapter) for
+//! desktop/plugin, or called directly on embedded targets.
 //!
 //! # Algorithm
 //!

@@ -34,16 +34,29 @@ param = "value"
 
 ## Available Effects
 
-| Effect | Parameters |
+All 19 effects registered in the `EffectRegistry`:
+
+| Effect | Description |
 |--------|------------|
-| `distortion` | drive, tone, level, waveshape |
-| `compressor` | threshold, ratio, attack, release, makeup |
-| `chorus` | rate, depth, mix |
-| `delay` | time, feedback, mix |
-| `filter` | cutoff, resonance |
-| `vibrato` | depth |
-| `tape` | drive, saturation |
-| `preamp` | gain |
+| `preamp` | Clean gain stage |
+| `distortion` | Waveshaping distortion with ADAA |
+| `compressor` | Dynamics compressor with soft knee |
+| `gate` | Noise gate |
+| `eq` | 3-band parametric EQ |
+| `wah` | Auto/manual wah filter |
+| `chorus` | Modulated delay chorus |
+| `flanger` | Modulated short-delay flanger |
+| `phaser` | Multi-stage allpass phaser |
+| `tremolo` | Amplitude modulation tremolo |
+| `delay` | Feedback delay with ping-pong and diffusion |
+| `filter` | Resonant lowpass filter |
+| `vibrato` | Multi-unit pitch vibrato |
+| `tape` | Tape saturation with hysteresis |
+| `reverb` | Freeverb-style algorithmic reverb |
+| `limiter` | Brickwall lookahead limiter |
+| `bitcrusher` | Bit depth and sample rate reduction |
+| `ringmod` | Ring modulator with carrier oscillator |
+| `stage` | Signal conditioning and stereo utility |
 
 ## Included Presets
 

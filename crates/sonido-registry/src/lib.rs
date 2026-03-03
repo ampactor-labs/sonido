@@ -492,6 +492,12 @@ impl EffectRegistry {
     ///
     /// Used by the GUI to initialize the effect chain. The ordering reflects
     /// standard guitar pedalboard convention.
+    ///
+    /// Excluded from the default chain (available via "Add Effect" in the GUI):
+    /// - `limiter` — typically a mastering/bus effect, not a pedalboard staple
+    /// - `bitcrusher` — niche lo-fi effect, not part of a standard signal chain
+    /// - `ringmod` — experimental/sound-design effect
+    /// - `stage` — stereo imaging utility, applied globally rather than per-chain
     pub fn default_chain_ids(&self) -> &'static [&'static str] {
         &[
             "preamp",     // Utility — gain stage

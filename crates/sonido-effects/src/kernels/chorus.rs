@@ -1,15 +1,9 @@
-//! Chorus kernel — pure DSP with separated parameter ownership.
+//! Chorus kernel — multi-voice delay modulation with stereo panning.
 //!
-//! Implements the Chorus effect using the kernel architecture.
-//! The DSP math is identical; the difference is structural:
-//!
-//! - **Classic `Chorus`**: owns `SmoothedParam` for rate/depth/mix/feedback/delay/output,
-//!   manages smoothing internally, implements `Effect` + `ParameterInfo` directly.
-//!
-//! - **`ChorusKernel`**: owns ONLY DSP state (delay lines, LFOs, feedback state).
-//!   Parameters are received via `&ChorusParams` on each processing call.
-//!   Deployed via [`KernelAdapter`](sonido_core::KernelAdapter) for desktop/plugin,
-//!   or called directly on embedded targets.
+//! `ChorusKernel` owns DSP state (delay lines, LFOs, feedback state).
+//! Parameters are received via `&ChorusParams` each sample. Deployed via
+//! [`KernelAdapter`](sonido_core::KernelAdapter) for desktop/plugin, or
+//! called directly on embedded targets.
 //!
 //! # Algorithm
 //!
@@ -63,19 +57,8 @@ use sonido_core::kernel::{DspKernel, KernelParams, SmoothingStyle};
 use sonido_core::math::soft_limit;
 use sonido_core::{
     DIVISION_LABELS, InterpolatedDelay, Lfo, LfoWaveform, ParamDescriptor, ParamFlags, ParamId,
-    ParamUnit, TempoManager, index_to_division, wet_dry_mix_stereo,
+    ParamUnit, TempoManager, fast_db_to_linear, index_to_division, wet_dry_mix_stereo,
 };
-
-// ── Unit conversion ──────────────────────────────────────────────────────────
-
-/// Fast dB-to-linear conversion for per-sample use.
-///
-/// Uses `sonido_core::fast_db_to_linear` which is a polynomial approximation
-/// (~0.1 dB accuracy, ~4× faster than `10^(db/20)`).
-#[inline]
-fn db_to_gain(db: f32) -> f32 {
-    sonido_core::fast_db_to_linear(db)
-}
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -494,7 +477,7 @@ impl DspKernel for ChorusKernel {
         let depth = params.depth_pct / 100.0; // 0–100 % → 0–1
         let mix = params.mix_pct / 100.0; // 0–100 % → 0–1
         let feedback = params.feedback_pct / 100.0; // 0–70 % → 0–0.7
-        let output = db_to_gain(params.output_db);
+        let output = fast_db_to_linear(params.output_db);
 
         // ── Base delay in samples ──
         self.base_delay_samples = (params.base_delay_ms / 1000.0) * self.sample_rate;

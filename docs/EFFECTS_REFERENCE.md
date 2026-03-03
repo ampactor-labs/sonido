@@ -14,7 +14,7 @@ let adapter = KernelAdapter::new(DistortionKernel::new(48000.0), 48000.0);
 
 // Embedded: call kernel directly, no smoothing overhead
 let mut kernel = DistortionKernel::new(48000.0);
-let params = DistortionParams::from_knobs(adc_drive, adc_tone, adc_output, adc_mix);
+let params = DistortionParams::from_knobs(adc_drive, adc_tone, adc_output, adc_shape, adc_mix);
 let (l, r) = kernel.process_stereo(input_l, input_r, &params);
 ```
 
@@ -39,7 +39,7 @@ sonido process in.wav --effect lowpass --param cutoff=2000  # Same effect
 
 ## Output Level Convention
 
-All effects expose an `output` parameter as their last ParameterInfo index (range: -20 to +20 dB, default 0.0 dB). Two exceptions use domain-specific names: distortion exposes `level` (-20 to 0 dB, default -6.0 dB) and compressor exposes `makeup` (0 to 24 dB, default 0.0 dB). Both serve the same gain-staging purpose. See `docs/DSP_QUALITY_STANDARD.md` for the full quality rules and compliance table.
+All effects expose an `output` parameter as their last ParameterInfo index (range: -20 to +20 dB, default 0.0 dB). Two exceptions use narrower ranges: tape output (-12 to 12 dB, default -6.0 dB) and preamp gain (-40 to 12 dB, default 0.0 dB). Compressor exposes `makeup` (0 to 24 dB, default 0.0 dB) as a separate gain-staging param in addition to its standard `output`. See `docs/DSP_QUALITY_STANDARD.md` for the full quality rules and compliance table.
 
 ---
 
@@ -52,15 +52,15 @@ Waveshaping distortion with multiple modes.
 Input -> Drive (gain) -> Waveshaper -> Tone Filter -> Output Level
 ```
 
-The distortion applies a static nonlinear transfer function (waveshaper) to the input signal, preceded by a gain stage (drive) to push the signal into the nonlinear region. All parameters use `SmoothedParam` with 5ms smoothing to prevent zipper noise during adjustment.
+The distortion applies a static nonlinear transfer function (waveshaper) to the input signal, preceded by a gain stage (drive) to push the signal into the nonlinear region. The `KernelAdapter` handles per-parameter smoothing via `SmoothingStyle` (Fast for drive, Standard for others).
 
 | Parameter | Description | Default | Range |
 |-----------|-------------|---------|-------|
 | `drive` | Drive amount in dB | 12.0 | 0-40 |
-| `tone` | Tone frequency in Hz | 4000.0 | 500-10000 |
-| `level` | Output level in dB | -6.0 | -20 to 0 |
-| `waveshape` | Waveshape type | softclip | softclip, hardclip, foldback, asymmetric |
-| `foldback_threshold` | Foldback waveshape threshold | 0.8 | 0.1-1.0 |
+| `tone` | Tone tilt in dB (boost/cut at 1 kHz) | 0.0 | -12 to 12 |
+| `output` | Output level in dB | 0.0 | -20 to 20 |
+| `shape` | Waveshape type (0=SoftClip, 1=HardClip, 2=Foldback, 3=Asymmetric) | 0 | 0-3 |
+| `mix` | Wet/dry mix % | 100.0 | 0-100 |
 
 ### Waveshape Types and Their Harmonic Character
 
@@ -71,9 +71,9 @@ The distortion applies a static nonlinear transfer function (waveshaper) to the 
 
 ### Tone Filter
 
-The tone control is a one-pole lowpass filter (`distortion.rs:174-176`) placed after the waveshaper. The coefficient is computed as `1 - exp(-2*pi*freq/sample_rate)`. This tames the harsh high-frequency harmonics created by waveshaping, which is essential because nonlinear processing can generate significant energy above the original signal's bandwidth.
+The tone control is a shelving tilt filter placed after the waveshaper. The `tone` parameter in dB boosts or cuts around 1 kHz, taming harsh high-frequency harmonics (negative values) or adding brightness (positive values). This is essential because nonlinear processing can generate significant energy above the original signal's bandwidth.
 
-**Stereo processing**: In stereo mode (`process_stereo`), each channel has its own independent tone filter state (`tone_filter_state` for left, `tone_filter_state_r` for right). This ensures proper dual-mono behavior -- each channel's filtering history is independent, preventing cross-channel artifacts that would occur if a single filter state were shared between channels.
+**Stereo processing**: In stereo mode (`process_stereo`), each channel has its own independent tone filter state. This ensures proper dual-mono behavior -- each channel's filtering history is independent, preventing cross-channel artifacts that would occur if a single filter state were shared between channels.
 
 **Aliasing note**: For critical applications, wrap the distortion in `Oversampled<4, Distortion>` to suppress harmonic aliasing from the nonlinear waveshaper. At 48 kHz base rate, 4x oversampling processes at 192 kHz, keeping generated harmonics below the effective Nyquist.
 
@@ -81,7 +81,7 @@ The tone control is a one-pole lowpass filter (`distortion.rs:174-176`) placed a
 
 ```bash
 sonido process in.wav --effect distortion \
-    --param drive=15 --param tone=3500 --param waveshape=softclip
+    --param drive=15 --param tone=-3 --param shape=0
 ```
 
 ---
@@ -110,6 +110,11 @@ The gain computer implements a soft-knee transfer curve (`compressor.rs:66-79`).
 | `release` | Release time in ms | 100.0 | 10-1000 |
 | `makeup` | Makeup gain in dB | 0.0 | 0-24 |
 | `knee` | Knee width in dB | 6.0 | 0-12 |
+| `detection` | Detection mode (0=Peak, 1=RMS) | 0 | 0-1 |
+| `sidechain_freq` | Sidechain HPF frequency in Hz (log scale) | 80.0 | 20-500 |
+| `auto_makeup` | Auto makeup gain (0=Off, 1=On) | 0 | 0-1 |
+| `output` | Output level in dB | 0.0 | -20 to 20 |
+| `mix` | Wet/dry mix % (parallel compression) | 100.0 | 0-100 |
 
 ### Tips
 
@@ -140,10 +145,10 @@ Multi-voice modulated delay chorus with feedback and tempo sync.
 | Parameter | Description | Default | Range |
 |-----------|-------------|---------|-------|
 | `rate` | LFO rate in Hz | 1.0 | 0.1-10 |
-| `depth` | Modulation depth (0-1) | 0.5 | 0-1 |
-| `mix` | Wet/dry mix (0-1) | 0.5 | 0-1 |
+| `depth` | Modulation depth % | 50.0 | 0-100 |
+| `mix` | Wet/dry mix % | 50.0 | 0-100 |
 | `voices` | Number of chorus voices | 2 | 2-4 |
-| `feedback` | Feedback amount (0-1) | 0.0 | 0-0.7 |
+| `feedback` | Feedback amount % | 0.0 | 0-70 |
 | `base_delay` | Base delay in ms | 15.0 | 5-25 |
 | `sync` | Tempo sync on/off | off | off, on |
 | `division` | Note division (when synced) | eighth | whole, half, quarter, eighth, etc. |
@@ -155,15 +160,15 @@ When `sync=on`, the LFO rate locks to the host tempo at the selected note divisi
 
 ### Tips
 
-- **Subtle chorus**: rate=0.5, depth=0.3, mix=0.3
-- **Classic chorus**: rate=1.0, depth=0.5, mix=0.5
-- **Thick chorus**: rate=2.0, depth=0.7, mix=0.6, voices=4
+- **Subtle chorus**: rate=0.5, depth=30, mix=30
+- **Classic chorus**: rate=1.0, depth=50, mix=50
+- **Thick chorus**: rate=2.0, depth=70, mix=60, voices=4
 
 ### Example
 
 ```bash
 sonido process in.wav --effect chorus \
-    --param rate=1.5 --param depth=0.6 --param mix=0.5
+    --param rate=1.5 --param depth=60 --param mix=50
 ```
 
 ---
@@ -183,28 +188,28 @@ Feedback delay with optional ping-pong stereo mode.
 | Parameter | Description | Default | Range |
 |-----------|-------------|---------|-------|
 | `time` | Delay time in ms | 300.0 | 1-2000 |
-| `feedback` | Feedback amount (0-1) | 0.4 | 0-0.95 |
-| `mix` | Wet/dry mix (0-1) | 0.5 | 0-1 |
-| `ping_pong` | Ping-pong stereo mode (0=off, 1=on) | 0.0 | 0-1 |
+| `feedback` | Feedback amount % | 40.0 | 0-95 |
+| `mix` | Wet/dry mix % | 50.0 | 0-100 |
+| `ping_pong` | Ping-pong stereo mode (0=off, 1=on) | 0 | 0-1 |
 | `feedback_lp` | Feedback lowpass frequency in Hz | 20000.0 | 200-20000 |
 | `feedback_hp` | Feedback highpass frequency in Hz | 20.0 | 20-2000 |
-| `diffusion` | Diffusion amount (0-1) | 0.0 | 0-1 |
+| `diffusion` | Diffusion amount % | 0.0 | 0-100 |
 | `sync` | Tempo sync on/off | off | off, on |
 | `division` | Note division (when synced) | quarter | whole, half, quarter, eighth, etc. |
 | `output` | Output level in dB | 0.0 | -20 to 20 |
 
 ### Tips
 
-- **Slapback**: time=80-120ms, feedback=0.2, mix=0.4
+- **Slapback**: time=80-120ms, feedback=20, mix=40
 - **Quarter note** (120 BPM): time=500ms
 - **Dotted eighth** (120 BPM): time=375ms
-- **Self-oscillation**: feedback > 0.9 (be careful with volume!)
+- **Self-oscillation**: feedback > 90 (be careful with volume!)
 
 ### Example
 
 ```bash
 sonido process in.wav --effect delay \
-    --param time=375 --param feedback=0.5 --param mix=0.4
+    --param time=375 --param feedback=50 --param mix=40
 ```
 
 ---
@@ -242,20 +247,21 @@ Simulates the complex pitch modulation of analog tape machines with 6 independen
 
 | Parameter | Description | Default | Range |
 |-----------|-------------|---------|-------|
-| `depth` | Overall depth (0-1) | 0.5 | 0-1 |
-| `mix` | Wet/dry mix (0-100%) | 100.0 | 0-100 |
+| `depth` | Overall depth % | 100.0 | 0-400 |
+| `mix` | Wet/dry mix % | 100.0 | 0-100 |
 | `output` | Output level in dB | 0.0 | -20 to 20 |
 
 ### Tips
 
-- **Subtle**: depth=0.2 - Adds gentle movement
-- **Medium**: depth=0.5 - Classic tape sound
-- **Heavy**: depth=0.8 - Obvious warble effect
+- **Subtle**: depth=50 - Adds gentle movement
+- **Medium**: depth=100 - Classic tape sound
+- **Heavy**: depth=200 - Obvious warble effect
+- **Extreme**: depth=400 - Maximum wow/flutter
 
 ### Example
 
 ```bash
-sonido process in.wav --effect vibrato --param depth=0.4
+sonido process in.wav --effect vibrato --param depth=80
 ```
 
 ---
@@ -267,24 +273,31 @@ Tape saturation with HF rolloff.
 | Parameter | Description | Default | Range |
 |-----------|-------------|---------|-------|
 | `drive` | Drive amount in dB | 6.0 | 0-24 |
-| `saturation` | Saturation amount (0-1) | 0.5 | 0-1 |
-| `output` | Output level in dB | -6.0 | -12 to 12 |
+| `saturation` | Saturation amount % | 30.0 | 0-100 |
 | `hf_rolloff` | HF rolloff frequency in Hz | 12000.0 | 1000-20000 |
 | `bias` | Tape bias offset | 0.0 | -0.2 to 0.2 |
+| `wow` | Wow amount (low-rate pitch modulation) | 0.3 | 0-1 |
+| `flutter` | Flutter amount (high-rate pitch modulation) | 0.2 | 0-1 |
+| `hysteresis` | Magnetic hysteresis feedback amount | 0.15 | 0-0.5 |
+| `head_bump` | Head bump (low-frequency resonance) | 0.3 | 0-1 |
+| `bump_freq` | Head bump center frequency in Hz | 80.0 | 40-200 |
+| `output` | Output level in dB | -6.0 | -12 to 12 |
 
 ### Tips
 
-- **Subtle warmth**: drive=3, saturation=0.3
-- **Tape compression**: drive=6, saturation=0.5
-- **Saturated tape**: drive=12, saturation=0.7
+- **Subtle warmth**: drive=3, saturation=20
+- **Tape compression**: drive=6, saturation=30
+- **Saturated tape**: drive=12, saturation=70
 - **Dark tape**: hf_rolloff=4000 — rolls off high frequencies earlier
 - **Bias offset**: Small bias values add asymmetric harmonic content
+- **Wow/flutter**: wow=0.3, flutter=0.2 — classic tape transport instability
+- **Head bump**: head_bump=0.5, bump_freq=80 — tape machine low-frequency resonance
 
 ### Example
 
 ```bash
 sonido process in.wav --effect tape \
-    --param drive=6 --param saturation=0.5
+    --param drive=6 --param saturation=30
 ```
 
 ---
@@ -295,13 +308,13 @@ Clean preamp/gain stage.
 
 | Parameter | Description | Default | Range |
 |-----------|-------------|---------|-------|
-| `gain` | Gain in dB | 0.0 | -20 to 20 |
+| `gain` | Input gain in dB | 0.0 | 0-40 |
+| `tone` | Tone tilt in dB (boost/cut) | 0.0 | -12 to 12 |
 | `output` | Output level in dB | 0.0 | -20 to 20 |
-| `headroom` | Headroom in dB | 20.0 | 6 to 40 |
 
 ### Tips
 
-Use before other effects to boost quiet signals, or after to control output level. The headroom parameter sets the clipping ceiling -- lower values produce softer compression at high gain.
+Use before other effects to boost quiet signals, or after to control output level. The tone parameter provides a simple tilt EQ for shaping the signal before downstream effects.
 
 ### Example
 
@@ -332,7 +345,7 @@ The right channel uses slightly offset tunings (`reverb.rs:17`) for stereo decor
 
 The 4 series allpass filters provide diffusion -- they smear the distinct echoes from the comb filters into a dense, smooth reverb tail. The allpass feedback coefficient is fixed at 0.5 (`reverb.rs:139`).
 
-**Comb filter feedback** (`reverb.rs:292-295`): The feedback coefficient combines room_size and decay parameters:
+**Comb filter feedback** (`reverb.rs:292-295`): The feedback coefficient combines room_size and decay parameters (internally normalized to 0-1 from the user-facing 0-100% range):
 ```
 scaled_room = 0.28 + room_size * 0.7    (range: 0.28 to 0.98)
 feedback = scaled_room + decay * (0.98 - scaled_room)
@@ -341,31 +354,27 @@ This mapping ensures the feedback stays below 1.0 (stable) while providing a wid
 
 **Gain compensation:** The comb output is scaled by `sqrt(1-feedback)` — moderate compensation suited to the parallel-comb topology. The 1/8 averaging across 8 combs provides ~18 dB additional headroom, so the exact `(1-fb)` formula used by single-comb effects (delay, flanger) would be unnecessarily aggressive. See `docs/DSP_FUNDAMENTALS.md` (Feedback Resonance Compensation) and ADR-019.
 
-**Stereo width** (`reverb.rs:396-402`): A mid/side matrix controls stereo width. At width=0, both channels receive the average (mono). At width=1, channels are fully independent.
+**Stereo width** (`reverb.rs:396-402`): A mid/side matrix controls stereo width. At width=0%, both channels receive the average (mono). At width=100%, channels are fully independent.
 
 | Parameter | Description | Default | Range |
 |-----------|-------------|---------|-------|
-| `room_size` | Room size (affects early reflection density) | 0.5 | 0-1 |
-| `decay` | Decay time (reverb tail length) | 0.5 | 0-1 |
-| `damping` | HF damping (0=bright, 1=dark) | 0.5 | 0-1 |
+| `room_size` | Room size % (affects early reflection density) | 50.0 | 0-100 |
+| `decay` | Decay time % (reverb tail length) | 50.0 | 0-100 |
+| `damping` | HF damping % (0=bright, 100=dark) | 50.0 | 0-100 |
 | `predelay` | Pre-delay time in ms | 10.0 | 0-100 |
-| `mix` | Wet/dry mix (0-1) | 0.5 | 0-1 |
-| `stereo_width` | Stereo width (0-100%) | 100.0 | 0-100 |
-| `reverb_type` | Reverb type (0=room, 1=hall) | 0.0 | 0-1 |
+| `mix` | Wet/dry mix % | 50.0 | 0-100 |
+| `width` | Stereo width % | 100.0 | 0-100 |
+| `er_level` | Early reflections level % | 50.0 | 0-100 |
 | `output` | Output level in dB | 0.0 | -20 to 20 |
-
-### Reverb Types
-
-- **room**: Small room with short decay (room_size=0.4, decay=0.5, damping=0.5, predelay=10ms)
-- **hall**: Large hall with long decay (room_size=0.8, decay=0.8, damping=0.3, predelay=25ms)
 
 ### Tips
 
-- **Small room**: room_size=0.3, decay=0.4, damping=0.6 - Tight, intimate sound
-- **Medium room**: room_size=0.5, decay=0.6, damping=0.4 - Balanced, natural
-- **Large hall**: room_size=0.8, decay=0.85, damping=0.25 - Spacious, epic
-- **Dark reverb**: damping=0.7-0.9 - Muffled, vintage sound
-- **Bright reverb**: damping=0.1-0.3 - Shimmery, modern sound
+- **Small room**: room_size=30, decay=40, damping=60 - Tight, intimate sound
+- **Medium room**: room_size=50, decay=60, damping=40 - Balanced, natural
+- **Large hall**: room_size=80, decay=85, damping=25 - Spacious, epic
+- **Dark reverb**: damping=70-90 - Muffled, vintage sound
+- **Bright reverb**: damping=10-30 - Shimmery, modern sound
+- **Early reflections**: er_level=70-100 — more defined room shape; 0 = tail only
 - **Pre-delay**: 10-30ms for clarity, keeps source separate from reverb
 - **Latency**: Reverb reports 0 latency samples. Predelay is a musical parameter, not processing latency (per CLAP/VST3 spec)
 
@@ -374,15 +383,15 @@ This mapping ensures the feedback stays below 1.0 (stable) while providing a wid
 ```bash
 # Room reverb
 sonido process in.wav --effect reverb \
-    --param room_size=0.5 --param decay=0.6 --param mix=0.4
+    --param room_size=50 --param decay=60 --param mix=40
 
-# Hall reverb preset
+# Large hall
 sonido process in.wav --effect reverb \
-    --param reverb_type=1 --param mix=0.5
+    --param room_size=80 --param decay=85 --param er_level=70 --param mix=50
 
 # Custom dark hall
 sonido process in.wav --effect reverb \
-    --param room_size=0.8 --param decay=0.9 --param damping=0.7 --param predelay=25
+    --param room_size=80 --param decay=90 --param damping=70 --param predelay=25
 ```
 
 ---
@@ -394,9 +403,9 @@ Amplitude modulation with multiple waveforms.
 | Parameter | Description | Default | Range |
 |-----------|-------------|---------|-------|
 | `rate` | LFO rate in Hz | 5.0 | 0.5-20 |
-| `depth` | Modulation depth (0-1) | 0.5 | 0-1 |
-| `waveform` | Waveform type | sine | sine, triangle, square, samplehold |
-| `spread` | Stereo spread (0-1) | 0.0 | 0-1 |
+| `depth` | Modulation depth % | 50.0 | 0-100 |
+| `waveform` | Waveform type (0=Sine, 1=Triangle, 2=Square, 3=SampleHold) | 0 | 0-3 |
+| `spread` | Stereo spread % | 0.0 | 0-100 |
 | `sync` | Tempo sync on/off | off | off, on |
 | `division` | Note division (when synced) | eighth | whole, half, quarter, eighth, etc. |
 | `output` | Output level in dB | 0.0 | -20 to 20 |
@@ -410,15 +419,15 @@ Amplitude modulation with multiple waveforms.
 
 ### Tips
 
-- **Subtle tremolo**: rate=4, depth=0.3 - Gentle pulsing
-- **Classic tremolo**: rate=6, depth=0.5 - Vintage amp sound
-- **Choppy tremolo**: rate=8, depth=0.8, waveform=square - Rhythmic gating
+- **Subtle tremolo**: rate=4, depth=30 - Gentle pulsing
+- **Classic tremolo**: rate=6, depth=50 - Vintage amp sound
+- **Choppy tremolo**: rate=8, depth=80, waveform=2 - Rhythmic gating
 
 ### Example
 
 ```bash
 sonido process in.wav --effect tremolo \
-    --param rate=6 --param depth=0.5 --param waveform=sine
+    --param rate=6 --param depth=50 --param waveform=0
 ```
 
 ---
@@ -433,6 +442,9 @@ Noise gate with threshold and hold.
 | `attack` | Attack time in ms | 1.0 | 0.1-50 |
 | `release` | Release time in ms | 100.0 | 10-1000 |
 | `hold` | Hold time in ms | 50.0 | 0-500 |
+| `range` | Gate range (maximum attenuation) in dB | -80.0 | -80 to 0 |
+| `hysteresis` | Hysteresis margin in dB | 3.0 | 0-12 |
+| `sidechain_freq` | Sidechain HPF frequency in Hz | 80.0 | 20-500 |
 | `output` | Output level in dB | 0.0 | -20 to 20 |
 
 ### Tips
@@ -466,9 +478,9 @@ Classic flanger with modulated short delay.
 | Parameter | Description | Default | Range |
 |-----------|-------------|---------|-------|
 | `rate` | LFO rate in Hz | 0.5 | 0.05-5 |
-| `depth` | Modulation depth (0-1) | 0.35 | 0-1 |
-| `feedback` | Feedback amount (-0.95 to 0.95) | 0.5 | -0.95 to 0.95 |
-| `mix` | Wet/dry mix (0-1) | 0.5 | 0-1 |
+| `depth` | Modulation depth % | 35.0 | 0-100 |
+| `feedback` | Feedback amount % (negative = inverted polarity) | 50.0 | -95 to 95 |
+| `mix` | Wet/dry mix % | 50.0 | 0-100 |
 | `tzf` | Through-zero flanging on/off | off | off, on |
 | `sync` | Tempo sync on/off | off | off, on |
 | `division` | Note division (when synced) | eighth | whole, half, quarter, eighth, etc. |
@@ -486,16 +498,16 @@ All three are modulation effects, but they differ in mechanism:
 
 ### Tips
 
-- **Subtle flanger**: rate=0.2, depth=0.3, feedback=0.3
-- **Classic flanger**: rate=0.5, depth=0.5, feedback=0.5
-- **Jet flanger**: rate=0.1, depth=0.8, feedback=0.8 - Slow, dramatic sweep
-- **Metallic**: high feedback (0.7+) creates resonant metallic tones
+- **Subtle flanger**: rate=0.2, depth=30, feedback=30
+- **Classic flanger**: rate=0.5, depth=50, feedback=50
+- **Jet flanger**: rate=0.1, depth=80, feedback=80 - Slow, dramatic sweep
+- **Metallic**: high feedback (70%+) creates resonant metallic tones
 
 ### Example
 
 ```bash
 sonido process in.wav --effect flanger \
-    --param rate=0.5 --param depth=0.6 --param feedback=0.5 --param mix=0.5
+    --param rate=0.5 --param depth=60 --param feedback=50 --param mix=50
 ```
 
 ---
@@ -519,10 +531,10 @@ When the allpass-shifted signal is mixed with the original, a notch appears at t
 | Parameter | Description | Default | Range |
 |-----------|-------------|---------|-------|
 | `rate` | LFO rate in Hz | 0.3 | 0.05-5 |
-| `depth` | Frequency sweep range (0-1) | 0.5 | 0-1 |
+| `depth` | Frequency sweep range % | 50.0 | 0-100 |
 | `stages` | Number of allpass stages | 6 | 2-12 |
-| `feedback` | Feedback/resonance (0-1) | 0.5 | 0-0.95 |
-| `mix` | Wet/dry mix (0-1) | 0.5 | 0-1 |
+| `feedback` | Feedback/resonance % | 50.0 | 0-95 |
+| `mix` | Wet/dry mix % | 50.0 | 0-100 |
 | `min_freq` | Minimum sweep frequency in Hz | 200.0 | 20-2000 |
 | `max_freq` | Maximum sweep frequency in Hz | 4000.0 | 200-20000 |
 | `sync` | Tempo sync on/off | off | off, on |
@@ -531,9 +543,9 @@ When the allpass-shifted signal is mixed with the original, a notch appears at t
 
 ### Tips
 
-- **Subtle phaser**: stages=4, depth=0.4, feedback=0.3
-- **Classic phaser**: stages=6, depth=0.5, feedback=0.5
-- **Deep phaser**: stages=8-12, depth=0.7, feedback=0.6
+- **Subtle phaser**: stages=4, depth=40, feedback=30
+- **Classic phaser**: stages=6, depth=50, feedback=50
+- **Deep phaser**: stages=8-12, depth=70, feedback=60
 - **More stages**: Creates more notches, thicker effect
 - **High feedback**: Resonant, almost filter-like
 
@@ -541,7 +553,7 @@ When the allpass-shifted signal is mixed with the original, a notch appears at t
 
 ```bash
 sonido process in.wav --effect phaser \
-    --param rate=0.4 --param depth=0.6 --param stages=6 --param feedback=0.5
+    --param rate=0.4 --param depth=60 --param stages=6 --param feedback=50
 ```
 
 ---
@@ -554,8 +566,8 @@ Auto-wah and manual wah with envelope follower. Also available as `autowah`.
 |-----------|-------------|---------|-------|
 | `frequency` | Center frequency in Hz | 800.0 | 200-2000 |
 | `resonance` | Filter Q (sharpness) | 5.0 | 1-10 |
-| `sensitivity` | Envelope sensitivity (0-1) | 0.5 | 0-1 |
-| `mode` | Wah mode | auto | auto, manual |
+| `sensitivity` | Envelope sensitivity % | 50.0 | 0-100 |
+| `mode` | Wah mode (0=Auto, 1=Manual) | 0 | 0-1 |
 | `output` | Output level in dB | 0.0 | -20 to 20 |
 
 ### Gain Normalization
@@ -569,9 +581,9 @@ The wah uses an SVF bandpass filter whose peak gain at the center frequency equa
 
 ### Tips
 
-- **Classic auto-wah**: frequency=600, resonance=6, sensitivity=0.7
-- **Subtle envelope**: sensitivity=0.3-0.5 for gentle sweep
-- **Aggressive**: sensitivity=0.8-1.0 for full range sweep
+- **Classic auto-wah**: frequency=600, resonance=6, sensitivity=70
+- **Subtle envelope**: sensitivity=30-50 for gentle sweep
+- **Aggressive**: sensitivity=80-100 for full range sweep
 - **High Q** (8-10): Classic narrow wah tone
 - **Low Q** (2-4): Wider, smoother sweep
 
@@ -580,11 +592,11 @@ The wah uses an SVF bandpass filter whose peak gain at the center frequency equa
 ```bash
 # Auto-wah
 sonido process in.wav --effect wah \
-    --param frequency=700 --param resonance=6 --param sensitivity=0.7
+    --param frequency=700 --param resonance=6 --param sensitivity=70
 
 # Manual wah (fixed position)
 sonido process in.wav --effect wah \
-    --param frequency=1200 --param mode=manual
+    --param frequency=1200 --param mode=1
 ```
 
 ---
@@ -813,55 +825,55 @@ effect1:param1=value1,param2=value2|effect2:param=value
 
 **Guitar Crunch**
 ```bash
---chain "preamp:gain=6|distortion:drive=12,tone=4000"
+--chain "preamp:gain=6|distortion:drive=12,tone=-2"
 ```
 
 **Tape Echo**
 ```bash
---chain "tape:drive=4,saturation=0.4|delay:time=350,feedback=0.45"
+--chain "tape:drive=4,saturation=40|delay:time=350,feedback=45"
 ```
 
 **Lush Chorus**
 ```bash
---chain "compressor:threshold=-18,ratio=3|chorus:rate=1,depth=0.5|delay:time=30,mix=0.2"
+--chain "compressor:threshold=-18,ratio=3|chorus:rate=1,depth=50|delay:time=30,mix=20"
 ```
 
 **Lo-Fi**
 ```bash
---chain "tape:drive=8,saturation=0.6|filter:cutoff=4000|vibrato:depth=0.3"
+--chain "tape:drive=8,saturation=60|filter:cutoff=4000|vibrato:depth=80"
 ```
 
 **Ambient Wash**
 ```bash
---chain "delay:time=400,feedback=0.5,mix=0.3|reverb:decay=0.9,room_size=0.8,mix=0.6"
+--chain "delay:time=400,feedback=50,mix=30|reverb:decay=90,room_size=80,mix=60"
 ```
 
 **Guitar Hall**
 ```bash
---chain "distortion:drive=10|compressor:threshold=-18|reverb:reverb_type=1,mix=0.4"
+--chain "distortion:drive=10|compressor:threshold=-18|reverb:room_size=80,decay=80,mix=40"
 ```
 
 **Funk Wah**
 ```bash
---chain "compressor:threshold=-15,ratio=4|wah:sensitivity=0.8,resonance=7"
+--chain "compressor:threshold=-15,ratio=4|wah:sensitivity=80,resonance=7"
 ```
 
 **Clean Chorus with EQ**
 ```bash
---chain "eq:lf=80,lg=3,hf=6000,hg=2|chorus:rate=1,depth=0.5|reverb:mix=0.3"
+--chain "eq:lf=80,lg=3,hf=6000,hg=2|chorus:rate=1,depth=50|reverb:mix=30"
 ```
 
 **Gated Tremolo**
 ```bash
---chain "gate:threshold=-45|tremolo:rate=6,depth=0.7,waveform=square"
+--chain "gate:threshold=-45|tremolo:rate=6,depth=70,waveform=2"
 ```
 
 **80s Phaser Lead**
 ```bash
---chain "distortion:drive=8|phaser:rate=0.3,stages=8,feedback=0.6|delay:time=350,feedback=0.4"
+--chain "distortion:drive=8|phaser:rate=0.3,stages=8,feedback=60|delay:time=350,feedback=40"
 ```
 
 **Jet Flanger**
 ```bash
---chain "compressor:threshold=-20|flanger:rate=0.1,depth=0.9,feedback=0.8"
+--chain "compressor:threshold=-20|flanger:rate=0.1,depth=90,feedback=80"
 ```

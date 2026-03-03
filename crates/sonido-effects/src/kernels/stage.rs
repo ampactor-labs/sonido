@@ -1,15 +1,9 @@
-//! Stage kernel — pure DSP with separated parameter ownership.
+//! Stage kernel — stereo imaging with width, balance, Haas delay, and bass mono.
 //!
-//! Implements the Stage effect using the kernel architecture.
-//! The DSP math is identical; the difference is structural:
-//!
-//! - **Classic `Stage`**: owns `SmoothedParam` for gain/width/balance/haas/output,
-//!   manages smoothing internally, implements `Effect` + `ParameterInfo` via `impl_params!`.
-//!
-//! - **`StageKernel`**: owns ONLY DSP state (DC blockers, LR4 biquads, Haas delay line).
-//!   Parameters are received via `&StageParams` on each processing call.
-//!   Deployed via [`KernelAdapter`](sonido_core::KernelAdapter) for desktop/plugin,
-//!   or called directly on embedded targets.
+//! `StageKernel` owns DSP state (DC blockers, LR4 biquads, Haas delay line).
+//! Parameters are received via `&StageParams` each sample. Deployed via
+//! [`KernelAdapter`](sonido_core::KernelAdapter) for desktop/plugin, or called
+//! directly on embedded targets.
 //!
 //! # Signal Flow
 //!
@@ -83,17 +77,6 @@ use sonido_core::{
     Biquad, DcBlocker, InterpolatedDelay, ParamDescriptor, ParamFlags, ParamId, ParamScale,
     ParamUnit, fast_db_to_linear,
 };
-
-// ── Unit conversion ───────────────────────────────────────────────────────────
-
-/// Fast dB-to-linear conversion for per-sample use.
-///
-/// Uses `sonido_core::fast_db_to_linear` — polynomial approximation
-/// (~0.1 dB accuracy, ~4× faster than `10^(db/20)`).
-#[inline]
-fn db_to_gain(db: f32) -> f32 {
-    fast_db_to_linear(db)
-}
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -529,13 +512,13 @@ impl DspKernel for StageKernel {
     ///
     /// 1. **Phase invert** — negate left if `phase_l ≥ 0.5`, right if `phase_r ≥ 0.5`.
     /// 2. **Channel mode** — Normal (0), Swap (1), Mono-L (2), Mono-R (3).
-    /// 3. **Input gain** — `db_to_gain(params.gain_db)` applied to both channels.
+    /// 3. **Input gain** — `fast_db_to_linear(params.gain_db)` applied to both channels.
     /// 4. **DC block** — if `dc_block ≥ 0.5`, route through per-channel DC blockers.
     /// 5. **M/S width** — encode to mid/side, scale side by `width_pct/100`, decode.
     /// 6. **Balance** — attenuate left or right with `min(1.0, 1.0 ∓ balance)`.
     /// 7. **Bass mono** — if `bass_mono ≥ 0.5`, split at crossover and mono-sum lows.
     /// 8. **Haas delay** — if `haas_ms > 0.01 samples`, delay the selected channel.
-    /// 9. **Output level** — `db_to_gain(params.output_db)` applied to both channels.
+    /// 9. **Output level** — `fast_db_to_linear(params.output_db)` applied to both channels.
     fn process_stereo(&mut self, left: f32, right: f32, params: &StageParams) -> (f32, f32) {
         // ── 1. Phase invert ──
         let mut l = if params.phase_l >= 0.5 { -left } else { left };
@@ -550,7 +533,7 @@ impl DspKernel for StageKernel {
         }
 
         // ── 3. Input gain ──
-        let input_gain = db_to_gain(params.gain_db);
+        let input_gain = fast_db_to_linear(params.gain_db);
         l *= input_gain;
         r *= input_gain;
 
@@ -615,7 +598,7 @@ impl DspKernel for StageKernel {
         }
 
         // ── 9. Output level ──
-        let output_gain = db_to_gain(params.output_db);
+        let output_gain = fast_db_to_linear(params.output_db);
         (l * output_gain, r * output_gain)
     }
 

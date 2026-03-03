@@ -1,16 +1,10 @@
-//! Reverb kernel — pure DSP with separated parameter ownership.
+//! Reverb kernel — 8-line Hadamard FDN with early reflections and allpass diffusion.
 //!
-//! Implements the Reverb effect using the kernel architecture.
-//! The DSP math is identical; the difference is structural:
-//!
-//! - **Classic `Reverb`**: owns `SmoothedParam` for all parameters, manages
-//!   smoothing internally, implements `Effect` + `ParameterInfo` via `impl_params!`.
-//!
-//! - **`ReverbKernel`**: owns ONLY DSP state (FDN delay lines, damping filters,
-//!   allpass diffusers, predelay lines, ER tapped delay). Parameters are received
-//!   via `&ReverbParams` on each processing call. Deployed via
-//!   [`KernelAdapter`](sonido_core::KernelAdapter) for desktop/plugin, or called
-//!   directly on embedded targets.
+//! `ReverbKernel` owns DSP state (FDN delay lines, damping filters, allpass
+//! diffusers, predelay lines, ER tapped delay). Parameters are received via
+//! `&ReverbParams` each sample. Deployed via
+//! [`KernelAdapter`](sonido_core::KernelAdapter) for desktop/plugin, or called
+//! directly on embedded targets.
 //!
 //! # Architecture
 //!

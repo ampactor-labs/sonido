@@ -1,17 +1,9 @@
-//! 3-band parametric EQ kernel — pure DSP with separated parameter ownership.
+//! 3-band parametric EQ kernel — low shelf, peaking mid, and high shelf with output gain.
 //!
-//! Implements the EQ effect using the kernel architecture.
-//! The DSP math is identical; the difference is structural:
-//!
-//! - **Classic `ParametricEq`**: owns `SmoothedParam` for all 10 parameters,
-//!   manages smoothing internally, implements `Effect` + `ParameterInfo` via
-//!   `impl_params!`.
-//!
-//! - **`EqKernel`**: owns ONLY DSP state (six biquad filters, sample
-//!   rate, coefficient caches, decimation counter). Parameters are received via
-//!   `&EqParams` on each processing call. Deployed via
-//!   [`KernelAdapter`](sonido_core::KernelAdapter) for desktop/plugin, or called
-//!   directly on embedded targets.
+//! `EqKernel` owns DSP state (six biquad filters, sample rate, coefficient
+//! caches, decimation counter). Parameters are received via `&EqParams` each
+//! sample. Deployed via [`KernelAdapter`](sonido_core::KernelAdapter) for
+//! desktop/plugin, or called directly on embedded targets.
 //!
 //! # Signal Flow
 //!
@@ -92,17 +84,6 @@ const COEFF_UPDATE_INTERVAL: u32 = 32;
 /// smoothed value by more than this epsilon, the band's biquad coefficients
 /// are recomputed at the next decimation boundary.
 const CHANGE_EPSILON: f32 = 0.001;
-
-// ── Unit conversion ───────────────────────────────────────────────────────────
-
-/// Fast dB-to-linear conversion for per-sample use.
-///
-/// Uses `sonido_core::fast_db_to_linear`, a polynomial approximation with
-/// ~0.1 dB accuracy — approximately 4× faster than `10^(db/20)`.
-#[inline]
-fn db_to_gain(db: f32) -> f32 {
-    fast_db_to_linear(db)
-}
 
 // ═══════════════════════════════════════════════════════════════════════════
 //  Parameters
@@ -628,7 +609,7 @@ impl DspKernel for EqKernel {
         }
 
         // ── Unit conversion ───────────────────────────────────────────────────
-        let output_gain = db_to_gain(params.output_db);
+        let output_gain = fast_db_to_linear(params.output_db);
 
         // ── Signal path: Low → Mid → High → Soft Limit → Output Level ────────
         // Left channel through L filters

@@ -1,15 +1,9 @@
-//! Clean preamp kernel — pure DSP with separated parameter ownership.
+//! Clean preamp kernel — gain staging with tone control and soft clipping.
 //!
-//! Implements the CleanPreamp effect using the kernel architecture.
-//! The DSP math is identical in structure; the difference is architectural:
-//!
-//! - **Classic `CleanPreamp`**: owns `SmoothedParam` for gain/output, manages
-//!   smoothing internally, implements `Effect` + `ParameterInfo` via `impl_params!`.
-//!
-//! - **`PreampKernel`**: owns ONLY DSP state (tone biquad filter, sample_rate,
-//!   cached coefficient tracking). Parameters are received via `&PreampParams`
-//!   on each processing call. Deployed via [`KernelAdapter`](sonido_core::KernelAdapter)
-//!   for desktop/plugin, or called directly on embedded targets.
+//! `PreampKernel` owns DSP state (tone biquad filter, sample rate, cached
+//! coefficient tracking). Parameters are received via `&PreampParams` each
+//! sample. Deployed via [`KernelAdapter`](sonido_core::KernelAdapter) for
+//! desktop/plugin, or called directly on embedded targets.
 //!
 //! # Signal Flow
 //!
@@ -26,7 +20,7 @@
 //! ## Gain Stage
 //!
 //! A linear gain multiplier maps `gain_db` → `10^(gain_db/20)` via
-//! [`fast_db_to_linear`](sonido_core::fast_db_to_linear). The `gain_db` range
+//! [`fast_db_to_linear`]. The `gain_db` range
 //! (0–40 dB) intentionally starts at unity; this is a boost-only preamp.
 //!
 //! ## Soft Clipping
@@ -72,18 +66,9 @@ use libm::tanhf;
 
 use sonido_core::kernel::{DspKernel, KernelParams, SmoothingStyle};
 use sonido_core::math::soft_limit;
-use sonido_core::{Biquad, ParamDescriptor, ParamId, ParamUnit, peaking_eq_coefficients};
-
-// ── Unit conversion (inlined, no_std safe) ──
-
-/// Fast dB-to-linear conversion for per-sample use.
-///
-/// Uses `sonido_core::fast_db_to_linear` which is a polynomial approximation
-/// (~0.05 dB accuracy, ~4× faster than `10^(db/20)`).
-#[inline]
-fn db_to_gain(db: f32) -> f32 {
-    sonido_core::fast_db_to_linear(db)
-}
+use sonido_core::{
+    Biquad, ParamDescriptor, ParamId, ParamUnit, fast_db_to_linear, peaking_eq_coefficients,
+};
 
 // ── Constants ──
 
@@ -330,8 +315,8 @@ impl DspKernel for PreampKernel {
         }
 
         // ── Unit conversion (user-facing → internal) ──
-        let gain = db_to_gain(params.gain_db);
-        let output = db_to_gain(params.output_db);
+        let gain = fast_db_to_linear(params.gain_db);
+        let output = fast_db_to_linear(params.output_db);
 
         // ── Gain stage ──
         let driven_l = left * gain;

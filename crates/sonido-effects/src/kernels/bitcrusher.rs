@@ -1,15 +1,9 @@
-//! Bitcrusher kernel — pure DSP with separated parameter ownership.
+//! Bitcrusher kernel — bit-depth reduction and sample-rate decimation with jitter.
 //!
-//! Implements the Bitcrusher effect using the kernel architecture.
-//! The DSP math is identical; the difference is structural:
-//!
-//! - **Classic `Bitcrusher`**: owns `SmoothedParam` for bit_depth/downsample/output,
-//!   manages smoothing internally, implements `Effect` + `ParameterInfo` directly.
-//!
-//! - **`BitcrusherKernel`**: owns ONLY DSP state (held samples, counter, RNG state).
-//!   Parameters are received via `&BitcrusherParams` on each processing call.
-//!   Deployed via [`KernelAdapter`](sonido_core::KernelAdapter) for desktop/plugin,
-//!   or called directly on embedded targets.
+//! `BitcrusherKernel` owns DSP state (held samples, counter, RNG state).
+//! Parameters are received via `&BitcrusherParams` each sample. Deployed via
+//! [`KernelAdapter`](sonido_core::KernelAdapter) for desktop/plugin, or called
+//! directly on embedded targets.
 //!
 //! # Signal Flow
 //!
@@ -46,18 +40,9 @@
 
 use libm::{floorf, powf};
 use sonido_core::kernel::{DspKernel, KernelParams, SmoothingStyle};
-use sonido_core::{ParamDescriptor, ParamFlags, ParamId, ParamUnit, wet_dry_mix_stereo};
-
-// ── Unit conversion (inlined, no_std safe) ──
-
-/// Fast dB-to-linear conversion for per-sample use.
-///
-/// Uses `sonido_core::fast_db_to_linear` which is a polynomial approximation
-/// (~0.1 dB accuracy, ~4× faster than `10^(db/20)`).
-#[inline]
-fn db_to_gain(db: f32) -> f32 {
-    sonido_core::fast_db_to_linear(db)
-}
+use sonido_core::{
+    ParamDescriptor, ParamFlags, ParamId, ParamUnit, fast_db_to_linear, wet_dry_mix_stereo,
+};
 
 // ═══════════════════════════════════════════════════════════════════════════
 //  Parameters
@@ -326,7 +311,7 @@ impl DspKernel for BitcrusherKernel {
         // Unit conversions: user-facing → kernel-internal
         let jitter = params.jitter_pct / 100.0;
         let mix = params.mix_pct / 100.0;
-        let output_gain = db_to_gain(params.output_db);
+        let output_gain = fast_db_to_linear(params.output_db);
 
         self.counter += 1.0;
         let threshold = self.threshold_with_jitter(params.rate, jitter);
