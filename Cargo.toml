@@ -139,6 +139,7 @@ case_sensitive_file_extension_comparisons = "allow"
 unnecessary_debug_formatting = "allow"
 
 [profile.dev]
+panic = "abort"
 split-debuginfo = "unpacked"
 
 # Strip full debuginfo from dependencies — keeps line tables for stack traces,
@@ -153,6 +154,7 @@ strip = "debuginfo"
 opt-level = 3
 
 [profile.release]
+panic = "abort"
 lto = true
 codegen-units = 1
 opt-level = 3
