@@ -1,12 +1,12 @@
 # Sonido
 
-Production-grade DSP framework in Rust — 19 audio effects built on a three-layer kernel architecture that runs identically on desktop plugins, CLI tools, and bare-metal ARM (Cortex-M7). Five `no_std` crates, zero-heap audio paths, `libm` for all math, `from_knobs()` on every effect for direct ADC-to-parameter mapping.
+Production-grade DSP framework in Rust — 19 audio effects built on a three-layer kernel architecture that runs identically on desktop plugins, CLI tools, and bare-metal ARM (Cortex-M7). Six `no_std` crates, zero-heap audio paths, `libm` for all math, `from_knobs()` on every effect for direct ADC-to-parameter mapping.
 
 [![CI](https://github.com/ampactor-labs/sonido/actions/workflows/ci.yml/badge.svg)](https://github.com/ampactor-labs/sonido/actions/workflows/ci.yml)
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/License-MIT%2FApache--2.0-blue.svg)](LICENSE-MIT)
 [![Rust Edition](https://img.shields.io/badge/Rust-Edition%202024-orange.svg)](https://doc.rust-lang.org/edition-guide/)
 
-12-crate Rust workspace: 19 effects, synthesis engine, spectral analysis, real-time GUI, 20 CLAP plugins — all from a shared `no_std` DSP core targeting Electrosmith Daisy Seed (STM32H750, 480 MHz Cortex-M7).
+14-crate Rust workspace: 19 effects, synthesis engine, spectral analysis, real-time GUI, 20 CLAP plugins — all from a shared `no_std` DSP core targeting Electrosmith Daisy Seed (STM32H750, 480 MHz Cortex-M7).
 
 ## Quick Start
 
@@ -134,7 +134,7 @@ let blended = DistortionParams::lerp(&clean_preset, &heavy_preset, 0.5);
 
 Target hardware: **Electrosmith Daisy Seed** (STM32H750, Cortex-M7 @ 480 MHz, 64 MB SDRAM) and **PedalPCB Hothouse** DIY pedal platform (6 knobs, 3 toggles, stereo I/O).
 
-`no_std` across 5 crates (`sonido-core`, `sonido-effects`, `sonido-synth`, `sonido-registry`, `sonido-platform`). All math via `libm`. All 19 effects provide `from_knobs()` for direct 0.0–1.0 ADC-to-parameter mapping.
+`no_std` across 6 crates (`sonido-core`, `sonido-effects`, `sonido-synth`, `sonido-registry`, `sonido-platform`, `sonido-daisy`). All math via `libm`. All 19 effects provide `from_knobs()` for direct 0.0–1.0 ADC-to-parameter mapping.
 
 ### DMA Audio Callback Example
 

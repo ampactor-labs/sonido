@@ -25,28 +25,17 @@ use defmt_rtt as _;
 use panic_probe as _;
 
 use sonido_core::kernel::DspKernel;
-use sonido_daisy::{measure_cycles, enable_cycle_counter, BLOCK_SIZE, SAMPLE_RATE, CYCLES_PER_BLOCK};
+use sonido_daisy::{
+    BLOCK_SIZE, CYCLES_PER_BLOCK, SAMPLE_RATE, enable_cycle_counter, measure_cycles,
+};
 
 use sonido_effects::kernels::{
-    PreampKernel, PreampParams,
-    DistortionKernel, DistortionParams,
-    CompressorKernel, CompressorParams,
-    GateKernel, GateParams,
-    EqKernel, EqParams,
-    WahKernel, WahParams,
-    ChorusKernel, ChorusParams,
-    FlangerKernel, FlangerParams,
-    PhaserKernel, PhaserParams,
-    TremoloKernel, TremoloParams,
-    DelayKernel, DelayParams,
-    FilterKernel, FilterParams,
-    VibratoKernel, VibratoParams,
-    TapeKernel, TapeParams,
-    ReverbKernel, ReverbParams,
-    LimiterKernel, LimiterParams,
-    BitcrusherKernel, BitcrusherParams,
-    RingModKernel, RingModParams,
-    StageKernel, StageParams,
+    BitcrusherKernel, BitcrusherParams, ChorusKernel, ChorusParams, CompressorKernel,
+    CompressorParams, DelayKernel, DelayParams, DistortionKernel, DistortionParams, EqKernel,
+    EqParams, FilterKernel, FilterParams, FlangerKernel, FlangerParams, GateKernel, GateParams,
+    LimiterKernel, LimiterParams, PhaserKernel, PhaserParams, PreampKernel, PreampParams,
+    ReverbKernel, ReverbParams, RingModKernel, RingModParams, StageKernel, StageParams, TapeKernel,
+    TapeParams, TremoloKernel, TremoloParams, VibratoKernel, VibratoParams, WahKernel, WahParams,
 };
 
 /// Benchmark a single kernel: process BLOCK_SIZE stereo samples, return cycle count.
@@ -63,8 +52,11 @@ fn report(name: &str, cycles: u32) {
     let pct_x100 = (cycles as u64 * 10000) / CYCLES_PER_BLOCK as u64;
     defmt::info!(
         "kernel={} cycles={} budget={} pct={}.{}%",
-        name, cycles, CYCLES_PER_BLOCK,
-        pct_x100 / 100, pct_x100 % 100
+        name,
+        cycles,
+        CYCLES_PER_BLOCK,
+        pct_x100 / 100,
+        pct_x100 % 100
     );
 }
 
@@ -77,8 +69,12 @@ async fn main(_spawner: embassy_executor::Spawner) {
     enable_cycle_counter(&mut cp.DCB, &mut cp.DWT);
 
     defmt::info!("=== Sonido Kernel Benchmarks ===");
-    defmt::info!("sample_rate={} block_size={} budget={} cycles",
-        SAMPLE_RATE as u32, BLOCK_SIZE, CYCLES_PER_BLOCK);
+    defmt::info!(
+        "sample_rate={} block_size={} budget={} cycles",
+        SAMPLE_RATE as u32,
+        BLOCK_SIZE,
+        CYCLES_PER_BLOCK
+    );
 
     // Preamp
     let mut k = PreampKernel::new(SAMPLE_RATE);

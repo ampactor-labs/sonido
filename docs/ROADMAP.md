@@ -10,12 +10,13 @@ Sonido is a production-grade DSP framework in Rust. The following capabilities a
 
 ### Crate Architecture
 
-12-crate workspace with clear dependency discipline. 5 crates are fully `no_std` (core, effects, synth, registry, platform), targeting both desktop and embedded hardware from the same implementation.
+14-crate workspace with clear dependency discipline. 6 crates are fully `no_std` (core, effects, synth, registry, platform, daisy), targeting both desktop and embedded hardware from the same implementation.
 
 | Tier | Crates |
 |------|--------|
 | no_std DSP core | sonido-core, sonido-effects, sonido-synth, sonido-registry, sonido-platform |
-| std library | sonido-config, sonido-analysis, sonido-io |
+| no_std firmware | sonido-daisy (Daisy Seed, optional build) |
+| std library | sonido-config, sonido-analysis, sonido-io, sonido-graph-dsl |
 | Applications | sonido-cli, sonido-gui-core, sonido-gui |
 | Plugin adapter | sonido-plugin (optional build) |
 

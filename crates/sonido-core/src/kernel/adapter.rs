@@ -294,9 +294,8 @@ mod tests {
         }
 
         fn set(&mut self, index: usize, value: f32) {
-            match index {
-                0 => self.gain_db = value,
-                _ => {}
+            if index == 0 {
+                self.gain_db = value;
             }
         }
     }
@@ -426,8 +425,7 @@ mod tests {
     fn adapter_load_snapshot_sets_targets() {
         let mut adapter = KernelAdapter::new(TestGainKernel, 48000.0);
 
-        let mut preset = TestGainParams::default();
-        preset.gain_db = -12.0;
+        let preset = TestGainParams { gain_db: -12.0 };
 
         adapter.load_snapshot(&preset);
         assert!(
