@@ -8,16 +8,56 @@ on:
         type: choice
         options:
           - all
+          - check
           - bench
           - coverage
           - plugin
-        default: all
+        default: check
 
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: "0"
 
 jobs:
+  check:
+    name: Lint + Test + no_std + Wasm
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    if: inputs.job == 'check' || inputs.job == 'all'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/setup-rust
+        with:
+          components: rustfmt, clippy
+          targets: wasm32-unknown-unknown
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Run clippy
+        run: cargo clippy --workspace --lib --bins --tests --benches -- -D warnings
+
+      - name: Run tests
+        run: cargo test --workspace
+
+      - name: Build documentation
+        run: cargo doc --workspace --no-deps
+        env:
+          RUSTDOCFLAGS: "-D warnings"
+
+      - name: Check no_std crates
+        run: |
+          cargo test --no-default-features -p sonido-core
+          cargo test --no-default-features -p sonido-effects
+          cargo test --no-default-features -p sonido-synth
+          cargo test --no-default-features -p sonido-registry
+          cargo test --no-default-features -p sonido-platform
+
+      - name: Check wasm compilation
+        run: cargo check --target wasm32-unknown-unknown -p sonido-gui
+
   bench:
     name: Benchmarks
     runs-on: ubuntu-latest
