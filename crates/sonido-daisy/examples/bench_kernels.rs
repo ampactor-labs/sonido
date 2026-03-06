@@ -1,8 +1,7 @@
 //! Tier 2: DWT cycle-count benchmarks for all 19 Sonido DSP kernels.
 //!
-//! Runs each kernel through a 128-sample stereo block and reports cycle counts
-//! via defmt/RTT. Compare against the per-block budget of 1,280,000 cycles
-//! (480 MHz / 375 blocks-per-second at 48 kHz).
+//! Runs each kernel through a 128-sample stereo block and reports cycle counts.
+//! Results are output via **USB serial** (CDC ACM) — no probe needed.
 //!
 //! # Build & Flash
 //!
@@ -13,28 +12,33 @@
 //! dfu-util -a 0 -s 0x90040000:leave -D bench.bin
 //! ```
 //!
-//! # Output
+//! # Read results
 //!
-//! **With probe** (defmt RTT): full table with cycle counts and percentages.
+//! After flashing, the Daisy enumerates as a USB serial device.
+//! Open it with any terminal:
 //!
-//! **Without probe** (LED): after benchmarks complete, the LED blinks a
-//! summary of all 19 kernels in order. For each kernel:
+//! ```bash
+//! cat /dev/ttyACM0
+//! # or: screen /dev/ttyACM0 115200
+//! ```
 //!
-//! 1. **Fast blinks** (100ms) = kernel index (1-based, so 1 blink = preamp,
-//!    2 = distortion, ..., 19 = stage)
-//! 2. **Pause** (600ms)
-//! 3. **Slow blinks** (300ms) = budget percentage / 10 (so 3 blinks = 30%,
-//!    0 blinks for <5%). A very long on (1s) means ≥100%.
-//! 4. **Long pause** (1.2s) before next kernel
+//! Output repeats every 5 seconds so you can connect at any time.
 //!
-//! The full sequence repeats forever so you can re-read any value.
+//! Results are also available via defmt RTT if a probe is connected.
 
 #![no_std]
 #![no_main]
 
 extern crate alloc;
 
+use core::fmt::Write as FmtWrite;
+
 use defmt_rtt as _;
+use embassy_executor::Spawner;
+use embassy_stm32::usb::Driver;
+use embassy_stm32::{bind_interrupts, peripherals, usb};
+use embassy_usb::UsbDevice;
+use embassy_usb::class::cdc_acm::{CdcAcmClass, State};
 use embedded_alloc::LlffHeap as Heap;
 use panic_probe as _;
 
@@ -56,9 +60,12 @@ use sonido_effects::kernels::{
     TapeParams, TremoloKernel, TremoloParams, VibratoKernel, VibratoParams, WahKernel, WahParams,
 };
 
+bind_interrupts!(struct Irqs {
+    OTG_FS => usb::InterruptHandler<peripherals::USB_OTG_FS>;
+});
+
 const NUM_KERNELS: usize = 19;
 
-/// Kernel names in benchmark order (for defmt output).
 const NAMES: [&str; NUM_KERNELS] = [
     "preamp",
     "distortion",
@@ -82,7 +89,6 @@ const NAMES: [&str; NUM_KERNELS] = [
 ];
 
 /// Benchmark a single kernel: create, process one block, return cycle count.
-/// Kernel is dropped at end of scope (frees heap for the next one).
 macro_rules! bench {
     ($results:expr, $idx:expr, $kernel:ty, $params:ty) => {{
         let mut k = <$kernel>::new(SAMPLE_RATE);
@@ -95,77 +101,80 @@ macro_rules! bench {
     }};
 }
 
-/// Log one result via defmt.
-fn report(name: &str, cycles: u32) {
-    let pct_x100 = (cycles as u64 * 10000) / CYCLES_PER_BLOCK as u64;
-    defmt::info!(
-        "kernel={} cycles={} budget={} pct={}.{}%",
-        name,
-        cycles,
-        CYCLES_PER_BLOCK,
-        pct_x100 / 100,
-        pct_x100 % 100
+/// Format all results into a fixed buffer. Returns the number of bytes written.
+fn format_results(results: &[u32; NUM_KERNELS], buf: &mut [u8]) -> usize {
+    struct BufWriter<'a> {
+        buf: &'a mut [u8],
+        pos: usize,
+    }
+    impl<'a> core::fmt::Write for BufWriter<'a> {
+        fn write_str(&mut self, s: &str) -> core::fmt::Result {
+            let bytes = s.as_bytes();
+            let remaining = self.buf.len() - self.pos;
+            let len = bytes.len().min(remaining);
+            self.buf[self.pos..self.pos + len].copy_from_slice(&bytes[..len]);
+            self.pos += len;
+            Ok(())
+        }
+    }
+
+    let mut w = BufWriter { buf, pos: 0 };
+    let _ = writeln!(w, "\r\n=== Sonido Kernel Benchmarks ===");
+    let _ = writeln!(
+        w,
+        "sample_rate=48000 block_size={} budget={} cycles\r",
+        BLOCK_SIZE, CYCLES_PER_BLOCK
     );
+
+    let mut total: u64 = 0;
+    for (i, &cycles) in results.iter().enumerate() {
+        let pct_x100 = (cycles as u64 * 10000) / CYCLES_PER_BLOCK as u64;
+        let _ = writeln!(
+            w,
+            "  {:>12}  {:>8} cycles  {:>3}.{:02}%\r",
+            NAMES[i],
+            cycles,
+            pct_x100 / 100,
+            pct_x100 % 100
+        );
+        total += cycles as u64;
+    }
+
+    let total_pct = (total * 10000) / CYCLES_PER_BLOCK as u64;
+    let _ = writeln!(w, "---\r");
+    let _ = writeln!(
+        w,
+        "  {:>12}  {:>8} cycles  {:>3}.{:02}% (all 19 kernels)\r",
+        "TOTAL",
+        total,
+        total_pct / 100,
+        total_pct % 100
+    );
+    let _ = writeln!(w, "=== End ===\r");
+    w.pos
 }
 
-/// Blink the LED: `count` fast pulses (100ms on/off).
-fn blink_fast(bsrr: *mut u32, count: u32) {
-    for _ in 0..count {
-        unsafe { core::ptr::write_volatile(bsrr, 1 << 7) }; // on
-        cortex_m::asm::delay(10_000_000); // ~100ms at ~100MHz post-init
-        unsafe { core::ptr::write_volatile(bsrr, 1 << (7 + 16)) }; // off
-        cortex_m::asm::delay(10_000_000);
-    }
-}
-
-/// Blink the LED: `count` slow pulses (300ms on/off).
-/// If count is 0, do one very short flash (50ms) so you know it's "zero".
-fn blink_slow(bsrr: *mut u32, count: u32) {
-    if count == 0 {
-        unsafe { core::ptr::write_volatile(bsrr, 1 << 7) };
-        cortex_m::asm::delay(5_000_000); // ~50ms
-        unsafe { core::ptr::write_volatile(bsrr, 1 << (7 + 16)) };
-        cortex_m::asm::delay(5_000_000);
-        return;
-    }
-    if count >= 10 {
-        // ≥100% — one long on (1s)
-        unsafe { core::ptr::write_volatile(bsrr, 1 << 7) };
-        cortex_m::asm::delay(100_000_000);
-        unsafe { core::ptr::write_volatile(bsrr, 1 << (7 + 16)) };
-        cortex_m::asm::delay(30_000_000);
-        return;
-    }
-    for _ in 0..count {
-        unsafe { core::ptr::write_volatile(bsrr, 1 << 7) };
-        cortex_m::asm::delay(30_000_000); // ~300ms
-        unsafe { core::ptr::write_volatile(bsrr, 1 << (7 + 16)) };
-        cortex_m::asm::delay(30_000_000);
-    }
+#[embassy_executor::task]
+async fn usb_task(mut device: UsbDevice<'static, Driver<'static, peripherals::USB_OTG_FS>>) -> ! {
+    device.run().await
 }
 
 #[embassy_executor::main]
-async fn main(_spawner: embassy_executor::Spawner) {
+async fn main(spawner: Spawner) {
     // Initialize heap — point at D2 SRAM (0x30008000, 256 KB).
-    // Safe during benchmarks: no audio DMA running, region is unused.
     unsafe {
         HEAP.init(0x3000_8000, 256 * 1024);
     }
 
     let config = daisy_embassy::default_rcc();
-    let _p = embassy_stm32::init(config);
+    let p = embassy_stm32::init(config);
 
     let mut cp = cortex_m::Peripherals::take().unwrap();
     enable_cycle_counter(&mut cp.DCB, &mut cp.DWT);
 
-    defmt::info!("=== Sonido Kernel Benchmarks ===");
-    defmt::info!(
-        "sample_rate={} block_size={} budget={} cycles",
-        SAMPLE_RATE as u32,
-        BLOCK_SIZE,
-        CYCLES_PER_BLOCK
-    );
+    defmt::info!("=== Running benchmarks... ===");
 
+    // --- Run all benchmarks first (before USB init) ---
     let mut results = [0u32; NUM_KERNELS];
 
     bench!(results, 0, PreampKernel, PreampParams);
@@ -188,50 +197,95 @@ async fn main(_spawner: embassy_executor::Spawner) {
     bench!(results, 17, RingModKernel, RingModParams);
     bench!(results, 18, StageKernel, StageParams);
 
-    // Print full results via defmt (visible with probe)
+    // Log via defmt (visible with probe)
     for (i, &cycles) in results.iter().enumerate() {
-        report(NAMES[i], cycles);
+        let pct_x100 = (cycles as u64 * 10000) / CYCLES_PER_BLOCK as u64;
+        defmt::info!(
+            "kernel={} cycles={} budget={} pct={}.{}%",
+            NAMES[i],
+            cycles,
+            CYCLES_PER_BLOCK,
+            pct_x100 / 100,
+            pct_x100 % 100
+        );
     }
-    defmt::info!("=== Benchmarks complete ===");
+    defmt::info!("=== Benchmarks complete, starting USB serial ===");
 
-    // --- LED output (visible without probe) ---
-    // Set up PC7 as output for LED signaling
-    const GPIOC_BASE: u32 = 0x5802_0800;
-    const GPIOC_BSRR: *mut u32 = (GPIOC_BASE + 0x18) as *mut u32;
-    // GPIO is already configured by embassy_stm32::init(), but ensure PC7 is output
-    const GPIOC_MODER: *mut u32 = GPIOC_BASE as *mut u32;
+    // --- Format results into a static buffer ---
+    static mut OUTPUT_BUF: [u8; 2048] = [0u8; 2048];
+    #[allow(static_mut_refs)]
+    let output_len = unsafe { format_results(&results, &mut OUTPUT_BUF) };
+
+    // --- USB CDC ACM setup ---
+    static mut EP_OUT_BUF: [u8; 256] = [0u8; 256];
+
+    #[allow(static_mut_refs)]
+    let driver = Driver::new_fs(
+        p.USB_OTG_FS,
+        Irqs,
+        p.PA12,
+        p.PA11,
+        unsafe { &mut EP_OUT_BUF },
+        embassy_stm32::usb::Config::default(),
+    );
+
+    let mut usb_config = embassy_usb::Config::new(0x1209, 0x0001);
+    usb_config.manufacturer = Some("Sonido");
+    usb_config.product = Some("Kernel Benchmarks");
+    usb_config.serial_number = Some("001");
+
+    static mut CONFIG_DESC: [u8; 256] = [0; 256];
+    static mut BOS_DESC: [u8; 256] = [0; 256];
+    static mut MSOS_DESC: [u8; 256] = [0; 256];
+    static mut CONTROL_BUF: [u8; 64] = [0; 64];
+    static mut CDC_STATE: Option<State<'static>> = None;
+
+    #[allow(static_mut_refs)]
     unsafe {
-        let val = core::ptr::read_volatile(GPIOC_MODER);
-        let val = val & !(0b11 << 14);
-        let val = val | (0b01 << 14);
-        core::ptr::write_volatile(GPIOC_MODER, val);
+        CDC_STATE = Some(State::new());
     }
 
-    // Precompute budget percentages (rounded to nearest 10%)
-    let mut pct_tens = [0u32; NUM_KERNELS];
-    for i in 0..NUM_KERNELS {
-        // (cycles * 100 / budget + 5) / 10 = rounded to nearest 10%
-        let pct = (results[i] as u64 * 100) / CYCLES_PER_BLOCK as u64;
-        pct_tens[i] = ((pct + 5) / 10) as u32;
-    }
+    #[allow(static_mut_refs)]
+    let mut builder = unsafe {
+        embassy_usb::Builder::new(
+            driver,
+            usb_config,
+            &mut CONFIG_DESC,
+            &mut BOS_DESC,
+            &mut MSOS_DESC,
+            &mut CONTROL_BUF,
+        )
+    };
 
-    // Signal "ready": 3 quick flashes
-    blink_fast(GPIOC_BSRR, 3);
-    cortex_m::asm::delay(60_000_000); // 600ms pause
+    #[allow(static_mut_refs)]
+    let mut class = unsafe { CdcAcmClass::new(&mut builder, CDC_STATE.as_mut().unwrap(), 64) };
 
-    // Loop forever: blink all 19 results, then repeat
+    let usb = builder.build();
+    spawner.spawn(usb_task(usb)).unwrap();
+
+    // --- Send results over USB serial, repeating forever ---
     loop {
-        for i in 0..NUM_KERNELS {
-            // Kernel index (1-based): fast blinks
-            blink_fast(GPIOC_BSRR, (i as u32) + 1);
-            // Pause between index and value
-            cortex_m::asm::delay(60_000_000); // 600ms
-            // Budget percentage / 10: slow blinks
-            blink_slow(GPIOC_BSRR, pct_tens[i]);
-            // Long pause before next kernel
-            cortex_m::asm::delay(120_000_000); // 1.2s
+        class.wait_connection().await;
+        defmt::info!("USB serial connected");
+
+        #[allow(static_mut_refs)]
+        let data = unsafe { &OUTPUT_BUF[..output_len] };
+
+        loop {
+            // Send in 64-byte chunks (USB FS max packet)
+            let mut sent = false;
+            for chunk in data.chunks(64) {
+                if class.write_packet(chunk).await.is_err() {
+                    break;
+                }
+                sent = true;
+            }
+            if !sent {
+                break; // disconnected
+            }
+
+            // Wait 5 seconds before repeating
+            embassy_time::Timer::after_secs(5).await;
         }
-        // Extra-long pause between full cycles
-        cortex_m::asm::delay(300_000_000); // 3s
     }
 }

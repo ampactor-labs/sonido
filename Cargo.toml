@@ -14,13 +14,12 @@ members = [
     "crates/sonido-synth",
     "crates/sonido-plugin",
     "crates/sonido-graph-dsl",
+]
+exclude = [
+    # Requires thumbv7em-none-eabihf cross-compilation target.
+    # Build from crate dir: cd crates/sonido-daisy && cargo build --release
     "crates/sonido-daisy",
 ]
-# sonido-plugin is excluded: it depends on clack (C FFI), which requires
-# unsafe_code — incompatible with the workspace-wide unsafe_code = "deny" lint.
-# Build it explicitly: cargo build -p sonido-plugin
-# sonido-daisy requires thumbv7em-none-eabihf target (embedded ARM).
-# Build it explicitly: cargo check -p sonido-daisy --target thumbv7em-none-eabihf
 default-members = [
     "crates/sonido-core",
     "crates/sonido-effects",

@@ -14,6 +14,7 @@ sonido-effects = { path = "../sonido-effects", default-features = false }
 embassy-executor = { version = "0.9", features = ["arch-cortex-m", "executor-thread"] }
 embassy-time = "0.5"
 embassy-stm32 = { version = "0.5", features = ["stm32h750ib"] }
+embassy-usb = "0.5"
 
 # Daisy Seed BSP
 daisy-embassy = { version = "0.2", default-features = false }
