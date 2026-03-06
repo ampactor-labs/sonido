@@ -591,6 +591,91 @@ Phase 3+ requires the Hothouse enclosure for proper control surface testing.
 
 ---
 
+## Hardware Interface Gaps
+
+Production pedal deployment requires hardware interface features not yet implemented.
+These items are tracked in `docs/ROADMAP.md` (Embedded Hardening section).
+
+### Expression Pedal Input
+
+TRS expression pedals output a variable voltage (typically 0-3.3V) via a potentiometer
+wiper. The ADC reads this as a continuous value, but real expression pedals have:
+
+- **Calibration variance**: Different pedals have different min/max ADC values
+  (some only sweep 0.05-0.92). Heel/toe calibration stores per-pedal endpoints.
+- **Response curves**: Linear voltage ≠ linear perceived response for many parameters.
+  A logarithmic curve for volume, S-curve for wah sweep, or custom LUT for scene morphing.
+- **Polarity detection**: Some pedals are wired tip-hot, others ring-hot. Auto-detect
+  on first sweep or manual toggle.
+
+Implementation: `ControlType::Expression` in `sonido-platform`, with `ExpressionConfig`
+struct holding calibration + curve + polarity.
+
+### CV Input (Eurorack Crossover)
+
+Eurorack CV signals are ±5V (bipolar) or 0-5V (unipolar). The Daisy Seed's ADC reads
+0-3.3V, so external conditioning (voltage divider + offset) is needed for bipolar signals.
+
+Implementation: `ControlType::CvInput` with voltage range, scaling, and offset parameters.
+The `ControlMapper` maps conditioned ADC values to kernel parameters.
+
+### MIDI CC Routing
+
+MIDI CC messages arrive via UART (pins D13/D14 on Daisy Seed, exposed on Hothouse).
+Routing maps CC numbers to effect parameters via `ControlId::midi(0x02XX)`.
+
+Features needed:
+- CC learn mode (footswitch-triggered)
+- Program Change → preset recall
+- MIDI Clock → `TempoManager` sync
+- Running status parsing for bandwidth efficiency
+
+### Pot Calibration and Dead Zones
+
+Real potentiometers don't sweep 0.0-1.0. Typical range is 0.003-0.991, and the
+relationship between rotation and resistance is only approximately linear.
+
+Per-pot calibration:
+- Store min/max ADC values per knob in flash
+- Remap raw ADC to 0.0-1.0 within calibrated range
+- Dead zones: ignore movement below a threshold near min/max (prevents jitter)
+- Hysteresis: require N-step ADC change before updating (noise rejection)
+
+### Control Curves
+
+Different parameters need different response curves from the same physical knob:
+- **Linear**: Most parameters (depth, mix, rate)
+- **Logarithmic**: Frequency, volume (perceptual linearity)
+- **Reverse log**: Attack/release times
+- **S-curve**: Crossfade, morph position
+- **Custom LUT**: 16-32 point lookup table for arbitrary response
+
+Applied in `ControlMapper::map_control()` after calibration, before parameter dispatch.
+
+### Parameter Pages
+
+6 knobs × 1 page = 6 parameters. Most effects have 5-11 parameters. Parameter pages
+multiply the available controls:
+
+- Footswitch long-press (>500ms) cycles pages
+- LED blink count indicates current page
+- Knob pickup: when switching pages, knobs don't jump — the parameter only updates
+  when the knob crosses the stored value (prevents audio glitches on page change)
+- Typical layout: Page 1 = primary controls, Page 2 = secondary/modifier, Page 3 = utility
+
+### Debounce
+
+Mechanical switches bounce for 5-30ms after state change. Without debounce, a single
+press registers as multiple events.
+
+Implementation: `Debouncer<const N: usize>` struct in `sonido-platform`:
+- Configurable debounce window (default 30ms)
+- Edge-triggered mode for footswitches (detect press/release)
+- Level-triggered mode for toggles (detect stable position)
+- Generic over pin count (N) for batch processing
+
+---
+
 ## See Also
 
 - [Architecture](ARCHITECTURE.md) -- Crate dependency graph and design overview

@@ -296,6 +296,44 @@ See ADR-025 in `docs/DESIGN_DECISIONS.md` for full architectural rationale.
 
 ---
 
+### Embedded Hardening
+
+**Status:** Not started
+
+Hardware interface features required for production pedal deployment on Hothouse/Daisy Seed.
+
+**Control types:**
+- `ControlType::Expression` — TRS expression pedal input. Range mapping (heel/toe calibration), response curve (linear/logarithmic/S-curve/custom LUT), polarity detection
+- `ControlType::CvInput` — 0-5V unipolar / +/-5V bipolar CV input for Eurorack crossover. Voltage-to-parameter scaling with configurable range and offset
+
+**MIDI routing:**
+- MIDI CC-to-parameter routing via `ControlId::midi(0x02XX)` namespace
+- Learn mode: hold footswitch + move CC → auto-assigns mapping
+- Program Change → preset recall from toggle-defined bank
+- Clock sync → TempoManager for delay/LFO tempo lock
+
+**Pot calibration:**
+- Real pots read 0.003–0.991, not 0.0–1.0. Per-pot min/max calibration stored in flash
+- Dead zone configuration: ignore movement below threshold (prevents jitter near boundaries)
+- Hysteresis: require N-step change before updating parameter (ADC noise rejection)
+
+**Control curves:**
+- Per-control response shaping: linear, logarithmic, reverse logarithmic, S-curve, custom lookup table
+- Curves stored alongside calibration data in flash
+- Applied in `ControlMapper` before parameter dispatch
+
+**Parameter pages:**
+- Footswitch long-press cycles through parameter pages
+- LED blink pattern indicates current page (1 blink = page 1, 2 blinks = page 2, etc.)
+- Each page maps 6 knobs to different parameters — extends 6-knob hardware to 18-36 parameters
+
+**Debounce utility:**
+- Software debounce for toggles and footswitches (configurable, default 30ms)
+- In `sonido-platform` as a reusable utility struct
+- Supports both edge-triggered (footswitch) and level-triggered (toggle) modes
+
+---
+
 ## Ecosystem (v0.4+)
 
 Longer-horizon items that depend on v0.3 capabilities or require external coordination.
