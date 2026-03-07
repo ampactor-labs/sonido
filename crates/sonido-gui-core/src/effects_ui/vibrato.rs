@@ -1,5 +1,6 @@
 //! Vibrato effect UI panel.
 
+use crate::theme::SonidoTheme;
 use crate::widgets::{BypassToggle, bridged_knob};
 use crate::{ParamBridge, ParamIndex, SlotIndex};
 use egui::Ui;
@@ -32,10 +33,11 @@ impl VibratoPanel {
             });
 
             ui.add_space(8.0);
+            let theme = SonidoTheme::get(ui.ctx());
             ui.label(
                 egui::RichText::new("6-unit tape wow/flutter simulation")
                     .small()
-                    .color(egui::Color32::from_rgb(120, 120, 130)),
+                    .color(theme.colors.text_secondary),
             );
         });
     }

@@ -1,5 +1,6 @@
 //! Parametric EQ effect UI panel.
 
+use crate::theme::SonidoTheme;
 use crate::widgets::{BypassToggle, Knob, gesture_wrap};
 use crate::{ParamBridge, ParamIndex, SlotIndex};
 use egui::Ui;
@@ -75,9 +76,10 @@ impl ParametricEqPanel {
         q_idx: ParamIndex,
     ) {
         ui.horizontal(|ui| {
+            let theme = SonidoTheme::get(ui.ctx());
             ui.label(
                 egui::RichText::new(label)
-                    .color(egui::Color32::from_rgb(150, 150, 160))
+                    .color(theme.colors.cyan)
                     .small(),
             );
             ui.add_space(8.0);
