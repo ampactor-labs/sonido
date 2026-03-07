@@ -1,8 +1,31 @@
 //! Level meter widgets for audio visualization.
+//!
+//! Renders segmented LED-bar meters with CRT phosphor glow. Each meter is
+//! divided into 16 discrete segments colored via [`SonidoTheme::meter_segment_color`].
+//! Active segments use [`glow::glow_rect`] for bloom; inactive segments are
+//! drawn at ghost intensity. Peak hold is displayed as a single lit segment
+//! with time-fading alpha.
 
-use egui::{Color32, Rect, Response, Sense, Stroke, StrokeKind, Ui, Widget, pos2, vec2};
+use egui::{Rect, Response, Sense, Stroke, StrokeKind, Ui, Widget, pos2, vec2};
 
-/// VU-style level meter with peak hold.
+use crate::theme::SonidoTheme;
+use crate::widgets::glow;
+
+/// Number of discrete LED segments in each meter.
+const SEGMENT_COUNT: usize = 16;
+
+/// Gap between segments in pixels.
+const SEGMENT_GAP: f32 = 0.5;
+
+/// VU-style segmented level meter with peak hold.
+///
+/// ## Parameters
+/// - `peak`: Peak level, normalized 0.0–1.5 (clamped). Values > 1.0 trigger clip indicator.
+/// - `rms`: RMS level, normalized 0.0–1.5 (clamped). Drives the main bar fill.
+/// - `label`: Optional text label drawn below the meter.
+/// - `width`: Meter width in pixels (default 24.0).
+/// - `height`: Meter height in pixels (default 120.0).
+/// - `horizontal`: If true, meter draws left-to-right instead of bottom-to-top.
 pub struct LevelMeter {
     peak: f32,
     rms: f32,
@@ -14,6 +37,8 @@ pub struct LevelMeter {
 
 impl LevelMeter {
     /// Create a new level meter.
+    ///
+    /// `peak` and `rms` are clamped to 0.0–1.5.
     pub fn new(peak: f32, rms: f32) -> Self {
         Self {
             peak: peak.clamp(0.0, 1.5),
@@ -46,29 +71,76 @@ impl LevelMeter {
         }
     }
 
-    fn peak_level_to_color(level: f32) -> Color32 {
-        if level > 0.95 {
-            Color32::from_rgb(255, 100, 100) // Bright Red
-        } else if level > 0.7 {
-            Color32::from_rgb(255, 230, 100) // Bright Yellow
+    /// Paint segmented LED meter along the primary axis.
+    ///
+    /// Segments fill from the origin (bottom for vertical, left for horizontal).
+    /// Each segment's color is determined by its normalized position via
+    /// [`SonidoTheme::meter_segment_color`]. Active segments get phosphor bloom,
+    /// inactive segments are drawn at ghost intensity.
+    fn paint_segments(
+        &self,
+        painter: &egui::Painter,
+        inner: Rect,
+        theme: &SonidoTheme,
+    ) {
+        let axis_length = if self.horizontal {
+            inner.width()
         } else {
-            Color32::from_rgb(120, 230, 120) // Bright Green
-        }
-    }
+            inner.height()
+        };
 
-    fn level_to_color(level: f32) -> Color32 {
-        if level > 0.95 {
-            Color32::from_rgb(220, 60, 60) // Red - clipping
-        } else if level > 0.7 {
-            Color32::from_rgb(220, 200, 60) // Yellow - hot
+        let total_gaps = (SEGMENT_COUNT - 1) as f32 * SEGMENT_GAP;
+        let seg_size = (axis_length - total_gaps) / SEGMENT_COUNT as f32;
+        let level = self.rms.min(1.0);
+
+        // Determine which segment the peak sits on (for peak hold)
+        let peak_seg = if self.peak > 0.01 {
+            let p = self.peak.min(1.0);
+            let idx = (p * SEGMENT_COUNT as f32).ceil() as usize;
+            Some(idx.min(SEGMENT_COUNT).saturating_sub(1))
         } else {
-            Color32::from_rgb(80, 200, 80) // Green - normal
+            None
+        };
+
+        for i in 0..SEGMENT_COUNT {
+            // Normalized position of this segment's top edge (0.0 = bottom, 1.0 = top)
+            let seg_position = (i as f32 + 1.0) / SEGMENT_COUNT as f32;
+            let seg_bottom_pos = i as f32 / SEGMENT_COUNT as f32;
+
+            let color = theme.meter_segment_color(seg_position);
+
+            // Compute segment rect along the primary axis
+            let seg_rect = if self.horizontal {
+                let x = inner.left() + i as f32 * (seg_size + SEGMENT_GAP);
+                Rect::from_min_size(pos2(x, inner.top()), vec2(seg_size, inner.height()))
+            } else {
+                // Vertical: segment 0 is at the bottom
+                let y = inner.bottom() - (i as f32 + 1.0) * seg_size - i as f32 * SEGMENT_GAP;
+                Rect::from_min_size(pos2(inner.left(), y), vec2(inner.width(), seg_size))
+            };
+
+            let is_active = level > seg_bottom_pos;
+            let is_peak = peak_seg == Some(i);
+
+            if is_active {
+                // Lit segment with phosphor bloom
+                glow::glow_rect(painter, seg_rect, color, 1.0, theme);
+            } else if is_peak {
+                // Peak hold: single lit segment with reduced alpha (fading hold)
+                let peak_color = color.gamma_multiply(0.7);
+                glow::glow_rect(painter, seg_rect, peak_color, 1.0, theme);
+            } else {
+                // Ghost (inactive) segment
+                let ghost_color = glow::ghost(color, theme);
+                painter.rect_filled(seg_rect, 1.0, ghost_color);
+            }
         }
     }
 }
 
 impl Widget for LevelMeter {
     fn ui(self, ui: &mut Ui) -> Response {
+        let theme = SonidoTheme::get(ui.ctx());
         let extra_height = if self.label.is_empty() { 0.0 } else { 18.0 };
         let size = if self.horizontal {
             vec2(self.height, self.width + extra_height)
@@ -90,82 +162,34 @@ impl Widget for LevelMeter {
                 Rect::from_min_size(rect.min, vec2(self.width, self.height))
             };
 
-            // Background
-            let bg_color = Color32::from_rgb(25, 25, 30);
-            painter.rect_filled(meter_rect, 2.0, bg_color);
+            // Background — void
+            painter.rect_filled(meter_rect, 2.0, theme.colors.void);
 
             // Border
             painter.rect_stroke(
                 meter_rect,
                 2.0,
-                Stroke::new(1.0, Color32::from_rgb(50, 50, 60)),
+                Stroke::new(1.0, theme.colors.dim),
                 StrokeKind::Inside,
             );
 
             // Inner padding
             let inner = meter_rect.shrink(2.0);
 
-            if self.horizontal {
-                // RMS bar (main level)
-                let rms_width = (self.rms.min(1.0) * inner.width()).max(0.0);
-                if rms_width > 0.0 {
-                    let rms_rect = Rect::from_min_size(inner.min, vec2(rms_width, inner.height()));
-                    painter.rect_filled(rms_rect, 1.0, Self::level_to_color(self.rms));
-                }
+            // Segmented LED bar
+            self.paint_segments(painter, inner, &theme);
 
-                // Peak indicator line
-                if self.peak > 0.01 {
-                    let peak_x = inner.left() + (self.peak.min(1.0) * inner.width());
-                    painter.line_segment(
-                        [pos2(peak_x, inner.top()), pos2(peak_x, inner.bottom())],
-                        Stroke::new(2.0, Color32::WHITE),
-                    );
-                }
-
-                // Clip indicator
-                if self.peak > 1.0 {
+            // Clip indicator (when peak > 1.0)
+            if self.peak > 1.0 {
+                if self.horizontal {
                     let clip_rect = Rect::from_min_size(
                         pos2(inner.right() - 4.0, inner.top()),
                         vec2(4.0, inner.height()),
                     );
-                    painter.rect_filled(clip_rect, 0.0, Color32::from_rgb(255, 0, 0));
-                }
-            } else {
-                // Vertical meter (default)
-                let rms_height = (self.rms.min(1.0) * inner.height()).max(0.0);
-                let peak_height = (self.peak.min(1.0) * inner.height()).max(0.0);
-
-                // RMS bar
-                if rms_height > 0.0 {
-                    let rms_rect = Rect::from_min_max(
-                        pos2(inner.left(), inner.bottom() - rms_height),
-                        inner.max,
-                    );
-                    painter.rect_filled(rms_rect, 1.0, Self::level_to_color(self.rms));
-                }
-
-                // Peak bar (on top of RMS)
-                if peak_height > rms_height {
-                    let peak_rect = Rect::from_min_max(
-                        pos2(inner.left(), inner.bottom() - peak_height),
-                        pos2(inner.right(), inner.bottom() - rms_height),
-                    );
-                    painter.rect_filled(peak_rect, 1.0, Self::peak_level_to_color(self.peak));
-                }
-
-                // Peak indicator line (thin hold line)
-                if self.peak > 0.01 {
-                    let peak_y = inner.bottom() - (self.peak.min(1.0) * inner.height());
-                    painter.line_segment(
-                        [pos2(inner.left(), peak_y), pos2(inner.right(), peak_y)],
-                        Stroke::new(1.0, Color32::WHITE.gamma_multiply(0.5)),
-                    );
-                }
-
-                // Clip indicator at top
-                if self.peak > 1.0 {
+                    glow::glow_rect(painter, clip_rect, theme.colors.red, 0.0, &theme);
+                } else {
                     let clip_rect = Rect::from_min_size(inner.min, vec2(inner.width(), 4.0));
-                    painter.rect_filled(clip_rect, 0.0, Color32::from_rgb(255, 0, 0));
+                    glow::glow_rect(painter, clip_rect, theme.colors.red, 0.0, &theme);
                 }
             }
 
@@ -177,7 +201,7 @@ impl Widget for LevelMeter {
                     egui::Align2::CENTER_TOP,
                     &self.label,
                     egui::FontId::proportional(11.0),
-                    Color32::from_rgb(150, 150, 160),
+                    theme.colors.text_secondary,
                 );
             }
         }
@@ -187,6 +211,15 @@ impl Widget for LevelMeter {
 }
 
 /// Gain reduction meter for compressor display.
+///
+/// Displays gain reduction as a segmented LED bar that lights top-down in amber.
+/// Active segments use phosphor bloom; inactive segments are drawn at ghost intensity.
+///
+/// ## Parameters
+/// - `reduction_db`: Gain reduction in dB (positive values, e.g. 6.0 = 6 dB reduction).
+/// - `max_reduction`: Maximum displayed reduction in dB (default 20.0).
+/// - `width`: Meter width in pixels (default 24.0).
+/// - `height`: Meter height in pixels (default 80.0).
 pub struct GainReductionMeter {
     reduction_db: f32,
     max_reduction: f32,
@@ -223,6 +256,7 @@ impl GainReductionMeter {
 
 impl Widget for GainReductionMeter {
     fn ui(self, ui: &mut Ui) -> Response {
+        let theme = SonidoTheme::get(ui.ctx());
         let size = vec2(self.width, self.height + 18.0);
         let (rect, response) = ui.allocate_exact_size(size, Sense::hover());
 
@@ -231,32 +265,38 @@ impl Widget for GainReductionMeter {
 
             let meter_rect = Rect::from_min_size(rect.min, vec2(self.width, self.height));
 
-            // Background
-            painter.rect_filled(meter_rect, 2.0, Color32::from_rgb(25, 25, 30));
+            // Background — void
+            painter.rect_filled(meter_rect, 2.0, theme.colors.void);
             painter.rect_stroke(
                 meter_rect,
                 2.0,
-                Stroke::new(1.0, Color32::from_rgb(50, 50, 60)),
+                Stroke::new(1.0, theme.colors.dim),
                 StrokeKind::Inside,
             );
 
             let inner = meter_rect.shrink(2.0);
+            let axis_length = inner.height();
+            let total_gaps = (SEGMENT_COUNT - 1) as f32 * SEGMENT_GAP;
+            let seg_size = (axis_length - total_gaps) / SEGMENT_COUNT as f32;
 
-            // GR bar - grows from top down (opposite of level meter)
+            // Normalized GR level (0.0 = no reduction, 1.0 = max_reduction)
             let normalized = (self.reduction_db / self.max_reduction).min(1.0);
-            let gr_height = normalized * inner.height();
+            let amber = theme.colors.amber;
+            let ghost_amber = glow::ghost(amber, &theme);
 
-            if gr_height > 0.0 {
-                let gr_rect = Rect::from_min_size(inner.min, vec2(inner.width(), gr_height));
+            // GR segments light top-down: segment 0 = topmost
+            for i in 0..SEGMENT_COUNT {
+                let seg_position = i as f32 / SEGMENT_COUNT as f32;
+                let y = inner.top() + i as f32 * (seg_size + SEGMENT_GAP);
+                let seg_rect =
+                    Rect::from_min_size(pos2(inner.left(), y), vec2(inner.width(), seg_size));
 
-                // Orange/amber color for gain reduction
-                let color = if self.reduction_db > 12.0 {
-                    Color32::from_rgb(220, 100, 50) // Heavy compression
+                let is_active = normalized > seg_position;
+                if is_active {
+                    glow::glow_rect(painter, seg_rect, amber, 1.0, &theme);
                 } else {
-                    Color32::from_rgb(220, 160, 50) // Normal
-                };
-
-                painter.rect_filled(gr_rect, 0.0, color);
+                    painter.rect_filled(seg_rect, 1.0, ghost_amber);
+                }
             }
 
             // Label
@@ -266,7 +306,7 @@ impl Widget for GainReductionMeter {
                 egui::Align2::CENTER_TOP,
                 "GR",
                 egui::FontId::proportional(11.0),
-                Color32::from_rgb(150, 150, 160),
+                theme.colors.text_secondary,
             );
         }
 
@@ -309,13 +349,21 @@ mod tests {
     }
 
     #[test]
-    fn level_to_color_thresholds() {
-        let green = LevelMeter::level_to_color(0.5);
-        let yellow = LevelMeter::level_to_color(0.8);
-        let red = LevelMeter::level_to_color(1.0);
-        assert_eq!(green, Color32::from_rgb(80, 200, 80));
-        assert_eq!(yellow, Color32::from_rgb(220, 200, 60));
-        assert_eq!(red, Color32::from_rgb(220, 60, 60));
+    fn meter_segment_color_thresholds() {
+        // Verify via theme — colors come from SonidoTheme::meter_segment_color
+        let theme = SonidoTheme::default();
+        let green = theme.meter_segment_color(0.5);
+        let yellow = theme.meter_segment_color(0.8);
+        let red = theme.meter_segment_color(1.0);
+        assert_eq!(green, theme.colors.green);
+        assert_eq!(yellow, theme.colors.yellow);
+        assert_eq!(red, theme.colors.red);
+    }
+
+    #[test]
+    fn segment_count_and_gap() {
+        assert_eq!(SEGMENT_COUNT, 16);
+        assert!((SEGMENT_GAP - 0.5).abs() < f32::EPSILON);
     }
 
     #[test]
