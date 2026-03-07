@@ -331,13 +331,14 @@ Command-line interface tying everything together.
 
 ### sonido-gui-core
 
-Shared GUI infrastructure for both standalone and plugin UIs. Contains everything needed to render effect parameter panels in any egui host.
+Shared GUI infrastructure for both standalone and plugin UIs. Contains everything needed to render effect parameter panels in any egui host. Uses an **arcade CRT** visual identity with phosphor glow, 7-segment LED displays, and void backgrounds.
 
 **Key modules:**
 - `param_bridge.rs`: `ParamBridge` trait — the abstraction boundary between GUI and audio thread. Includes `begin_set`/`end_set` gesture protocol for CLAP/VST3 undo grouping and automation recording.
 - `effects_ui/`: Per-effect parameter panels (19 effects + `EffectPanel` dispatcher)
-- `widgets/`: Knob, LevelMeter, BypassToggle, FootswitchToggle
-- `theme.rs`: Dark theme shared across all targets
+- `widgets/`: Knob (pointer-on-void with glow arc), BridgedKnob (knob + LED readout), LedDisplay (7-segment), LevelMeter (16-segment LED bar), BypassToggle (LED bloom), FootswitchToggle, MorphBar (segment crossfade)
+- `widgets/glow.rs`: Phosphor bloom rendering primitives (`glow_circle`, `glow_line`, `glow_arc`, `glow_rect`, `scanlines`)
+- `theme.rs`: `SonidoTheme` struct — single source of truth for the arcade CRT design system (colors, sizing, glow config, scanline config). Installed into `egui::Context::data()`, retrieved via `SonidoTheme::get(ctx)`. Includes `reduced_fx` flag for WASM performance.
 
 **Why a separate gui-core?** Plugin hosts (CLAP via clack) need effect UIs but not cpal audio streams or preset management. By isolating widgets, effect panels, and the ParamBridge trait into gui-core, `sonido-plugin` depends on gui-core alone and provides its own `ParamBridge` implementation (`PluginParamBridge`) backed by lock-free atomic host parameters.
 

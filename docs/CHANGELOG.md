@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Arcade CRT design system: phosphor glow, 7-segment LED displays, void backgrounds
+- `SonidoTheme` struct — single source of truth for all visual parameters
+- `glow.rs` — reusable phosphor bloom/scanline painting primitives
+- `LedDisplay` — 7-segment numeric display widget
+- Share Tech Mono font bundled for arcade typography
+
+### Changed
+- Knob: pointer-on-void style with glow arcs (removed filled body)
+- Level meter: segmented LED bar with peak hold animation
+- Toggles: LED bloom on bypass and footswitch indicators
+- Morph bar: LED segment crossfade from cyan (A) to amber (B)
+- All colors: amber-dominant CRT palette replaces blue-accent flat UI
+- All text: Share Tech Mono replaces system proportional font
+- Graph editor: category-colored glow node borders and wires
+- Effect panels: amber border frames with scanline overlay
+
 ### Changed
 - **Naming standardization**: Shortened type and file names to match registry IDs
   - `TapeSaturationKernel`/`TapeSaturationParams` → `TapeKernel`/`TapeParams` (file: `tape.rs`)

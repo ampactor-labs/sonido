@@ -2,6 +2,55 @@
 
 Sonido GUI is a professional real-time DSP effect processor built on the Sonido framework using [egui](https://github.com/emilk/egui).
 
+## Design System
+
+Sonido uses an **arcade CRT** visual identity across all GUI targets (standalone, CLAP/VST3 plugins, WASM):
+
+### Color Palette
+
+| Role | Color | Hex | Usage |
+|------|-------|-----|-------|
+| Amber | Brand primary | `#FFB833` | Knob arcs, headings, panel borders |
+| Green | Signal OK | `#33FF66` | Meter safe zone, bypass-on LED |
+| Cyan | Info/labels | `#33DDFF` | Parameter labels, secondary text |
+| Red | Danger/clip | `#FF3333` | Clipping, error states |
+| Magenta | Modulation | `#FF33AA` | Modulation effect category |
+| Yellow | Caution | `#FFDD33` | Meter hot zone |
+| Purple | Time-based | `#AA55FF` | Delay/reverb category |
+| Dim | Inactive | `#2A2A35` | Ghost segments, tracks |
+| Void | Background | `#0A0A0F` | Everything glows out of this |
+
+### Typography
+
+Share Tech Mono — bundled TTF, registered as both Monospace and Proportional.
+All text uses monospace rendering for the arcade aesthetic.
+
+### Theme Architecture
+
+`SonidoTheme` (in `sonido-gui-core/src/theme.rs`) is the single source of truth:
+- Stored in `egui::Context::data()` via `install()`, retrieved via `SonidoTheme::get(ctx)`
+- Sub-structs: `ThemeColors`, `ThemeSizing`, `GlowConfig`, `ScanlineConfig`
+- `reduced_fx` flag skips bloom + scanlines for WASM performance
+
+### Glow Primitives
+
+`widgets/glow.rs` provides phosphor bloom rendering:
+- `glow_circle()`, `glow_line()`, `glow_arc()`, `glow_rect()` — sharp element + bloom halo
+- `glow_circle_stroke()` — circle outline with bloom
+- `ghost()` — dim inactive elements to ghost alpha
+- `scanlines()` — horizontal CRT scanline overlay
+
+### Component Inventory
+
+| Widget | File | Style |
+|--------|------|-------|
+| Knob | `widgets/knob.rs` | Pointer-on-void, amber glow arc |
+| Bridged Knob | `widgets/bridged_knob.rs` | Knob + 7-segment LED readout |
+| LED Display | `widgets/led_display.rs` | 7-segment digits with ghost traces |
+| Level Meter | `widgets/meter.rs` | 16-segment LED bar, peak hold |
+| Bypass Toggle | `widgets/toggle.rs` | Green LED bloom |
+| Morph Bar | `widgets/morph_bar.rs` | 20-segment cyan→amber crossfade |
+
 ## Installation
 
 ### Native (from source)
