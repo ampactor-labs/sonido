@@ -149,7 +149,14 @@ cargo check -p sonido-daisy \
    rustup target add thumbv7em-none-eabihf
    ```
 
-5. **probe-rs** *(optional — needed for Phase 2 defmt output):*
+5. **cargo-binutils** (provides `cargo objcopy` for creating flashable binaries):
+
+   ```bash
+   cargo install cargo-binutils
+   rustup component add llvm-tools
+   ```
+
+6. **probe-rs** *(optional — only needed for defmt RTT debug output via SWD probe):*
 
    ```bash
    cargo install probe-rs-tools --locked
@@ -158,6 +165,28 @@ cargo check -p sonido-daisy \
 ### Phase 1: Validate Hardware
 
 *Bare Seed + USB. No probe required.*
+
+#### Bootloader Behavior
+
+The Electrosmith bootloader lives in the STM32's internal flash (128 KB). On every
+power-on or reset, it runs for a **2.5-second grace period**:
+
+- **LED pulses sinusoidally** — bootloader is alive and listening for DFU/media
+- **BOOT button extends grace period** — hold to keep listening (acknowledged by rapid blinks)
+- After grace period, bootloader jumps to user program (if one is stored in QSPI)
+- **No program stored** — stays in grace period indefinitely until DFU flash
+- **SOS blink pattern** (3 short, 3 long, 3 short) — invalid binary detected
+
+To enter DFU mode for flashing:
+
+1. **Hold BOOT** button
+2. **Press and release RESET** button
+3. **Release BOOT** button
+4. LED should pulse — bootloader is in DFU mode
+
+> **First-time Daisy:** The bootloader comes pre-flashed from the factory.
+> If your Seed has never been used, it will sit in the grace period with
+> a pulsing LED — this is normal and means it's ready for DFU.
 
 #### Option A — Browser flash (fastest, no Rust needed)
 
@@ -171,6 +200,9 @@ cargo check -p sonido-daisy \
 3. Open [flash.daisy.audio](https://flash.daisy.audio/) in **Chrome** (WebUSB)
 4. Click **Connect** → select **DFU in FS Mode** → **Flash Blink**
 5. LED blinks = hardware works
+
+   > **What you see:** Steady on/off blink (~1 Hz). This is the factory blink
+   > program, not the bootloader pulse. If you see this, your hardware is good.
 
 #### Option B — Sonido blinky (validates full toolchain + BOOT_SRAM)
 
@@ -193,6 +225,17 @@ dfu-util -a 0 -s 0x90040000:leave -D blinky.bin
 
 LED blinks = BOOT_SRAM path + toolchain + flash all working.
 
+> **What you see:** The `dfu-util` output ends with something like:
+> ```
+> Downloading element to address = 0x90040000, size = XXXX
+> Download done.
+> File downloaded successfully
+> dfu-util: Error during download get_status
+> ```
+> The "Error during download get_status" is **normal** — the `:leave` flag
+> causes the device to reset out of DFU mode. After reset, the bootloader
+> copies the binary from QSPI to SRAM and jumps. LED blinks = success.
+
 For Embassy runtime validation (async timer, GPIO HAL):
 
 ```bash
@@ -212,7 +255,20 @@ cargo objcopy --example bench_kernels --release -- -O binary bench.bin
 dfu-util -a 0 -s 0x90040000:leave -D bench.bin
 ```
 
-After flashing, the Daisy enumerates as a USB serial device (CDC ACM).
+> **dfu-util output:** Same as Phase 1 — "Error during download get_status" is normal.
+
+After flashing, the Daisy resets, runs benchmarks (~1 second), then enumerates
+as a USB serial device (CDC ACM). You may need a udev rule for non-root access:
+
+```bash
+# If /dev/ttyACM0 shows "permission denied":
+sudo tee /etc/udev/rules.d/50-daisy-cdc.rules << 'EOF'
+SUBSYSTEMS=="usb", ATTRS{idVendor}=="1209", ATTRS{idProduct}=="0001", \
+    MODE="0666", GROUP="plugdev", TAG+="uaccess"
+EOF
+sudo udevadm control --reload-rules && sudo udevadm trigger
+```
+
 Read results with any terminal:
 
 ```bash
@@ -231,6 +287,11 @@ sample_rate=48000 block_size=128 budget=1280000 cycles
 ...
 === End ===
 ```
+
+> **Device not appearing?** After flashing, the Daisy needs ~2 seconds to run
+> benchmarks and initialize USB. Check with `dmesg | tail` — you should see
+> `cdc_acm` and a `/dev/ttyACM*` assignment. If nothing appears, unplug and
+> replug USB (the board resets on reconnect).
 
 With an SWD probe (ST-Link V3 Mini, ~$12), results are also available via
 defmt RTT:
@@ -280,6 +341,72 @@ cargo run --example <name> --release
 
 > **Power:** USB alone is sufficient for development. External VIN (5–17V DC)
 > only needed inside the Hothouse enclosure.
+
+---
+
+## Troubleshooting
+
+### USB Cable
+
+The single most common issue. **Charge-only cables have 2 wires (power only)**;
+data cables have 4 wires (power + D+/D-). If `lsusb` shows nothing after
+entering DFU mode, try a different cable.
+
+### DFU Device Not Detected
+
+```bash
+lsusb | grep "0483:df11"
+```
+
+Should show `STMicroelectronics STM Device in DFU Mode`. If not:
+
+1. Verify DFU entry: hold BOOT, press/release RESET, release BOOT
+2. Try a different USB cable (charge-only cables won't work)
+3. Check udev rules (see Prerequisites)
+4. Try a different USB port (avoid hubs)
+
+### "Invalid DFU suffix signature" Warning
+
+```
+Warning: Invalid DFU suffix signature
+A valid DFU suffix will be required in a future dfu-util release!!!
+```
+
+This warning is **benign** — `cargo objcopy` outputs raw binaries without DFU
+suffix metadata. The flash still works. Ignore it.
+
+### "Error during download get_status"
+
+```
+dfu-util: Error during download get_status
+```
+
+This is **normal** when using the `:leave` flag in the DFU address. It means
+the device reset out of DFU mode after flashing — which is what you want.
+
+### LED Shows SOS Pattern
+
+Three short blinks, three long, three short = the bootloader found an invalid
+binary. Common causes:
+
+- Flashed a debug build (too large for 480 KB SRAM limit) — use `--release`
+- Wrong linker script (binary targets internal flash instead of SRAM)
+- Corrupted flash — re-flash with DFU
+
+### No USB Serial After Flashing bench_kernels
+
+1. Wait 2-3 seconds after reset for USB enumeration
+2. Check `dmesg | tail` for `cdc_acm` messages
+3. Unplug and replug USB to force re-enumeration
+4. Verify the correct device: `ls /dev/ttyACM*`
+
+### Breadboarding Without Soldered Headers
+
+If your Seed has headers but you're not on a carrier board: **DGND and AGND
+must be connected to each other**, even when powered only via USB. Without this
+connection, the analog ground plane floats and the codec may not initialize.
+On a bare Seed with no breakout, this isn't an issue — the PCB connects them
+internally.
 
 ---
 
