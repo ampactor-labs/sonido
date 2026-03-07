@@ -652,7 +652,7 @@ impl SonidoApp {
             .fill(theme.colors.void)
             .stroke(Stroke::new(1.0, theme.colors.amber))
             .corner_radius(theme.sizing.panel_border_radius)
-            .inner_margin(Margin::same(theme.sizing.panel_padding));
+            .inner_margin(Margin::same(theme.sizing.panel_padding as i8));
 
         let panel_response = panel_frame.show(ui, |ui| {
             ui.set_min_height(160.0);

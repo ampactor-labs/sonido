@@ -8,7 +8,8 @@
 //! `rfd::AsyncFileDialog` with bytes-based WAV parsing via `hound`.
 
 use crossbeam_channel::Sender;
-use egui::{Color32, Ui};
+use egui::Ui;
+use sonido_gui_core::theme::SonidoTheme;
 #[cfg(not(target_arch = "wasm32"))]
 use sonido_io::{read_wav_info, read_wav_stereo};
 #[cfg(not(target_arch = "wasm32"))]
@@ -364,12 +365,12 @@ impl FilePlayer {
             if self.file_name.is_empty() {
                 ui.label(
                     egui::RichText::new("No file loaded")
-                        .color(Color32::from_rgb(120, 120, 130))
+                        .color(SonidoTheme::get(ui.ctx()).colors.text_secondary)
                         .italics(),
                 );
             } else {
                 ui.label(
-                    egui::RichText::new(&self.file_name).color(Color32::from_rgb(180, 180, 190)),
+                    egui::RichText::new(&self.file_name).color(SonidoTheme::get(ui.ctx()).colors.text_primary),
                 );
             }
 
@@ -397,10 +398,11 @@ impl FilePlayer {
                 }
 
                 // Loop toggle
+                let theme = SonidoTheme::get(ui.ctx());
                 let loop_color = if self.is_looping {
-                    Color32::from_rgb(100, 200, 100)
+                    theme.colors.green
                 } else {
-                    Color32::from_rgb(120, 120, 130)
+                    theme.colors.dim
                 };
                 if ui
                     .button(egui::RichText::new("L").color(loop_color))
@@ -432,7 +434,7 @@ impl FilePlayer {
                         format_time(self.position_secs),
                         format_time(self.duration_secs),
                     ))
-                    .color(Color32::from_rgb(160, 160, 170))
+                    .color(SonidoTheme::get(ui.ctx()).colors.text_secondary)
                     .small(),
                 );
             }
