@@ -14,9 +14,13 @@
 mod bridged_knob;
 mod knob;
 mod meter;
+mod morph_bar;
 mod toggle;
 
-pub use bridged_knob::{bridged_combo, bridged_knob, bridged_knob_fmt, gesture_wrap};
+pub use bridged_knob::{
+    bridged_combo, bridged_knob, bridged_knob_fmt, bridged_knob_with_morph, gesture_wrap,
+};
 pub use knob::Knob;
 pub use meter::{GainReductionMeter, LevelMeter};
+pub use morph_bar::{MorphBarResponse, morph_bar};
 pub use toggle::{BypassToggle, FootswitchToggle};

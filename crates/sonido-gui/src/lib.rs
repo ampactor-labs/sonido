@@ -12,6 +12,7 @@ pub mod chain_view;
 pub mod dsl_console;
 pub mod file_player;
 pub mod graph_view;
+pub mod morph_state;
 pub mod preset_manager;
 pub mod theme;
 pub mod widgets;

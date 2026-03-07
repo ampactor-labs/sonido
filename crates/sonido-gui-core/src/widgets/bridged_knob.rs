@@ -13,7 +13,7 @@
 
 use super::Knob;
 use crate::{ParamBridge, ParamIndex, SlotIndex};
-use egui::{Response, Ui};
+use egui::{Color32, Response, Ui};
 use sonido_core::{ParamDescriptor, ParamUnit};
 
 /// Normalize a plain value to \[0, 1\] using the descriptor's scale, or linear fallback.
@@ -196,6 +196,92 @@ pub fn bridged_knob_fmt(
     let plain_out = denormalize(desc.as_ref(), normalized, min, max);
     gesture_wrap(&response, bridge, slot, param, plain_out, default);
     response
+}
+
+/// Like [`bridged_knob`] but with optional A/B morph ghost markers.
+///
+/// When `morph_markers` is `Some((a_value, b_value))`, thin colored arcs
+/// are drawn on the knob ring: blue for A, orange for B. These show where
+/// each snapshot's value sits on the knob sweep.
+///
+/// Values are **plain** (Hz, dB, etc.) — they are normalized internally
+/// using the parameter's [`ParamScale`](sonido_core::ParamScale).
+#[allow(clippy::too_many_arguments)]
+pub fn bridged_knob_with_morph(
+    ui: &mut Ui,
+    bridge: &dyn ParamBridge,
+    slot: SlotIndex,
+    param: ParamIndex,
+    label: &str,
+    morph_markers: Option<(f32, f32)>,
+) -> Response {
+    let response = bridged_knob(ui, bridge, slot, param, label);
+
+    if let Some((a_plain, b_plain)) = morph_markers {
+        let desc = bridge.param_descriptor(slot, param);
+        let (min, max, _) = desc
+            .as_ref()
+            .map_or((0.0, 1.0, 0.5), |d| (d.min, d.max, d.default));
+
+        let norm_a = normalize(desc.as_ref(), a_plain, min, max);
+        let norm_b = normalize(desc.as_ref(), b_plain, min, max);
+
+        let rect = response.rect;
+        // Match knob.rs layout: center is offset from rect top by diameter/2
+        let diameter = 60.0_f32;
+        let center = egui::pos2(rect.center().x, rect.top() + diameter / 2.0);
+        let radius = diameter / 2.0 - 4.0;
+        let marker_radius = radius - 2.0;
+
+        // Knob arc angles (must match knob.rs: 270-degree sweep from 135 to 405 degrees)
+        let start_angle = std::f32::consts::PI * 0.75;
+        let sweep = std::f32::consts::PI * 1.5;
+
+        let painter = ui.painter();
+
+        // A marker — blue
+        let a_angle = start_angle + norm_a * sweep;
+        draw_marker_tick(
+            painter,
+            center,
+            marker_radius,
+            a_angle,
+            Color32::from_rgb(70, 130, 220),
+        );
+
+        // B marker — orange
+        let b_angle = start_angle + norm_b * sweep;
+        draw_marker_tick(
+            painter,
+            center,
+            marker_radius,
+            b_angle,
+            Color32::from_rgb(220, 140, 50),
+        );
+    }
+
+    response
+}
+
+/// Draw a short radial tick mark at the given angle on the knob ring.
+fn draw_marker_tick(
+    painter: &egui::Painter,
+    center: egui::Pos2,
+    radius: f32,
+    angle: f32,
+    color: Color32,
+) {
+    let inner = radius - 4.0;
+    let outer = radius + 4.0;
+    let p_inner = egui::pos2(
+        center.x + angle.cos() * inner,
+        center.y + angle.sin() * inner,
+    );
+    let p_outer = egui::pos2(
+        center.x + angle.cos() * outer,
+        center.y + angle.sin() * outer,
+    );
+    painter.line_segment([p_inner, p_outer], egui::Stroke::new(2.0, color));
 }
 
 /// Render a combo box for an enum parameter bound to a [`ParamBridge`] slot.
