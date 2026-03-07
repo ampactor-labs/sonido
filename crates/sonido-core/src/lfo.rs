@@ -3,8 +3,6 @@
 //! Provides smooth, periodic modulation signals used in chorus, flanger,
 //! tremolo, vibrato, and other time-based effects.
 
-use libm::{floorf, sinf};
-
 use crate::fast_math::fast_sin_turns;
 
 use crate::tempo::NoteDivision;
@@ -63,6 +61,8 @@ pub struct Lfo {
     sh_value: f32,
     /// Previous phase (for detecting wrap)
     prev_phase: f32,
+    /// LCG pseudo-random state for Sample & Hold waveform.
+    rng_state: u32,
 }
 
 impl Default for Lfo {
@@ -81,6 +81,7 @@ impl Lfo {
             waveform: LfoWaveform::Sine,
             sh_value: 0.0,
             prev_phase: 0.0,
+            rng_state: 0x1234_5678,
         }
     }
 
@@ -108,6 +109,7 @@ impl Lfo {
     pub fn reset(&mut self) {
         self.phase = 0.0;
         self.prev_phase = 0.0;
+        self.rng_state = 0x1234_5678;
     }
 
     /// Sync phase to a specific value (0.0 - 1.0)
@@ -163,10 +165,12 @@ impl Lfo {
     pub fn advance(&mut self) -> f32 {
         // S&H: generate new random value on phase wrap (before reading)
         if self.waveform == LfoWaveform::SampleAndHold && self.phase < self.prev_phase {
-            // Simple pseudo-random using phase (hash-like magic numbers)
-            #[allow(clippy::excessive_precision)]
-            let x = sinf(self.phase * 12345.6789) * 43758.5453;
-            self.sh_value = (x - floorf(x)) * 2.0 - 1.0;
+            // LCG PRNG (Numerical Recipes constants) — ~3 cycles vs ~100 for sinf
+            self.rng_state = self
+                .rng_state
+                .wrapping_mul(1_664_525)
+                .wrapping_add(1_013_904_223);
+            self.sh_value = (self.rng_state as f32) / (u32::MAX as f32) * 2.0 - 1.0;
         }
 
         let output = self.value_at_phase();

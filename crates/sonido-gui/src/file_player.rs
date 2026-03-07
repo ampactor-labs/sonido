@@ -65,6 +65,11 @@ pub struct FilePlayer {
     use_file_input: bool,
     sample_rate: f32,
     has_file: bool,
+    /// Receives file path from background file dialog (native only).
+    #[cfg(not(target_arch = "wasm32"))]
+    native_file_rx: crossbeam_channel::Receiver<PathBuf>,
+    #[cfg(not(target_arch = "wasm32"))]
+    native_file_tx: Sender<PathBuf>,
     /// Receives file bytes loaded by async dialog (wasm only).
     #[cfg(target_arch = "wasm32")]
     file_result_rx: crossbeam_channel::Receiver<(String, Vec<u8>)>,
@@ -75,6 +80,8 @@ pub struct FilePlayer {
 impl FilePlayer {
     /// Create a new file player with the given transport command sender.
     pub fn new(transport_tx: Sender<TransportCommand>) -> Self {
+        #[cfg(not(target_arch = "wasm32"))]
+        let (native_file_tx, native_file_rx) = crossbeam_channel::unbounded();
         #[cfg(target_arch = "wasm32")]
         let (file_result_tx, file_result_rx) = crossbeam_channel::unbounded();
 
@@ -90,6 +97,10 @@ impl FilePlayer {
             use_file_input: true,
             sample_rate: 48000.0,
             has_file: false,
+            #[cfg(not(target_arch = "wasm32"))]
+            native_file_rx,
+            #[cfg(not(target_arch = "wasm32"))]
+            native_file_tx,
             #[cfg(target_arch = "wasm32")]
             file_result_rx,
             #[cfg(target_arch = "wasm32")]
@@ -130,6 +141,42 @@ impl FilePlayer {
         } else {
             self.is_playing = true;
             let _ = self.transport_tx.send(TransportCommand::Play);
+        }
+    }
+
+    /// Re-send current file_mode and file data to the audio thread.
+    ///
+    /// Called after audio stream restart (buffer size change, preset load)
+    /// because the `AudioProcessor` is recreated with a fresh `FilePlayback`.
+    pub fn resync_transport(&mut self) {
+        // Always sync the current file_mode
+        let _ = self
+            .transport_tx
+            .send(TransportCommand::SetFileMode(self.use_file_input));
+
+        // Re-send file data and restore playback state
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(ref path) = self.file_path {
+            if self.has_file {
+                if let Ok((samples, _spec)) = read_wav_stereo(path) {
+                    let _ = self.transport_tx.send(TransportCommand::LoadFile {
+                        left: samples.left,
+                        right: samples.right,
+                        sample_rate: self.sample_rate,
+                    });
+                    let _ = self
+                        .transport_tx
+                        .send(TransportCommand::SetLoop(self.is_looping));
+                    if self.position_secs > 0.0 {
+                        let _ = self
+                            .transport_tx
+                            .send(TransportCommand::Seek(self.position_secs));
+                    }
+                    if self.is_playing {
+                        let _ = self.transport_tx.send(TransportCommand::Play);
+                    }
+                }
+            }
         }
     }
 
@@ -270,6 +317,12 @@ impl FilePlayer {
 
     /// Render the file player panel (bottom bar).
     pub fn ui(&mut self, ui: &mut Ui) {
+        // Check for completed file dialog (native — spawned on background thread)
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Ok(path) = self.native_file_rx.try_recv() {
+            self.load_file(path);
+        }
+
         // Check for completed async file loads (wasm)
         #[cfg(target_arch = "wasm32")]
         if let Ok((name, bytes)) = self.file_result_rx.try_recv() {
@@ -277,14 +330,18 @@ impl FilePlayer {
         }
 
         ui.horizontal(|ui| {
-            // Browse button — platform-specific file dialog
+            // Browse button — spawned on background thread to avoid blocking GUI
             #[cfg(not(target_arch = "wasm32"))]
-            if ui.button("Open").clicked()
-                && let Some(path) = rfd::FileDialog::new()
-                    .add_filter("WAV", &["wav"])
-                    .pick_file()
-            {
-                self.load_file(path);
+            if ui.button("Open").clicked() {
+                let tx = self.native_file_tx.clone();
+                std::thread::spawn(move || {
+                    if let Some(path) = rfd::FileDialog::new()
+                        .add_filter("WAV", &["wav"])
+                        .pick_file()
+                    {
+                        let _ = tx.send(path);
+                    }
+                });
             }
 
             #[cfg(target_arch = "wasm32")]

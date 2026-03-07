@@ -126,7 +126,8 @@ impl StateVariableFilter {
             output_type: SvfOutput::Lowpass,
             drive: 0.0,
         };
-        svf.update_coefficients();
+        svf.update_g();
+        svf.update_k();
         svf
     }
 
@@ -138,7 +139,7 @@ impl StateVariableFilter {
     /// 10 kHz and [`libm::tanf`] above, balancing speed and accuracy.
     pub fn set_cutoff(&mut self, freq: f32) {
         self.cutoff = freq.clamp(20.0, self.sample_rate * 0.49);
-        self.update_coefficients();
+        self.update_g();
     }
 
     /// Get current cutoff frequency in Hz.
@@ -152,7 +153,7 @@ impl StateVariableFilter {
     /// (maximally flat) response. Higher Q produces a resonant peak at cutoff.
     pub fn set_resonance(&mut self, q: f32) {
         self.resonance = q.clamp(0.5, 20.0);
-        self.update_coefficients();
+        self.update_k();
     }
 
     /// Get current resonance (Q factor).
@@ -190,18 +191,22 @@ impl StateVariableFilter {
         self.drive
     }
 
-    /// Recompute filter coefficients from cutoff and resonance.
+    /// Recompute the `g` coefficient from the current cutoff and sample rate.
     ///
     /// Uses `fast_tan` for cutoff < 10 kHz (< 0.1% error in that range),
     /// falling back to `libm::tanf` above 10 kHz where the Padé approximation
     /// approaches its accuracy limit.
-    fn update_coefficients(&mut self) {
+    fn update_g(&mut self) {
         let arg = PI * self.cutoff / self.sample_rate;
         self.g = if self.cutoff < 10_000.0 {
             fast_tan(arg)
         } else {
             tanf(arg)
         };
+    }
+
+    /// Recompute the `k` coefficient from the current resonance.
+    fn update_k(&mut self) {
         self.k = 1.0 / self.resonance;
     }
 
@@ -260,7 +265,7 @@ impl Effect for StateVariableFilter {
 
     fn set_sample_rate(&mut self, sample_rate: f32) {
         self.sample_rate = sample_rate;
-        self.update_coefficients();
+        self.update_g();
     }
 }
 

@@ -166,6 +166,7 @@ impl SonidoApp {
         if let Err(e) = app.start_audio() {
             app.audio_error = Some(e);
         }
+        app.file_player.resync_transport();
 
         app
     }
@@ -273,6 +274,7 @@ impl SonidoApp {
                 "failed to restart audio"
             );
         }
+        self.file_player.resync_transport();
     }
 
     /// Get the buffer size in milliseconds.
@@ -460,7 +462,10 @@ impl SonidoApp {
                 if retry {
                     self.stop_audio();
                     match self.start_audio() {
-                        Ok(()) => self.audio_error = None,
+                        Ok(()) => {
+                            self.audio_error = None;
+                            self.file_player.resync_transport();
+                        }
                         Err(e) => self.audio_error = Some(e),
                     }
                 }
@@ -506,6 +511,7 @@ impl SonidoApp {
         if let Err(e) = self.start_audio() {
             self.audio_error = Some(e);
         }
+        self.file_player.resync_transport();
     }
 
     /// Render the I/O section with meters and gain controls.

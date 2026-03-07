@@ -1089,44 +1089,66 @@ impl ProcessingGraph {
                     output_buf,
                 } => {
                     if let Some(Some(node)) = nodes.get_mut(*node_idx) {
-                        let bypass_active = node.bypassed || !node.bypass_fade.is_settled();
+                        let bypass_settled = node.bypassed && node.bypass_fade.is_settled();
+                        let bypass_fading =
+                            !bypass_settled && (node.bypassed || !node.bypass_fade.is_settled());
 
-                        // Phase 1: Save dry signal before effect processing.
-                        if bypass_active {
-                            let src = pool.get(*input_buf);
-                            node.bypass_buf.left[..len].copy_from_slice(&src.left[..len]);
-                            node.bypass_buf.right[..len].copy_from_slice(&src.right[..len]);
-                        }
-
-                        // Phase 2: Process through effect (always — keeps state warm).
-                        if let NodeKind::Effect(ref mut effect) = node.kind {
-                            if *input_buf == *output_buf {
-                                let buf = pool.get_mut(*input_buf);
-                                effect.process_block_stereo_inplace(
-                                    &mut buf.left[..len],
-                                    &mut buf.right[..len],
-                                );
-                            } else {
-                                let (inp, out) = pool.get_ref_and_mut(*input_buf, *output_buf);
-                                effect.process_block_stereo(
-                                    &inp.left[..len],
-                                    &inp.right[..len],
-                                    &mut out.left[..len],
-                                    &mut out.right[..len],
-                                );
+                        if bypass_settled {
+                            // Fully bypassed and fade complete — copy input to output,
+                            // skip effect processing entirely (massive CPU savings).
+                            if *input_buf != *output_buf {
+                                let (inp, out) =
+                                    pool.get_ref_and_mut(*input_buf, *output_buf);
+                                out.left[..len].copy_from_slice(&inp.left[..len]);
+                                out.right[..len].copy_from_slice(&inp.right[..len]);
                             }
-                        }
+                            // If input_buf == output_buf, data is already in place.
+                        } else {
+                            // Phase 1: Save dry signal before effect processing.
+                            if bypass_fading {
+                                let src = pool.get(*input_buf);
+                                node.bypass_buf.left[..len]
+                                    .copy_from_slice(&src.left[..len]);
+                                node.bypass_buf.right[..len]
+                                    .copy_from_slice(&src.right[..len]);
+                            }
 
-                        // Phase 3: Crossfade between dry (bypass_buf) and wet (output).
-                        if bypass_active {
-                            let out = pool.get_mut(*output_buf);
-                            for i in 0..len {
-                                let fade = node.bypass_fade.advance();
-                                // fade=1.0 → wet (active), fade=0.0 → dry (bypassed)
-                                out.left[i] =
-                                    wet_dry_mix(node.bypass_buf.left[i], out.left[i], fade);
-                                out.right[i] =
-                                    wet_dry_mix(node.bypass_buf.right[i], out.right[i], fade);
+                            // Phase 2: Process through effect.
+                            if let NodeKind::Effect(ref mut effect) = node.kind {
+                                if *input_buf == *output_buf {
+                                    let buf = pool.get_mut(*input_buf);
+                                    effect.process_block_stereo_inplace(
+                                        &mut buf.left[..len],
+                                        &mut buf.right[..len],
+                                    );
+                                } else {
+                                    let (inp, out) =
+                                        pool.get_ref_and_mut(*input_buf, *output_buf);
+                                    effect.process_block_stereo(
+                                        &inp.left[..len],
+                                        &inp.right[..len],
+                                        &mut out.left[..len],
+                                        &mut out.right[..len],
+                                    );
+                                }
+                            }
+
+                            // Phase 3: Crossfade between dry and wet during fade.
+                            if bypass_fading {
+                                let out = pool.get_mut(*output_buf);
+                                for i in 0..len {
+                                    let fade = node.bypass_fade.advance();
+                                    out.left[i] = wet_dry_mix(
+                                        node.bypass_buf.left[i],
+                                        out.left[i],
+                                        fade,
+                                    );
+                                    out.right[i] = wet_dry_mix(
+                                        node.bypass_buf.right[i],
+                                        out.right[i],
+                                        fade,
+                                    );
+                                }
                             }
                         }
                     }
@@ -2067,6 +2089,52 @@ mod tests {
                     "bypass crossfade out of range: {s}"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn test_settled_bypass_skips_processing() {
+        // When bypass_fade is settled at 0.0, effect should NOT be called.
+        static COUNTER: AtomicUsize = AtomicUsize::new(0);
+
+        let effects: Vec<Box<dyn EffectWithParams + Send>> =
+            vec![Box::new(CountingEffect { counter: &COUNTER })];
+        let mut graph = ProcessingGraph::linear(effects, 48000.0, 64).unwrap();
+
+        let effect_id = NodeId(1);
+        graph.set_bypass(effect_id, true);
+
+        // Snap bypass fade to 0.0 immediately (simulates settled state).
+        if let Some(Some(node)) = graph.nodes.get_mut(1) {
+            node.bypass_fade.snap_to_target();
+        }
+
+        COUNTER.store(0, Ordering::SeqCst);
+
+        let left_in = vec![0.5; 64];
+        let right_in = vec![0.25; 64];
+        let mut left_out = vec![0.0; 64];
+        let mut right_out = vec![0.0; 64];
+
+        graph.process_block(&left_in, &right_in, &mut left_out, &mut right_out);
+
+        assert_eq!(
+            COUNTER.load(Ordering::SeqCst),
+            0,
+            "settled bypass should skip effect processing"
+        );
+
+        for (i, &s) in left_out.iter().enumerate() {
+            assert!(
+                (s - 0.5).abs() < 1e-6,
+                "settled bypass left[{i}]: expected 0.5, got {s}"
+            );
+        }
+        for (i, &s) in right_out.iter().enumerate() {
+            assert!(
+                (s - 0.25).abs() < 1e-6,
+                "settled bypass right[{i}]: expected 0.25, got {s}"
+            );
         }
     }
 

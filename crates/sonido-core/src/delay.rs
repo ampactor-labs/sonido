@@ -137,7 +137,7 @@ impl InterpolatedDelay {
             Interpolation::None => self.buffer[read_pos],
 
             Interpolation::Linear => {
-                let next_pos = (read_pos + len - 1) % len;
+                let next_pos = if read_pos == 0 { len - 1 } else { read_pos - 1 };
                 let a = self.buffer[read_pos];
                 let b = self.buffer[next_pos];
                 a + (b - a) * frac
@@ -145,10 +145,14 @@ impl InterpolatedDelay {
 
             Interpolation::Cubic => {
                 // 4-point cubic Lagrange interpolation
-                let p0 = (read_pos + 1) % len;
+                let p0 = if read_pos + 1 >= len { 0 } else { read_pos + 1 };
                 let p1 = read_pos;
-                let p2 = (read_pos + len - 1) % len;
-                let p3 = (read_pos + len - 2) % len;
+                let p2 = if read_pos == 0 { len - 1 } else { read_pos - 1 };
+                let p3 = match read_pos {
+                    0 => len - 2,
+                    1 => len - 1,
+                    _ => read_pos - 2,
+                };
 
                 let y0 = self.buffer[p0];
                 let y1 = self.buffer[p1];
@@ -176,7 +180,10 @@ impl InterpolatedDelay {
     #[inline]
     pub fn write(&mut self, sample: f32) {
         self.buffer[self.write_pos] = sample;
-        self.write_pos = (self.write_pos + 1) % self.buffer.len();
+        self.write_pos += 1;
+        if self.write_pos >= self.buffer.len() {
+            self.write_pos = 0;
+        }
     }
 
     /// Combined read and write operation.
@@ -245,7 +252,10 @@ impl<const N: usize> FixedDelayLine<N> {
     #[inline]
     pub fn write(&mut self, sample: f32) {
         self.buffer[self.write_pos] = sample;
-        self.write_pos = (self.write_pos + 1) % N;
+        self.write_pos += 1;
+        if self.write_pos >= N {
+            self.write_pos = 0;
+        }
     }
 
     /// Read from the delay line with fractional delay
@@ -260,7 +270,7 @@ impl<const N: usize> FixedDelayLine<N> {
             Interpolation::None => self.buffer[read_pos],
 
             Interpolation::Linear => {
-                let next_pos = (read_pos + N - 1) % N;
+                let next_pos = if read_pos == 0 { N - 1 } else { read_pos - 1 };
                 let a = self.buffer[read_pos];
                 let b = self.buffer[next_pos];
                 a + (b - a) * frac
@@ -268,10 +278,14 @@ impl<const N: usize> FixedDelayLine<N> {
 
             Interpolation::Cubic => {
                 // 4-point cubic interpolation
-                let p0 = (read_pos + 1) % N;
+                let p0 = if read_pos + 1 >= N { 0 } else { read_pos + 1 };
                 let p1 = read_pos;
-                let p2 = (read_pos + N - 1) % N;
-                let p3 = (read_pos + N - 2) % N;
+                let p2 = if read_pos == 0 { N - 1 } else { read_pos - 1 };
+                let p3 = match read_pos {
+                    0 => N - 2,
+                    1 => N - 1,
+                    _ => read_pos - 2,
+                };
 
                 let y0 = self.buffer[p0];
                 let y1 = self.buffer[p1];

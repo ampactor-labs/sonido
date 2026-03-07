@@ -69,6 +69,12 @@ pub struct KernelAdapter<K: DspKernel> {
 
     /// Sample rate — needed for smoother reconfiguration.
     sample_rate: f32,
+
+    /// When `true`, all smoothers have reached their targets and
+    /// [`advance_params()`](Self::advance_params) can skip iteration entirely.
+    /// Cleared on [`set_param()`](Self::set_param) and
+    /// [`load_snapshot()`](Self::load_snapshot).
+    all_settled: bool,
 }
 
 impl<K: DspKernel> KernelAdapter<K> {
@@ -93,6 +99,7 @@ impl<K: DspKernel> KernelAdapter<K> {
             smoothers,
             snapshot: defaults,
             sample_rate,
+            all_settled: true,
         }
     }
 
@@ -128,6 +135,7 @@ impl<K: DspKernel> KernelAdapter<K> {
                 self.smoothers[i].set_target(clamped);
             }
         }
+        self.all_settled = false;
     }
 
     /// Get a snapshot of current parameter targets (what the user set).
@@ -145,11 +153,16 @@ impl<K: DspKernel> KernelAdapter<K> {
     /// Advance all smoothers and rebuild the parameter snapshot.
     ///
     /// Called once per sample before `kernel.process_stereo()`.
+    /// Skips iteration entirely when all smoothers have settled, avoiding
+    /// 30-80 wasted function calls per sample in steady state for a typical chain.
     #[inline]
     fn advance_params(&mut self) {
-        for i in 0..self.smoothers.len() {
-            let value = self.smoothers[i].advance();
-            self.snapshot.set(i, flush_denormal(value));
+        if !self.all_settled {
+            for i in 0..self.smoothers.len() {
+                let value = self.smoothers[i].advance();
+                self.snapshot.set(i, flush_denormal(value));
+            }
+            self.all_settled = self.smoothers.iter().all(SmoothedParam::is_settled);
         }
     }
 }
@@ -248,6 +261,7 @@ impl<K: DspKernel> ParameterInfo for KernelAdapter<K> {
             if let Some(desc) = K::Params::descriptor(index) {
                 let clamped = desc.clamp(value);
                 self.smoothers[index].set_target(clamped);
+                self.all_settled = false;
             }
         }
     }

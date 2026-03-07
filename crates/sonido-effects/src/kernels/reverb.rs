@@ -53,7 +53,8 @@
 //! let (left, right) = kernel.process_stereo(input_l, input_r, &params);
 //! ```
 
-use libm::{ceilf, powf, roundf, sinf, sqrtf};
+use libm::{ceilf, powf, roundf, sqrtf};
+use sonido_core::fast_math::fast_sin_turns;
 use sonido_core::kernel::{DspKernel, KernelParams, SmoothingStyle};
 use sonido_core::{
     InterpolatedDelay, Interpolation, ModulatedAllpass, OnePole, ParamDescriptor, ParamId,
@@ -104,6 +105,8 @@ const HADAMARD_SCALE: f32 = 0.353_553_39;
 
 /// ER output normalization. Keeps per-channel ER level near unity for
 /// sustained signals (7 taps/channel with 1/√k gains sum ≈ 3.3).
+/// Used to derive [`ER_TAP_GAINS`] LUT values.
+#[allow(dead_code)]
 const ER_GAIN_SCALE: f32 = 0.3;
 
 /// Allpass diffusion feedback coefficient.
@@ -120,14 +123,28 @@ fn scale_to_rate(samples: usize, target_rate: f32) -> usize {
     (roundf(samples as f32 * target_rate / REFERENCE_RATE) as usize).max(1)
 }
 
-/// Compute ER tap gain for the given 0-based tap index.
+/// Pre-computed ER tap gains: `ER_GAIN_SCALE / sqrt(i+1)` for i in 0..14.
 ///
 /// Gains decrease as 1/√(i+1), giving a natural amplitude decay with
 /// distance. Scaled by [`ER_GAIN_SCALE`] so 7 taps per channel sum to ≈ 1.
-#[inline]
-fn er_tap_gain(index: usize) -> f32 {
-    ER_GAIN_SCALE / sqrtf((index + 1) as f32)
-}
+///
+/// Replaces the per-sample `sqrtf` calls with a const lookup.
+const ER_TAP_GAINS: [f32; ER_TAP_COUNT] = [
+    0.300_000, // i=0:  0.3 / sqrt(1)
+    0.212_132, // i=1:  0.3 / sqrt(2)
+    0.173_205, // i=2:  0.3 / sqrt(3)
+    0.150_000, // i=3:  0.3 / sqrt(4)
+    0.134_164, // i=4:  0.3 / sqrt(5)
+    0.122_474, // i=5:  0.3 / sqrt(6)
+    0.113_389, // i=6:  0.3 / sqrt(7)
+    0.106_066, // i=7:  0.3 / sqrt(8)
+    0.100_000, // i=8:  0.3 / sqrt(9)
+    0.094_868, // i=9:  0.3 / sqrt(10)
+    0.090_453, // i=10: 0.3 / sqrt(11)
+    0.086_603, // i=11: 0.3 / sqrt(12)
+    0.083_205, // i=12: 0.3 / sqrt(13)
+    0.080_178, // i=13: 0.3 / sqrt(14)
+];
 
 /// Convert damping parameter (0 = bright, 1 = dark) to lowpass cutoff Hz.
 ///
@@ -467,9 +484,9 @@ pub struct ReverbKernel {
     fdn_base_delays: [f32; 8],
     /// Peak modulation depth in samples = `FDN_MOD_DEPTH_MS * 0.001 * sample_rate`.
     fdn_mod_depth: f32,
-    /// Current LFO phase per FDN line (radians).
+    /// Current LFO phase per FDN line (turns, 0.0–1.0).
     fdn_phases: [f32; 8],
-    /// LFO phase increment per sample per FDN line (2π × rate / sample_rate).
+    /// LFO phase increment per sample per FDN line (rate / sample_rate).
     fdn_phase_incs: [f32; 8],
     /// Hadamard-mixed feedback from the previous sample (one value per FDN line).
     fdn_fb: [f32; 8],
@@ -537,8 +554,7 @@ impl ReverbKernel {
             core::array::from_fn(|i| scale_to_rate(FDN_TUNINGS_44K[i], sample_rate) as f32);
 
         let fdn_phases = [0.0f32; 8];
-        let fdn_phase_incs: [f32; 8] =
-            core::array::from_fn(|i| core::f32::consts::TAU * FDN_MOD_RATES[i] / sample_rate);
+        let fdn_phase_incs: [f32; 8] = core::array::from_fn(|i| FDN_MOD_RATES[i] / sample_rate);
 
         // Early reflections tapped delay (~80 ms max)
         let er_max = (ceilf(MAX_ER_MS * 0.001 * sample_rate) as usize).max(1);
@@ -665,7 +681,8 @@ impl ReverbKernel {
 
         // 1. Read modulated outputs
         for i in 0..8 {
-            let modulated = self.fdn_base_delays[i] + self.fdn_mod_depth * sinf(self.fdn_phases[i]);
+            let modulated =
+                self.fdn_base_delays[i] + self.fdn_mod_depth * fast_sin_turns(self.fdn_phases[i]);
             raw[i] = self.fdn_delays[i].read(modulated);
         }
 
@@ -679,8 +696,8 @@ impl ReverbKernel {
             self.fdn_delays[i].write(flush_denormal(input + damped * self.feedback));
 
             self.fdn_phases[i] += self.fdn_phase_incs[i];
-            if self.fdn_phases[i] >= core::f32::consts::TAU {
-                self.fdn_phases[i] -= core::f32::consts::TAU;
+            if self.fdn_phases[i] >= 1.0 {
+                self.fdn_phases[i] -= 1.0;
             }
         }
 
@@ -704,7 +721,7 @@ impl ReverbKernel {
         for i in 0..ER_TAP_COUNT {
             let tap_pos = self.er_base_taps[i] * self.er_room_scale;
             let sample = self.er_delay.read(tap_pos);
-            let gain = er_tap_gain(i);
+            let gain = ER_TAP_GAINS[i];
             if i % 2 == 0 {
                 er_l += sample * gain;
             } else {
@@ -837,8 +854,7 @@ impl DspKernel for ReverbKernel {
         });
         self.fdn_base_delays =
             core::array::from_fn(|i| scale_to_rate(FDN_TUNINGS_44K[i], sample_rate) as f32);
-        self.fdn_phase_incs =
-            core::array::from_fn(|i| core::f32::consts::TAU * FDN_MOD_RATES[i] / sample_rate);
+        self.fdn_phase_incs = core::array::from_fn(|i| FDN_MOD_RATES[i] / sample_rate);
         for filter in &mut self.fdn_damping {
             filter.set_sample_rate(sample_rate);
         }

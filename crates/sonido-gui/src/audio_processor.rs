@@ -45,7 +45,7 @@ impl FilePlayback {
             file_sample_rate: 48000.0,
             playing: false,
             looping: false,
-            file_mode: false,
+            file_mode: true,
         }
     }
 

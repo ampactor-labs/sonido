@@ -10,9 +10,9 @@
 //! 1. **Lookahead buffering**: Input is written to circular delay buffers for L and R.
 //!    The audio output is read from the far end of the buffer (delayed by
 //!    `lookahead_samples`), so gain reduction is applied before the transient arrives.
-//! 2. **Peak detection**: The lookahead window is scanned every sample for the peak
+//! 2. **Peak detection**: A monotonic deque tracks the sliding-window maximum of
 //!    absolute amplitude across both channels (linked stereo: `max(|L|, |R|)`).
-//!    This is `O(lookahead_samples)` per sample.
+//!    O(1) amortized per sample — each element is pushed and popped at most once.
 //! 3. **Gain computation**: If `peak > threshold_linear` the required gain factor is
 //!    `G = (threshold / peak) * ceiling_linear`. Otherwise `G = ceiling_linear`.
 //! 4. **Gain smoothing**: One-pole filter — instant attack (follow gain down immediately
@@ -59,9 +59,14 @@
 #[cfg(not(feature = "std"))]
 extern crate alloc;
 #[cfg(not(feature = "std"))]
+use alloc::collections::VecDeque;
+#[cfg(not(feature = "std"))]
 use alloc::vec;
 #[cfg(not(feature = "std"))]
 use alloc::vec::Vec;
+
+#[cfg(feature = "std")]
+use std::collections::VecDeque;
 
 use libm::{expf, fabsf};
 use sonido_core::kernel::{DspKernel, KernelParams, SmoothingStyle};
@@ -266,8 +271,8 @@ impl KernelParams for LimiterParams {
 /// The circular buffers hold up to `MAX_LOOKAHEAD_MS` worth of input. At each
 /// sample:
 /// 1. New input is written at `write_pos`.
-/// 2. The lookahead window `[write_pos, write_pos + lookahead_samples]` is scanned
-///    for the peak absolute value across both channels.
+/// 2. The absolute input value is pushed into a monotonic deque that tracks the
+///    sliding-window maximum over the lookahead window. O(1) amortized.
 /// 3. Gain reduction is computed and smoothed (instant attack, exponential release).
 /// 4. The delayed output sample at `write_pos + lookahead_samples + 1` is read and
 ///    scaled by the smoothed gain and output level.
@@ -322,6 +327,18 @@ pub struct LimiterKernel {
 
     /// Last `lookahead_ms` used to compute `lookahead_samples`. Tracks when a recompute is needed.
     last_lookahead_ms: f32,
+
+    /// Monotonic deque for left channel peak tracking: `(absolute_index, abs_value)`.
+    ///
+    /// Values decrease monotonically from front to back. The front element is always
+    /// the current window maximum. O(1) amortized per push.
+    peak_deque_l: VecDeque<(usize, f32)>,
+
+    /// Monotonic deque for right channel peak tracking.
+    peak_deque_r: VecDeque<(usize, f32)>,
+
+    /// Monotonically increasing sample counter for deque indexing.
+    sample_index: usize,
 }
 
 impl LimiterKernel {
@@ -347,26 +364,45 @@ impl LimiterKernel {
             lookahead_samples,
             last_release_ms: defaults.release_ms,
             last_lookahead_ms: defaults.lookahead_ms,
+            peak_deque_l: VecDeque::with_capacity(max_samples),
+            peak_deque_r: VecDeque::with_capacity(max_samples),
+            sample_index: 0,
         }
     }
 
-    /// Scan one circular buffer for the peak absolute value within the lookahead window.
+    /// Push a new absolute sample value into a monotonic deque and return the current max.
     ///
-    /// The window starts at `write_pos` (the freshest sample, just written) and extends
-    /// forward by `lookahead_samples` slots. The scan wraps around the circular buffer.
+    /// Maintains the invariant: values decrease monotonically from front to back.
+    /// The front element is always the maximum within the current window.
     ///
-    /// Complexity: O(`lookahead_samples`).
+    /// Complexity: O(1) amortized — each element is pushed and popped at most once.
     #[inline]
-    fn scan_peak_mono(&self, buf: &[f32]) -> f32 {
-        let len = buf.len();
-        let mut peak = 0.0_f32;
-        for i in 0..=self.lookahead_samples {
-            let s = fabsf(buf[(self.write_pos + i) % len]);
-            if s > peak {
-                peak = s;
+    fn deque_push_and_max(
+        deque: &mut VecDeque<(usize, f32)>,
+        index: usize,
+        value: f32,
+        window_size: usize,
+    ) -> f32 {
+        // Remove smaller elements from back — they can never be the max while
+        // this larger (or equal) value is in the window.
+        while let Some(&(_, back_val)) = deque.back() {
+            if back_val <= value {
+                deque.pop_back();
+            } else {
+                break;
             }
         }
-        peak
+        deque.push_back((index, value));
+        // Remove expired elements from front (outside the sliding window).
+        let oldest_valid = index.saturating_sub(window_size);
+        while let Some(&(front_idx, _)) = deque.front() {
+            if front_idx < oldest_valid {
+                deque.pop_front();
+            } else {
+                break;
+            }
+        }
+        deque.front().map_or(0.0, |&(_, v)| v)
     }
 
     /// Compute the target gain factor given the detected peak and current params.
@@ -432,9 +468,22 @@ impl DspKernel for LimiterKernel {
         self.buffer_l[self.write_pos] = left;
         self.buffer_r[self.write_pos] = right;
 
-        // ── Peak detection — linked stereo: max(|L|, |R|) ──
-        let peak_l = self.scan_peak_mono(&self.buffer_l);
-        let peak_r = self.scan_peak_mono(&self.buffer_r);
+        // ── Peak detection — monotonic deque: O(1) amortized, linked stereo ──
+        let abs_l = fabsf(left);
+        let abs_r = fabsf(right);
+        let peak_l = Self::deque_push_and_max(
+            &mut self.peak_deque_l,
+            self.sample_index,
+            abs_l,
+            self.lookahead_samples + 1,
+        );
+        let peak_r = Self::deque_push_and_max(
+            &mut self.peak_deque_r,
+            self.sample_index,
+            abs_r,
+            self.lookahead_samples + 1,
+        );
+        self.sample_index += 1;
         let peak = if peak_l > peak_r { peak_l } else { peak_r };
 
         // ── Target gain: threshold + ceiling limits ──
@@ -475,6 +524,9 @@ impl DspKernel for LimiterKernel {
         self.buffer_r.fill(0.0);
         self.write_pos = 0;
         self.gain_reduction = 1.0;
+        self.peak_deque_l.clear();
+        self.peak_deque_r.clear();
+        self.sample_index = 0;
     }
 
     /// Update internal state for a new sample rate.
@@ -495,6 +547,10 @@ impl DspKernel for LimiterKernel {
         self.release_coeff = compute_release_coeff(self.last_release_ms, sample_rate);
         self.lookahead_samples =
             ms_to_samples(self.last_lookahead_ms, sample_rate).min(max_samples.saturating_sub(1));
+
+        self.peak_deque_l = VecDeque::with_capacity(max_samples);
+        self.peak_deque_r = VecDeque::with_capacity(max_samples);
+        self.sample_index = 0;
     }
 
     /// Reports the current lookahead window as processing latency in samples.

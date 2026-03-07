@@ -87,7 +87,7 @@ impl Biquad {
 
         // Update delay lines (flush denormals to prevent CPU slowdown in feedback)
         self.x2 = self.x1;
-        self.x1 = input;
+        self.x1 = flush_denormal(input);
         self.y2 = self.y1;
         self.y1 = flush_denormal(output);
 

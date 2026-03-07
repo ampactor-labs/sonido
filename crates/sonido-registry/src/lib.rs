@@ -55,7 +55,7 @@ use alloc::{boxed::Box, vec::Vec};
 
 // Re-export EffectWithParams from core (moved there to unblock ProcessingGraph).
 pub use sonido_core::EffectWithParams;
-use sonido_core::KernelAdapter;
+use sonido_core::{KernelAdapter, ParamDescriptor};
 use sonido_effects::kernels::{
     BitcrusherKernel, ChorusKernel, CompressorKernel, DelayKernel, DistortionKernel, EqKernel,
     FilterKernel, FlangerKernel, GateKernel, LimiterKernel, PhaserKernel, PreampKernel,
@@ -135,6 +135,9 @@ type EffectFactory = fn(f32) -> Box<dyn EffectWithParams + Send>;
 struct RegistryEntry {
     descriptor: EffectDescriptor,
     factory: EffectFactory,
+    /// Cached parameter descriptors, populated once during registration.
+    /// Avoids allocating a temporary effect instance in [`EffectRegistry::param_index_by_name()`].
+    param_descriptors: Vec<ParamDescriptor>,
 }
 
 /// Registry of all available audio effects.
@@ -412,10 +415,19 @@ impl EffectRegistry {
     }
 
     /// Register an effect with the registry.
+    ///
+    /// Creates a temporary instance at 48 kHz to cache parameter descriptors,
+    /// so that [`param_index_by_name()`](Self::param_index_by_name) can scan
+    /// names without allocating at query time.
     fn register(&mut self, descriptor: EffectDescriptor, factory: EffectFactory) {
+        let temp = factory(48000.0);
+        let param_descriptors = (0..temp.effect_param_count())
+            .filter_map(|i| temp.effect_param_info(i))
+            .collect();
         self.entries.push(RegistryEntry {
             descriptor,
             factory,
+            param_descriptors,
         });
     }
 
@@ -463,15 +475,13 @@ impl EffectRegistry {
 
     /// Find a parameter index by name for a given effect type.
     ///
-    /// Creates a temporary effect instance to scan parameter descriptors.
+    /// Scans cached parameter descriptors — no allocation required.
     /// Returns `None` if the effect type or parameter name is not found.
     pub fn param_index_by_name(&self, effect_id: &str, param_name: &str) -> Option<usize> {
-        let effect = self.create(effect_id, 48000.0)?;
+        let entry = self.entries.iter().find(|e| e.descriptor.id == effect_id)?;
         let lower = param_name.to_lowercase();
-        for i in 0..effect.effect_param_count() {
-            if let Some(desc) = effect.effect_param_info(i)
-                && (desc.name.to_lowercase() == lower || desc.short_name.to_lowercase() == lower)
-            {
+        for (i, desc) in entry.param_descriptors.iter().enumerate() {
+            if desc.name.to_lowercase() == lower || desc.short_name.to_lowercase() == lower {
                 return Some(i);
             }
         }

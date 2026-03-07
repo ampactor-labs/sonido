@@ -96,6 +96,9 @@ struct VibratoUnit {
     lfo: Lfo,
     /// Vibrato depth in cents (very subtle: 0.4–2.5 cents per unit).
     depth_cents: f32,
+    /// Precomputed `depth_cents * sample_rate / 44100.0 * 0.01`.
+    /// Saves 3 multiplies per sample per unit.
+    cents_to_samples_base: f32,
     /// Delay line providing the modulation headroom (256 samples ≈ 5.3 ms at 48 kHz).
     delay: FixedDelayLine<256>,
 }
@@ -115,6 +118,7 @@ impl VibratoUnit {
         Self {
             lfo,
             depth_cents,
+            cents_to_samples_base: depth_cents * sample_rate / 44100.0 * 0.01,
             delay: FixedDelayLine::new(),
         }
     }
@@ -124,18 +128,13 @@ impl VibratoUnit {
     /// # Arguments
     ///
     /// - `input` — the audio sample to process.
-    /// - `sample_rate` — current sample rate in Hz (for pitch-accurate delay scaling).
     /// - `depth_scale` — master depth multiplier (from `params.depth_pct / 100.0`).
     ///
     /// Returns the delayed, pitch-modulated sample.
     #[inline]
-    fn process(&mut self, input: f32, sample_rate: f32, depth_scale: f32) -> f32 {
+    fn process(&mut self, input: f32, depth_scale: f32) -> f32 {
         let lfo_val = self.lfo.advance();
-
-        // Convert cents to a delay modulation in samples, normalised to 44100 Hz
-        // so that the cents-to-delay mapping is sample-rate independent.
-        let cents_to_samples = self.depth_cents * depth_scale * sample_rate / 44100.0 * 0.01;
-        let delay_mod = lfo_val * cents_to_samples;
+        let delay_mod = lfo_val * self.cents_to_samples_base * depth_scale;
 
         let delay_samples = BASE_DELAY + delay_mod;
         self.delay.read_write(input, delay_samples)
@@ -150,6 +149,7 @@ impl VibratoUnit {
     /// Update the LFO sample rate without clearing state.
     fn set_sample_rate(&mut self, sample_rate: f32) {
         self.lfo.set_sample_rate(sample_rate);
+        self.cents_to_samples_base = self.depth_cents * sample_rate / 44100.0 * 0.01;
     }
 }
 
@@ -366,14 +366,14 @@ impl DspKernel for VibratoKernel {
         // ── Left channel: sum all six units and average ──
         let mut wet_l = 0.0_f32;
         for vib in &mut self.vibratos_l {
-            wet_l += vib.process(left, self.sample_rate, depth_scale);
+            wet_l += vib.process(left, depth_scale);
         }
         wet_l /= NUM_VIBRATOS as f32;
 
         // ── Right channel: sum all six units and average ──
         let mut wet_r = 0.0_f32;
         for vib in &mut self.vibratos_r {
-            wet_r += vib.process(right, self.sample_rate, depth_scale);
+            wet_r += vib.process(right, depth_scale);
         }
         wet_r /= NUM_VIBRATOS as f32;
 
@@ -393,7 +393,7 @@ impl DspKernel for VibratoKernel {
 
         let mut wet = 0.0_f32;
         for vib in &mut self.vibratos_l {
-            wet += vib.process(input, self.sample_rate, depth_scale);
+            wet += vib.process(input, depth_scale);
         }
         wet /= NUM_VIBRATOS as f32;
 
