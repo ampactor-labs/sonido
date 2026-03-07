@@ -205,6 +205,7 @@ mod tests {
     }
 
     impl MockBridge {
+        #[allow(clippy::type_complexity)]
         fn new(slots: &[(&str, &[f32], &[Option<ParamDescriptor>])]) -> Self {
             Self {
                 values: Mutex::new(slots.iter().map(|(_, v, _)| v.to_vec()).collect()),
