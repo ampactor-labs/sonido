@@ -26,6 +26,7 @@
 pub mod builder;
 pub mod effects;
 pub mod parser;
+pub mod serialize;
 
 // Re-export primary API
 pub use builder::{ManifestEntry, build_graph, build_graph_only};
@@ -36,6 +37,7 @@ pub use parser::{
     DslParseError, GraphNode, GraphSpec, build_graph_slug, count_nodes, parse_graph_dsl,
     validate_spec,
 };
+pub use serialize::graph_to_dsl;
 
 /// Unified error type for DSL operations.
 #[derive(Debug, thiserror::Error)]
