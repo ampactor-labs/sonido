@@ -10,7 +10,7 @@
 
 use arc_swap::ArcSwap;
 use sonido_core::ParamDescriptor;
-use sonido_gui_core::{ChainMutator, ParamBridge, ParamIndex, SlotIndex};
+use sonido_gui_core::{ParamBridge, ParamIndex, SlotIndex};
 use sonido_registry::EffectRegistry;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -50,11 +50,9 @@ pub(crate) struct SharedAudioState {
 ///
 /// Hot-path reads (`get`, `set`, `sync_to_chain`) go through
 /// [`ArcSwap::load`] — wait-free, no locks. Structural mutations
-/// (`add_slot`, `remove_slot`, `move_effect`) use RCU — readers never block.
+/// (`add_slot`, `remove_slot`) use RCU — readers never block.
 pub struct AtomicParamBridge {
     state: ArcSwap<SharedAudioState>,
-    /// Set by GUI (reorder / param change), checked by audio thread.
-    order_dirty: AtomicBool,
 }
 
 impl AtomicParamBridge {
@@ -96,7 +94,6 @@ impl AtomicParamBridge {
 
         Self {
             state: ArcSwap::from_pointee(SharedAudioState { slots, order }),
-            order_dirty: AtomicBool::new(true),
         }
     }
 
@@ -136,7 +133,7 @@ impl AtomicParamBridge {
             Arc::new(SharedAudioState { slots, order })
         });
         let idx = self.state.load().slots.len() - 1;
-        self.order_dirty.store(true, Ordering::Release);
+
         SlotIndex(idx)
     }
 
@@ -163,7 +160,6 @@ impl AtomicParamBridge {
             }
             Arc::new(SharedAudioState { slots, order })
         });
-        self.order_dirty.store(true, Ordering::Release);
     }
 
     /// Rebuilds all slots from a topology manifest.
@@ -196,11 +192,14 @@ impl AtomicParamBridge {
         let order: Vec<usize> = (0..slots.len()).collect();
         self.state
             .store(Arc::new(SharedAudioState { slots, order }));
-        self.order_dirty.store(true, Ordering::Release);
     }
 
-    // ── Order operations (moved from EffectOrder) ──────────────────────────
-    // `get_order()` and `move_effect()` are provided by the `ChainMutator` trait impl.
+    // ── Order operations ──────────────────────────────────────────────────
+
+    /// Returns the current processing order as slot indices.
+    pub fn get_order(&self) -> Vec<usize> {
+        self.state.load().order.clone()
+    }
 
     /// Returns the effect IDs in their current processing order.
     pub fn ordered_static_ids(&self) -> Vec<&'static str> {
@@ -218,39 +217,6 @@ impl AtomicParamBridge {
             .iter()
             .map(|&i| snap.slots[i].bypassed.load(Ordering::Acquire))
             .collect()
-    }
-
-    /// Returns `true` if the order has been mutated since the last
-    /// [`clear_order_dirty`](Self::clear_order_dirty).
-    pub fn order_is_dirty(&self) -> bool {
-        self.order_dirty.load(Ordering::Acquire)
-    }
-
-    /// Clear the order dirty flag (audio thread calls this after caching).
-    pub fn clear_order_dirty(&self) {
-        self.order_dirty.store(false, Ordering::Release);
-    }
-}
-
-impl ChainMutator for AtomicParamBridge {
-    fn get_order(&self) -> Vec<usize> {
-        self.state.load().order.clone()
-    }
-
-    fn move_effect(&self, from: usize, to: usize) {
-        self.state.rcu(|old| {
-            if from >= old.order.len() || to >= old.order.len() || from == to {
-                return Arc::clone(old);
-            }
-            let mut order = old.order.clone();
-            let effect = order.remove(from);
-            order.insert(to, effect);
-            Arc::new(SharedAudioState {
-                slots: old.slots.clone(),
-                order,
-            })
-        });
-        self.order_dirty.store(true, Ordering::Release);
     }
 }
 
@@ -426,30 +392,6 @@ mod tests {
         let bridge =
             AtomicParamBridge::new(&registry, &["distortion", "reverb", "chorus"], 48000.0);
         assert_eq!(bridge.get_order(), vec![0, 1, 2]);
-    }
-
-    #[test]
-    fn move_effect_reorders() {
-        let registry = EffectRegistry::new();
-        let bridge =
-            AtomicParamBridge::new(&registry, &["distortion", "reverb", "chorus"], 48000.0);
-
-        bridge.move_effect(0, 2);
-        assert_eq!(bridge.get_order(), vec![1, 2, 0]);
-    }
-
-    #[test]
-    fn order_dirty_tracks_mutations() {
-        let registry = EffectRegistry::new();
-        let bridge = AtomicParamBridge::new(&registry, &["distortion", "reverb"], 48000.0);
-
-        // Starts dirty
-        assert!(bridge.order_is_dirty());
-        bridge.clear_order_dirty();
-        assert!(!bridge.order_is_dirty());
-
-        bridge.move_effect(0, 1);
-        assert!(bridge.order_is_dirty());
     }
 
     #[test]

@@ -12,7 +12,7 @@ use crate::chain_manager::GraphCommand;
 use crate::file_player::TransportCommand;
 use crossbeam_channel::{Receiver, Sender};
 use sonido_core::graph::GraphEngine;
-use sonido_gui_core::{ChainMutator, ParamBridge, SlotIndex};
+use sonido_gui_core::{ParamBridge, SlotIndex};
 use sonido_registry::EffectRegistry;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -90,8 +90,6 @@ impl FilePlayback {
 pub(crate) struct AudioProcessor {
     graph: GraphEngine,
     bridge: Arc<AtomicParamBridge>,
-    /// Cached copy of the effect order; only refreshed when `bridge.order_is_dirty()`.
-    cached_order: Vec<usize>,
     input_gain: Arc<AtomicParam>,
     master_volume: Arc<AtomicParam>,
     chain_bypass: Arc<AtomicBool>,
@@ -206,7 +204,6 @@ impl AudioProcessor {
                     self.bridge
                         .rebuild_from_manifest(&effect_ids, &slot_descriptors);
                     self.graph = *engine;
-                    self.cached_order.clear();
                     tracing::info!(
                         effects = effect_ids.len(),
                         "topology replaced via ReplaceTopology"
@@ -221,15 +218,6 @@ impl AudioProcessor {
 
         // Sync bridge -> graph effect parameters and bypass states
         self.sync_bridge_to_graph();
-
-        // Sync effect order from GUI (only when changed)
-        if self.bridge.order_is_dirty() {
-            self.cached_order = self.bridge.get_order();
-            if self.cached_order.len() == self.graph.slot_count() {
-                self.graph.reorder_slots(&self.cached_order);
-            }
-            self.bridge.clear_order_dirty();
-        }
 
         let frames = data.len() / self.out_ch;
         let file_mode = self.file_pb.file_mode;
@@ -504,7 +492,6 @@ pub(crate) fn build_audio_streams(
     let mut processor = AudioProcessor {
         graph,
         bridge,
-        cached_order: Vec::new(),
         input_gain,
         master_volume,
         chain_bypass,
