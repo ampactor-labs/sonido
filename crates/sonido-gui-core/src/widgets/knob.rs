@@ -1,13 +1,20 @@
-//! Rotary knob control widget.
+//! Rotary knob control widget with arcade CRT phosphor aesthetic.
 //!
-//! Professional audio-style knob with:
-//! - Drag to adjust value
-//! - Fine control with Shift key
-//! - Double-click to reset
-//! - Value display below knob
+//! Pointer-on-void design: no filled knob body, just a glowing amber arc
+//! and pointer line emerging from darkness. Uses [`glow`](super::glow)
+//! primitives for phosphor bloom on all drawn elements.
+//!
+//! Interaction (unchanged from original):
+//! - Drag vertically to adjust value
+//! - Shift+drag for fine control (10x reduction)
+//! - Double-click to reset to default
+//! - Cyan label, amber value text below knob
 
-use egui::{Color32, Pos2, Response, Sense, Stroke, Ui, Widget, pos2, vec2};
+use egui::{Response, Sense, Ui, Widget, pos2, vec2};
 use std::f32::consts::PI;
+
+use crate::theme::SonidoTheme;
+use crate::widgets::glow;
 
 /// Rotary knob parameters.
 pub struct Knob<'a> {
@@ -130,12 +137,10 @@ impl Widget for Knob<'_> {
             changed = true;
         }
 
-        // Visual state
-        let is_active = response.dragged() || response.has_focus();
-
         // Draw knob
         if ui.is_rect_visible(rect) {
             let painter = ui.painter();
+            let theme = SonidoTheme::get(ui.ctx());
 
             // Knob arc angles (270 degree sweep, starting from bottom-left)
             let start_angle = PI * 0.75; // 135 degrees
@@ -146,54 +151,42 @@ impl Widget for Knob<'_> {
             let normalized = (*self.value - self.min) / (self.max - self.min);
             let value_angle = start_angle + normalized * sweep;
 
-            // Track (background arc)
-            let track_color = Color32::from_rgb(50, 50, 60);
-            draw_arc(
+            // Track (background arc) — dim ghost trace
+            glow::glow_arc(
                 painter,
                 center,
                 radius - 2.0,
                 start_angle,
                 end_angle,
-                track_color,
-                6.0,
+                theme.colors.dim,
+                4.0,
+                &theme,
             );
 
-            // Value arc (filled portion)
-            let fill_color = if is_active {
-                Color32::from_rgb(120, 200, 255)
-            } else {
-                Color32::from_rgb(100, 180, 255)
-            };
+            // Value arc (filled portion) — phosphor amber glow
             if normalized > 0.001 {
-                draw_arc(
+                glow::glow_arc(
                     painter,
                     center,
                     radius - 2.0,
                     start_angle,
                     value_angle,
-                    fill_color,
+                    theme.colors.amber,
                     6.0,
+                    &theme,
                 );
             }
 
-            // Knob body
-            let body_color = if is_active {
-                Color32::from_rgb(65, 65, 78)
-            } else {
-                Color32::from_rgb(55, 55, 68)
-            };
-            painter.circle_filled(center, radius - 8.0, body_color);
-
-            // Pointer line
+            // Pointer line — from center to value position
             let pointer_len = radius - 14.0;
             let pointer_end = pos2(
                 center.x + value_angle.cos() * pointer_len,
                 center.y + value_angle.sin() * pointer_len,
             );
-            painter.line_segment([center, pointer_end], Stroke::new(3.0, fill_color));
+            glow::glow_line(painter, center, pointer_end, theme.colors.amber, 2.0, &theme);
 
             // Center dot
-            painter.circle_filled(center, 3.0, fill_color);
+            glow::glow_circle(painter, center, 2.0, theme.colors.amber, &theme);
 
             // Label
             let label_pos = pos2(rect.center().x, center.y + radius + 8.0);
@@ -201,8 +194,8 @@ impl Widget for Knob<'_> {
                 label_pos,
                 egui::Align2::CENTER_TOP,
                 self.label,
-                egui::FontId::proportional(12.0),
-                Color32::from_rgb(180, 180, 190),
+                egui::FontId::monospace(11.0),
+                theme.colors.cyan,
             );
 
             // Value text
@@ -216,8 +209,8 @@ impl Widget for Knob<'_> {
                 value_pos,
                 egui::Align2::CENTER_TOP,
                 value_text,
-                egui::FontId::proportional(11.0),
-                Color32::from_rgb(150, 150, 160),
+                egui::FontId::monospace(11.0),
+                theme.colors.amber,
             );
         }
 
@@ -226,35 +219,6 @@ impl Widget for Knob<'_> {
         }
 
         response
-    }
-}
-
-/// Draw an arc using line segments.
-fn draw_arc(
-    painter: &egui::Painter,
-    center: Pos2,
-    radius: f32,
-    start_angle: f32,
-    end_angle: f32,
-    color: Color32,
-    stroke_width: f32,
-) {
-    let segments = 32;
-    let sweep = end_angle - start_angle;
-
-    let points: Vec<Pos2> = (0..=segments)
-        .map(|i| {
-            let t = i as f32 / segments as f32;
-            let angle = start_angle + t * sweep;
-            pos2(
-                center.x + angle.cos() * radius,
-                center.y + angle.sin() * radius,
-            )
-        })
-        .collect();
-
-    for window in points.windows(2) {
-        painter.line_segment([window[0], window[1]], Stroke::new(stroke_width, color));
     }
 }
 
