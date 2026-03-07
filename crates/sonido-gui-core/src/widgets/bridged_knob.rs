@@ -12,8 +12,11 @@
 //! - [`gesture_wrap`] — low-level gesture protocol for custom widgets
 
 use super::Knob;
+use crate::theme::SonidoTheme;
+use crate::widgets::glow;
+use crate::widgets::led_display::LedDisplay;
 use crate::{ParamBridge, ParamIndex, SlotIndex};
-use egui::{Color32, Response, Ui};
+use egui::{Response, Ui};
 use sonido_core::{ParamDescriptor, ParamUnit};
 
 /// Normalize a plain value to \[0, 1\] using the descriptor's scale, or linear fallback.
@@ -36,6 +39,36 @@ fn denormalize(desc: Option<&ParamDescriptor>, normalized: f32, min: f32, max: f
         || min + normalized * (max - min),
         |d| d.denormalize(normalized),
     )
+}
+
+/// Format a plain parameter value for LED display based on its unit.
+fn format_plain_value(value: f32, unit: &ParamUnit) -> String {
+    match unit {
+        ParamUnit::Decibels => {
+            if value >= 0.0 {
+                format!(" {value:.1}dB")
+            } else {
+                format!("{value:.1}dB")
+            }
+        }
+        ParamUnit::Hertz => {
+            if value >= 1000.0 {
+                format!("{:.1}kHz", value / 1000.0)
+            } else {
+                format!("{value:.0}Hz")
+            }
+        }
+        ParamUnit::Milliseconds => {
+            if value >= 1000.0 {
+                format!("{:.2} s", value / 1000.0)
+            } else {
+                format!("{value:.0}ms")
+            }
+        }
+        ParamUnit::Percent => format!("{value:.0} %"),
+        ParamUnit::Ratio => format!("{value:.1}:1"),
+        ParamUnit::None => format!("{value:.2}"),
+    }
 }
 
 /// Apply the gesture protocol to a widget response.
@@ -100,6 +133,7 @@ pub fn bridged_knob(
     param: ParamIndex,
     label: &str,
 ) -> Response {
+    let theme = SonidoTheme::get(ui.ctx());
     let desc = bridge.param_descriptor(slot, param);
     let (min, max, default) = desc.map_or((0.0, 1.0, 0.5), |d| (d.min, d.max, d.default));
 
@@ -110,6 +144,11 @@ pub fn bridged_knob(
     let norm_default = normalize(desc.as_ref(), default, min, max);
 
     let knob = Knob::new(&mut normalized, 0.0, 1.0, label).default(norm_default);
+
+    // Build the formatted text for the LED display and the knob's own value text.
+    // We compute it once from the current plain value and share it.
+    let unit = desc.as_ref().map_or(ParamUnit::None, |d| d.unit);
+    let formatted = format_plain_value(plain_value, &unit);
 
     // Format: denormalize back to plain value, then apply unit formatting
     let knob = if let Some(d) = desc {
@@ -153,6 +192,9 @@ pub fn bridged_knob(
 
     let response = ui.add(knob);
 
+    // 7-segment LED value display below the knob
+    ui.add(LedDisplay::new(formatted).color(theme.colors.amber));
+
     // Denormalize back to plain value for the bridge
     let plain_out = denormalize(desc.as_ref(), normalized, min, max);
     gesture_wrap(&response, bridge, slot, param, plain_out, default);
@@ -175,6 +217,7 @@ pub fn bridged_knob_fmt(
     label: &str,
     format: impl Fn(f32) -> String + 'static,
 ) -> Response {
+    let theme = SonidoTheme::get(ui.ctx());
     let desc = bridge.param_descriptor(slot, param);
     let (min, max, default) = desc.map_or((0.0, 1.0, 0.5), |d| (d.min, d.max, d.default));
 
@@ -182,6 +225,9 @@ pub fn bridged_knob_fmt(
 
     let mut normalized = normalize(desc.as_ref(), plain_value, min, max);
     let norm_default = normalize(desc.as_ref(), default, min, max);
+
+    // Pre-compute formatted text for the LED display from the current plain value
+    let led_text = format(plain_value);
 
     // Wrap user's format fn: denormalize [0,1] → plain before formatting
     let knob = Knob::new(&mut normalized, 0.0, 1.0, label)
@@ -193,6 +239,9 @@ pub fn bridged_knob_fmt(
 
     let response = ui.add(knob);
 
+    // 7-segment LED value display below the knob
+    ui.add(LedDisplay::new(led_text).color(theme.colors.amber));
+
     let plain_out = denormalize(desc.as_ref(), normalized, min, max);
     gesture_wrap(&response, bridge, slot, param, plain_out, default);
     response
@@ -201,8 +250,8 @@ pub fn bridged_knob_fmt(
 /// Like [`bridged_knob`] but with optional A/B morph ghost markers.
 ///
 /// When `morph_markers` is `Some((a_value, b_value))`, thin colored arcs
-/// are drawn on the knob ring: blue for A, orange for B. These show where
-/// each snapshot's value sits on the knob sweep.
+/// are drawn on the knob ring: cyan for A, amber for B. These show where
+/// each snapshot's value sits on the knob sweep, with phosphor bloom.
 ///
 /// Values are **plain** (Hz, dB, etc.) — they are normalized internally
 /// using the parameter's [`ParamScale`](sonido_core::ParamScale).
@@ -215,6 +264,7 @@ pub fn bridged_knob_with_morph(
     label: &str,
     morph_markers: Option<(f32, f32)>,
 ) -> Response {
+    let theme = SonidoTheme::get(ui.ctx());
     let response = bridged_knob(ui, bridge, slot, param, label);
 
     if let Some((a_plain, b_plain)) = morph_markers {
@@ -239,37 +289,28 @@ pub fn bridged_knob_with_morph(
 
         let painter = ui.painter();
 
-        // A marker — blue
+        // A marker — cyan (snapshot A)
         let a_angle = start_angle + norm_a * sweep;
-        draw_marker_tick(
-            painter,
-            center,
-            marker_radius,
-            a_angle,
-            Color32::from_rgb(70, 130, 220),
-        );
+        draw_marker_tick(painter, center, marker_radius, a_angle, theme.colors.cyan, &theme);
 
-        // B marker — orange
+        // B marker — amber (snapshot B)
         let b_angle = start_angle + norm_b * sweep;
-        draw_marker_tick(
-            painter,
-            center,
-            marker_radius,
-            b_angle,
-            Color32::from_rgb(220, 140, 50),
-        );
+        draw_marker_tick(painter, center, marker_radius, b_angle, theme.colors.amber, &theme);
     }
 
     response
 }
 
 /// Draw a short radial tick mark at the given angle on the knob ring.
+///
+/// Uses [`glow::glow_line`] for phosphor bloom on the morph markers.
 fn draw_marker_tick(
     painter: &egui::Painter,
     center: egui::Pos2,
     radius: f32,
     angle: f32,
-    color: Color32,
+    color: egui::Color32,
+    theme: &SonidoTheme,
 ) {
     let inner = radius - 4.0;
     let outer = radius + 4.0;
@@ -281,7 +322,7 @@ fn draw_marker_tick(
         center.x + angle.cos() * outer,
         center.y + angle.sin() * outer,
     );
-    painter.line_segment([p_inner, p_outer], egui::Stroke::new(2.0, color));
+    glow::glow_line(painter, p_inner, p_outer, color, 2.0, theme);
 }
 
 /// Render a combo box for an enum parameter bound to a [`ParamBridge`] slot.
