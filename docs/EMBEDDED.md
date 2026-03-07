@@ -202,7 +202,7 @@ dfu-util -a 0 -s 0x90040000:leave -D blinky.bin
 
 ### Phase 2: Kernel Benchmarks
 
-*Bare Seed + USB. SWD probe optional (for live RTT output).*
+*Bare Seed + USB. No probe required — results output via USB serial.*
 
 Flash via DFU:
 
@@ -212,26 +212,32 @@ cargo objcopy --example bench_kernels --release -- -O binary bench.bin
 dfu-util -a 0 -s 0x90040000:leave -D bench.bin
 ```
 
-With an SWD probe (ST-Link V3 Mini, ~$12), you get live defmt RTT output:
+After flashing, the Daisy enumerates as a USB serial device (CDC ACM).
+Read results with any terminal:
 
 ```bash
-cargo run --example bench_kernels --release
+cat /dev/ttyACM0
+# or: screen /dev/ttyACM0 115200
 ```
 
-Expected output (via RTT):
+Output repeats every 5 seconds so you can connect at any time:
 
 ```
 === Sonido Kernel Benchmarks ===
 sample_rate=48000 block_size=128 budget=1280000 cycles
-kernel=preamp       cycles=XXXXX  budget=1280000  pct=X.XX%
-kernel=distortion   cycles=XXXXX  budget=1280000  pct=X.XX%
-kernel=compressor   cycles=XXXXX  budget=1280000  pct=X.XX%
+       preamp     XXXXX cycles  X.XX%
+   distortion     XXXXX cycles  X.XX%
+   compressor     XXXXX cycles  X.XX%
 ...
-=== Benchmarks complete ===
+=== End ===
 ```
 
-> **Without a probe:** benchmarks run but defmt output isn't visible.
-> LED staying on after boot confirms completion without panic.
+With an SWD probe (ST-Link V3 Mini, ~$12), results are also available via
+defmt RTT:
+
+```bash
+cargo run --example bench_kernels --release
+```
 
 ### Phase 3: Audio Passthrough
 
