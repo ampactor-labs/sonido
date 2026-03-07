@@ -75,6 +75,8 @@ pub struct SonidoApp {
 
     /// Last compilation error message, if any.
     compile_error: Option<String>,
+    /// Frames remaining for compile success flash.
+    compile_success_frames: u32,
 
     // Preset dialog (native only — no filesystem on wasm)
     #[cfg(not(target_arch = "wasm32"))]
@@ -146,6 +148,7 @@ impl SonidoApp {
             cpu_history: Vec::with_capacity(60),
             single_effect,
             compile_error: None,
+            compile_success_frames: 0,
             #[cfg(not(target_arch = "wasm32"))]
             show_save_dialog: false,
             #[cfg(not(target_arch = "wasm32"))]
@@ -415,9 +418,11 @@ impl SonidoApp {
                         Ok(cmd) => {
                             self.audio_bridge.send_command(cmd);
                             self.compile_error = None;
+                            self.compile_success_frames = 90; // ~1.5s at 60fps
                         }
                         Err(e) => {
                             self.compile_error = Some(e.to_string());
+                            self.compile_success_frames = 0;
                         }
                     }
                 }
@@ -428,6 +433,14 @@ impl SonidoApp {
                             .font(FontId::monospace(10.0))
                             .color(theme.colors.red)
                             .small(),
+                    );
+                } else if self.compile_success_frames > 0 {
+                    self.compile_success_frames -= 1;
+                    ui.label(
+                        egui::RichText::new("OK")
+                            .font(FontId::monospace(10.0))
+                            .color(theme.colors.green)
+                            .strong(),
                     );
                 }
             }
@@ -1069,6 +1082,20 @@ impl eframe::App for SonidoApp {
                         if slot.0 < self.bridge.slot_count() {
                             self.render_effect_panel(&mut child, slot);
                         }
+                    } else {
+                        // Hint when no node is selected
+                        let theme = SonidoTheme::get(child.ctx());
+                        child.vertical_centered(|ui| {
+                            ui.add_space(8.0);
+                            ui.label(
+                                egui::RichText::new(
+                                    "Right-click to add nodes · Click a node to edit params · Compile to apply",
+                                )
+                                .font(FontId::monospace(10.0))
+                                .color(theme.colors.text_secondary)
+                                .italics(),
+                            );
+                        });
                     }
                 }
             }

@@ -143,10 +143,12 @@ pub fn bridged_knob(
     let mut normalized = normalize(desc.as_ref(), plain_value, min, max);
     let norm_default = normalize(desc.as_ref(), default, min, max);
 
-    let knob = Knob::new(&mut normalized, 0.0, 1.0, label).default(norm_default);
+    // Hide the knob's built-in value text — the LED display below shows it instead
+    let knob = Knob::new(&mut normalized, 0.0, 1.0, label)
+        .default(norm_default)
+        .show_value(false);
 
-    // Build the formatted text for the LED display and the knob's own value text.
-    // We compute it once from the current plain value and share it.
+    // Build the formatted text for the LED display.
     let unit = desc.as_ref().map_or(ParamUnit::None, |d| d.unit);
     let formatted = format_plain_value(plain_value, &unit);
 
@@ -229,9 +231,10 @@ pub fn bridged_knob_fmt(
     // Pre-compute formatted text for the LED display from the current plain value
     let led_text = format(plain_value);
 
-    // Wrap user's format fn: denormalize [0,1] → plain before formatting
+    // Hide knob's built-in value text; LED display below shows it
     let knob = Knob::new(&mut normalized, 0.0, 1.0, label)
         .default(norm_default)
+        .show_value(false)
         .format(move |n| {
             let plain = denormalize(desc.as_ref(), n, min, max);
             format(plain)

@@ -116,17 +116,18 @@ impl Default for SonidoTheme {
 impl Default for ThemeColors {
     fn default() -> Self {
         Self {
-            amber: Color32::from_rgb(255, 184, 51),
-            green: Color32::from_rgb(51, 255, 102),
-            cyan: Color32::from_rgb(51, 221, 255),
-            red: Color32::from_rgb(255, 51, 51),
-            magenta: Color32::from_rgb(255, 51, 170),
-            yellow: Color32::from_rgb(255, 221, 51),
-            purple: Color32::from_rgb(170, 85, 255),
-            dim: Color32::from_rgb(42, 42, 53),
-            void: Color32::from_rgb(10, 10, 15),
-            text_primary: Color32::from_rgb(230, 230, 235),
-            text_secondary: Color32::from_rgb(119, 136, 136),
+            // Polybius arcade CRT phosphors — saturated, high-contrast
+            amber: Color32::from_rgb(255, 176, 32),
+            green: Color32::from_rgb(32, 255, 96),
+            cyan: Color32::from_rgb(32, 210, 255),
+            red: Color32::from_rgb(255, 48, 48),
+            magenta: Color32::from_rgb(255, 48, 160),
+            yellow: Color32::from_rgb(255, 210, 32),
+            purple: Color32::from_rgb(160, 80, 255),
+            dim: Color32::from_rgb(28, 28, 38),
+            void: Color32::from_rgb(4, 4, 8),
+            text_primary: Color32::from_rgb(220, 220, 228),
+            text_secondary: Color32::from_rgb(100, 115, 120),
         }
     }
 }
@@ -137,9 +138,9 @@ impl Default for ThemeSizing {
             knob_diameter: 60.0,
             meter_width: 24.0,
             meter_height: 120.0,
-            led_digit_width: 10.0,
-            led_digit_height: 16.0,
-            led_digit_gap: 2.0,
+            led_digit_width: 14.0,
+            led_digit_height: 22.0,
+            led_digit_gap: 3.0,
             panel_border_radius: 4.0,
             item_spacing: vec2(8.0, 6.0),
             knob_spacing: 16.0,
@@ -151,10 +152,10 @@ impl Default for ThemeSizing {
 impl Default for GlowConfig {
     fn default() -> Self {
         Self {
-            bloom_radius: 3.0,
-            bloom_alpha: 0.20,
-            ghost_alpha: 0.05,
-            hover_bloom_mult: 1.5,
+            bloom_radius: 4.0,
+            bloom_alpha: 0.30,
+            ghost_alpha: 0.10,
+            hover_bloom_mult: 1.6,
         }
     }
 }
@@ -163,7 +164,7 @@ impl Default for ScanlineConfig {
     fn default() -> Self {
         Self {
             line_spacing: 3.0,
-            line_opacity: 0.03,
+            line_opacity: 0.05,
             enabled: true,
         }
     }
@@ -234,11 +235,11 @@ impl SonidoTheme {
         visuals.widgets.inactive.fg_stroke = Stroke::new(1.0, self.colors.text_primary);
         visuals.widgets.inactive.corner_radius = CornerRadius::same(4);
 
-        visuals.widgets.hovered.bg_fill = Color32::from_rgb(50, 45, 30);
+        visuals.widgets.hovered.bg_fill = Color32::from_rgb(35, 30, 15);
         visuals.widgets.hovered.fg_stroke = Stroke::new(1.5, self.colors.amber);
         visuals.widgets.hovered.corner_radius = CornerRadius::same(4);
 
-        visuals.widgets.active.bg_fill = Color32::from_rgb(60, 50, 25);
+        visuals.widgets.active.bg_fill = Color32::from_rgb(45, 38, 12);
         visuals.widgets.active.fg_stroke = Stroke::new(2.0, self.colors.amber);
         visuals.widgets.active.corner_radius = CornerRadius::same(4);
 

@@ -26,6 +26,7 @@ pub struct Knob<'a> {
     format_value: Option<Box<dyn Fn(f32) -> String + 'a>>,
     diameter: f32,
     sensitivity: f32,
+    show_value: bool,
 }
 
 impl<'a> Knob<'a> {
@@ -40,6 +41,7 @@ impl<'a> Knob<'a> {
             format_value: None,
             diameter: 60.0,
             sensitivity: 0.004,
+            show_value: true,
         }
     }
 
@@ -64,6 +66,14 @@ impl<'a> Knob<'a> {
     /// Set sensitivity (value change per pixel dragged).
     pub fn sensitivity(mut self, sensitivity: f32) -> Self {
         self.sensitivity = sensitivity;
+        self
+    }
+
+    /// Hide the value text below the knob.
+    ///
+    /// Use when an external display (e.g., LED) shows the value instead.
+    pub fn show_value(mut self, show: bool) -> Self {
+        self.show_value = show;
         self
     }
 
@@ -107,7 +117,9 @@ impl<'a> Knob<'a> {
 
 impl Widget for Knob<'_> {
     fn ui(self, ui: &mut Ui) -> Response {
-        let size = vec2(self.diameter, self.diameter + 35.0); // Extra space for label
+        // Extra space: label only (20px) or label + value text (35px)
+        let extra = if self.show_value { 35.0 } else { 20.0 };
+        let size = vec2(self.diameter, self.diameter + extra);
         let (rect, mut response) = ui.allocate_exact_size(size, Sense::click_and_drag());
 
         let center = pos2(rect.center().x, rect.top() + self.diameter / 2.0);
@@ -198,20 +210,22 @@ impl Widget for Knob<'_> {
                 theme.colors.cyan,
             );
 
-            // Value text
-            let value_text = if let Some(ref formatter) = self.format_value {
-                formatter(*self.value)
-            } else {
-                format!("{:.2}", *self.value)
-            };
-            let value_pos = pos2(rect.center().x, center.y + radius + 22.0);
-            painter.text(
-                value_pos,
-                egui::Align2::CENTER_TOP,
-                value_text,
-                egui::FontId::monospace(11.0),
-                theme.colors.amber,
-            );
+            // Value text (hidden when an external LED display is used)
+            if self.show_value {
+                let value_text = if let Some(ref formatter) = self.format_value {
+                    formatter(*self.value)
+                } else {
+                    format!("{:.2}", *self.value)
+                };
+                let value_pos = pos2(rect.center().x, center.y + radius + 22.0);
+                painter.text(
+                    value_pos,
+                    egui::Align2::CENTER_TOP,
+                    value_text,
+                    egui::FontId::monospace(11.0),
+                    theme.colors.amber,
+                );
+            }
         }
 
         if changed {

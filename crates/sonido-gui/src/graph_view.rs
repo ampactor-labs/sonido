@@ -287,9 +287,15 @@ impl SnarlViewer<SonidoNode> for SonidoViewer<'_> {
         snarl: &Snarl<SonidoNode>,
     ) -> egui::Frame {
         let accent = self.node_accent(&snarl[node]);
+        let is_selected = *self.selected_node == Some(node);
+        let (stroke_width, fill) = if is_selected {
+            (2.0, accent.gamma_multiply(0.08))
+        } else {
+            (1.0, self.theme.colors.void)
+        };
         egui::Frame::new()
-            .fill(self.theme.colors.void)
-            .stroke(Stroke::new(1.0, accent))
+            .fill(fill)
+            .stroke(Stroke::new(stroke_width, accent))
             .corner_radius(4.0)
             .inner_margin(6.0)
     }
@@ -322,12 +328,26 @@ impl SnarlViewer<SonidoNode> for SonidoViewer<'_> {
         snarl: &mut Snarl<SonidoNode>,
     ) {
         let accent = self.node_accent(&snarl[node]);
+        let is_selected = *self.selected_node == Some(node);
         let title = self.title(&snarl[node]);
-        ui.label(
+
+        // Bold the title if selected
+        let text = if is_selected {
+            RichText::new(title)
+                .font(FontId::monospace(12.0))
+                .color(accent)
+                .strong()
+        } else {
             RichText::new(title)
                 .font(FontId::monospace(11.0))
-                .color(accent),
-        );
+                .color(accent)
+        };
+
+        // Clickable label — sets the selected node on click
+        let response = ui.add(egui::Label::new(text).sense(egui::Sense::click()));
+        if response.clicked() {
+            *self.selected_node = Some(node);
+        }
     }
 
     fn inputs(&mut self, node: &SonidoNode) -> usize {
@@ -397,16 +417,33 @@ impl SnarlViewer<SonidoNode> for SonidoViewer<'_> {
         } = &snarl[node]
         {
             let dim = self.theme.colors.text_secondary;
-            ui.label(
-                RichText::new(category.name())
+            let is_selected = *self.selected_node == Some(node);
+            let accent = category_color(*category, &self.theme);
+
+            // Clickable body — clicking selects this node
+            let body_text = format!("{} · {} params", category.name(), descriptors.len());
+            let text = if is_selected {
+                RichText::new(body_text)
                     .font(FontId::monospace(9.0))
-                    .color(dim),
-            );
-            ui.label(
-                RichText::new(format!("{} params", descriptors.len()))
+                    .color(accent)
+            } else {
+                RichText::new(body_text)
                     .font(FontId::monospace(9.0))
-                    .color(dim),
-            );
+                    .color(dim)
+            };
+            let response = ui.add(egui::Label::new(text).sense(egui::Sense::click()));
+            if response.clicked() {
+                *self.selected_node = Some(node);
+            }
+
+            // Selected indicator
+            if is_selected {
+                ui.label(
+                    RichText::new("▸ selected")
+                        .font(FontId::monospace(8.0))
+                        .color(accent),
+                );
+            }
         }
     }
 

@@ -150,18 +150,18 @@ impl Widget for LedDisplay {
 
                 match ch {
                     '.' => {
-                        // Decimal point: small dot at bottom-right
-                        let dot_pos = pos2(x + dw * 0.5, rect.bottom() - 1.0);
-                        glow::glow_circle(painter, dot_pos, 1.0, color, &theme);
-                        x += gap + 4.0; // narrower than a full digit
+                        // Decimal point: dot at bottom-right
+                        let dot_pos = pos2(x + dw * 0.5, rect.bottom() - 2.0);
+                        glow::glow_circle(painter, dot_pos, 1.5, color, &theme);
+                        x += gap + 6.0; // narrower than a full digit
                         continue;
                     }
                     ':' => {
                         // Colon: two dots vertically centered
                         let mid_x = x + dw * 0.5;
-                        glow::glow_circle(painter, pos2(mid_x, rect.top() + dh * 0.3), 1.0, color, &theme);
-                        glow::glow_circle(painter, pos2(mid_x, rect.top() + dh * 0.7), 1.0, color, &theme);
-                        x += gap + 6.0;
+                        glow::glow_circle(painter, pos2(mid_x, rect.top() + dh * 0.3), 1.5, color, &theme);
+                        glow::glow_circle(painter, pos2(mid_x, rect.top() + dh * 0.7), 1.5, color, &theme);
+                        x += gap + 8.0;
                         continue;
                     }
                     _ => {}
@@ -190,9 +190,9 @@ fn draw_7seg(
     show_ghosts: bool,
     theme: &SonidoTheme,
 ) {
-    let pad = 1.0;
+    let pad = 2.0;
     let half_h = h / 2.0;
-    let stroke_w = 2.0;
+    let stroke_w = 3.0;
 
     // Segment endpoints: (start, end)
     let seg_lines: [(Pos2, Pos2); 7] = [
