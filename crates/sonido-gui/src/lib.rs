@@ -19,4 +19,4 @@ pub use app::SonidoApp;
 pub use audio_bridge::AtomicParam;
 pub use preset_manager::{PresetEntry, PresetManager, PresetSource};
 pub use sonido_config::Preset;
-pub use theme::Theme;
+pub use theme::{SonidoTheme, Theme};

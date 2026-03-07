@@ -19,7 +19,7 @@ pub mod widgets;
 
 pub use effects_ui::{EffectPanel, create_panel};
 pub use param_bridge::{ChainMutator, ParamBridge, ParamIndex, SlotIndex};
-pub use theme::Theme;
+pub use theme::{SonidoTheme, Theme};
 pub use widgets::{
     BypassToggle, FootswitchToggle, GainReductionMeter, Knob, LevelMeter, MorphBarResponse,
     bridged_combo, bridged_knob, bridged_knob_fmt, bridged_knob_with_morph, gesture_wrap,

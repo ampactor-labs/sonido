@@ -4,4 +4,4 @@
 //! definition lives in `sonido-gui-core` so it can be shared with
 //! plugin UIs.
 
-pub use sonido_gui_core::Theme;
+pub use sonido_gui_core::{SonidoTheme, Theme};
