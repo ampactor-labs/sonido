@@ -14,10 +14,12 @@ use crate::preset_manager::PresetManager;
 use crate::theme::Theme;
 use crate::widgets::{Knob, LevelMeter};
 use egui::{
-    Align, CentralPanel, Color32, Context, Frame, Layout, Margin, Rect, TopBottomPanel, UiBuilder,
-    pos2, vec2,
+    Align, CentralPanel, Color32, Context, FontId, Frame, Layout, Margin, Rect, Stroke,
+    TopBottomPanel, UiBuilder, pos2, vec2,
 };
 use sonido_gui_core::effects_ui;
+use sonido_gui_core::theme::SonidoTheme;
+use sonido_gui_core::widgets::glow;
 use sonido_gui_core::widgets::morph_bar;
 use sonido_gui_core::{ParamBridge, SlotIndex};
 use sonido_registry::EffectRegistry;
@@ -616,21 +618,26 @@ impl SonidoApp {
                 effects_ui::create_panel(effect_id).map(|p| (slot, effect_id.to_owned(), p));
         }
 
-        let panel_frame = Frame::new()
-            .fill(Color32::from_rgb(40, 40, 48))
-            .corner_radius(8.0)
-            .inner_margin(Margin::same(16));
+        let theme = SonidoTheme::get(ui.ctx());
 
-        panel_frame.show(ui, |ui| {
+        let panel_frame = Frame::new()
+            .fill(theme.colors.void)
+            .stroke(Stroke::new(1.0, theme.colors.amber))
+            .corner_radius(theme.sizing.panel_border_radius)
+            .inner_margin(Margin::same(theme.sizing.panel_padding));
+
+        let panel_response = panel_frame.show(ui, |ui| {
             ui.set_min_height(160.0);
             let max_h = ui.available_height().max(160.0);
             egui::ScrollArea::vertical()
                 .max_height(max_h)
                 .auto_shrink(true)
                 .show(ui, |ui| {
-                    // Panel title
-                    ui.heading(
-                        egui::RichText::new(panel_name).color(Color32::from_rgb(100, 180, 255)),
+                    // Panel title — monospace amber
+                    ui.label(
+                        egui::RichText::new(panel_name)
+                            .font(FontId::monospace(12.0))
+                            .color(theme.colors.amber),
                     );
                     ui.add_space(8.0);
                     ui.separator();
@@ -643,6 +650,10 @@ impl SonidoApp {
                     }
                 });
         });
+
+        // Scanline overlay on the effect panel
+        let panel_rect = panel_response.response.rect;
+        glow::scanlines(ui.painter(), panel_rect, &theme);
     }
 
     /// Render the morph crossfader bar.
