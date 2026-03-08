@@ -10,7 +10,6 @@ use crate::audio_processor::build_audio_streams;
 use crate::file_player::FilePlayer;
 use crate::graph_view::{GraphView, SonidoNode};
 use crate::morph_state::MorphState;
-use crate::preset_manager::PresetManager;
 use crate::theme::Theme;
 use crate::widgets::{Knob, LevelMeter};
 use egui::{
@@ -51,7 +50,6 @@ pub struct SonidoApp {
     graph_view: GraphView,
     morph_state: MorphState,
     file_player: FilePlayer,
-    preset_manager: PresetManager,
 
     /// Cached effect panel: (slot, effect_id, panel).
     /// Avoids reconstructing the panel widget every frame.
@@ -136,7 +134,6 @@ impl SonidoApp {
             graph_view: GraphView::new(),
             morph_state: MorphState::new(),
             file_player: FilePlayer::new(transport_tx),
-            preset_manager: PresetManager::new(),
             cached_panel: None,
             sample_rate: 48000.0,
             buffer_size: 2048, // Default buffer size
@@ -152,11 +149,6 @@ impl SonidoApp {
 
         // Apply theme
         app.theme.apply(&cc.egui_ctx);
-
-        // Load initial preset — select first preset which applies it to bridge
-        if !app.preset_manager.presets().is_empty() {
-            app.preset_manager.select(0, &*app.bridge);
-        }
 
         tracing::info!(sample_rate = app.sample_rate, "app initialized");
 
@@ -484,47 +476,6 @@ impl SonidoApp {
         });
     }
 
-    /// Reconfigures the app to use a new preset.
-    ///
-    /// This is a "hard" reset: it stops audio, rebuilds the parameter bridge
-    /// and effect chain from the preset, and restarts audio. This ensures the
-    /// chain exactly matches the preset, adding and removing effects as needed.
-    fn apply_preset(&mut self, preset_idx: usize) {
-        if preset_idx >= self.preset_manager.presets().len() {
-            return;
-        }
-
-        // Set the preset as current in the manager.
-        self.preset_manager.select(preset_idx, &*self.bridge);
-
-        let preset = self.preset_manager.current().unwrap().preset.clone();
-        let effect_ids: Vec<&'static str> = preset
-            .effects
-            .iter()
-            .filter_map(|config| self.registry.get(&config.effect_type).map(|desc| desc.id))
-            .collect();
-
-        // 1. Stop audio
-        self.stop_audio();
-
-        // 2. Create and configure a new bridge for the preset's chain
-        let new_bridge = Arc::new(AtomicParamBridge::new(
-            &self.registry,
-            &effect_ids,
-            self.sample_rate,
-        ));
-        crate::preset_manager::preset_to_params(&preset, &*new_bridge);
-
-        // 3. Swap in the new bridge
-        self.bridge = new_bridge;
-
-        // 4. Restart audio with the new chain
-        if let Err(e) = self.start_audio() {
-            self.audio_error = Some(e);
-        }
-        self.file_player.resync_transport();
-    }
-
     /// Render a unified I/O strip (INPUT or OUTPUT endpoint).
     ///
     /// `is_input` selects between input gain / output master controls and metering.
@@ -590,7 +541,6 @@ impl SonidoApp {
                         .changed()
                     {
                         input_gain.set(gain_val);
-                        self.preset_manager.mark_modified();
                     }
                 } else {
                     let master_vol_param = self.audio_bridge.master_volume();
@@ -605,7 +555,6 @@ impl SonidoApp {
                         .changed()
                     {
                         master_vol_param.set(master_val);
-                        self.preset_manager.mark_modified();
                     }
                 }
             });
