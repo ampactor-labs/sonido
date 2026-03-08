@@ -936,11 +936,22 @@ impl eframe::App for SonidoApp {
             self.audio_resumed = true;
         }
 
-        // Request continuous repaint for metering
+        // Adaptive repaint: 60fps when audio/metering is active, 4fps when idle
+        let is_animating = self.audio_bridge.is_running()
+            || self.file_player.is_playing()
+            || self.metering.output_peak > 0.001;
         #[cfg(target_arch = "wasm32")]
-        ctx.request_repaint_after(std::time::Duration::from_millis(33)); // 30fps
+        ctx.request_repaint_after(std::time::Duration::from_millis(if is_animating {
+            33
+        } else {
+            250
+        }));
         #[cfg(not(target_arch = "wasm32"))]
-        ctx.request_repaint_after(Duration::from_millis(16)); // ~60fps cap
+        ctx.request_repaint_after(Duration::from_millis(if is_animating {
+            16
+        } else {
+            250
+        }));
 
         // Global keyboard shortcuts (only when no text widget is focused)
         let no_widget_focused = ctx.memory(|m| m.focused().is_none());

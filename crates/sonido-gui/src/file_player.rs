@@ -130,6 +130,11 @@ impl FilePlayer {
         self.has_file
     }
 
+    /// Whether audio is currently playing.
+    pub fn is_playing(&self) -> bool {
+        self.is_playing
+    }
+
     /// Toggle between play and pause states.
     ///
     /// If playing, sends [`TransportCommand::Pause`]. If paused, sends
