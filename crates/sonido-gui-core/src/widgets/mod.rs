@@ -5,6 +5,7 @@
 //! - [`Fader`] — Vertical slot fader with LED-segment fill
 //! - [`bridged_knob`] — Bridge-aware knob with auto-format and gesture protocol
 //! - [`bridged_knob_fmt`] — Bridge-aware knob with custom formatter
+//! - [`bridged_fader`] — Bridge-aware vertical fader with gesture protocol
 //! - [`bridged_combo`] — Bridge-aware combo box for enum parameters
 //! - [`gesture_wrap`] — Gesture protocol helper for custom widget layouts
 //! - [`LevelMeter`] — VU-style peak/RMS meter (vertical or horizontal)
@@ -22,7 +23,8 @@ mod morph_bar;
 mod toggle;
 
 pub use bridged_knob::{
-    bridged_combo, bridged_knob, bridged_knob_fmt, bridged_knob_with_morph, gesture_wrap,
+    bridged_combo, bridged_fader, bridged_knob, bridged_knob_fmt, bridged_knob_with_morph,
+    gesture_wrap,
 };
 pub use fader::Fader;
 pub use knob::Knob;

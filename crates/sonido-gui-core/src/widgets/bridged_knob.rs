@@ -11,6 +11,7 @@
 //! - [`bridged_combo`] — combo box for enum parameters
 //! - [`gesture_wrap`] — low-level gesture protocol for custom widgets
 
+use super::fader::Fader;
 use super::Knob;
 use crate::theme::SonidoTheme;
 use crate::widgets::glow;
@@ -364,4 +365,70 @@ pub fn bridged_combo(
         });
 
     response.response
+}
+
+/// Render a vertical fader bridged to a parameter slot.
+///
+/// Handles normalization ([`ParamScale`](sonido_core::ParamScale)-aware), gesture protocol
+/// (`begin_set`/`end_set`), auto-formatting from [`ParamUnit`], and double-click-to-reset.
+/// Drop-in replacement for [`bridged_knob`] with vertical fader UX.
+pub fn bridged_fader(
+    ui: &mut Ui,
+    bridge: &dyn ParamBridge,
+    slot: SlotIndex,
+    param: ParamIndex,
+    fader_w: f32,
+    fader_h: f32,
+) -> Response {
+    let desc = bridge.param_descriptor(slot, param);
+    let plain_value = bridge.get(slot, param);
+
+    let (min, max, default) = desc
+        .as_ref()
+        .map(|d| (d.min, d.max, d.default))
+        .unwrap_or((0.0, 1.0, 0.5));
+
+    let label = desc
+        .as_ref()
+        .map(|d| d.short_name)
+        .unwrap_or("?");
+
+    let normalized = normalize(desc.as_ref(), plain_value, min, max);
+    let default_normalized = normalize(desc.as_ref(), default, min, max);
+
+    let unit = desc.as_ref().map_or(ParamUnit::None, |d| d.unit);
+    let formatted = format_plain_value(plain_value, &unit);
+
+    let theme = SonidoTheme::get(ui.ctx());
+    let color = theme.colors.amber;
+
+    let mut norm = normalized;
+    let response = ui.add(
+        Fader::new(&mut norm, label)
+            .display(&formatted)
+            .color(color)
+            .size(fader_w, fader_h)
+            .default_value(default_normalized),
+    );
+
+    // Double-click reset
+    if response.double_clicked() {
+        bridge.begin_set(slot, param);
+        bridge.set(slot, param, default);
+        bridge.end_set(slot, param);
+    } else {
+        // Gesture protocol
+        if response.drag_started() {
+            bridge.begin_set(slot, param);
+        }
+        if response.changed() {
+            let new_plain = denormalize(desc.as_ref(), norm, min, max);
+            bridge.set(slot, param, new_plain);
+        }
+        if response.drag_stopped() {
+            bridge.end_set(slot, param);
+        }
+    }
+
+    response
 }
