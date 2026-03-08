@@ -8,7 +8,7 @@ use crate::atomic_param_bridge::AtomicParamBridge;
 use crate::audio_bridge::{AudioBridge, MeteringData};
 use crate::audio_processor::build_audio_streams;
 use crate::file_player::FilePlayer;
-use crate::graph_view::GraphView;
+use crate::graph_view::{GraphView, SonidoNode};
 use crate::morph_state::MorphState;
 use crate::preset_manager::PresetManager;
 use crate::theme::Theme;
@@ -142,7 +142,7 @@ impl SonidoApp {
             preset_manager: PresetManager::new(),
             cached_panel: None,
             sample_rate: 48000.0,
-            buffer_size: 1024, // Default buffer size
+            buffer_size: 2048, // Default buffer size
             cpu_usage: 0.0,
             audio_error: None,
             cpu_history: Vec::with_capacity(60),
@@ -171,13 +171,7 @@ impl SonidoApp {
         // passthrough works immediately without requiring the user to
         // click Compile.
         if !single_effect {
-            match app
-                .graph_view
-                .compile_to_engine(app.sample_rate, app.buffer_size, &app.registry)
-            {
-                Ok(cmd) => app.audio_bridge.send_command(cmd),
-                Err(e) => tracing::warn!("initial graph compile failed: {e}"),
-            }
+            app.compile_and_apply();
         }
 
         // Start audio
@@ -187,6 +181,27 @@ impl SonidoApp {
         app.file_player.resync_transport();
 
         app
+    }
+
+    /// Compile the current graph and send it to the audio thread.
+    ///
+    /// On success, clears any previous compile error and arms the success flash.
+    /// On failure, stores the error string for display in the header.
+    fn compile_and_apply(&mut self) {
+        match self
+            .graph_view
+            .compile_to_engine(self.sample_rate, self.buffer_size, &self.registry)
+        {
+            Ok(cmd) => {
+                self.audio_bridge.send_command(cmd);
+                self.compile_error = None;
+                self.compile_success_frames = 90;
+            }
+            Err(e) => {
+                self.compile_error = Some(e.to_string());
+                self.compile_success_frames = 0;
+            }
+        }
     }
 
     /// Build cpal streams and start audio processing.
@@ -424,20 +439,7 @@ impl SonidoApp {
                         .strong(),
                 );
                 if compile_btn.clicked() {
-                    match self
-                        .graph_view
-                        .compile_to_engine(self.sample_rate, self.buffer_size, &self.registry)
-                    {
-                        Ok(cmd) => {
-                            self.audio_bridge.send_command(cmd);
-                            self.compile_error = None;
-                            self.compile_success_frames = 90; // ~1.5s at 60fps
-                        }
-                        Err(e) => {
-                            self.compile_error = Some(e.to_string());
-                            self.compile_success_frames = 0;
-                        }
-                    }
+                    self.compile_and_apply();
                 }
 
                 if let Some(ref err) = self.compile_error {
@@ -674,35 +676,32 @@ impl SonidoApp {
 
         let theme = SonidoTheme::get(ui.ctx());
 
+        // Hardware module enclosure — arcade CRT chassis
         let panel_frame = Frame::new()
             .fill(theme.colors.void)
-            .stroke(Stroke::new(1.0, theme.colors.amber))
+            .stroke(Stroke::new(2.0, theme.colors.amber))
             .corner_radius(theme.sizing.panel_border_radius)
             .inner_margin(Margin::same(theme.sizing.panel_padding as i8));
 
         let panel_response = panel_frame.show(ui, |ui| {
-            ui.set_min_height(160.0);
-            let max_h = ui.available_height().max(160.0);
-            egui::ScrollArea::vertical()
-                .max_height(max_h)
-                .auto_shrink(true)
-                .show(ui, |ui| {
-                    // Panel title — monospace amber
-                    ui.label(
-                        egui::RichText::new(panel_name)
-                            .font(FontId::monospace(12.0))
-                            .color(theme.colors.amber),
-                    );
-                    ui.add_space(8.0);
-                    ui.separator();
-                    ui.add_space(12.0);
+            // Module title — monospace amber, centered
+            ui.vertical_centered(|ui| {
+                ui.label(
+                    egui::RichText::new(panel_name)
+                        .font(FontId::monospace(14.0))
+                        .color(theme.colors.amber)
+                        .strong(),
+                );
+            });
+            ui.add_space(4.0);
+            ui.separator();
+            ui.add_space(8.0);
 
-                    // Effect-specific controls from cache
-                    if let Some((_, _, ref mut panel)) = self.cached_panel {
-                        let bridge: &dyn ParamBridge = &*self.bridge;
-                        panel.ui(ui, bridge, slot);
-                    }
-                });
+            // Effect controls — no ScrollArea, all controls visible
+            if let Some((_, _, ref mut panel)) = self.cached_panel {
+                let bridge: &dyn ParamBridge = &*self.bridge;
+                panel.ui(ui, bridge, slot);
+            }
         });
 
         // Scanline overlay on the effect panel
@@ -822,7 +821,7 @@ impl SonidoApp {
             );
             ui.separator();
 
-            // CPU meter — color-coded by load
+            // CPU meter — fixed-width allocation to prevent sparkline jitter
             let cpu_text = format!("CPU: {:.1}%", self.cpu_usage);
             #[cfg(debug_assertions)]
             let cpu_text = format!("{cpu_text} (debug)");
@@ -833,16 +832,23 @@ impl SonidoApp {
             } else {
                 theme.colors.green
             };
-            ui.label(
-                egui::RichText::new(&cpu_text)
-                    .font(FontId::monospace(11.0))
-                    .color(cpu_color),
-            );
 
-            // CPU usage sparkline graph (glow oscilloscope style)
-            if !self.cpu_history.is_empty() {
-                draw_sparkline(ui, &self.cpu_history, cpu_color, 100.0, 24.0);
-            }
+            // Fixed-width container: sparkline stays put regardless of text width
+            ui.allocate_ui_with_layout(
+                vec2(240.0, 24.0),
+                Layout::left_to_right(Align::Center),
+                |ui| {
+                    ui.set_min_width(240.0);
+                    ui.label(
+                        egui::RichText::new(&cpu_text)
+                            .font(FontId::monospace(11.0))
+                            .color(cpu_color),
+                    );
+                    if !self.cpu_history.is_empty() {
+                        draw_sparkline(ui, &self.cpu_history, cpu_color, 100.0, 24.0);
+                    }
+                },
+            );
         });
     }
 
@@ -1070,9 +1076,11 @@ impl eframe::App for SonidoApp {
                     // Single-effect mode: show only the effect panel, no graph
                     self.render_effect_panel(&mut child, SlotIndex(0));
                 } else {
-                    // Graph editor fills the upper portion (constrained)
+                    // Panel-first allocation: reserve space for the effect panel,
+                    // graph editor takes the rest (it has internal zoom/pan).
                     let avail_h = child.available_height();
-                    let graph_h = (avail_h * 0.6).max(200.0);
+                    let panel_h = 320.0; // 3 rows of knobs (reverb) without scrolling
+                    let graph_h = (avail_h - panel_h - 16.0).max(180.0);
                     let theme = SonidoTheme::get(child.ctx());
                     let selected_slot = child
                         .group(|ui| {
@@ -1084,28 +1092,26 @@ impl eframe::App for SonidoApp {
                                         .color(theme.colors.cyan),
                                 );
                                 ui.add_space(4.0);
+
+                                // Update per-slot activity from output metering
+                                let slot_count = self
+                                    .graph_view
+                                    .snarl
+                                    .node_ids()
+                                    .filter(|(_, n)| matches!(n, SonidoNode::Effect { .. }))
+                                    .count();
+                                self.graph_view.slot_activity =
+                                    vec![self.metering.output_peak; slot_count];
+
                                 self.graph_view.show(ui)
                             })
                             .inner
                         })
                         .inner;
 
-                    // Auto-compile when topology changes (connect/disconnect/insert/remove)
+                    // Auto-compile when topology changes (connect/disconnect/remove)
                     if self.graph_view.topology_changed {
-                        match self
-                            .graph_view
-                            .compile_to_engine(self.sample_rate, self.buffer_size, &self.registry)
-                        {
-                            Ok(cmd) => {
-                                self.audio_bridge.send_command(cmd);
-                                self.compile_error = None;
-                                self.compile_success_frames = 90;
-                            }
-                            Err(e) => {
-                                self.compile_error = Some(e.to_string());
-                                self.compile_success_frames = 0;
-                            }
-                        }
+                        self.compile_and_apply();
                     }
 
                     child.add_space(16.0);
