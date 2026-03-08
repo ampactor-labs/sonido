@@ -560,6 +560,102 @@ impl FilePlayer {
         }
     }
 
+    /// Render the generator controls panel (shown when source mode is Generator).
+    fn render_generator_panel(&mut self, ui: &mut Ui, theme: &SonidoTheme) {
+        ui.horizontal(|ui| {
+            // Signal type combo
+            egui::ComboBox::from_id_salt("gen_signal_full")
+                .selected_text(
+                    egui::RichText::new(self.gen_signal_type.label())
+                        .font(egui::FontId::monospace(11.0))
+                        .color(theme.colors.text_primary),
+                )
+                .width(100.0)
+                .show_ui(ui, |ui| {
+                    for t in SignalType::ALL {
+                        if ui
+                            .selectable_label(self.gen_signal_type == t, t.label())
+                            .clicked()
+                        {
+                            self.gen_signal_type = t;
+                            let _ = self
+                                .transport_tx
+                                .send(TransportCommand::SetSignalType(t));
+                        }
+                    }
+                });
+
+            ui.add_space(8.0);
+
+            // Frequency slider (for applicable signal types)
+            if matches!(
+                self.gen_signal_type,
+                SignalType::Sine | SignalType::SawChord
+            ) {
+                ui.label(
+                    egui::RichText::new("Freq:")
+                        .font(egui::FontId::monospace(10.0))
+                        .color(theme.colors.text_secondary),
+                );
+                let mut log_freq = self.gen_frequency.ln();
+                let resp = ui.add(
+                    egui::Slider::new(
+                        &mut log_freq,
+                        (20.0_f32).ln()..=(20000.0_f32).ln(),
+                    )
+                    .show_value(false)
+                    .custom_formatter(|v, _| format!("{:.0} Hz", v.exp()))
+                    .custom_parser(|s| {
+                        s.trim_end_matches(" Hz")
+                            .parse::<f64>()
+                            .ok()
+                            .map(|v| v.ln())
+                    }),
+                );
+                if resp.changed() {
+                    self.gen_frequency = log_freq.exp();
+                    let _ = self
+                        .transport_tx
+                        .send(TransportCommand::SetGeneratorFreq(self.gen_frequency));
+                }
+            }
+
+            ui.add_space(8.0);
+
+            // Transport: Play/Pause, Stop
+            let (play_sym, play_color) = if self.is_playing {
+                ("||", theme.colors.amber)
+            } else {
+                (">", theme.colors.green)
+            };
+            if arcade_led_button(ui, play_sym, play_color, self.is_playing, theme).clicked() {
+                self.toggle_play_pause();
+            }
+
+            if arcade_led_button(ui, "[]", theme.colors.red, false, theme).clicked() {
+                self.is_playing = false;
+                let _ = self.transport_tx.send(TransportCommand::Stop);
+            }
+
+            ui.add_space(8.0);
+
+            // Signal info label
+            let info = match self.gen_signal_type {
+                SignalType::Sine => format!("{:.0} Hz", self.gen_frequency),
+                SignalType::Sweep => "20-20k Hz log".to_string(),
+                SignalType::WhiteNoise => "Flat spectrum".to_string(),
+                SignalType::PinkNoise => "-3 dB/oct".to_string(),
+                SignalType::Impulse => "2 Hz clicks".to_string(),
+                SignalType::SawChord => format!("{:.0} Hz chord", self.gen_frequency),
+            };
+            ui.label(
+                egui::RichText::new(info)
+                    .font(egui::FontId::monospace(10.0))
+                    .color(theme.colors.cyan),
+            );
+        });
+    }
+
     /// Render the file player panel (bottom bar).
     pub fn ui(&mut self, ui: &mut Ui) {
         // Check for completed file dialog (native — spawned on background thread)
@@ -575,6 +671,11 @@ impl FilePlayer {
         }
 
         let theme = SonidoTheme::get(ui.ctx());
+
+        if self.source_mode == SourceMode::Generator {
+            self.render_generator_panel(ui, &theme);
+            return;
+        }
 
         ui.horizontal(|ui| {
             // Browse button — arcade-styled (void body, dim border, amber text)
