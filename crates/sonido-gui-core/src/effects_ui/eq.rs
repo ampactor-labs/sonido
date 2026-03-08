@@ -1,7 +1,7 @@
 //! Parametric EQ effect UI panel.
 
 use crate::theme::SonidoTheme;
-use crate::widgets::{BypassToggle, bridged_fader};
+use crate::widgets::bridged_fader;
 use crate::{ParamBridge, ParamIndex, SlotIndex};
 use egui::Ui;
 
@@ -28,15 +28,6 @@ impl ParametricEqPanel {
         let fader_h = theme.layout.fader_height(ui.available_height().min(200.0));
 
         ui.vertical(|ui| {
-            ui.horizontal(|ui| {
-                let mut active = !bridge.is_bypassed(slot);
-                if ui.add(BypassToggle::new(&mut active, "Active")).changed() {
-                    bridge.set_bypassed(slot, !active);
-                }
-            });
-
-            ui.add_space(12.0);
-
             // Low band (params 0, 1, 2)
             Self::render_band(ui, bridge, slot, "LOW", 0, fader_w, fader_h, &theme);
             ui.add_space(4.0);
