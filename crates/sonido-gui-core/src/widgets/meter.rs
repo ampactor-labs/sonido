@@ -1,44 +1,75 @@
 //! Level meter widgets for audio visualization.
 //!
-//! Renders segmented LED-bar meters with CRT phosphor glow. Each meter is
-//! divided into 16 discrete segments colored via [`SonidoTheme::meter_segment_color`].
-//! Active segments use [`glow::glow_rect`] for bloom; inactive segments are
-//! drawn at ghost intensity. Peak hold is displayed as a single lit segment
-//! with time-fading alpha.
+//! Provides two meter types:
+//!
+//! - [`LevelMeter`] — Continuous dual-bar (RMS + peak) meter with dB scale,
+//!   styled after Ableton Live's channel meters. The RMS level drives a filled
+//!   bar colored by threshold (green/yellow/red via
+//!   [`SonidoTheme::meter_segment_color`]), while peak is shown as a thin
+//!   horizontal line. An optional latching clip indicator lights at the top
+//!   when peak exceeds 0 dBFS.
+//!
+//! - [`GainReductionMeter`] — Segmented LED-bar meter for compressor gain
+//!   reduction display. Lights top-down in amber with phosphor bloom.
 
 use egui::{Rect, Response, Sense, Stroke, StrokeKind, Ui, Widget, pos2, vec2};
 
 use crate::theme::SonidoTheme;
 use crate::widgets::glow;
 
-/// Number of discrete LED segments in each meter.
+/// Number of discrete LED segments in the gain reduction meter.
 const SEGMENT_COUNT: usize = 16;
 
-/// Gap between segments in pixels.
+/// Gap between segments in pixels (gain reduction meter).
 const SEGMENT_GAP: f32 = 0.5;
 
-/// VU-style segmented level meter with peak hold.
+/// dB scale tick marks: (linear level, label text).
+///
+/// Positions are pre-computed from `10^(dB/20)`:
+/// - 0 dB = 1.000
+/// - -6 dB = 0.501
+/// - -12 dB = 0.251
+/// - -18 dB = 0.126
+/// - -24 dB = 0.063
+const DB_MARKS: &[(f32, &str)] = &[
+    (1.000, "0"),
+    (0.501, "-6"),
+    (0.251, "-12"),
+    (0.126, "-18"),
+    (0.063, "-24"),
+];
+
+/// Continuous dual-bar level meter with dB scale and clip indicator.
+///
+/// Renders an RMS bar (filled rectangle) and a peak line overlaid on a void
+/// background. A dB scale with tick marks is drawn to the left of the bar.
+/// When peak exceeds 0 dBFS, a clip indicator circle appears at the top of the
+/// meter.
 ///
 /// ## Parameters
-/// - `peak`: Peak level, normalized 0.0–1.5 (clamped). Values > 1.0 trigger clip indicator.
-/// - `rms`: RMS level, normalized 0.0–1.5 (clamped). Drives the main bar fill.
+/// - `peak`: Peak level, normalized 0.0-1.5 (clamped). Values > 1.0 trigger clip indicator.
+/// - `rms`: RMS level, normalized 0.0-1.5 (clamped). Drives the main bar fill.
 /// - `label`: Optional text label drawn below the meter.
-/// - `width`: Meter width in pixels (default 24.0).
+/// - `width`: Total meter width in pixels (default 24.0). Bar occupies the right ~50%.
 /// - `height`: Meter height in pixels (default 120.0).
 /// - `horizontal`: If true, meter draws left-to-right instead of bottom-to-top.
-pub struct LevelMeter {
+/// - `clip_latched`: Optional mutable reference to a clip latch flag. When `Some`, the clip
+///   indicator stays lit after peak > 1.0 until the meter is clicked. When `None`, clip
+///   indicator blinks momentarily.
+pub struct LevelMeter<'a> {
     peak: f32,
     rms: f32,
     label: String,
     width: f32,
     height: f32,
     horizontal: bool,
+    clip_latched: Option<&'a mut bool>,
 }
 
-impl LevelMeter {
+impl<'a> LevelMeter<'a> {
     /// Create a new level meter.
     ///
-    /// `peak` and `rms` are clamped to 0.0–1.5.
+    /// `peak` and `rms` are clamped to 0.0-1.5.
     pub fn new(peak: f32, rms: f32) -> Self {
         Self {
             peak: peak.clamp(0.0, 1.5),
@@ -47,6 +78,7 @@ impl LevelMeter {
             width: 24.0,
             height: 120.0,
             horizontal: false,
+            clip_latched: None,
         }
     }
 
@@ -71,74 +103,17 @@ impl LevelMeter {
         }
     }
 
-    /// Paint segmented LED meter along the primary axis.
+    /// Attach a clip latch flag for persistent clip indication.
     ///
-    /// Segments fill from the origin (bottom for vertical, left for horizontal).
-    /// Each segment's color is determined by its normalized position via
-    /// [`SonidoTheme::meter_segment_color`]. Active segments get phosphor bloom,
-    /// inactive segments are drawn at ghost intensity.
-    fn paint_segments(
-        &self,
-        painter: &egui::Painter,
-        inner: Rect,
-        theme: &SonidoTheme,
-    ) {
-        let axis_length = if self.horizontal {
-            inner.width()
-        } else {
-            inner.height()
-        };
-
-        let total_gaps = (SEGMENT_COUNT - 1) as f32 * SEGMENT_GAP;
-        let seg_size = (axis_length - total_gaps) / SEGMENT_COUNT as f32;
-        let level = self.rms.min(1.0);
-
-        // Determine which segment the peak sits on (for peak hold)
-        let peak_seg = if self.peak > 0.01 {
-            let p = self.peak.min(1.0);
-            let idx = (p * SEGMENT_COUNT as f32).ceil() as usize;
-            Some(idx.min(SEGMENT_COUNT).saturating_sub(1))
-        } else {
-            None
-        };
-
-        for i in 0..SEGMENT_COUNT {
-            // Normalized position of this segment's top edge (0.0 = bottom, 1.0 = top)
-            let seg_position = (i as f32 + 1.0) / SEGMENT_COUNT as f32;
-            let seg_bottom_pos = i as f32 / SEGMENT_COUNT as f32;
-
-            let color = theme.meter_segment_color(seg_position);
-
-            // Compute segment rect along the primary axis
-            let seg_rect = if self.horizontal {
-                let x = inner.left() + i as f32 * (seg_size + SEGMENT_GAP);
-                Rect::from_min_size(pos2(x, inner.top()), vec2(seg_size, inner.height()))
-            } else {
-                // Vertical: segment 0 is at the bottom
-                let y = inner.bottom() - (i as f32 + 1.0) * seg_size - i as f32 * SEGMENT_GAP;
-                Rect::from_min_size(pos2(inner.left(), y), vec2(inner.width(), seg_size))
-            };
-
-            let is_active = level > seg_bottom_pos;
-            let is_peak = peak_seg == Some(i);
-
-            if is_active {
-                // Lit segment with phosphor bloom
-                glow::glow_rect(painter, seg_rect, color, 1.0, theme);
-            } else if is_peak {
-                // Peak hold: single lit segment with reduced alpha (fading hold)
-                let peak_color = color.gamma_multiply(0.7);
-                glow::glow_rect(painter, seg_rect, peak_color, 1.0, theme);
-            } else {
-                // Ghost (inactive) segment
-                let ghost_color = glow::ghost(color, theme);
-                painter.rect_filled(seg_rect, 1.0, ghost_color);
-            }
-        }
+    /// When provided, the clip indicator stays lit after peak exceeds 1.0
+    /// until the user clicks the meter to reset it.
+    pub fn clip_latch(mut self, latched: &'a mut bool) -> Self {
+        self.clip_latched = Some(latched);
+        self
     }
 }
 
-impl Widget for LevelMeter {
+impl Widget for LevelMeter<'_> {
     fn ui(self, ui: &mut Ui) -> Response {
         let theme = SonidoTheme::get(ui.ctx());
         let extra_height = if self.label.is_empty() { 0.0 } else { 18.0 };
@@ -148,7 +123,15 @@ impl Widget for LevelMeter {
             vec2(self.width, self.height + extra_height)
         };
 
-        let (rect, response) = ui.allocate_exact_size(size, Sense::hover());
+        let (rect, response) = ui.allocate_exact_size(size, Sense::click());
+
+        // Handle clip latch reset on click
+        let mut clip_latched = self.clip_latched;
+        if response.clicked() {
+            if let Some(ref mut latched) = clip_latched {
+                **latched = false;
+            }
+        }
 
         if ui.is_rect_visible(rect) {
             let painter = ui.painter();
@@ -162,34 +145,165 @@ impl Widget for LevelMeter {
                 Rect::from_min_size(rect.min, vec2(self.width, self.height))
             };
 
-            // Background — void
+            // Background — void (full meter area)
             painter.rect_filled(meter_rect, 2.0, theme.colors.void);
 
-            // Border
-            painter.rect_stroke(
-                meter_rect,
-                2.0,
-                Stroke::new(1.0, theme.colors.dim),
-                StrokeKind::Inside,
-            );
+            if self.horizontal {
+                // Simplified horizontal fallback: continuous bar without dB scale
+                let inner = meter_rect.shrink(2.0);
+                let rms_level = self.rms.min(1.0);
+                let peak_level = self.peak.min(1.0);
 
-            // Inner padding
-            let inner = meter_rect.shrink(2.0);
+                // Border around bar area
+                painter.rect_stroke(
+                    meter_rect,
+                    2.0,
+                    Stroke::new(1.0, theme.colors.dim),
+                    StrokeKind::Inside,
+                );
 
-            // Segmented LED bar
-            self.paint_segments(painter, inner, &theme);
-
-            // Clip indicator (when peak > 1.0)
-            if self.peak > 1.0 {
-                if self.horizontal {
-                    let clip_rect = Rect::from_min_size(
-                        pos2(inner.right() - 4.0, inner.top()),
-                        vec2(4.0, inner.height()),
+                // RMS bar
+                if rms_level > 0.001 {
+                    let bar_width = inner.width() * rms_level;
+                    let bar_rect = Rect::from_min_size(
+                        inner.min,
+                        vec2(bar_width, inner.height()),
                     );
-                    glow::glow_rect(painter, clip_rect, theme.colors.red, 0.0, &theme);
+                    let color = theme.meter_segment_color(rms_level);
+                    painter.rect_filled(bar_rect, 0.0, color);
+                }
+
+                // Peak line
+                if peak_level > 0.01 {
+                    let peak_x = inner.left() + inner.width() * peak_level;
+                    painter.line_segment(
+                        [pos2(peak_x, inner.top()), pos2(peak_x, inner.bottom())],
+                        Stroke::new(1.0, theme.colors.text_primary),
+                    );
+                }
+            } else {
+                // Vertical layout: dB labels on the left, bar on the right
+
+                let inner = meter_rect.shrink(2.0);
+
+                // Partition: ~55% right for bar, ~45% left for dB labels
+                let bar_fraction = 0.55;
+                let bar_width = inner.width() * bar_fraction;
+                let label_width = inner.width() - bar_width;
+
+                let bar_left = inner.right() - bar_width;
+                let bar_rect = Rect::from_min_max(
+                    pos2(bar_left, inner.top()),
+                    inner.max,
+                );
+
+                // Border around bar area only
+                painter.rect_stroke(
+                    bar_rect,
+                    1.0,
+                    Stroke::new(1.0, theme.colors.dim),
+                    StrokeKind::Inside,
+                );
+
+                let bar_inner = bar_rect.shrink(1.0);
+                let rms_level = self.rms.min(1.0);
+                let peak_level = self.peak.min(1.0);
+
+                // RMS bar — continuous filled rect from bottom to RMS level
+                if rms_level > 0.001 {
+                    let bar_height = bar_inner.height() * rms_level;
+                    let rms_rect = Rect::from_min_max(
+                        pos2(bar_inner.left(), bar_inner.bottom() - bar_height),
+                        bar_inner.max,
+                    );
+                    // Color based on highest lit position
+                    let color = theme.meter_segment_color(rms_level);
+                    painter.rect_filled(rms_rect, 0.0, color);
+                }
+
+                // Peak line — 1px horizontal line at peak position
+                if peak_level > 0.01 {
+                    let peak_y = bar_inner.bottom() - bar_inner.height() * peak_level;
+                    painter.line_segment(
+                        [
+                            pos2(bar_inner.left(), peak_y),
+                            pos2(bar_inner.right(), peak_y),
+                        ],
+                        Stroke::new(1.0, theme.colors.text_primary),
+                    );
+                }
+
+                // dB scale markings — tick marks + labels on the left side
+                let font_size = (bar_width * 0.35).clamp(7.0, 9.0);
+                let font_id = egui::FontId::proportional(font_size);
+                let tick_right = bar_left - 1.0;
+                let tick_len = 3.0;
+
+                for &(linear, label_text) in DB_MARKS {
+                    let y = bar_inner.bottom() - bar_inner.height() * linear;
+                    // Only draw if within visible range
+                    if y >= bar_inner.top() && y <= bar_inner.bottom() {
+                        // Tick mark
+                        painter.line_segment(
+                            [
+                                pos2(tick_right - tick_len, y),
+                                pos2(tick_right, y),
+                            ],
+                            Stroke::new(1.0, theme.colors.dim),
+                        );
+
+                        // Label, right-aligned to the left of the tick
+                        let label_x = inner.left() + label_width - tick_len - 2.0;
+                        painter.text(
+                            pos2(label_x, y),
+                            egui::Align2::RIGHT_CENTER,
+                            label_text,
+                            font_id.clone(),
+                            theme.colors.text_secondary,
+                        );
+                    }
+                }
+
+                // Clip indicator — 3px red filled circle at top of meter
+                let clip_active = if let Some(ref latched) = clip_latched {
+                    // Latch mode: set latch on peak > 1.0, stays until clicked
+                    if self.peak > 1.0 {
+                        // We already potentially reset it on click above;
+                        // the latch write happens below after this check
+                        true
+                    } else {
+                        **latched
+                    }
                 } else {
-                    let clip_rect = Rect::from_min_size(inner.min, vec2(inner.width(), 4.0));
-                    glow::glow_rect(painter, clip_rect, theme.colors.red, 0.0, &theme);
+                    // No latch: momentary blink at 4 Hz
+                    if self.peak > 1.0 {
+                        let t = ui.ctx().input(|i| i.time);
+                        let blink_on = (t * 4.0) % 1.0 < 0.5;
+                        if blink_on {
+                            ui.ctx().request_repaint();
+                            true
+                        } else {
+                            ui.ctx().request_repaint();
+                            false
+                        }
+                    } else {
+                        false
+                    }
+                };
+
+                // Update latch state (after click reset above)
+                if let Some(latched) = clip_latched {
+                    if self.peak > 1.0 {
+                        *latched = true;
+                    }
+                }
+
+                if clip_active {
+                    let clip_center = pos2(
+                        bar_rect.center().x,
+                        bar_inner.top() + 3.0,
+                    );
+                    painter.circle_filled(clip_center, 3.0, theme.colors.red);
                 }
             }
 
@@ -327,6 +441,7 @@ mod tests {
         assert_eq!(meter.height, 120.0);
         assert!(!meter.horizontal);
         assert!(meter.label.is_empty());
+        assert!(meter.clip_latched.is_none());
     }
 
     #[test]
@@ -349,6 +464,13 @@ mod tests {
     }
 
     #[test]
+    fn level_meter_clip_latch_builder() {
+        let mut latched = false;
+        let meter = LevelMeter::new(0.5, 0.3).clip_latch(&mut latched);
+        assert!(meter.clip_latched.is_some());
+    }
+
+    #[test]
     fn meter_segment_color_thresholds() {
         // Verify via theme — colors come from SonidoTheme::meter_segment_color
         let theme = SonidoTheme::default();
@@ -361,9 +483,21 @@ mod tests {
     }
 
     #[test]
-    fn segment_count_and_gap() {
-        assert_eq!(SEGMENT_COUNT, 16);
-        assert!((SEGMENT_GAP - 0.5).abs() < f32::EPSILON);
+    fn db_marks_are_ordered() {
+        // Verify dB marks are ordered from highest to lowest linear level
+        for window in DB_MARKS.windows(2) {
+            assert!(
+                window[0].0 > window[1].0,
+                "DB_MARKS should be ordered descending by linear level"
+            );
+        }
+    }
+
+    #[test]
+    fn db_marks_cover_expected_range() {
+        assert_eq!(DB_MARKS.len(), 5);
+        assert_eq!(DB_MARKS[0].1, "0");
+        assert_eq!(DB_MARKS[4].1, "-24");
     }
 
     #[test]

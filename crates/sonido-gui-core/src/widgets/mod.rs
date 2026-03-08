@@ -8,7 +8,7 @@
 //! - [`bridged_fader`] — Bridge-aware vertical fader with gesture protocol
 //! - [`bridged_combo`] — Bridge-aware combo box for enum parameters
 //! - [`gesture_wrap`] — Gesture protocol helper for custom widget layouts
-//! - [`LevelMeter`] — VU-style peak/RMS meter (vertical or horizontal)
+//! - [`LevelMeter`] — Continuous dual-bar (RMS + peak) meter with dB scale
 //! - [`GainReductionMeter`] — Compressor gain reduction display
 //! - [`BypassToggle`] — Small bypass indicator for effect panels
 //! - [`FootswitchToggle`] — Large pedal-style toggle for the chain view

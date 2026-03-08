@@ -168,7 +168,7 @@ impl Widget for LedDisplay {
                 }
 
                 let segments = char_segments(ch).unwrap_or(0);
-                draw_7seg(painter, origin, dw, dh, segments, color, ghost_color, self.show_ghosts, &theme);
+                draw_7seg(painter, origin, dw, dh, segments, color, ghost_color, self.show_ghosts);
                 x += dw + gap;
             }
         }
@@ -188,7 +188,6 @@ fn draw_7seg(
     active_color: Color32,
     ghost_color: Color32,
     show_ghosts: bool,
-    theme: &SonidoTheme,
 ) {
     let pad = 2.0;
     let half_h = h / 2.0;
@@ -215,7 +214,8 @@ fn draw_7seg(
     for (i, &(start, end)) in seg_lines.iter().enumerate() {
         let bit = 1 << i;
         if segments & bit != 0 {
-            glow::glow_line(painter, start, end, active_color, stroke_w, theme);
+            // Sharp segments — no bloom. Glow kills legibility at this scale.
+            painter.line_segment([start, end], egui::Stroke::new(stroke_w, active_color));
         } else if show_ghosts {
             painter.line_segment([start, end], egui::Stroke::new(stroke_w, ghost_color));
         }
