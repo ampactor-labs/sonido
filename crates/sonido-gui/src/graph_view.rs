@@ -15,6 +15,7 @@ use egui_snarl::{InPin, InPinId, NodeId, OutPin, OutPinId, Snarl};
 use sonido_core::graph::{GraphEngine, MAX_SPLIT_TARGETS, ProcessingGraph};
 use sonido_core::{ParamDescriptor, SmoothingStyle};
 use sonido_gui_core::theme::SonidoTheme;
+use sonido_gui_core::widgets::glow;
 use sonido_registry::{EffectCategory, EffectRegistry};
 
 use crate::chain_manager::GraphCommand;
@@ -82,9 +83,12 @@ pub struct GraphView {
     pub selected_node: Option<NodeId>,
     /// Visual style configuration.
     pub style: SnarlStyle,
-    /// Set to `true` when a connect/disconnect/remove/insert changes the
-    /// topology. Checked by the app after `show()` to trigger auto-compile.
+    /// Set to `true` when a connect/disconnect/remove changes the topology.
+    /// Checked by the app after `show()` to trigger auto-compile.
     pub topology_changed: bool,
+    /// Per-effect-slot activity level (0.0--1.0), updated each frame from
+    /// audio-thread metering data. Drives the glow LED on each effect node.
+    pub slot_activity: Vec<f32>,
 }
 
 impl GraphView {
@@ -117,6 +121,7 @@ impl GraphView {
             selected_node: None,
             style,
             topology_changed: false,
+            slot_activity: Vec::new(),
         }
     }
 
@@ -134,6 +139,7 @@ impl GraphView {
             click_handled: &mut click_handled,
             topology_changed: &mut self.topology_changed,
             theme,
+            slot_activity: &self.slot_activity,
         };
         self.snarl
             .show(&mut viewer, &self.style, "sonido_graph", ui);
@@ -296,11 +302,13 @@ struct SonidoViewer<'a> {
     /// Set to `true` when a node click is detected, preventing empty-space
     /// deselection on the same frame.
     click_handled: &'a mut bool,
-    /// Set to `true` when a connect/disconnect/remove/insert changes the
-    /// topology, signalling the app to auto-compile.
+    /// Set to `true` when a connect/disconnect/remove changes the topology,
+    /// signalling the app to auto-compile.
     topology_changed: &'a mut bool,
     /// Arcade CRT theme snapshot for palette access.
     theme: SonidoTheme,
+    /// Per-effect-slot activity level (0.0--1.0) for LED indicators.
+    slot_activity: &'a [f32],
 }
 
 impl SonidoViewer<'_> {
@@ -427,6 +435,27 @@ impl SnarlViewer<SonidoNode> for SonidoViewer<'_> {
         };
 
         ui.label(text);
+
+        // Activity LED for effect nodes — glows when signal passes through
+        if matches!(node_data, SonidoNode::Effect { .. }) {
+            let mut slot_idx = 0usize;
+            for (id, n) in snarl.node_ids() {
+                if id == node {
+                    break;
+                }
+                if matches!(n, SonidoNode::Effect { .. }) {
+                    slot_idx += 1;
+                }
+            }
+            let activity = self.slot_activity.get(slot_idx).copied().unwrap_or(0.0);
+            if activity > 0.01 {
+                let led_pos =
+                    egui::pos2(ui.max_rect().right() - 6.0, ui.max_rect().center().y);
+                let led_alpha = activity.clamp(0.2, 1.0);
+                let led_color = accent.gamma_multiply(led_alpha);
+                glow::glow_circle(ui.painter(), led_pos, 3.0, led_color, &self.theme);
+            }
+        }
     }
 
     fn inputs(&mut self, node: &SonidoNode) -> usize {
