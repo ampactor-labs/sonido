@@ -78,13 +78,6 @@ pub struct SonidoApp {
     /// Frames remaining for compile success flash.
     compile_success_frames: u32,
 
-    // Preset dialog (native only — no filesystem on wasm)
-    #[cfg(not(target_arch = "wasm32"))]
-    show_save_dialog: bool,
-    #[cfg(not(target_arch = "wasm32"))]
-    new_preset_name: String,
-    #[cfg(not(target_arch = "wasm32"))]
-    new_preset_description: String,
 }
 
 impl SonidoApp {
@@ -149,12 +142,6 @@ impl SonidoApp {
             single_effect,
             compile_error: None,
             compile_success_frames: 0,
-            #[cfg(not(target_arch = "wasm32"))]
-            show_save_dialog: false,
-            #[cfg(not(target_arch = "wasm32"))]
-            new_preset_name: String::new(),
-            #[cfg(not(target_arch = "wasm32"))]
-            new_preset_description: "User".to_string(),
         };
 
         // Apply theme
@@ -371,115 +358,71 @@ impl SonidoApp {
         let theme = SonidoTheme::get(ui.ctx());
 
         ui.horizontal(|ui| {
+            // SONIDO brand
             ui.heading(
                 egui::RichText::new("SONIDO")
                     .font(FontId::monospace(18.0))
                     .color(theme.colors.amber)
                     .strong(),
             );
+            ui.add_space(12.0);
 
-            ui.add_space(20.0);
-
-            // Preset selector
-            let current_name = self
-                .preset_manager
-                .current()
-                .map(|p| p.preset.name.as_str())
-                .unwrap_or("Init");
-            let display_name = if self.preset_manager.is_modified() {
-                format!("{}*", current_name)
+            // BYPASS (promoted from status bar)
+            let chain_bypassed = self.audio_bridge.chain_bypass().load(Ordering::Relaxed);
+            let bypass_color = if chain_bypassed {
+                theme.colors.red
             } else {
-                current_name.to_string()
+                theme.colors.dim
             };
-
-            // Collect preset names to avoid borrow issues
-            let preset_names: Vec<(usize, String)> = self
-                .preset_manager
-                .presets()
-                .iter()
-                .enumerate()
-                .map(|(i, p)| (i, p.preset.name.clone()))
-                .collect();
-            let current_idx = self.preset_manager.current_preset();
-
-            let mut selected_preset = None;
-            egui::ComboBox::from_id_salt("preset_selector")
-                .selected_text(
-                    egui::RichText::new(&display_name)
-                        .font(FontId::monospace(12.0))
-                        .color(theme.colors.text_primary),
-                )
-                .width(150.0)
-                .show_ui(ui, |ui| {
-                    for (i, name) in &preset_names {
-                        if ui.selectable_label(*i == current_idx, name).clicked() {
-                            selected_preset = Some(*i);
-                        }
-                    }
-                });
-
-            // Apply preset selection after borrow ends
-            if let Some(idx) = selected_preset {
-                self.apply_preset(idx);
+            let bypass_btn = ui.button(
+                egui::RichText::new("BYPASS")
+                    .font(FontId::monospace(11.0))
+                    .color(bypass_color)
+                    .strong(),
+            );
+            let circle_center = pos2(bypass_btn.rect.right() + 8.0, bypass_btn.rect.center().y);
+            glow::glow_circle(ui.painter(), circle_center, 3.0, bypass_color, &theme);
+            ui.add_space(10.0);
+            if bypass_btn.clicked() {
+                self.audio_bridge
+                    .chain_bypass()
+                    .store(!chain_bypassed, Ordering::SeqCst);
             }
 
-            ui.add_space(8.0);
+            ui.separator();
+
+            // Save / Load (placeholder — Task 12 fills in)
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                if ui
+                    .button(
+                        egui::RichText::new("Save")
+                            .font(FontId::monospace(12.0))
+                            .color(theme.colors.text_primary),
+                    )
+                    .clicked()
+                {
+                    self.save_session();
+                }
+                if ui
+                    .button(
+                        egui::RichText::new("Load")
+                            .font(FontId::monospace(12.0))
+                            .color(theme.colors.text_primary),
+                    )
+                    .clicked()
+                {
+                    self.load_session();
+                }
+            }
+
+            ui.separator();
+
+            // FILE source toggle
             self.file_player.render_source_toggle(ui);
 
-            // Compile button — only in multi-effect mode (graph editor)
-            if !self.single_effect {
-                ui.add_space(8.0);
-                ui.separator();
-                ui.add_space(4.0);
-
-                let compile_btn = ui.button(
-                    egui::RichText::new("Compile")
-                        .font(FontId::monospace(12.0))
-                        .color(theme.colors.green)
-                        .strong(),
-                );
-                if compile_btn.clicked() {
-                    self.compile_and_apply();
-                }
-
-                if let Some(ref err) = self.compile_error {
-                    ui.label(
-                        egui::RichText::new(err)
-                            .font(FontId::monospace(10.0))
-                            .color(theme.colors.red)
-                            .small(),
-                    );
-                } else if self.compile_success_frames > 0 {
-                    self.compile_success_frames -= 1;
-                    ui.label(
-                        egui::RichText::new("OK")
-                            .font(FontId::monospace(10.0))
-                            .color(theme.colors.green)
-                            .strong(),
-                    );
-                }
-            }
-
-            // Save button (native only — no filesystem on wasm)
-            #[cfg(not(target_arch = "wasm32"))]
-            if ui
-                .button(
-                    egui::RichText::new("Save")
-                        .font(FontId::monospace(12.0))
-                        .color(theme.colors.text_primary),
-                )
-                .clicked()
-            {
-                self.show_save_dialog = true;
-                self.new_preset_name = self
-                    .preset_manager
-                    .current()
-                    .map(|p| p.preset.name.clone())
-                    .unwrap_or_default();
-            }
-
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                // Audio status indicator — glowing circle
+            // Right-aligned: audio status + compile error
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 let status_color = if self.audio_bridge.is_running() {
                     theme.colors.green
                 } else {
@@ -498,7 +441,15 @@ impl SonidoApp {
                 let err_count = self.audio_bridge.error_count().load(Ordering::Relaxed);
                 if err_count > 0 {
                     ui.label(
-                        egui::RichText::new(format!("audio errors: {err_count}"))
+                        egui::RichText::new(format!("errors: {err_count}"))
+                            .font(FontId::monospace(10.0))
+                            .color(theme.colors.red),
+                    );
+                }
+
+                if let Some(ref err) = self.compile_error {
+                    ui.label(
+                        egui::RichText::new(err)
                             .font(FontId::monospace(10.0))
                             .color(theme.colors.red),
                     );
@@ -852,51 +803,16 @@ impl SonidoApp {
         });
     }
 
-    /// Render save preset dialog (native only — no filesystem on wasm).
+    /// Save the current session to disk (placeholder for Task 12).
     #[cfg(not(target_arch = "wasm32"))]
-    fn render_save_dialog(&mut self, ctx: &Context) {
-        if !self.show_save_dialog {
-            return;
-        }
+    fn save_session(&mut self) {
+        tracing::info!("TODO: save_session");
+    }
 
-        egui::Window::new("Save Preset")
-            .collapsible(false)
-            .resizable(false)
-            .show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    ui.label("Name:");
-                    ui.text_edit_singleline(&mut self.new_preset_name);
-                });
-
-                ui.horizontal(|ui| {
-                    ui.label("Description:");
-                    ui.text_edit_singleline(&mut self.new_preset_description);
-                });
-
-                ui.add_space(8.0);
-
-                ui.horizontal(|ui| {
-                    if ui.button("Cancel").clicked() {
-                        self.show_save_dialog = false;
-                    }
-
-                    if ui.button("Save").clicked() && !self.new_preset_name.is_empty() {
-                        let description = if self.new_preset_description.is_empty() {
-                            None
-                        } else {
-                            Some(self.new_preset_description.as_str())
-                        };
-                        if let Err(e) = self.preset_manager.save_as(
-                            &self.new_preset_name,
-                            description,
-                            &*self.bridge,
-                        ) {
-                            tracing::error!(error = %e, "failed to save preset");
-                        }
-                        self.show_save_dialog = false;
-                    }
-                });
-            });
+    /// Load a session from disk (placeholder for Task 12).
+    #[cfg(not(target_arch = "wasm32"))]
+    fn load_session(&mut self) {
+        tracing::info!("TODO: load_session");
     }
 }
 
@@ -1161,9 +1077,6 @@ impl eframe::App for SonidoApp {
             ));
         });
 
-        // Dialogs (save dialog is native-only)
-        #[cfg(not(target_arch = "wasm32"))]
-        self.render_save_dialog(ctx);
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
