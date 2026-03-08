@@ -794,16 +794,75 @@ impl SonidoApp {
         });
     }
 
-    /// Save the current session to disk (placeholder for Task 12).
+    /// Save the current session to a JSON file via file dialog.
     #[cfg(not(target_arch = "wasm32"))]
-    fn save_session(&mut self) {
-        tracing::info!("TODO: save_session");
+    fn save_session(&self) {
+        if let Some(path) = rfd::FileDialog::new()
+            .set_title("Save Session")
+            .add_filter("Sonido Session", &["json"])
+            .save_file()
+        {
+            let session = self.graph_view.capture_session(
+                &*self.bridge,
+                self.audio_bridge.input_gain().get(),
+                self.audio_bridge.master_volume().get(),
+            );
+            if let Err(e) = session.save(&path) {
+                tracing::error!(error = %e, "failed to save session");
+            }
+        }
     }
 
-    /// Load a session from disk (placeholder for Task 12).
+    /// Load a session from a JSON file via file dialog.
     #[cfg(not(target_arch = "wasm32"))]
     fn load_session(&mut self) {
-        tracing::info!("TODO: load_session");
+        if let Some(path) = rfd::FileDialog::new()
+            .set_title("Load Session")
+            .add_filter("Sonido Session", &["json"])
+            .pick_file()
+        {
+            match crate::session::Session::load(&path) {
+                Ok(session) => {
+                    self.graph_view
+                        .restore_session(&session, &self.registry);
+                    // Compile the restored graph and send to audio thread
+                    self.compile_and_apply();
+                    // Restore I/O gains
+                    self.audio_bridge.input_gain().set(session.input_gain);
+                    self.audio_bridge
+                        .master_volume()
+                        .set(session.master_volume);
+                    // Restore per-effect params
+                    for (node_idx, state) in &session.params {
+                        let mut slot = 0usize;
+                        for (i, entry) in session.nodes.iter().enumerate() {
+                            if matches!(
+                                entry.node,
+                                crate::session::SessionNode::Effect { .. }
+                            ) {
+                                if i == *node_idx {
+                                    for (p, &val) in state.params.iter().enumerate() {
+                                        self.bridge.set(
+                                            SlotIndex(slot),
+                                            sonido_gui_core::ParamIndex(p),
+                                            val,
+                                        );
+                                    }
+                                    if state.bypassed {
+                                        self.bridge.set_bypassed(SlotIndex(slot), true);
+                                    }
+                                    break;
+                                }
+                                slot += 1;
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::error!(error = %e, "failed to load session");
+                }
+            }
+        }
     }
 }
 
