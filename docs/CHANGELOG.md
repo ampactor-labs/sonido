@@ -8,6 +8,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Signal generator**: Built-in test tone source with 6 signal types (sine, sweep, white noise, pink noise, impulse train, sawtooth chord)
+- Generator is default audio source — app opens ready to play on spacebar
+- Source mode toggle (GEN/FILE) in header bar
+- Generator controls: signal type selector, log-scale frequency slider, transport buttons
+- **Auto-wire**: Graph compiler auto-inserts Split/Merge nodes for fan-out/fan-in — users never need to place routing nodes manually
+- **I/O pin-to-edges**: Input/Output nodes pinned to left/right edges of effect bounding box
+- Zoom hint in quick-reference bar (`Ctrl+Scroll to zoom`)
+
+### Changed
+- **LED bypass dot**: Title-row bypass control replaced text button with clickable glow circle (green = active, red = bypassed)
+- **Status bar**: Sample rate and latency use plain monospace text instead of 7-segment LedDisplay
+- Removed redundant BypassToggle from all 19 effect panels (title row LED handles bypass)
+- Removed "GRAPH EDITOR" label to recover vertical space
+- Split/Merge removed from graph context menu (auto-wire handles routing)
+- Output node accepts multiple input wires (auto-wire compiles fan-in via Merge)
+
+### Removed
+- Microphone input (will return with proper audio device selection UI)
+- `--input` CLI argument
+
+### Fixed
+- Sample rate mismatch: effects now initialize at device-detected rate instead of hardcoded 48000 Hz
+- CLI `--sample-rate` and `--buffer-size` arguments now wired through to app initialization
+
+### Added
 - Arcade CRT design system: phosphor glow, 7-segment LED displays, void backgrounds
 - `SonidoTheme` struct — single source of truth for all visual parameters
 - `glow.rs` — reusable phosphor bloom/scanline painting primitives

@@ -284,8 +284,8 @@ impl SignalGenerator {
         debug_assert_eq!(left.len(), right.len());
 
         if !self.playing {
-            left.iter_mut().for_each(|s| *s = 0.0);
-            right.iter_mut().for_each(|s| *s = 0.0);
+            left.fill(0.0);
+            right.fill(0.0);
             return;
         }
 

@@ -181,16 +181,37 @@ sonido-gui --effect reverb
 - **Output Meter**: Real-time peak and RMS level display
 - **Master Volume**: -40 to +6 dB master output control
 
+### Signal Generator
+
+The built-in signal generator provides test tones for evaluating effects without requiring external audio files or a microphone. It is the default audio source — the app opens with the generator selected and paused. Press spacebar to start.
+
+**Source modes** (toggle in header bar):
+- **GEN**: Built-in signal generator (default)
+- **FILE**: WAV file playback
+
+**Signal types:**
+
+| Signal | Description | Use Case |
+|--------|-------------|----------|
+| Sine | Pure tone at configurable frequency | Distortion character, clean reference |
+| Sweep | Logarithmic 20 Hz–20 kHz frequency sweep | Filter shapes, resonance peaks |
+| White Noise | Flat spectrum, decorrelated L/R | EQ curves, gate thresholds |
+| Pink Noise | −3 dB/octave (Voss-McCartney) | Perceptually flat broadband testing |
+| Impulse | Single-sample clicks at configurable rate | Reverb tails, delay times |
+| Saw Chord | Root + major 3rd + perfect 5th (naive saw) | Harmonically rich, aliasing test |
+
+**Controls:** Signal type dropdown, frequency slider (log-scaled, for Sine/Saw Chord), play/pause/stop transport. All signals generated at the device sample rate in the audio thread.
+
 ### Graph Editor
 
 The center panel contains a visual node-graph editor powered by [egui-snarl](https://crates.io/crates/egui-snarl). Nodes represent audio processing elements; wires represent audio signal flow.
 
 **Node types:**
-- **Input**: Audio source (microphone or file). One per graph.
-- **Output**: Audio sink (speakers). One per graph.
+- **Input**: Audio source (signal generator or file). One per graph. Pinned to left edge.
+- **Output**: Audio sink (speakers). One per graph. Pinned to right edge.
 - **Effect**: Any of the 19 registered effects. Shows category, parameter count.
-- **Split**: Fan-out node (1 input, up to 4 outputs) for parallel paths.
-- **Merge**: Fan-in node (up to 4 inputs, 1 output) for recombining paths.
+
+Split and Merge nodes are auto-inserted during compilation when the graph has fan-out (one node wired to multiple targets) or fan-in (multiple sources wired to one node). Users never need to place routing nodes manually.
 
 Effect nodes are color-coded by category:
 
@@ -208,10 +229,10 @@ Effect nodes are color-coded by category:
 - **Click node**: Select node to show its parameter panel below
 - **Right-click node**: Remove or duplicate
 - **Drag wire**: Connect output pin to input pin
-- **Compile button**: Compiles the graph topology to the audio engine
+- **Ctrl+Scroll**: Zoom the graph view
 
-**Compilation:**
-The Compile button walks the Snarl topology, builds a `ProcessingGraph` (Kahn sort, latency compensation), creates effects via the registry, and produces a `GraphCommand::ReplaceTopology` for atomic swap on the audio thread.
+**Auto-wire compilation:**
+Topology changes auto-compile. The compiler walks the Snarl topology, auto-inserts Split nodes for fan-out and Merge nodes for fan-in, builds a `ProcessingGraph` (Kahn sort, latency compensation), creates effects via the registry, and produces a `GraphCommand::ReplaceTopology` for atomic swap on the audio thread. Old sessions with explicit Split/Merge nodes are handled transparently.
 
 ### Effect Panels
 
