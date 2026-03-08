@@ -1,7 +1,7 @@
 //! Phaser effect UI panel.
 
 use crate::theme::SonidoTheme;
-use crate::widgets::{BypassToggle, bridged_combo, bridged_fader};
+use crate::widgets::{bridged_combo, bridged_fader};
 use crate::{ParamBridge, ParamIndex, SlotIndex};
 use egui::Ui;
 use sonido_core::DIVISION_LABELS;
@@ -33,13 +33,6 @@ impl PhaserPanel {
 
         ui.vertical(|ui| {
             ui.horizontal(|ui| {
-                let mut active = !bridge.is_bypassed(slot);
-                if ui.add(BypassToggle::new(&mut active, "Active")).changed() {
-                    bridge.set_bypassed(slot, !active);
-                }
-
-                ui.add_space(20.0);
-
                 // Stages selector (param 2) — non-sequential values, manual gesture wrap
                 ui.label("Stages:");
                 let current_stages = bridge.get(slot, ParamIndex(2)) as usize;

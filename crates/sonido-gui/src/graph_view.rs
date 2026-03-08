@@ -6,7 +6,7 @@
 //! [`compile_to_engine()`](GraphView::compile_to_engine), producing a
 //! [`GraphCommand::ReplaceTopology`] for atomic swap on the audio thread.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use egui::{Color32, FontId, RichText, Stroke, Ui};
 use egui_snarl::ui::{PinInfo, SnarlStyle, SnarlViewer};
@@ -140,6 +140,56 @@ impl GraphView {
         }
     }
 
+    /// Pin Input/Output nodes to the left/right edges of the effect bounding box.
+    ///
+    /// Called at the start of each frame so I/O nodes act as fixed wire anchors
+    /// that cannot be dragged out of position.
+    fn pin_io_nodes(&mut self) {
+        let mut input_id = None;
+        let mut output_id = None;
+        let mut min_x = f32::INFINITY;
+        let mut max_x = f32::NEG_INFINITY;
+        let mut sum_y = 0.0f32;
+        let mut effect_count = 0u32;
+
+        for (id, node) in self.snarl.node_ids() {
+            match node {
+                SonidoNode::Input => input_id = Some(id),
+                SonidoNode::Output => output_id = Some(id),
+                SonidoNode::Effect { .. } => {
+                    if let Some(info) = self.snarl.get_node_info(id) {
+                        min_x = min_x.min(info.pos.x);
+                        max_x = max_x.max(info.pos.x);
+                        sum_y += info.pos.y;
+                        effect_count += 1;
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        let (input_pos, output_pos) = if effect_count > 0 {
+            let avg_y = sum_y / effect_count as f32;
+            (
+                egui::pos2(min_x - 150.0, avg_y),
+                egui::pos2(max_x + 200.0, avg_y),
+            )
+        } else {
+            (egui::pos2(50.0, 200.0), egui::pos2(400.0, 200.0))
+        };
+
+        if let Some(id) = input_id
+            && let Some(info) = self.snarl.get_node_info_mut(id)
+        {
+            info.pos = input_pos;
+        }
+        if let Some(id) = output_id
+            && let Some(info) = self.snarl.get_node_info_mut(id)
+        {
+            info.pos = output_pos;
+        }
+    }
+
     /// Renders the graph editor and returns the slot index of the currently
     /// selected effect node, if any.
     ///
@@ -147,6 +197,7 @@ impl GraphView {
     /// all Effect nodes in the graph (useful for param-bridge indexing).
     pub fn show(&mut self, ui: &mut Ui) -> Option<usize> {
         self.topology_changed = false;
+        self.pin_io_nodes();
         let theme = SonidoTheme::get(ui.ctx());
         let mut click_handled = false;
         let mut viewer = SonidoViewer {
@@ -242,6 +293,7 @@ impl GraphView {
                     slot_descriptors.push(descriptors.clone());
                     gid
                 }
+                // Legacy Split/Merge from old sessions — preserve them.
                 SonidoNode::Split => graph.add_split(),
                 SonidoNode::Merge => graph.add_merge(),
             };
@@ -255,11 +307,61 @@ impl GraphView {
             return Err(CompileError::NoOutput);
         }
 
-        // Second pass: create all connections.
+        // --- Auto-wire: analyze snarl topology for fan-out / fan-in ---
+
+        // Build per-snarl-node target/source lists from wires.
+        let mut out_targets: HashMap<NodeId, Vec<NodeId>> = HashMap::new();
+        let mut in_sources: HashMap<NodeId, Vec<NodeId>> = HashMap::new();
         for (out_pin, in_pin) in self.snarl.wires() {
-            let from = snarl_to_graph[&out_pin.node];
-            let to = snarl_to_graph[&in_pin.node];
-            graph.connect(from, to)?;
+            let targets = out_targets.entry(out_pin.node).or_default();
+            if !targets.contains(&in_pin.node) {
+                targets.push(in_pin.node);
+            }
+            let sources = in_sources.entry(in_pin.node).or_default();
+            if !sources.contains(&out_pin.node) {
+                sources.push(out_pin.node);
+            }
+        }
+
+        // Auto-insert Splits for fan-out: any non-Split node with >1 distinct targets.
+        let mut split_map: HashMap<NodeId, sonido_core::graph::NodeId> = HashMap::new();
+        for (&snarl_id, targets) in &out_targets {
+            if targets.len() > 1 && !matches!(self.snarl[snarl_id], SonidoNode::Split) {
+                let split_gid = graph.add_split();
+                let source_gid = snarl_to_graph[&snarl_id];
+                graph.connect(source_gid, split_gid)?;
+                split_map.insert(snarl_id, split_gid);
+            }
+        }
+
+        // Auto-insert Merges for fan-in: any node with >1 distinct sources
+        // that isn't already a Merge node.
+        let mut merge_map: HashMap<NodeId, sonido_core::graph::NodeId> = HashMap::new();
+        for (&snarl_id, sources) in &in_sources {
+            if sources.len() > 1 && !matches!(self.snarl[snarl_id], SonidoNode::Merge) {
+                let merge_gid = graph.add_merge();
+                let target_gid = snarl_to_graph[&snarl_id];
+                graph.connect(merge_gid, target_gid)?;
+                merge_map.insert(snarl_id, merge_gid);
+            }
+        }
+
+        // Second pass: wire through auto-inserted nodes.
+        // Deduplicate because multiple snarl pins can map to the same graph edge.
+        let mut wired: HashSet<(sonido_core::graph::NodeId, sonido_core::graph::NodeId)> =
+            HashSet::new();
+        for (out_pin, in_pin) in self.snarl.wires() {
+            let from = split_map
+                .get(&out_pin.node)
+                .copied()
+                .unwrap_or_else(|| snarl_to_graph[&out_pin.node]);
+            let to = merge_map
+                .get(&in_pin.node)
+                .copied()
+                .unwrap_or_else(|| snarl_to_graph[&in_pin.node]);
+            if wired.insert((from, to)) {
+                graph.connect(from, to)?;
+            }
         }
 
         graph.compile()?;
@@ -495,13 +597,14 @@ impl SnarlViewer<SonidoNode> for SonidoViewer<'_> {
     ) -> egui::Frame {
         let node_data = &snarl[node];
 
-        // I/O nodes are represented by the sidebar strips — render minimal
+        // I/O nodes are invisible — the sidebar strips are the visual.
+        // Zero margin so only the wire pin dot remains.
         if matches!(node_data, SonidoNode::Input | SonidoNode::Output) {
             return egui::Frame::new()
                 .fill(Color32::TRANSPARENT)
                 .stroke(Stroke::NONE)
                 .corner_radius(0.0)
-                .inner_margin(2.0);
+                .inner_margin(0.0);
         }
 
         let accent = self.node_accent(node_data);
@@ -528,13 +631,13 @@ impl SnarlViewer<SonidoNode> for SonidoViewer<'_> {
     ) -> egui::Frame {
         let node_data = &snarl[node];
 
-        // I/O nodes: minimal transparent header
+        // I/O nodes: invisible header (no text rendered in show_header).
         if matches!(node_data, SonidoNode::Input | SonidoNode::Output) {
             return egui::Frame::new()
                 .fill(Color32::TRANSPARENT)
                 .stroke(Stroke::NONE)
                 .corner_radius(0.0)
-                .inner_margin(1.0);
+                .inner_margin(0.0);
         }
 
         let accent = self.node_accent(node_data);
@@ -558,14 +661,9 @@ impl SnarlViewer<SonidoNode> for SonidoViewer<'_> {
     ) {
         let node_data = &snarl[node];
 
-        // I/O nodes: tiny label, they're implicit in the sidebar
+        // I/O nodes: no label — the sidebar strips are the visual representation.
+        // Only the wire pin is visible.
         if matches!(node_data, SonidoNode::Input | SonidoNode::Output) {
-            let title = self.title(node_data);
-            ui.label(
-                RichText::new(title)
-                    .font(FontId::monospace(8.0))
-                    .color(self.theme.colors.text_secondary.gamma_multiply(0.5)),
-            );
             return;
         }
 
@@ -726,30 +824,6 @@ impl SnarlViewer<SonidoNode> for SonidoViewer<'_> {
         ui.separator();
 
         if filter.is_empty() {
-            // Structural nodes (only shown when no filter is active)
-            if ui.button("Input").clicked() {
-                snarl.insert_node(pos, SonidoNode::Input);
-                *self.topology_changed = true;
-                ui.close_menu();
-            }
-            if ui.button("Output").clicked() {
-                snarl.insert_node(pos, SonidoNode::Output);
-                *self.topology_changed = true;
-                ui.close_menu();
-            }
-            if ui.button("Split").clicked() {
-                snarl.insert_node(pos, SonidoNode::Split);
-                *self.topology_changed = true;
-                ui.close_menu();
-            }
-            if ui.button("Merge").clicked() {
-                snarl.insert_node(pos, SonidoNode::Merge);
-                *self.topology_changed = true;
-                ui.close_menu();
-            }
-
-            ui.separator();
-
             // Category submenus (existing behavior when no filter)
             let registry = EffectRegistry::new();
             let categories = [
@@ -817,8 +891,9 @@ impl SnarlViewer<SonidoNode> for SonidoViewer<'_> {
         }
     }
 
-    fn has_node_menu(&mut self, _node: &SonidoNode) -> bool {
-        true
+    fn has_node_menu(&mut self, node: &SonidoNode) -> bool {
+        // I/O nodes are fixed — no remove/duplicate menu.
+        !matches!(node, SonidoNode::Input | SonidoNode::Output)
     }
 
     fn show_node_menu(
@@ -860,8 +935,13 @@ impl SnarlViewer<SonidoNode> for SonidoViewer<'_> {
         _graph_rect: egui::Rect,
         ui: &mut Ui,
         _scale: f32,
-        _snarl: &mut Snarl<SonidoNode>,
+        snarl: &mut Snarl<SonidoNode>,
     ) {
+        // I/O nodes are not selectable — they have no param panel.
+        if matches!(snarl[node], SonidoNode::Input | SonidoNode::Output) {
+            return;
+        }
+
         // Detect clicks on nodes without adding interactive widgets that
         // would steal pointer events from snarl's built-in drag system.
         // Use primary_pressed() (button-down) instead of primary_clicked()

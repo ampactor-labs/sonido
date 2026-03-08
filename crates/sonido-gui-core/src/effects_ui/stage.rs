@@ -1,7 +1,7 @@
 //! Stage (signal conditioning / stereo utility) effect UI panel.
 
 use crate::theme::SonidoTheme;
-use crate::widgets::{BypassToggle, bridged_combo, bridged_fader};
+use crate::widgets::{bridged_combo, bridged_fader};
 use crate::{ParamBridge, ParamIndex, SlotIndex};
 use egui::Ui;
 
@@ -37,15 +37,8 @@ impl StagePanel {
         let fader_h = theme.layout.fader_height(ui.available_height().min(200.0));
 
         ui.vertical(|ui| {
-            // -- Header: bypass + channel mode --
+            // -- Header: channel mode --
             ui.horizontal(|ui| {
-                let mut active = !bridge.is_bypassed(slot);
-                if ui.add(BypassToggle::new(&mut active, "Active")).changed() {
-                    bridge.set_bypassed(slot, !active);
-                }
-
-                ui.add_space(20.0);
-
                 ui.label("Chan:");
                 bridged_combo(ui, bridge, slot, ParamIndex(5), "chan", CHANNEL_MODES);
             });
