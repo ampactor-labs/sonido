@@ -49,6 +49,21 @@ pub enum SonidoNode {
     Merge,
 }
 
+impl SonidoNode {
+    /// Convert to a serializable session node.
+    pub fn to_session(&self) -> crate::session::SessionNode {
+        match self {
+            SonidoNode::Input => crate::session::SessionNode::Input,
+            SonidoNode::Output => crate::session::SessionNode::Output,
+            SonidoNode::Effect { effect_id, .. } => crate::session::SessionNode::Effect {
+                effect_id: (*effect_id).to_string(),
+            },
+            SonidoNode::Split => crate::session::SessionNode::Split,
+            SonidoNode::Merge => crate::session::SessionNode::Merge,
+        }
+    }
+}
+
 /// Error type for graph compilation failures.
 #[derive(Debug, thiserror::Error)]
 pub enum CompileError {
@@ -256,6 +271,143 @@ impl GraphView {
             effect_ids,
             slot_descriptors,
         })
+    }
+
+    /// Capture the current graph state as a [`Session`](crate::session::Session).
+    ///
+    /// Walks all nodes and wires in the Snarl graph, reads parameter values
+    /// from the bridge, and bundles everything into a serializable session.
+    pub fn capture_session(
+        &self,
+        bridge: &dyn sonido_gui_core::ParamBridge,
+        input_gain: f32,
+        master_volume: f32,
+    ) -> crate::session::Session {
+        use crate::session::{EffectState, Session, SessionNodeEntry};
+        use sonido_gui_core::{ParamIndex, SlotIndex};
+
+        let mut nodes = Vec::new();
+        let mut node_id_to_idx: HashMap<NodeId, usize> = HashMap::new();
+
+        for (id, node) in self.snarl.node_ids() {
+            let idx = nodes.len();
+            node_id_to_idx.insert(id, idx);
+            let pos = self
+                .snarl
+                .get_node_info(id)
+                .map_or([0.0, 0.0], |info| [info.pos.x, info.pos.y]);
+            nodes.push(SessionNodeEntry {
+                node: node.to_session(),
+                pos,
+            });
+        }
+
+        let mut wires = Vec::new();
+        for (out_pin, in_pin) in self.snarl.wires() {
+            if let (Some(&from_idx), Some(&to_idx)) = (
+                node_id_to_idx.get(&out_pin.node),
+                node_id_to_idx.get(&in_pin.node),
+            ) {
+                wires.push((from_idx, out_pin.output, to_idx, in_pin.input));
+            }
+        }
+
+        let mut params = HashMap::new();
+        let mut effect_slot = 0usize;
+        for (idx, entry) in nodes.iter().enumerate() {
+            if let crate::session::SessionNode::Effect { ref effect_id } = entry.node {
+                let slot = SlotIndex(effect_slot);
+                let param_count = bridge.param_count(slot);
+                let param_values: Vec<f32> = (0..param_count)
+                    .map(|i| bridge.get(slot, ParamIndex(i)))
+                    .collect();
+                params.insert(
+                    idx,
+                    EffectState {
+                        effect_id: effect_id.clone(),
+                        params: param_values,
+                        bypassed: bridge.is_bypassed(slot),
+                    },
+                );
+                effect_slot += 1;
+            }
+        }
+
+        Session {
+            version: Session::VERSION,
+            nodes,
+            wires,
+            params,
+            input_gain,
+            master_volume,
+        }
+    }
+
+    /// Restore graph from a session, rebuilding the Snarl topology.
+    ///
+    /// Creates new nodes and wires from the session data. Unknown effects
+    /// (not found in the registry) are logged and skipped. After calling
+    /// this method, the caller should compile the graph and apply params.
+    pub fn restore_session(
+        &mut self,
+        session: &crate::session::Session,
+        registry: &EffectRegistry,
+    ) {
+        use crate::session::SessionNode;
+
+        let mut snarl = Snarl::new();
+        let mut idx_to_node_id: Vec<Option<NodeId>> = Vec::new();
+
+        for entry in &session.nodes {
+            let pos = egui::pos2(entry.pos[0], entry.pos[1]);
+            let node = match &entry.node {
+                SessionNode::Input => SonidoNode::Input,
+                SessionNode::Output => SonidoNode::Output,
+                SessionNode::Effect { effect_id } => {
+                    if let Some(desc) = registry.get(effect_id) {
+                        let descriptors = collect_descriptors(desc.id, 48000.0);
+                        let smoothing = collect_smoothing(desc.id, 48000.0);
+                        SonidoNode::Effect {
+                            effect_id: desc.id,
+                            name: desc.name,
+                            category: desc.category,
+                            descriptors,
+                            smoothing,
+                        }
+                    } else {
+                        tracing::warn!("unknown effect in session: {effect_id}");
+                        idx_to_node_id.push(None);
+                        continue;
+                    }
+                }
+                SessionNode::Split => SonidoNode::Split,
+                SessionNode::Merge => SonidoNode::Merge,
+            };
+            let id = snarl.insert_node(pos, node);
+            idx_to_node_id.push(Some(id));
+        }
+
+        // Restore wires
+        for &(from_idx, from_output, to_idx, to_input) in &session.wires {
+            if let (Some(Some(from_node)), Some(Some(to_node))) =
+                (idx_to_node_id.get(from_idx), idx_to_node_id.get(to_idx))
+            {
+                snarl.connect(
+                    OutPinId {
+                        node: *from_node,
+                        output: from_output,
+                    },
+                    InPinId {
+                        node: *to_node,
+                        input: to_input,
+                    },
+                );
+            }
+        }
+
+        self.snarl = snarl;
+        self.selected_node = None;
+        self.topology_changed = true;
     }
 }
 
