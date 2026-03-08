@@ -1,6 +1,7 @@
 //! Stage (signal conditioning / stereo utility) effect UI panel.
 
-use crate::widgets::{BypassToggle, bridged_combo, bridged_knob};
+use crate::theme::SonidoTheme;
+use crate::widgets::{BypassToggle, bridged_combo, bridged_fader};
 use crate::{ParamBridge, ParamIndex, SlotIndex};
 use egui::Ui;
 
@@ -28,6 +29,13 @@ impl StagePanel {
     /// 4 = phase R, 5 = channel, 6 = DC block, 7 = bass mono,
     /// 8 = bass freq, 9 = haas, 10 = haas side, 11 = output.
     pub fn ui(&mut self, ui: &mut Ui, bridge: &dyn ParamBridge, slot: SlotIndex) {
+        let theme = SonidoTheme::get(ui.ctx());
+        let fader_indices: &[usize] = &[0, 1, 2, 8, 9, 11];
+        let param_count = fader_indices.len();
+        let avail_w = ui.available_width();
+        let fader_w = theme.layout.fader_width(avail_w, param_count);
+        let fader_h = theme.layout.fader_height(ui.available_height().min(200.0));
+
         ui.vertical(|ui| {
             // -- Header: bypass + channel mode --
             ui.horizontal(|ui| {
@@ -42,22 +50,9 @@ impl StagePanel {
                 bridged_combo(ui, bridge, slot, ParamIndex(5), "chan", CHANNEL_MODES);
             });
 
-            ui.add_space(12.0);
-
-            // -- Row 1: Gain, Width, Balance, Output --
-            ui.horizontal(|ui| {
-                bridged_knob(ui, bridge, slot, ParamIndex(0), "GAIN");
-                ui.add_space(16.0);
-                bridged_knob(ui, bridge, slot, ParamIndex(1), "WIDTH");
-                ui.add_space(16.0);
-                bridged_knob(ui, bridge, slot, ParamIndex(2), "BAL");
-                ui.add_space(16.0);
-                bridged_knob(ui, bridge, slot, ParamIndex(11), "OUTPUT");
-            });
-
             ui.add_space(8.0);
 
-            // -- Row 2: Phase L, Phase R, DC Block --
+            // -- Toggle row: Phase L, Phase R, DC Block, Bass Mono, Haas Side --
             ui.horizontal(|ui| {
                 ui.label("Phase L:");
                 bridged_combo(ui, bridge, slot, ParamIndex(3), "phl", ON_OFF);
@@ -67,25 +62,21 @@ impl StagePanel {
                 ui.add_space(12.0);
                 ui.label("DC Block:");
                 bridged_combo(ui, bridge, slot, ParamIndex(6), "dc", ON_OFF);
-            });
-
-            ui.add_space(8.0);
-
-            // -- Row 3: Bass Mono, Bass Freq, Haas, Haas Side --
-            ui.horizontal(|ui| {
+                ui.add_space(12.0);
                 ui.label("Bass Mono:");
                 bridged_combo(ui, bridge, slot, ParamIndex(7), "bmono", ON_OFF);
                 ui.add_space(12.0);
-                bridged_knob(ui, bridge, slot, ParamIndex(8), "B.FREQ");
-            });
-
-            ui.add_space(8.0);
-
-            ui.horizontal(|ui| {
-                bridged_knob(ui, bridge, slot, ParamIndex(9), "HAAS");
-                ui.add_space(12.0);
                 ui.label("Side:");
                 bridged_combo(ui, bridge, slot, ParamIndex(10), "hside", HAAS_SIDES);
+            });
+
+            ui.add_space(12.0);
+
+            // -- Continuous faders --
+            ui.horizontal_wrapped(|ui| {
+                for &i in fader_indices {
+                    bridged_fader(ui, bridge, slot, ParamIndex(i), fader_w, fader_h);
+                }
             });
         });
     }
