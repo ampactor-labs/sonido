@@ -10,7 +10,7 @@ use std::collections::HashMap;
 
 use egui::{Color32, FontId, RichText, Stroke, Ui};
 use egui_snarl::ui::{PinInfo, SnarlStyle, SnarlViewer};
-use egui_snarl::{InPin, NodeId, OutPin, Snarl};
+use egui_snarl::{InPin, InPinId, NodeId, OutPin, OutPinId, Snarl};
 
 use sonido_core::graph::{GraphEngine, MAX_SPLIT_TARGETS, ProcessingGraph};
 use sonido_core::{ParamDescriptor, SmoothingStyle};
@@ -85,10 +85,27 @@ pub struct GraphView {
 }
 
 impl GraphView {
-    /// Creates a new empty graph view.
+    /// Creates a new graph view with default Input and Output nodes.
+    ///
+    /// The two nodes are connected so that audio passes through immediately
+    /// after the first compile. Users can right-click to add effects between
+    /// them.
     pub fn new() -> Self {
+        let mut snarl = Snarl::new();
+        let input = snarl.insert_node(egui::pos2(100.0, 200.0), SonidoNode::Input);
+        let output = snarl.insert_node(egui::pos2(500.0, 200.0), SonidoNode::Output);
+        snarl.connect(
+            OutPinId {
+                node: input,
+                output: 0,
+            },
+            InPinId {
+                node: output,
+                input: 0,
+            },
+        );
         Self {
-            snarl: Snarl::new(),
+            snarl,
             selected_node: None,
             style: SnarlStyle::new(),
         }
@@ -101,12 +118,19 @@ impl GraphView {
     /// all Effect nodes in the graph (useful for param-bridge indexing).
     pub fn show(&mut self, ui: &mut Ui) -> Option<usize> {
         let theme = SonidoTheme::get(ui.ctx());
+        let mut click_handled = false;
         let mut viewer = SonidoViewer {
             selected_node: &mut self.selected_node,
+            click_handled: &mut click_handled,
             theme,
         };
         self.snarl
             .show(&mut viewer, &self.style, "sonido_graph", ui);
+
+        // Click on empty space deselects
+        if !click_handled && ui.input(|i| i.pointer.primary_pressed()) {
+            self.selected_node = None;
+        }
 
         // Map selected NodeId to an effect slot index.
         let selected = self.selected_node?;
@@ -252,6 +276,9 @@ fn structural_color(theme: &SonidoTheme) -> Color32 {
 struct SonidoViewer<'a> {
     /// Mutable reference to the selected-node state in [`GraphView`].
     selected_node: &'a mut Option<NodeId>,
+    /// Set to `true` when a node click is detected, preventing empty-space
+    /// deselection on the same frame.
+    click_handled: &'a mut bool,
     /// Arcade CRT theme snapshot for palette access.
     theme: SonidoTheme,
 }
@@ -331,7 +358,8 @@ impl SnarlViewer<SonidoNode> for SonidoViewer<'_> {
         let is_selected = *self.selected_node == Some(node);
         let title = self.title(&snarl[node]);
 
-        // Bold the title if selected
+        // Bold the title if selected — plain label (no Sense) to avoid
+        // stealing pointer events from snarl's node drag system.
         let text = if is_selected {
             RichText::new(title)
                 .font(FontId::monospace(12.0))
@@ -343,11 +371,7 @@ impl SnarlViewer<SonidoNode> for SonidoViewer<'_> {
                 .color(accent)
         };
 
-        // Clickable label — sets the selected node on click
-        let response = ui.add(egui::Label::new(text).sense(egui::Sense::click()));
-        if response.clicked() {
-            *self.selected_node = Some(node);
-        }
+        ui.label(text);
     }
 
     fn inputs(&mut self, node: &SonidoNode) -> usize {
@@ -420,30 +444,14 @@ impl SnarlViewer<SonidoNode> for SonidoViewer<'_> {
             let is_selected = *self.selected_node == Some(node);
             let accent = category_color(*category, &self.theme);
 
-            // Clickable body — clicking selects this node
+            // Plain label — selection is handled via final_node_rect()
             let body_text = format!("{} · {} params", category.name(), descriptors.len());
-            let text = if is_selected {
+            let color = if is_selected { accent } else { dim };
+            ui.label(
                 RichText::new(body_text)
                     .font(FontId::monospace(9.0))
-                    .color(accent)
-            } else {
-                RichText::new(body_text)
-                    .font(FontId::monospace(9.0))
-                    .color(dim)
-            };
-            let response = ui.add(egui::Label::new(text).sense(egui::Sense::click()));
-            if response.clicked() {
-                *self.selected_node = Some(node);
-            }
-
-            // Selected indicator
-            if is_selected {
-                ui.label(
-                    RichText::new("▸ selected")
-                        .font(FontId::monospace(8.0))
-                        .color(accent),
-                );
-            }
+                    .color(color),
+            );
         }
     }
 
@@ -544,6 +552,32 @@ impl SnarlViewer<SonidoNode> for SonidoViewer<'_> {
             let offset = egui::vec2(30.0, 30.0);
             snarl.insert_node(original_pos + offset, original);
             ui.close_menu();
+        }
+    }
+
+    fn final_node_rect(
+        &mut self,
+        node: NodeId,
+        ui_rect: egui::Rect,
+        _graph_rect: egui::Rect,
+        ui: &mut Ui,
+        _scale: f32,
+        _snarl: &mut Snarl<SonidoNode>,
+    ) {
+        // Detect clicks on nodes without adding interactive widgets that
+        // would steal pointer events from snarl's built-in drag system.
+        // Use primary_pressed() (button-down) instead of primary_clicked()
+        // (button-up) — the latter fails when the mouse moves even slightly
+        // during a click. Allow all overlapping nodes to set themselves as
+        // selected; since snarl iterates in draw order (back-to-front), the
+        // topmost (last-drawn) node wins.
+        if ui.input(|i| i.pointer.primary_pressed()) {
+            if let Some(pos) = ui.input(|i| i.pointer.interact_pos()) {
+                if ui_rect.contains(pos) {
+                    *self.selected_node = Some(node);
+                    *self.click_handled = true;
+                }
+            }
         }
     }
 
