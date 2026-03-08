@@ -21,6 +21,8 @@ pub struct SonidoTheme {
     pub glow: GlowConfig,
     /// Scanline overlay parameters.
     pub scanlines: ScanlineConfig,
+    /// Responsive layout ratios and clamps.
+    pub layout: ThemeLayout,
     /// Skip bloom + scanlines for performance (WASM fallback).
     pub reduced_fx: bool,
 }
@@ -101,6 +103,36 @@ pub struct ScanlineConfig {
     pub enabled: bool,
 }
 
+/// Responsive layout ratios and clamps.
+///
+/// All sizing derives from available space using these ratios, with min/max
+/// constraints. No hardcoded pixel values in layout code.
+#[derive(Clone, Debug)]
+pub struct ThemeLayout {
+    /// I/O strip width as fraction of window width.
+    pub io_strip_ratio: f32,
+    /// Minimum I/O strip width in pixels.
+    pub io_strip_min: f32,
+    /// Maximum I/O strip width in pixels.
+    pub io_strip_max: f32,
+    /// Graph editor height as fraction of content area.
+    pub graph_ratio: f32,
+    /// Minimum graph editor height in pixels.
+    pub graph_min_h: f32,
+    /// Maximum effect panel height as fraction of content area.
+    pub panel_max_ratio: f32,
+    /// Minimum effect panel height in pixels.
+    pub panel_min_h: f32,
+    /// Minimum fader width in pixels.
+    pub fader_min_w: f32,
+    /// Maximum fader width in pixels.
+    pub fader_max_w: f32,
+    /// Minimum fader height in pixels.
+    pub fader_min_h: f32,
+    /// Maximum fader height in pixels.
+    pub fader_max_h: f32,
+}
+
 impl Default for SonidoTheme {
     fn default() -> Self {
         Self {
@@ -108,6 +140,7 @@ impl Default for SonidoTheme {
             sizing: ThemeSizing::default(),
             glow: GlowConfig::default(),
             scanlines: ScanlineConfig::default(),
+            layout: ThemeLayout::default(),
             reduced_fx: false,
         }
     }
@@ -138,8 +171,8 @@ impl Default for ThemeSizing {
             knob_diameter: 60.0,
             meter_width: 24.0,
             meter_height: 120.0,
-            led_digit_width: 14.0,
-            led_digit_height: 22.0,
+            led_digit_width: 18.0,
+            led_digit_height: 28.0,
             led_digit_gap: 3.0,
             panel_border_radius: 4.0,
             item_spacing: vec2(8.0, 6.0),
@@ -152,9 +185,9 @@ impl Default for ThemeSizing {
 impl Default for GlowConfig {
     fn default() -> Self {
         Self {
-            bloom_radius: 4.0,
-            bloom_alpha: 0.30,
-            ghost_alpha: 0.10,
+            bloom_radius: 3.0,
+            bloom_alpha: 0.25,
+            ghost_alpha: 0.08,
             hover_bloom_mult: 1.6,
         }
     }
@@ -167,6 +200,56 @@ impl Default for ScanlineConfig {
             line_opacity: 0.05,
             enabled: true,
         }
+    }
+}
+
+impl Default for ThemeLayout {
+    fn default() -> Self {
+        Self {
+            io_strip_ratio: 0.07,
+            io_strip_min: 50.0,
+            io_strip_max: 80.0,
+            graph_ratio: 0.45,
+            graph_min_h: 150.0,
+            panel_max_ratio: 0.50,
+            panel_min_h: 120.0,
+            fader_min_w: 32.0,
+            fader_max_w: 52.0,
+            fader_min_h: 60.0,
+            fader_max_h: 120.0,
+        }
+    }
+}
+
+impl ThemeLayout {
+    /// Compute I/O strip width from window width.
+    pub fn io_strip_width(&self, window_w: f32) -> f32 {
+        (window_w * self.io_strip_ratio).clamp(self.io_strip_min, self.io_strip_max)
+    }
+
+    /// Compute graph and panel heights from available content height.
+    ///
+    /// Returns `(graph_h, panel_h)`.
+    pub fn split_vertical(&self, content_h: f32, panel_content_h: f32) -> (f32, f32) {
+        let panel_max = content_h * self.panel_max_ratio;
+        let panel_h = panel_content_h.clamp(self.panel_min_h, panel_max);
+        let graph_h = (content_h - panel_h).max(self.graph_min_h);
+        (graph_h, panel_h)
+    }
+
+    /// Compute fader width for `param_count` params in available width.
+    pub fn fader_width(&self, available_w: f32, param_count: usize) -> f32 {
+        if param_count == 0 {
+            return self.fader_max_w;
+        }
+        let w = available_w / param_count as f32;
+        w.clamp(self.fader_min_w, self.fader_max_w)
+    }
+
+    /// Compute fader height from available panel height minus labels.
+    pub fn fader_height(&self, panel_inner_h: f32) -> f32 {
+        let label_space = 32.0;
+        (panel_inner_h - label_space).clamp(self.fader_min_h, self.fader_max_h)
     }
 }
 
@@ -273,3 +356,38 @@ impl SonidoTheme {
 
 /// Type alias for the old `Theme` name. Use `SonidoTheme` for new code.
 pub type Theme = SonidoTheme;
+
+#[cfg(test)]
+mod layout_tests {
+    use super::*;
+
+    #[test]
+    fn io_strip_width_clamps() {
+        let layout = ThemeLayout::default();
+        assert_eq!(layout.io_strip_width(400.0), 50.0); // hits min
+        let w = layout.io_strip_width(1000.0);
+        assert!((w - 70.0).abs() < 0.1); // proportional
+        assert_eq!(layout.io_strip_width(2000.0), 80.0); // hits max
+    }
+
+    #[test]
+    fn split_vertical_respects_min_graph() {
+        let layout = ThemeLayout::default();
+        let (graph_h, _) = layout.split_vertical(300.0, 200.0);
+        assert!(graph_h >= layout.graph_min_h);
+    }
+
+    #[test]
+    fn fader_width_distributes_evenly() {
+        let layout = ThemeLayout::default();
+        let w = layout.fader_width(400.0, 8);
+        assert_eq!(w, 50.0); // 400/8 = 50, within [32, 52]
+    }
+
+    #[test]
+    fn fader_width_clamps_to_min() {
+        let layout = ThemeLayout::default();
+        let w = layout.fader_width(200.0, 20);
+        assert_eq!(w, 32.0);
+    }
+}
