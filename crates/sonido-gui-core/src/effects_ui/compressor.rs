@@ -1,6 +1,7 @@
 //! Compressor effect UI panel.
 
-use crate::widgets::{BypassToggle, bridged_knob};
+use crate::theme::SonidoTheme;
+use crate::widgets::{BypassToggle, bridged_fader};
 use crate::{ParamBridge, ParamIndex, SlotIndex};
 use egui::Ui;
 
@@ -16,8 +17,17 @@ impl CompressorPanel {
     /// Render the compressor effect controls.
     ///
     /// Param indices: 0 = threshold (dB), 1 = ratio, 2 = attack (ms),
-    /// 3 = release (ms), 4 = makeup (dB).
+    /// 3 = release (ms), 4 = makeup (dB), 10 = mix (%).
+    ///
+    /// Only continuous fader params are shown; indices 5–9 are internal.
     pub fn ui(&mut self, ui: &mut Ui, bridge: &dyn ParamBridge, slot: SlotIndex) {
+        let theme = SonidoTheme::get(ui.ctx());
+        let fader_indices: &[usize] = &[0, 1, 2, 3, 4, 10];
+        let param_count = fader_indices.len();
+        let avail_w = ui.available_width();
+        let fader_w = theme.layout.fader_width(avail_w, param_count);
+        let fader_h = theme.layout.fader_height(ui.available_height().min(200.0));
+
         ui.vertical(|ui| {
             ui.horizontal(|ui| {
                 let mut active = !bridge.is_bypassed(slot);
@@ -28,24 +38,10 @@ impl CompressorPanel {
 
             ui.add_space(12.0);
 
-            // First row: Threshold, Ratio, Makeup
-            ui.horizontal(|ui| {
-                bridged_knob(ui, bridge, slot, ParamIndex(0), "THRESH");
-                ui.add_space(16.0);
-                bridged_knob(ui, bridge, slot, ParamIndex(1), "RATIO");
-                ui.add_space(16.0);
-                bridged_knob(ui, bridge, slot, ParamIndex(4), "MAKEUP");
-            });
-
-            ui.add_space(8.0);
-
-            // Second row: Attack, Release, Mix
-            ui.horizontal(|ui| {
-                bridged_knob(ui, bridge, slot, ParamIndex(2), "ATTACK");
-                ui.add_space(16.0);
-                bridged_knob(ui, bridge, slot, ParamIndex(3), "RELEASE");
-                ui.add_space(16.0);
-                bridged_knob(ui, bridge, slot, ParamIndex(10), "MIX");
+            ui.horizontal_wrapped(|ui| {
+                for &i in fader_indices {
+                    bridged_fader(ui, bridge, slot, ParamIndex(i), fader_w, fader_h);
+                }
             });
         });
     }

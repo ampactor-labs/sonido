@@ -1,7 +1,7 @@
 //! Parametric EQ effect UI panel.
 
 use crate::theme::SonidoTheme;
-use crate::widgets::{BypassToggle, Knob, gesture_wrap};
+use crate::widgets::{BypassToggle, bridged_fader};
 use crate::{ParamBridge, ParamIndex, SlotIndex};
 use egui::Ui;
 
@@ -20,6 +20,13 @@ impl ParametricEqPanel {
     /// 3 = mid_freq (Hz), 4 = mid_gain (dB), 5 = mid_q,
     /// 6 = high_freq (Hz), 7 = high_gain (dB), 8 = high_q.
     pub fn ui(&mut self, ui: &mut Ui, bridge: &dyn ParamBridge, slot: SlotIndex) {
+        let theme = SonidoTheme::get(ui.ctx());
+        // 3 params per band, 3 bands = 9 faders
+        let params_per_band = 3;
+        let avail_w = ui.available_width();
+        let fader_w = theme.layout.fader_width(avail_w, params_per_band * 3);
+        let fader_h = theme.layout.fader_height(ui.available_height().min(200.0));
+
         ui.vertical(|ui| {
             ui.horizontal(|ui| {
                 let mut active = !bridge.is_bypassed(slot);
@@ -31,52 +38,28 @@ impl ParametricEqPanel {
             ui.add_space(12.0);
 
             // Low band (params 0, 1, 2)
-            Self::render_band(
-                ui,
-                bridge,
-                slot,
-                "LOW",
-                ParamIndex(0),
-                ParamIndex(1),
-                ParamIndex(2),
-            );
+            Self::render_band(ui, bridge, slot, "LOW", 0, fader_w, fader_h, &theme);
             ui.add_space(4.0);
             // Mid band (params 3, 4, 5)
-            Self::render_band(
-                ui,
-                bridge,
-                slot,
-                "MID",
-                ParamIndex(3),
-                ParamIndex(4),
-                ParamIndex(5),
-            );
+            Self::render_band(ui, bridge, slot, "MID", 3, fader_w, fader_h, &theme);
             ui.add_space(4.0);
             // High band (params 6, 7, 8)
-            Self::render_band(
-                ui,
-                bridge,
-                slot,
-                "HIGH",
-                ParamIndex(6),
-                ParamIndex(7),
-                ParamIndex(8),
-            );
+            Self::render_band(ui, bridge, slot, "HIGH", 6, fader_w, fader_h, &theme);
         });
     }
 
-    /// Render a single EQ band (freq, gain, Q) with compact 50px knobs.
+    /// Render a single EQ band (freq, gain, Q) as a labeled fader row.
     fn render_band(
         ui: &mut Ui,
         bridge: &dyn ParamBridge,
         slot: SlotIndex,
         label: &str,
-        freq_idx: ParamIndex,
-        gain_idx: ParamIndex,
-        q_idx: ParamIndex,
+        base_idx: usize,
+        fader_w: f32,
+        fader_h: f32,
+        theme: &SonidoTheme,
     ) {
         ui.horizontal(|ui| {
-            let theme = SonidoTheme::get(ui.ctx());
             ui.label(
                 egui::RichText::new(label)
                     .color(theme.colors.cyan)
@@ -84,51 +67,16 @@ impl ParametricEqPanel {
             );
             ui.add_space(8.0);
 
-            // Frequency
-            let desc = bridge.param_descriptor(slot, freq_idx);
-            let (min, max, default) = desc
-                .as_ref()
-                .map_or((20.0, 20000.0, 1000.0), |d| (d.min, d.max, d.default));
-            let mut freq = bridge.get(slot, freq_idx);
-            let response = ui.add(
-                Knob::new(&mut freq, min, max, "FREQ")
-                    .default(default)
-                    .format_hz()
-                    .diameter(50.0),
-            );
-            gesture_wrap(&response, bridge, slot, freq_idx, freq, default);
-
-            ui.add_space(8.0);
-
-            // Gain
-            let desc = bridge.param_descriptor(slot, gain_idx);
-            let (min, max, default) = desc
-                .as_ref()
-                .map_or((-12.0, 12.0, 0.0), |d| (d.min, d.max, d.default));
-            let mut gain = bridge.get(slot, gain_idx);
-            let response = ui.add(
-                Knob::new(&mut gain, min, max, "GAIN")
-                    .default(default)
-                    .format_db()
-                    .diameter(50.0),
-            );
-            gesture_wrap(&response, bridge, slot, gain_idx, gain, default);
-
-            ui.add_space(8.0);
-
-            // Q
-            let desc = bridge.param_descriptor(slot, q_idx);
-            let (min, max, default) = desc
-                .as_ref()
-                .map_or((0.5, 5.0, 1.0), |d| (d.min, d.max, d.default));
-            let mut q = bridge.get(slot, q_idx);
-            let response = ui.add(
-                Knob::new(&mut q, min, max, "Q")
-                    .default(default)
-                    .format(|v| format!("{v:.1}"))
-                    .diameter(50.0),
-            );
-            gesture_wrap(&response, bridge, slot, q_idx, q, default);
+            for offset in 0..3 {
+                bridged_fader(
+                    ui,
+                    bridge,
+                    slot,
+                    ParamIndex(base_idx + offset),
+                    fader_w,
+                    fader_h,
+                );
+            }
         });
     }
 }

@@ -153,6 +153,14 @@ impl Widget for Knob<'_> {
         if ui.is_rect_visible(rect) {
             let painter = ui.painter();
             let theme = SonidoTheme::get(ui.ctx());
+            let hovered = response.hovered();
+
+            // Hover multiplier — bloom doubles on pointer + value arc
+            let hover_mult = if hovered {
+                theme.glow.hover_bloom_mult
+            } else {
+                1.0
+            };
 
             // Knob arc angles (270 degree sweep, starting from bottom-left)
             let start_angle = PI * 0.75; // 135 degrees
@@ -176,6 +184,7 @@ impl Widget for Knob<'_> {
             );
 
             // Value arc (filled portion) — phosphor amber glow
+            // Hover: stroke widens for brighter bloom
             if normalized > 0.001 {
                 glow::glow_arc(
                     painter,
@@ -184,30 +193,43 @@ impl Widget for Knob<'_> {
                     start_angle,
                     value_angle,
                     theme.colors.amber,
-                    6.0,
+                    6.0 * hover_mult,
                     &theme,
                 );
             }
 
             // Pointer line — from center to value position
+            // Hover: stroke widens for brighter bloom
             let pointer_len = radius - 14.0;
             let pointer_end = pos2(
                 center.x + value_angle.cos() * pointer_len,
                 center.y + value_angle.sin() * pointer_len,
             );
-            glow::glow_line(painter, center, pointer_end, theme.colors.amber, 2.0, &theme);
+            glow::glow_line(
+                painter,
+                center,
+                pointer_end,
+                theme.colors.amber,
+                2.0 * hover_mult,
+                &theme,
+            );
 
             // Center dot
             glow::glow_circle(painter, center, 2.0, theme.colors.amber, &theme);
 
-            // Label
+            // Label — brightens to full cyan on hover
+            let label_color = if hovered {
+                theme.colors.cyan
+            } else {
+                theme.colors.cyan.gamma_multiply(0.7)
+            };
             let label_pos = pos2(rect.center().x, center.y + radius + 8.0);
             painter.text(
                 label_pos,
                 egui::Align2::CENTER_TOP,
                 self.label,
                 egui::FontId::monospace(11.0),
-                theme.colors.cyan,
+                label_color,
             );
 
             // Value text (hidden when an external LED display is used)

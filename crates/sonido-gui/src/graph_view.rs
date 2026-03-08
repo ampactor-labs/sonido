@@ -15,6 +15,7 @@ use egui_snarl::{InPin, InPinId, NodeId, OutPin, OutPinId, Snarl};
 use sonido_core::graph::{GraphEngine, MAX_SPLIT_TARGETS, ProcessingGraph};
 use sonido_core::{ParamDescriptor, SmoothingStyle};
 use sonido_gui_core::theme::SonidoTheme;
+use sonido_gui_core::widgets::glow;
 use sonido_registry::{EffectCategory, EffectRegistry};
 
 use crate::chain_manager::GraphCommand;
@@ -46,6 +47,21 @@ pub enum SonidoNode {
     Split,
     /// Signal merger: up to 8 inputs, 1 output.
     Merge,
+}
+
+impl SonidoNode {
+    /// Convert to a serializable session node.
+    pub fn to_session(&self) -> crate::session::SessionNode {
+        match self {
+            SonidoNode::Input => crate::session::SessionNode::Input,
+            SonidoNode::Output => crate::session::SessionNode::Output,
+            SonidoNode::Effect { effect_id, .. } => crate::session::SessionNode::Effect {
+                effect_id: (*effect_id).to_string(),
+            },
+            SonidoNode::Split => crate::session::SessionNode::Split,
+            SonidoNode::Merge => crate::session::SessionNode::Merge,
+        }
+    }
 }
 
 /// Error type for graph compilation failures.
@@ -82,6 +98,12 @@ pub struct GraphView {
     pub selected_node: Option<NodeId>,
     /// Visual style configuration.
     pub style: SnarlStyle,
+    /// Set to `true` when a connect/disconnect/remove changes the topology.
+    /// Checked by the app after `show()` to trigger auto-compile.
+    pub topology_changed: bool,
+    /// Per-effect-slot activity level (0.0--1.0), updated each frame from
+    /// audio-thread metering data. Drives the glow LED on each effect node.
+    pub slot_activity: Vec<f32>,
 }
 
 impl GraphView {
@@ -104,10 +126,17 @@ impl GraphView {
                 input: 0,
             },
         );
+        let mut style = SnarlStyle::new();
+        // Audio graph nodes should never collapse — collapsing hides pins
+        // and body, breaking visual wire connections and confusing the layout.
+        style.collapsible = Some(false);
+
         Self {
             snarl,
             selected_node: None,
-            style: SnarlStyle::new(),
+            style,
+            topology_changed: false,
+            slot_activity: Vec::new(),
         }
     }
 
@@ -117,19 +146,28 @@ impl GraphView {
     /// The returned `usize` corresponds to the effect's position among
     /// all Effect nodes in the graph (useful for param-bridge indexing).
     pub fn show(&mut self, ui: &mut Ui) -> Option<usize> {
+        self.topology_changed = false;
         let theme = SonidoTheme::get(ui.ctx());
         let mut click_handled = false;
         let mut viewer = SonidoViewer {
             selected_node: &mut self.selected_node,
             click_handled: &mut click_handled,
+            topology_changed: &mut self.topology_changed,
             theme,
+            slot_activity: &self.slot_activity,
         };
         self.snarl
             .show(&mut viewer, &self.style, "sonido_graph", ui);
 
-        // Click on empty space deselects
+        // Click on empty space deselects — only within the graph area.
+        // Without the rect check, clicks on the effect panel (below the graph)
+        // would deselect the node and hide the panel.
         if !click_handled && ui.input(|i| i.pointer.primary_pressed()) {
-            self.selected_node = None;
+            if let Some(pos) = ui.input(|i| i.pointer.interact_pos()) {
+                if ui.max_rect().contains(pos) {
+                    self.selected_node = None;
+                }
+            }
         }
 
         // Map selected NodeId to an effect slot index.
@@ -160,8 +198,8 @@ impl GraphView {
         &self,
         sample_rate: f32,
         block_size: usize,
+        registry: &EffectRegistry,
     ) -> Result<GraphCommand, CompileError> {
-        let registry = EffectRegistry::new();
         let mut graph = ProcessingGraph::new(sample_rate, block_size);
 
         // Map Snarl NodeIds to ProcessingGraph NodeIds.
@@ -234,6 +272,143 @@ impl GraphView {
             slot_descriptors,
         })
     }
+
+    /// Capture the current graph state as a [`Session`](crate::session::Session).
+    ///
+    /// Walks all nodes and wires in the Snarl graph, reads parameter values
+    /// from the bridge, and bundles everything into a serializable session.
+    pub fn capture_session(
+        &self,
+        bridge: &dyn sonido_gui_core::ParamBridge,
+        input_gain: f32,
+        master_volume: f32,
+    ) -> crate::session::Session {
+        use crate::session::{EffectState, Session, SessionNodeEntry};
+        use sonido_gui_core::{ParamIndex, SlotIndex};
+
+        let mut nodes = Vec::new();
+        let mut node_id_to_idx: HashMap<NodeId, usize> = HashMap::new();
+
+        for (id, node) in self.snarl.node_ids() {
+            let idx = nodes.len();
+            node_id_to_idx.insert(id, idx);
+            let pos = self
+                .snarl
+                .get_node_info(id)
+                .map_or([0.0, 0.0], |info| [info.pos.x, info.pos.y]);
+            nodes.push(SessionNodeEntry {
+                node: node.to_session(),
+                pos,
+            });
+        }
+
+        let mut wires = Vec::new();
+        for (out_pin, in_pin) in self.snarl.wires() {
+            if let (Some(&from_idx), Some(&to_idx)) = (
+                node_id_to_idx.get(&out_pin.node),
+                node_id_to_idx.get(&in_pin.node),
+            ) {
+                wires.push((from_idx, out_pin.output, to_idx, in_pin.input));
+            }
+        }
+
+        let mut params = HashMap::new();
+        let mut effect_slot = 0usize;
+        for (idx, entry) in nodes.iter().enumerate() {
+            if let crate::session::SessionNode::Effect { ref effect_id } = entry.node {
+                let slot = SlotIndex(effect_slot);
+                let param_count = bridge.param_count(slot);
+                let param_values: Vec<f32> = (0..param_count)
+                    .map(|i| bridge.get(slot, ParamIndex(i)))
+                    .collect();
+                params.insert(
+                    idx,
+                    EffectState {
+                        effect_id: effect_id.clone(),
+                        params: param_values,
+                        bypassed: bridge.is_bypassed(slot),
+                    },
+                );
+                effect_slot += 1;
+            }
+        }
+
+        Session {
+            version: Session::VERSION,
+            nodes,
+            wires,
+            params,
+            input_gain,
+            master_volume,
+        }
+    }
+
+    /// Restore graph from a session, rebuilding the Snarl topology.
+    ///
+    /// Creates new nodes and wires from the session data. Unknown effects
+    /// (not found in the registry) are logged and skipped. After calling
+    /// this method, the caller should compile the graph and apply params.
+    pub fn restore_session(
+        &mut self,
+        session: &crate::session::Session,
+        registry: &EffectRegistry,
+    ) {
+        use crate::session::SessionNode;
+
+        let mut snarl = Snarl::new();
+        let mut idx_to_node_id: Vec<Option<NodeId>> = Vec::new();
+
+        for entry in &session.nodes {
+            let pos = egui::pos2(entry.pos[0], entry.pos[1]);
+            let node = match &entry.node {
+                SessionNode::Input => SonidoNode::Input,
+                SessionNode::Output => SonidoNode::Output,
+                SessionNode::Effect { effect_id } => {
+                    if let Some(desc) = registry.get(effect_id) {
+                        let descriptors = collect_descriptors(desc.id, 48000.0);
+                        let smoothing = collect_smoothing(desc.id, 48000.0);
+                        SonidoNode::Effect {
+                            effect_id: desc.id,
+                            name: desc.name,
+                            category: desc.category,
+                            descriptors,
+                            smoothing,
+                        }
+                    } else {
+                        tracing::warn!("unknown effect in session: {effect_id}");
+                        idx_to_node_id.push(None);
+                        continue;
+                    }
+                }
+                SessionNode::Split => SonidoNode::Split,
+                SessionNode::Merge => SonidoNode::Merge,
+            };
+            let id = snarl.insert_node(pos, node);
+            idx_to_node_id.push(Some(id));
+        }
+
+        // Restore wires
+        for &(from_idx, from_output, to_idx, to_input) in &session.wires {
+            if let (Some(Some(from_node)), Some(Some(to_node))) =
+                (idx_to_node_id.get(from_idx), idx_to_node_id.get(to_idx))
+            {
+                snarl.connect(
+                    OutPinId {
+                        node: *from_node,
+                        output: from_output,
+                    },
+                    InPinId {
+                        node: *to_node,
+                        input: to_input,
+                    },
+                );
+            }
+        }
+
+        self.snarl = snarl;
+        self.selected_node = None;
+        self.topology_changed = true;
+    }
 }
 
 impl Default for GraphView {
@@ -279,8 +454,13 @@ struct SonidoViewer<'a> {
     /// Set to `true` when a node click is detected, preventing empty-space
     /// deselection on the same frame.
     click_handled: &'a mut bool,
+    /// Set to `true` when a connect/disconnect/remove changes the topology,
+    /// signalling the app to auto-compile.
+    topology_changed: &'a mut bool,
     /// Arcade CRT theme snapshot for palette access.
     theme: SonidoTheme,
+    /// Per-effect-slot activity level (0.0--1.0) for LED indicators.
+    slot_activity: &'a [f32],
 }
 
 impl SonidoViewer<'_> {
@@ -313,7 +493,18 @@ impl SnarlViewer<SonidoNode> for SonidoViewer<'_> {
         _outputs: &[OutPin],
         snarl: &Snarl<SonidoNode>,
     ) -> egui::Frame {
-        let accent = self.node_accent(&snarl[node]);
+        let node_data = &snarl[node];
+
+        // I/O nodes are represented by the sidebar strips — render minimal
+        if matches!(node_data, SonidoNode::Input | SonidoNode::Output) {
+            return egui::Frame::new()
+                .fill(Color32::TRANSPARENT)
+                .stroke(Stroke::NONE)
+                .corner_radius(0.0)
+                .inner_margin(2.0);
+        }
+
+        let accent = self.node_accent(node_data);
         let is_selected = *self.selected_node == Some(node);
         let (stroke_width, fill) = if is_selected {
             (2.0, accent.gamma_multiply(0.08))
@@ -335,7 +526,18 @@ impl SnarlViewer<SonidoNode> for SonidoViewer<'_> {
         _outputs: &[OutPin],
         snarl: &Snarl<SonidoNode>,
     ) -> egui::Frame {
-        let accent = self.node_accent(&snarl[node]);
+        let node_data = &snarl[node];
+
+        // I/O nodes: minimal transparent header
+        if matches!(node_data, SonidoNode::Input | SonidoNode::Output) {
+            return egui::Frame::new()
+                .fill(Color32::TRANSPARENT)
+                .stroke(Stroke::NONE)
+                .corner_radius(0.0)
+                .inner_margin(1.0);
+        }
+
+        let accent = self.node_accent(node_data);
         // Subtle tinted header background — the accent at very low alpha
         let header_bg = accent.gamma_multiply(0.10);
         egui::Frame::new()
@@ -354,9 +556,22 @@ impl SnarlViewer<SonidoNode> for SonidoViewer<'_> {
         _scale: f32,
         snarl: &mut Snarl<SonidoNode>,
     ) {
-        let accent = self.node_accent(&snarl[node]);
+        let node_data = &snarl[node];
+
+        // I/O nodes: tiny label, they're implicit in the sidebar
+        if matches!(node_data, SonidoNode::Input | SonidoNode::Output) {
+            let title = self.title(node_data);
+            ui.label(
+                RichText::new(title)
+                    .font(FontId::monospace(8.0))
+                    .color(self.theme.colors.text_secondary.gamma_multiply(0.5)),
+            );
+            return;
+        }
+
+        let accent = self.node_accent(node_data);
         let is_selected = *self.selected_node == Some(node);
-        let title = self.title(&snarl[node]);
+        let title = self.title(node_data);
 
         // Bold the title if selected — plain label (no Sense) to avoid
         // stealing pointer events from snarl's node drag system.
@@ -372,6 +587,27 @@ impl SnarlViewer<SonidoNode> for SonidoViewer<'_> {
         };
 
         ui.label(text);
+
+        // Activity LED for effect nodes — glows when signal passes through
+        if matches!(node_data, SonidoNode::Effect { .. }) {
+            let mut slot_idx = 0usize;
+            for (id, n) in snarl.node_ids() {
+                if id == node {
+                    break;
+                }
+                if matches!(n, SonidoNode::Effect { .. }) {
+                    slot_idx += 1;
+                }
+            }
+            let activity = self.slot_activity.get(slot_idx).copied().unwrap_or(0.0);
+            if activity > 0.01 {
+                let led_pos =
+                    egui::pos2(ui.max_rect().right() - 6.0, ui.max_rect().center().y);
+                let led_alpha = activity.clamp(0.2, 1.0);
+                let led_color = accent.gamma_multiply(led_alpha);
+                glow::glow_circle(ui.painter(), led_pos, 3.0, led_color, &self.theme);
+            }
+        }
     }
 
     fn inputs(&mut self, node: &SonidoNode) -> usize {
@@ -421,8 +657,8 @@ impl SnarlViewer<SonidoNode> for SonidoViewer<'_> {
             .with_wire_color(color)
     }
 
-    fn has_body(&mut self, node: &SonidoNode) -> bool {
-        matches!(node, SonidoNode::Effect { .. })
+    fn has_body(&mut self, _node: &SonidoNode) -> bool {
+        false
     }
 
     fn show_body(
@@ -466,42 +702,99 @@ impl SnarlViewer<SonidoNode> for SonidoViewer<'_> {
         _scale: f32,
         snarl: &mut Snarl<SonidoNode>,
     ) {
-        ui.label("Add Node");
+        // Search filter — persisted across frames via egui temp data
+        let filter_id = egui::Id::new("graph_menu_filter");
+        let mut filter: String = ui
+            .data(|d| d.get_temp::<String>(filter_id))
+            .unwrap_or_default();
+
+        ui.horizontal(|ui| {
+            ui.label(
+                RichText::new("Search")
+                    .font(FontId::monospace(10.0))
+                    .color(self.theme.colors.text_secondary),
+            );
+            let response = ui.text_edit_singleline(&mut filter);
+            // Auto-focus the search field when the menu opens
+            if response.gained_focus() || ui.memory(|m| m.focused().is_none()) {
+                response.request_focus();
+            }
+        });
+        ui.data_mut(|d| d.insert_temp(filter_id, filter.clone()));
+
+        let filter_lower = filter.to_lowercase();
         ui.separator();
 
-        if ui.button("Input").clicked() {
-            snarl.insert_node(pos, SonidoNode::Input);
-            ui.close_menu();
-        }
-        if ui.button("Output").clicked() {
-            snarl.insert_node(pos, SonidoNode::Output);
-            ui.close_menu();
-        }
-        if ui.button("Split").clicked() {
-            snarl.insert_node(pos, SonidoNode::Split);
-            ui.close_menu();
-        }
-        if ui.button("Merge").clicked() {
-            snarl.insert_node(pos, SonidoNode::Merge);
-            ui.close_menu();
-        }
+        if filter.is_empty() {
+            // Structural nodes (only shown when no filter is active)
+            if ui.button("Input").clicked() {
+                snarl.insert_node(pos, SonidoNode::Input);
+                *self.topology_changed = true;
+                ui.close_menu();
+            }
+            if ui.button("Output").clicked() {
+                snarl.insert_node(pos, SonidoNode::Output);
+                *self.topology_changed = true;
+                ui.close_menu();
+            }
+            if ui.button("Split").clicked() {
+                snarl.insert_node(pos, SonidoNode::Split);
+                *self.topology_changed = true;
+                ui.close_menu();
+            }
+            if ui.button("Merge").clicked() {
+                snarl.insert_node(pos, SonidoNode::Merge);
+                *self.topology_changed = true;
+                ui.close_menu();
+            }
 
-        ui.separator();
+            ui.separator();
 
-        let registry = EffectRegistry::new();
-        let categories = [
-            EffectCategory::Dynamics,
-            EffectCategory::Distortion,
-            EffectCategory::Modulation,
-            EffectCategory::Filter,
-            EffectCategory::TimeBased,
-            EffectCategory::Utility,
-        ];
+            // Category submenus (existing behavior when no filter)
+            let registry = EffectRegistry::new();
+            let categories = [
+                EffectCategory::Dynamics,
+                EffectCategory::Distortion,
+                EffectCategory::Modulation,
+                EffectCategory::Filter,
+                EffectCategory::TimeBased,
+                EffectCategory::Utility,
+            ];
 
-        for cat in categories {
-            ui.menu_button(cat.name(), |ui| {
-                for desc in registry.effects_in_category(cat) {
-                    if ui.button(desc.name).clicked() {
+            for cat in categories {
+                ui.menu_button(cat.name(), |ui| {
+                    for desc in registry.effects_in_category(cat) {
+                        if ui.button(desc.name).clicked() {
+                            let descriptors = collect_descriptors(desc.id, 48000.0);
+                            let smoothing = collect_smoothing(desc.id, 48000.0);
+                            snarl.insert_node(
+                                pos,
+                                SonidoNode::Effect {
+                                    effect_id: desc.id,
+                                    name: desc.name,
+                                    category: desc.category,
+                                    descriptors,
+                                    smoothing,
+                                },
+                            );
+                            *self.topology_changed = true;
+                            ui.close_menu();
+                        }
+                    }
+                });
+            }
+        } else {
+            // Flat filtered list — show matching effects with category color
+            let registry = EffectRegistry::new();
+            for desc in registry.all_effects() {
+                if desc.name.to_lowercase().contains(&filter_lower)
+                    || desc.id.contains(&filter_lower)
+                {
+                    let cat_color = category_color(desc.category, &self.theme);
+                    if ui
+                        .button(RichText::new(desc.name).color(cat_color))
+                        .clicked()
+                    {
                         let descriptors = collect_descriptors(desc.id, 48000.0);
                         let smoothing = collect_smoothing(desc.id, 48000.0);
                         snarl.insert_node(
@@ -514,10 +807,13 @@ impl SnarlViewer<SonidoNode> for SonidoViewer<'_> {
                                 smoothing,
                             },
                         );
+                        *self.topology_changed = true;
+                        // Clear filter for next open
+                        ui.data_mut(|d| d.insert_temp::<String>(filter_id, String::new()));
                         ui.close_menu();
                     }
                 }
-            });
+            }
         }
     }
 
@@ -540,6 +836,7 @@ impl SnarlViewer<SonidoNode> for SonidoViewer<'_> {
                 *self.selected_node = None;
             }
             snarl.remove_node(node);
+            *self.topology_changed = true;
             ui.close_menu();
             return;
         }
@@ -551,6 +848,7 @@ impl SnarlViewer<SonidoNode> for SonidoViewer<'_> {
                 .map_or(egui::pos2(0.0, 0.0), |n| n.pos);
             let offset = egui::vec2(30.0, 30.0);
             snarl.insert_node(original_pos + offset, original);
+            *self.topology_changed = true;
             ui.close_menu();
         }
     }
@@ -571,12 +869,15 @@ impl SnarlViewer<SonidoNode> for SonidoViewer<'_> {
         // during a click. Allow all overlapping nodes to set themselves as
         // selected; since snarl iterates in draw order (back-to-front), the
         // topmost (last-drawn) node wins.
-        if ui.input(|i| i.pointer.primary_pressed()) {
-            if let Some(pos) = ui.input(|i| i.pointer.interact_pos()) {
-                if ui_rect.contains(pos) {
-                    *self.selected_node = Some(node);
-                    *self.click_handled = true;
-                }
+        if let Some(pos) = ui.input(|i| {
+            i.pointer
+                .primary_pressed()
+                .then(|| i.pointer.interact_pos())
+                .flatten()
+        }) {
+            if ui_rect.contains(pos) {
+                *self.selected_node = Some(node);
+                *self.click_handled = true;
             }
         }
     }
@@ -589,6 +890,22 @@ impl SnarlViewer<SonidoNode> for SonidoViewer<'_> {
             snarl.drop_inputs(to.id);
         }
         snarl.connect(from.id, to.id);
+        *self.topology_changed = true;
+    }
+
+    fn disconnect(&mut self, from: &OutPin, to: &InPin, snarl: &mut Snarl<SonidoNode>) {
+        snarl.disconnect(from.id, to.id);
+        *self.topology_changed = true;
+    }
+
+    fn drop_outputs(&mut self, pin: &OutPin, snarl: &mut Snarl<SonidoNode>) {
+        snarl.drop_outputs(pin.id);
+        *self.topology_changed = true;
+    }
+
+    fn drop_inputs(&mut self, pin: &InPin, snarl: &mut Snarl<SonidoNode>) {
+        snarl.drop_inputs(pin.id);
+        *self.topology_changed = true;
     }
 }
 

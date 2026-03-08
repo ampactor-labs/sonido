@@ -1,6 +1,7 @@
 //! Reverb effect UI panel.
 
-use crate::widgets::{BypassToggle, bridged_knob};
+use crate::theme::SonidoTheme;
+use crate::widgets::{BypassToggle, bridged_fader};
 use crate::{ParamBridge, ParamIndex, SlotIndex};
 use egui::Ui;
 
@@ -18,6 +19,12 @@ impl ReverbPanel {
     /// Param indices: 0 = room\_size (%), 1 = decay (%), 2 = damping (%),
     /// 3 = predelay (ms), 4 = mix (%), 5 = width (%), 6 = er\_level (%), 7 = output (dB).
     pub fn ui(&mut self, ui: &mut Ui, bridge: &dyn ParamBridge, slot: SlotIndex) {
+        let theme = SonidoTheme::get(ui.ctx());
+        let param_count = 8;
+        let avail_w = ui.available_width();
+        let fader_w = theme.layout.fader_width(avail_w, param_count);
+        let fader_h = theme.layout.fader_height(ui.available_height().min(200.0));
+
         ui.vertical(|ui| {
             ui.horizontal(|ui| {
                 let mut active = !bridge.is_bypassed(slot);
@@ -28,33 +35,10 @@ impl ReverbPanel {
 
             ui.add_space(12.0);
 
-            // First row: Room Size, Decay, Damping
-            ui.horizontal(|ui| {
-                bridged_knob(ui, bridge, slot, ParamIndex(0), "SIZE");
-                ui.add_space(16.0);
-                bridged_knob(ui, bridge, slot, ParamIndex(1), "DECAY");
-                ui.add_space(16.0);
-                bridged_knob(ui, bridge, slot, ParamIndex(2), "DAMP");
-            });
-
-            ui.add_space(8.0);
-
-            // Second row: Predelay, Mix, Width
-            ui.horizontal(|ui| {
-                bridged_knob(ui, bridge, slot, ParamIndex(3), "PREDLY");
-                ui.add_space(16.0);
-                bridged_knob(ui, bridge, slot, ParamIndex(4), "MIX");
-                ui.add_space(16.0);
-                bridged_knob(ui, bridge, slot, ParamIndex(5), "WIDTH");
-            });
-
-            ui.add_space(8.0);
-
-            // Third row: ER Level, Output
-            ui.horizontal(|ui| {
-                bridged_knob(ui, bridge, slot, ParamIndex(6), "ER LVL");
-                ui.add_space(16.0);
-                bridged_knob(ui, bridge, slot, ParamIndex(7), "OUTPUT");
+            ui.horizontal_wrapped(|ui| {
+                for i in 0..param_count {
+                    bridged_fader(ui, bridge, slot, ParamIndex(i), fader_w, fader_h);
+                }
             });
         });
     }

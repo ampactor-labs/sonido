@@ -8,8 +8,10 @@
 //! `rfd::AsyncFileDialog` with bytes-based WAV parsing via `hound`.
 
 use crossbeam_channel::Sender;
-use egui::Ui;
+use egui::{pos2, vec2, Rect, Sense, Stroke, StrokeKind, Ui};
 use sonido_gui_core::theme::SonidoTheme;
+use sonido_gui_core::widgets::glow;
+use sonido_gui_core::widgets::led_display::LedDisplay;
 #[cfg(not(target_arch = "wasm32"))]
 use sonido_io::{read_wav_info, read_wav_stereo};
 #[cfg(not(target_arch = "wasm32"))]
@@ -128,6 +130,11 @@ impl FilePlayer {
         self.has_file
     }
 
+    /// Whether audio is currently playing.
+    pub fn is_playing(&self) -> bool {
+        self.is_playing
+    }
+
     /// Toggle between play and pause states.
     ///
     /// If playing, sends [`TransportCommand::Pause`]. If paused, sends
@@ -218,6 +225,10 @@ impl FilePlayer {
             right: samples.right,
             sample_rate: self.sample_rate,
         });
+        // Sync loop state — audio thread defaults to looping=false
+        let _ = self
+            .transport_tx
+            .send(TransportCommand::SetLoop(self.is_looping));
     }
 
     /// Load a WAV file from raw bytes (wasm).
@@ -290,18 +301,25 @@ impl FilePlayer {
             right,
             sample_rate,
         });
+        // Sync loop state — audio thread defaults to looping=false
+        let _ = self
+            .transport_tx
+            .send(TransportCommand::SetLoop(self.is_looping));
     }
 
     /// Render the input source toggle (Mic / File) for the header bar.
+    ///
+    /// Arcade-styled: LED dot + monospace label. Green LED when file mode active.
     pub fn render_source_toggle(&mut self, ui: &mut Ui) {
-        let label = if self.use_file_input { "File" } else { "Mic" };
-        if ui
-            .selectable_label(
-                self.use_file_input,
-                egui::RichText::new(label).small().strong(),
-            )
-            .clicked()
-        {
+        let theme = SonidoTheme::get(ui.ctx());
+        let label = if self.use_file_input { "FILE" } else { "MIC" };
+        let color = if self.use_file_input {
+            theme.colors.green
+        } else {
+            theme.colors.cyan
+        };
+
+        if arcade_led_button(ui, label, color, self.use_file_input, &theme).clicked() {
             self.use_file_input = !self.use_file_input;
             let _ = self
                 .transport_tx
@@ -312,6 +330,120 @@ impl FilePlayer {
                 let _ = self.transport_tx.send(TransportCommand::Stop);
                 self.is_playing = false;
                 self.position_secs = 0.0;
+            }
+        }
+    }
+
+    /// Render a compact one-line transport for inline display in the status bar.
+    ///
+    /// Shows play/pause, filename, and position. Only renders when a file is loaded.
+    pub fn render_compact(&mut self, ui: &mut Ui) {
+        // Check for completed file dialog (native — spawned on background thread)
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Ok(path) = self.native_file_rx.try_recv() {
+            self.load_file(path);
+        }
+
+        // Check for completed async file loads (wasm)
+        #[cfg(target_arch = "wasm32")]
+        if let Ok((name, bytes)) = self.file_result_rx.try_recv() {
+            self.load_file_from_bytes(name, bytes);
+        }
+
+        let theme = SonidoTheme::get(ui.ctx());
+
+        // Browse button
+        #[cfg(not(target_arch = "wasm32"))]
+        if arcade_button(ui, "OPEN", theme.colors.amber, &theme).clicked() {
+            let tx = self.native_file_tx.clone();
+            std::thread::spawn(move || {
+                if let Some(path) = rfd::FileDialog::new()
+                    .add_filter("WAV", &["wav"])
+                    .pick_file()
+                {
+                    let _ = tx.send(path);
+                }
+            });
+        }
+
+        #[cfg(target_arch = "wasm32")]
+        if arcade_button(ui, "OPEN", theme.colors.amber, &theme).clicked() {
+            let tx = self.file_result_tx.clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                if let Some(file) = rfd::AsyncFileDialog::new()
+                    .add_filter("WAV", &["wav"])
+                    .pick_file()
+                    .await
+                {
+                    let name = file.file_name();
+                    let bytes = file.read().await;
+                    let _ = tx.send((name, bytes));
+                }
+            });
+        }
+
+        if self.has_file {
+            // Play / Pause
+            let (play_sym, play_color) = if self.is_playing {
+                ("||", theme.colors.amber)
+            } else {
+                (">", theme.colors.green)
+            };
+            if arcade_led_button(ui, play_sym, play_color, self.is_playing, &theme).clicked() {
+                self.toggle_play_pause();
+            }
+
+            // Filename (truncated)
+            let display_name = if self.file_name.len() > 16 {
+                format!("{}...", &self.file_name[..13])
+            } else {
+                self.file_name.clone()
+            };
+            ui.label(
+                egui::RichText::new(&display_name)
+                    .font(egui::FontId::monospace(10.0))
+                    .color(theme.colors.text_primary),
+            );
+
+            // Position LED
+            let time_text = format!(
+                "{}/{}",
+                format_time(self.position_secs),
+                format_time(self.duration_secs),
+            );
+            ui.add(LedDisplay::new(time_text).color(theme.colors.amber));
+        } else {
+            ui.label(
+                egui::RichText::new("No file")
+                    .font(egui::FontId::monospace(10.0))
+                    .color(theme.colors.text_secondary)
+                    .italics(),
+            );
+        }
+
+        // Handle drag-and-drop (native only)
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            ui.ctx().input(|i| {
+                if let Some(dropped) = i.raw.dropped_files.first()
+                    && let Some(path) = &dropped.path
+                    && path
+                        .extension()
+                        .is_some_and(|ext| ext.eq_ignore_ascii_case("wav"))
+                {
+                    self.file_path = Some(path.clone());
+                }
+            });
+
+            if let Some(ref path) = self.file_path {
+                let name = path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                if name != self.file_name && !name.is_empty() {
+                    let path = path.clone();
+                    self.load_file(path);
+                }
             }
         }
     }
@@ -330,10 +462,12 @@ impl FilePlayer {
             self.load_file_from_bytes(name, bytes);
         }
 
+        let theme = SonidoTheme::get(ui.ctx());
+
         ui.horizontal(|ui| {
-            // Browse button — spawned on background thread to avoid blocking GUI
+            // Browse button — arcade-styled (void body, dim border, amber text)
             #[cfg(not(target_arch = "wasm32"))]
-            if ui.button("Open").clicked() {
+            if arcade_button(ui, "OPEN", theme.colors.amber, &theme).clicked() {
                 let tx = self.native_file_tx.clone();
                 std::thread::spawn(move || {
                     if let Some(path) = rfd::FileDialog::new()
@@ -346,7 +480,7 @@ impl FilePlayer {
             }
 
             #[cfg(target_arch = "wasm32")]
-            if ui.button("Open").clicked() {
+            if arcade_button(ui, "OPEN", theme.colors.amber, &theme).clicked() {
                 let tx = self.file_result_tx.clone();
                 wasm_bindgen_futures::spawn_local(async move {
                     if let Some(file) = rfd::AsyncFileDialog::new()
@@ -365,12 +499,15 @@ impl FilePlayer {
             if self.file_name.is_empty() {
                 ui.label(
                     egui::RichText::new("No file loaded")
-                        .color(SonidoTheme::get(ui.ctx()).colors.text_secondary)
+                        .font(egui::FontId::monospace(10.0))
+                        .color(theme.colors.text_secondary)
                         .italics(),
                 );
             } else {
                 ui.label(
-                    egui::RichText::new(&self.file_name).color(SonidoTheme::get(ui.ctx()).colors.text_primary),
+                    egui::RichText::new(&self.file_name)
+                        .font(egui::FontId::monospace(10.0))
+                        .color(theme.colors.text_primary),
                 );
             }
 
@@ -378,9 +515,13 @@ impl FilePlayer {
 
             // Transport controls (only if file loaded)
             if self.has_file {
-                // Play / Pause
-                let play_label = if self.is_playing { "||" } else { ">" };
-                if ui.button(play_label).clicked() {
+                // Play / Pause — green LED when playing, amber when paused
+                let (play_sym, play_color) = if self.is_playing {
+                    ("||", theme.colors.amber)
+                } else {
+                    (">", theme.colors.green)
+                };
+                if arcade_led_button(ui, play_sym, play_color, self.is_playing, &theme).clicked() {
                     if self.is_playing {
                         self.is_playing = false;
                         let _ = self.transport_tx.send(TransportCommand::Pause);
@@ -390,24 +531,20 @@ impl FilePlayer {
                     }
                 }
 
-                // Stop
-                if ui.button("[]").clicked() {
+                // Stop — ghost LED
+                if arcade_led_button(ui, "[]", theme.colors.red, false, &theme).clicked() {
                     self.is_playing = false;
                     self.position_secs = 0.0;
                     let _ = self.transport_tx.send(TransportCommand::Stop);
                 }
 
-                // Loop toggle
-                let theme = SonidoTheme::get(ui.ctx());
+                // Loop toggle — green LED when active
                 let loop_color = if self.is_looping {
                     theme.colors.green
                 } else {
                     theme.colors.dim
                 };
-                if ui
-                    .button(egui::RichText::new("L").color(loop_color))
-                    .clicked()
-                {
+                if arcade_led_button(ui, "L", loop_color, self.is_looping, &theme).clicked() {
                     self.is_looping = !self.is_looping;
                     let _ = self
                         .transport_tx
@@ -416,27 +553,29 @@ impl FilePlayer {
 
                 ui.add_space(8.0);
 
-                // Position scrubber
-                let mut pos = self.position_secs;
-                let slider = egui::Slider::new(&mut pos, 0.0..=self.duration_secs)
-                    .show_value(false)
-                    .trailing_fill(true);
-                let response = ui.add_sized([200.0, 18.0], slider);
-                if response.changed() {
-                    let _ = self.transport_tx.send(TransportCommand::Seek(pos));
-                    self.position_secs = pos;
+                // Position scrubber — segmented LED bar
+                let fill_ratio = if self.duration_secs > 0.0 {
+                    (self.position_secs / self.duration_secs).clamp(0.0, 1.0)
+                } else {
+                    0.0
+                };
+                if let Some(new_pos) =
+                    segmented_progress_bar(ui, fill_ratio, 200.0, 14.0, &theme)
+                {
+                    let seek_pos = new_pos * self.duration_secs;
+                    let _ = self.transport_tx.send(TransportCommand::Seek(seek_pos));
+                    self.position_secs = seek_pos;
                 }
 
-                // Time display
-                ui.label(
-                    egui::RichText::new(format!(
-                        "{} / {}",
-                        format_time(self.position_secs),
-                        format_time(self.duration_secs),
-                    ))
-                    .color(SonidoTheme::get(ui.ctx()).colors.text_secondary)
-                    .small(),
+                ui.add_space(4.0);
+
+                // Time display — 7-segment LED readout
+                let time_text = format!(
+                    "{}/{}",
+                    format_time(self.position_secs),
+                    format_time(self.duration_secs),
                 );
+                ui.add(LedDisplay::new(time_text).color(theme.colors.amber));
             }
         });
 
@@ -475,4 +614,125 @@ fn format_time(secs: f32) -> String {
     let m = total / 60;
     let s = total % 60;
     format!("{m}:{s:02}")
+}
+
+/// Arcade-styled text button: void body, dim border, colored text.
+fn arcade_button(
+    ui: &mut Ui,
+    label: &str,
+    color: egui::Color32,
+    theme: &SonidoTheme,
+) -> egui::Response {
+    let text = egui::RichText::new(label)
+        .font(egui::FontId::monospace(11.0))
+        .color(color);
+    let btn = egui::Button::new(text)
+        .fill(theme.colors.void)
+        .stroke(Stroke::new(1.0, theme.colors.dim));
+    ui.add(btn)
+}
+
+/// Arcade-styled transport button with LED indicator dot.
+///
+/// Renders a dark body with dim border and a colored LED dot above the label
+/// that glows when `lit` is true.
+fn arcade_led_button(
+    ui: &mut Ui,
+    label: &str,
+    color: egui::Color32,
+    lit: bool,
+    theme: &SonidoTheme,
+) -> egui::Response {
+    let btn_size = vec2(28.0, 22.0);
+    let (rect, response) = ui.allocate_exact_size(btn_size, Sense::click());
+
+    if ui.is_rect_visible(rect) {
+        let painter = ui.painter();
+
+        // Dark body
+        painter.rect_filled(rect, 3.0, theme.colors.void);
+        painter.rect_stroke(
+            rect,
+            3.0,
+            Stroke::new(1.0, theme.colors.dim),
+            StrokeKind::Inside,
+        );
+
+        // LED dot at top
+        let led_center = pos2(rect.center().x, rect.top() + 5.0);
+        if lit {
+            glow::glow_circle(painter, led_center, 2.5, color, theme);
+        } else {
+            let ghost_color = glow::ghost(color, theme);
+            painter.circle_filled(led_center, 2.0, ghost_color);
+        }
+
+        // Label text below LED
+        let text_color = if lit { color } else { theme.colors.dim };
+        painter.text(
+            pos2(rect.center().x, rect.center().y + 2.0),
+            egui::Align2::CENTER_CENTER,
+            label,
+            egui::FontId::monospace(9.0),
+            text_color,
+        );
+    }
+
+    response
+}
+
+/// Horizontal segmented LED progress bar with click-to-seek.
+///
+/// Returns `Some(normalized_position)` when the user clicks or drags on the bar.
+fn segmented_progress_bar(
+    ui: &mut Ui,
+    fill: f32,
+    width: f32,
+    height: f32,
+    theme: &SonidoTheme,
+) -> Option<f32> {
+    let (rect, response) = ui.allocate_exact_size(vec2(width, height), Sense::click_and_drag());
+
+    // Click/drag to seek
+    let new_pos = if response.clicked() || response.dragged() {
+        response.interact_pointer_pos().map(|pos| {
+            ((pos.x - rect.left()) / rect.width()).clamp(0.0, 1.0)
+        })
+    } else {
+        None
+    };
+
+    if ui.is_rect_visible(rect) {
+        let painter = ui.painter();
+
+        // Border
+        painter.rect_filled(rect, 2.0, theme.colors.void);
+        painter.rect_stroke(
+            rect,
+            2.0,
+            Stroke::new(1.0, theme.colors.dim),
+            StrokeKind::Inside,
+        );
+
+        let inner = rect.shrink(2.0);
+        let seg_count = 24;
+        let gap = 1.0_f32;
+        let total_gaps = (seg_count - 1) as f32 * gap;
+        let seg_w = (inner.width() - total_gaps) / seg_count as f32;
+
+        for i in 0..seg_count {
+            let seg_pos = i as f32 / seg_count as f32;
+            let x = inner.left() + i as f32 * (seg_w + gap);
+            let seg_rect = Rect::from_min_size(pos2(x, inner.top()), vec2(seg_w, inner.height()));
+
+            if fill > seg_pos {
+                glow::glow_rect(painter, seg_rect, theme.colors.amber, 1.0, theme);
+            } else {
+                let ghost_color = glow::ghost(theme.colors.amber, theme);
+                painter.rect_filled(seg_rect, 1.0, ghost_color);
+            }
+        }
+    }
+
+    new_pos
 }

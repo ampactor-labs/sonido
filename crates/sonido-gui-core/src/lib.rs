@@ -21,7 +21,7 @@ pub use effects_ui::{EffectPanel, create_panel};
 pub use param_bridge::{ChainMutator, ParamBridge, ParamIndex, SlotIndex};
 pub use theme::{SonidoTheme, Theme};
 pub use widgets::{
-    BypassToggle, FootswitchToggle, GainReductionMeter, Knob, LedDisplay, LevelMeter,
-    MorphBarResponse, bridged_combo, bridged_knob, bridged_knob_fmt, bridged_knob_with_morph,
-    gesture_wrap, morph_bar,
+    BypassToggle, Fader, FootswitchToggle, GainReductionMeter, Knob, LedDisplay, LevelMeter,
+    MorphBarResponse, bridged_combo, bridged_fader, bridged_knob, bridged_knob_fmt,
+    bridged_knob_with_morph, gesture_wrap, morph_bar,
 };

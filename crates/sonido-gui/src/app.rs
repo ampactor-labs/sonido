@@ -8,9 +8,8 @@ use crate::atomic_param_bridge::AtomicParamBridge;
 use crate::audio_bridge::{AudioBridge, MeteringData};
 use crate::audio_processor::build_audio_streams;
 use crate::file_player::FilePlayer;
-use crate::graph_view::GraphView;
+use crate::graph_view::{GraphView, SonidoNode};
 use crate::morph_state::MorphState;
-use crate::preset_manager::PresetManager;
 use crate::theme::Theme;
 use crate::widgets::{Knob, LevelMeter};
 use egui::{
@@ -51,7 +50,6 @@ pub struct SonidoApp {
     graph_view: GraphView,
     morph_state: MorphState,
     file_player: FilePlayer,
-    preset_manager: PresetManager,
 
     /// Cached effect panel: (slot, effect_id, panel).
     /// Avoids reconstructing the panel widget every frame.
@@ -78,13 +76,10 @@ pub struct SonidoApp {
     /// Frames remaining for compile success flash.
     compile_success_frames: u32,
 
-    // Preset dialog (native only — no filesystem on wasm)
-    #[cfg(not(target_arch = "wasm32"))]
-    show_save_dialog: bool,
-    #[cfg(not(target_arch = "wasm32"))]
-    new_preset_name: String,
-    #[cfg(not(target_arch = "wasm32"))]
-    new_preset_description: String,
+    /// Latched clip indicator for input meter (click to reset).
+    input_clip_latched: bool,
+    /// Latched clip indicator for output meter (click to reset).
+    output_clip_latched: bool,
 }
 
 impl SonidoApp {
@@ -139,31 +134,21 @@ impl SonidoApp {
             graph_view: GraphView::new(),
             morph_state: MorphState::new(),
             file_player: FilePlayer::new(transport_tx),
-            preset_manager: PresetManager::new(),
             cached_panel: None,
             sample_rate: 48000.0,
-            buffer_size: 1024, // Default buffer size
+            buffer_size: 2048, // Default buffer size
             cpu_usage: 0.0,
             audio_error: None,
             cpu_history: Vec::with_capacity(60),
             single_effect,
             compile_error: None,
             compile_success_frames: 0,
-            #[cfg(not(target_arch = "wasm32"))]
-            show_save_dialog: false,
-            #[cfg(not(target_arch = "wasm32"))]
-            new_preset_name: String::new(),
-            #[cfg(not(target_arch = "wasm32"))]
-            new_preset_description: "User".to_string(),
+            input_clip_latched: false,
+            output_clip_latched: false,
         };
 
         // Apply theme
         app.theme.apply(&cc.egui_ctx);
-
-        // Load initial preset — select first preset which applies it to bridge
-        if !app.preset_manager.presets().is_empty() {
-            app.preset_manager.select(0, &*app.bridge);
-        }
 
         tracing::info!(sample_rate = app.sample_rate, "app initialized");
 
@@ -171,13 +156,7 @@ impl SonidoApp {
         // passthrough works immediately without requiring the user to
         // click Compile.
         if !single_effect {
-            match app
-                .graph_view
-                .compile_to_engine(app.sample_rate, app.buffer_size)
-            {
-                Ok(cmd) => app.audio_bridge.send_command(cmd),
-                Err(e) => tracing::warn!("initial graph compile failed: {e}"),
-            }
+            app.compile_and_apply();
         }
 
         // Start audio
@@ -187,6 +166,27 @@ impl SonidoApp {
         app.file_player.resync_transport();
 
         app
+    }
+
+    /// Compile the current graph and send it to the audio thread.
+    ///
+    /// On success, clears any previous compile error and arms the success flash.
+    /// On failure, stores the error string for display in the header.
+    fn compile_and_apply(&mut self) {
+        match self
+            .graph_view
+            .compile_to_engine(self.sample_rate, self.buffer_size, &self.registry)
+        {
+            Ok(cmd) => {
+                self.audio_bridge.send_command(cmd);
+                self.compile_error = None;
+                self.compile_success_frames = 90;
+            }
+            Err(e) => {
+                self.compile_error = Some(e.to_string());
+                self.compile_success_frames = 0;
+            }
+        }
     }
 
     /// Build cpal streams and start audio processing.
@@ -356,128 +356,71 @@ impl SonidoApp {
         let theme = SonidoTheme::get(ui.ctx());
 
         ui.horizontal(|ui| {
+            // SONIDO brand
             ui.heading(
                 egui::RichText::new("SONIDO")
                     .font(FontId::monospace(18.0))
                     .color(theme.colors.amber)
                     .strong(),
             );
+            ui.add_space(12.0);
 
-            ui.add_space(20.0);
-
-            // Preset selector
-            let current_name = self
-                .preset_manager
-                .current()
-                .map(|p| p.preset.name.as_str())
-                .unwrap_or("Init");
-            let display_name = if self.preset_manager.is_modified() {
-                format!("{}*", current_name)
+            // BYPASS (promoted from status bar)
+            let chain_bypassed = self.audio_bridge.chain_bypass().load(Ordering::Relaxed);
+            let bypass_color = if chain_bypassed {
+                theme.colors.red
             } else {
-                current_name.to_string()
+                theme.colors.dim
             };
-
-            // Collect preset names to avoid borrow issues
-            let preset_names: Vec<(usize, String)> = self
-                .preset_manager
-                .presets()
-                .iter()
-                .enumerate()
-                .map(|(i, p)| (i, p.preset.name.clone()))
-                .collect();
-            let current_idx = self.preset_manager.current_preset();
-
-            let mut selected_preset = None;
-            egui::ComboBox::from_id_salt("preset_selector")
-                .selected_text(
-                    egui::RichText::new(&display_name)
-                        .font(FontId::monospace(12.0))
-                        .color(theme.colors.text_primary),
-                )
-                .width(150.0)
-                .show_ui(ui, |ui| {
-                    for (i, name) in &preset_names {
-                        if ui.selectable_label(*i == current_idx, name).clicked() {
-                            selected_preset = Some(*i);
-                        }
-                    }
-                });
-
-            // Apply preset selection after borrow ends
-            if let Some(idx) = selected_preset {
-                self.apply_preset(idx);
+            let bypass_btn = ui.button(
+                egui::RichText::new("BYPASS")
+                    .font(FontId::monospace(11.0))
+                    .color(bypass_color)
+                    .strong(),
+            );
+            let circle_center = pos2(bypass_btn.rect.right() + 8.0, bypass_btn.rect.center().y);
+            glow::glow_circle(ui.painter(), circle_center, 3.0, bypass_color, &theme);
+            ui.add_space(10.0);
+            if bypass_btn.clicked() {
+                self.audio_bridge
+                    .chain_bypass()
+                    .store(!chain_bypassed, Ordering::SeqCst);
             }
 
-            ui.add_space(8.0);
+            ui.separator();
+
+            // Save / Load (placeholder — Task 12 fills in)
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                if ui
+                    .button(
+                        egui::RichText::new("Save")
+                            .font(FontId::monospace(12.0))
+                            .color(theme.colors.text_primary),
+                    )
+                    .clicked()
+                {
+                    self.save_session();
+                }
+                if ui
+                    .button(
+                        egui::RichText::new("Load")
+                            .font(FontId::monospace(12.0))
+                            .color(theme.colors.text_primary),
+                    )
+                    .clicked()
+                {
+                    self.load_session();
+                }
+            }
+
+            ui.separator();
+
+            // FILE source toggle
             self.file_player.render_source_toggle(ui);
 
-            // Compile button — only in multi-effect mode (graph editor)
-            if !self.single_effect {
-                ui.add_space(8.0);
-                ui.separator();
-                ui.add_space(4.0);
-
-                let compile_btn = ui.button(
-                    egui::RichText::new("Compile")
-                        .font(FontId::monospace(12.0))
-                        .color(theme.colors.green)
-                        .strong(),
-                );
-                if compile_btn.clicked() {
-                    match self
-                        .graph_view
-                        .compile_to_engine(self.sample_rate, self.buffer_size)
-                    {
-                        Ok(cmd) => {
-                            self.audio_bridge.send_command(cmd);
-                            self.compile_error = None;
-                            self.compile_success_frames = 90; // ~1.5s at 60fps
-                        }
-                        Err(e) => {
-                            self.compile_error = Some(e.to_string());
-                            self.compile_success_frames = 0;
-                        }
-                    }
-                }
-
-                if let Some(ref err) = self.compile_error {
-                    ui.label(
-                        egui::RichText::new(err)
-                            .font(FontId::monospace(10.0))
-                            .color(theme.colors.red)
-                            .small(),
-                    );
-                } else if self.compile_success_frames > 0 {
-                    self.compile_success_frames -= 1;
-                    ui.label(
-                        egui::RichText::new("OK")
-                            .font(FontId::monospace(10.0))
-                            .color(theme.colors.green)
-                            .strong(),
-                    );
-                }
-            }
-
-            // Save button (native only — no filesystem on wasm)
-            #[cfg(not(target_arch = "wasm32"))]
-            if ui
-                .button(
-                    egui::RichText::new("Save")
-                        .font(FontId::monospace(12.0))
-                        .color(theme.colors.text_primary),
-                )
-                .clicked()
-            {
-                self.show_save_dialog = true;
-                self.new_preset_name = self
-                    .preset_manager
-                    .current()
-                    .map(|p| p.preset.name.clone())
-                    .unwrap_or_default();
-            }
-
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                // Audio status indicator — glowing circle
+            // Right-aligned: audio status + compile error
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 let status_color = if self.audio_bridge.is_running() {
                     theme.colors.green
                 } else {
@@ -496,7 +439,15 @@ impl SonidoApp {
                 let err_count = self.audio_bridge.error_count().load(Ordering::Relaxed);
                 if err_count > 0 {
                     ui.label(
-                        egui::RichText::new(format!("audio errors: {err_count}"))
+                        egui::RichText::new(format!("errors: {err_count}"))
+                            .font(FontId::monospace(10.0))
+                            .color(theme.colors.red),
+                    );
+                }
+
+                if let Some(ref err) = self.compile_error {
+                    ui.label(
+                        egui::RichText::new(err)
                             .font(FontId::monospace(10.0))
                             .color(theme.colors.red),
                     );
@@ -525,135 +476,124 @@ impl SonidoApp {
         });
     }
 
-    /// Reconfigures the app to use a new preset.
+    /// Render a unified I/O strip (INPUT or OUTPUT endpoint).
     ///
-    /// This is a "hard" reset: it stops audio, rebuilds the parameter bridge
-    /// and effect chain from the preset, and restarts audio. This ensures the
-    /// chain exactly matches the preset, adding and removing effects as needed.
-    fn apply_preset(&mut self, preset_idx: usize) {
-        if preset_idx >= self.preset_manager.presets().len() {
-            return;
-        }
-
-        // Set the preset as current in the manager.
-        self.preset_manager.select(preset_idx, &*self.bridge);
-
-        let preset = self.preset_manager.current().unwrap().preset.clone();
-        let effect_ids: Vec<&'static str> = preset
-            .effects
-            .iter()
-            .filter_map(|config| self.registry.get(&config.effect_type).map(|desc| desc.id))
-            .collect();
-
-        // 1. Stop audio
-        self.stop_audio();
-
-        // 2. Create and configure a new bridge for the preset's chain
-        let new_bridge = Arc::new(AtomicParamBridge::new(
-            &self.registry,
-            &effect_ids,
-            self.sample_rate,
-        ));
-        crate::preset_manager::preset_to_params(&preset, &*new_bridge);
-
-        // 3. Swap in the new bridge
-        self.bridge = new_bridge;
-
-        // 4. Restart audio with the new chain
-        if let Err(e) = self.start_audio() {
-            self.audio_error = Some(e);
-        }
-        self.file_player.resync_transport();
-    }
-
-    /// Render the I/O section with meters and gain controls.
-    fn render_io_section(&mut self, ui: &mut egui::Ui) {
+    /// `is_input` selects between input gain / output master controls and metering.
+    fn render_io_strip(&mut self, ui: &mut egui::Ui, is_input: bool) {
         let theme = SonidoTheme::get(ui.ctx());
+        let label = if is_input { "INPUT" } else { "OUTPUT" };
 
         ui.group(|ui| {
-            ui.set_min_width(80.0);
+            ui.set_min_width(50.0);
             ui.vertical_centered(|ui| {
                 ui.label(
-                    egui::RichText::new("INPUT")
-                        .font(FontId::monospace(12.0))
+                    egui::RichText::new(label)
+                        .font(FontId::monospace(11.0))
                         .color(theme.colors.cyan),
                 );
 
                 ui.add_space(4.0);
 
-                // Input meter
-                ui.add(
-                    LevelMeter::new(self.metering.input_peak, self.metering.input_rms)
-                        .size(24.0, 100.0),
+                // Meter
+                let (peak, rms) = if is_input {
+                    (self.metering.input_peak, self.metering.input_rms)
+                } else {
+                    (self.metering.output_peak, self.metering.output_rms)
+                };
+                ui.add(LevelMeter::new(peak, rms).size(20.0, 100.0));
+
+                // Clip indicator (latched, click to reset)
+                let clip_latched = if is_input {
+                    &mut self.input_clip_latched
+                } else {
+                    &mut self.output_clip_latched
+                };
+                if peak > 1.0 {
+                    *clip_latched = true;
+                }
+                let clip_color = if *clip_latched {
+                    theme.colors.red
+                } else {
+                    theme.colors.dim
+                };
+                let clip_resp = ui.button(
+                    egui::RichText::new("CLIP")
+                        .font(FontId::monospace(8.0))
+                        .color(clip_color),
                 );
+                if clip_resp.clicked() {
+                    *clip_latched = false;
+                }
 
-                ui.add_space(8.0);
+                ui.add_space(4.0);
 
-                // Input gain knob
-                let input_gain = self.audio_bridge.input_gain();
-                let mut gain_val = input_gain.get();
-                if ui
-                    .add(
-                        Knob::new(&mut gain_val, -20.0, 20.0, "GAIN")
-                            .default(0.0)
-                            .format_db()
-                            .diameter(50.0),
-                    )
-                    .changed()
-                {
-                    input_gain.set(gain_val);
-                    self.preset_manager.mark_modified();
+                // Gain knob
+                if is_input {
+                    let input_gain = self.audio_bridge.input_gain();
+                    let mut gain_val = input_gain.get();
+                    if ui
+                        .add(
+                            Knob::new(&mut gain_val, -20.0, 20.0, "GAIN")
+                                .default(0.0)
+                                .format_db()
+                                .diameter(44.0),
+                        )
+                        .changed()
+                    {
+                        input_gain.set(gain_val);
+                    }
+                } else {
+                    let master_vol_param = self.audio_bridge.master_volume();
+                    let mut master_val = master_vol_param.get();
+                    if ui
+                        .add(
+                            Knob::new(&mut master_val, -40.0, 6.0, "VOL")
+                                .default(0.0)
+                                .format_db()
+                                .diameter(44.0),
+                        )
+                        .changed()
+                    {
+                        master_vol_param.set(master_val);
+                    }
                 }
             });
         });
     }
 
-    /// Render the output section.
-    fn render_output_section(&mut self, ui: &mut egui::Ui) {
+    /// Show a quick-reference hint when no node is selected in the graph.
+    fn render_quick_reference(ui: &mut egui::Ui) {
         let theme = SonidoTheme::get(ui.ctx());
-
-        ui.group(|ui| {
-            ui.set_min_width(80.0);
-            ui.vertical_centered(|ui| {
-                ui.label(
-                    egui::RichText::new("OUTPUT")
-                        .font(FontId::monospace(12.0))
-                        .color(theme.colors.cyan),
-                );
-
-                ui.add_space(4.0);
-
-                // Output meter
-                ui.add(
-                    LevelMeter::new(self.metering.output_peak, self.metering.output_rms)
-                        .size(24.0, 100.0),
-                );
-
-                ui.add_space(8.0);
-
-                // Master volume knob
-                let master_vol_param = self.audio_bridge.master_volume();
-                let mut master_val = master_vol_param.get();
-                if ui
-                    .add(
-                        Knob::new(&mut master_val, -40.0, 6.0, "MASTER")
-                            .default(0.0)
-                            .format_db()
-                            .diameter(50.0),
-                    )
-                    .changed()
-                {
-                    master_vol_param.set(master_val);
-                    self.preset_manager.mark_modified();
-                }
-            });
+        ui.vertical_centered(|ui| {
+            ui.add_space(8.0);
+            ui.label(
+                egui::RichText::new(
+                    "Right-click to add nodes \u{00b7} Click a node to edit params",
+                )
+                .font(FontId::monospace(10.0))
+                .color(theme.colors.text_secondary)
+                .italics(),
+            );
         });
+    }
+
+    /// Estimate the needed effect panel height from the cached panel's param count.
+    fn estimate_panel_height(&self) -> f32 {
+        let param_count = self
+            .cached_panel
+            .as_ref()
+            .map(|(slot, _, _)| self.bridge.param_count(*slot))
+            .unwrap_or(6);
+        // Rough estimate: title row + ~40px per row of 4-5 knobs
+        let rows = ((param_count + 4) / 5).max(1);
+        80.0 + rows as f32 * 60.0
     }
 
     /// Render the effect panel for the selected slot.
     ///
     /// The panel widget is cached in `self.cached_panel` and only reconstructed
-    /// when the selected slot or effect type changes.
+    /// when the selected slot or effect type changes. Includes an inline morph
+    /// bar in the title row when in multi-effect mode.
     fn render_effect_panel(&mut self, ui: &mut egui::Ui, slot: sonido_gui_core::SlotIndex) {
         let effect_id = self.bridge.effect_id(slot);
         let panel_name = self
@@ -676,65 +616,77 @@ impl SonidoApp {
 
         let panel_frame = Frame::new()
             .fill(theme.colors.void)
-            .stroke(Stroke::new(1.0, theme.colors.amber))
+            .stroke(Stroke::new(2.0, theme.colors.amber))
             .corner_radius(theme.sizing.panel_border_radius)
             .inner_margin(Margin::same(theme.sizing.panel_padding as i8));
 
         let panel_response = panel_frame.show(ui, |ui| {
-            ui.set_min_height(160.0);
-            let max_h = ui.available_height().max(160.0);
-            egui::ScrollArea::vertical()
-                .max_height(max_h)
-                .auto_shrink(true)
-                .show(ui, |ui| {
-                    // Panel title — monospace amber
-                    ui.label(
-                        egui::RichText::new(panel_name)
-                            .font(FontId::monospace(12.0))
-                            .color(theme.colors.amber),
-                    );
-                    ui.add_space(8.0);
-                    ui.separator();
-                    ui.add_space(12.0);
+            // Title row: effect name + morph bar + bypass
+            ui.horizontal(|ui| {
+                ui.label(
+                    egui::RichText::new(panel_name)
+                        .font(FontId::monospace(12.0))
+                        .color(theme.colors.amber)
+                        .strong(),
+                );
 
-                    // Effect-specific controls from cache
-                    if let Some((_, _, ref mut panel)) = self.cached_panel {
-                        let bridge: &dyn ParamBridge = &*self.bridge;
-                        panel.ui(ui, bridge, slot);
+                // Inline morph bar
+                if !self.single_effect {
+                    ui.add_space(8.0);
+                    let has_a = self.morph_state.a.is_some();
+                    let has_b = self.morph_state.b.is_some();
+                    let resp = morph_bar(ui, &mut self.morph_state.t, has_a, has_b);
+                    if resp.capture_a {
+                        self.morph_state.capture_a(&*self.bridge);
+                    }
+                    if resp.capture_b {
+                        self.morph_state.capture_b(&*self.bridge);
+                    }
+                    if resp.recall_a {
+                        self.morph_state.recall_a(&*self.bridge);
+                    }
+                    if resp.recall_b {
+                        self.morph_state.recall_b(&*self.bridge);
+                    }
+                    if resp.t_changed {
+                        self.morph_state.active = true;
+                        self.morph_state.apply(&*self.bridge);
+                    }
+                }
+
+                // Bypass toggle right-aligned
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    let is_bypassed = self.bridge.is_bypassed(slot);
+                    let bypass_text = if is_bypassed { "BYP" } else { "ON" };
+                    let bypass_color = if is_bypassed {
+                        theme.colors.red
+                    } else {
+                        theme.colors.green
+                    };
+                    if ui
+                        .button(
+                            egui::RichText::new(bypass_text)
+                                .font(FontId::monospace(10.0))
+                                .color(bypass_color),
+                        )
+                        .clicked()
+                    {
+                        self.bridge.set_bypassed(slot, !is_bypassed);
                     }
                 });
+            });
+
+            ui.add_space(4.0);
+
+            // Effect controls
+            if let Some((_, _, ref mut panel)) = self.cached_panel {
+                let bridge: &dyn ParamBridge = &*self.bridge;
+                panel.ui(ui, bridge, slot);
+            }
         });
 
-        // Scanline overlay on the effect panel
         let panel_rect = panel_response.response.rect;
         glow::scanlines(ui.painter(), panel_rect, &theme);
-    }
-
-    /// Render the morph crossfader bar.
-    ///
-    /// Only shown when not in single-effect mode.
-    fn render_morph_bar(&mut self, ui: &mut egui::Ui) {
-        let has_a = self.morph_state.a.is_some();
-        let has_b = self.morph_state.b.is_some();
-
-        let resp = morph_bar(ui, &mut self.morph_state.t, has_a, has_b);
-
-        if resp.capture_a {
-            self.morph_state.capture_a(&*self.bridge);
-        }
-        if resp.capture_b {
-            self.morph_state.capture_b(&*self.bridge);
-        }
-        if resp.recall_a {
-            self.morph_state.recall_a(&*self.bridge);
-        }
-        if resp.recall_b {
-            self.morph_state.recall_b(&*self.bridge);
-        }
-        if resp.t_changed {
-            self.morph_state.active = true;
-            self.morph_state.apply(&*self.bridge);
-        }
     }
 
     /// Render the status bar.
@@ -742,87 +694,20 @@ impl SonidoApp {
         let theme = SonidoTheme::get(ui.ctx());
 
         ui.horizontal(|ui| {
-            // BYPASS button with glow indicator
-            let chain_bypassed = self.audio_bridge.chain_bypass().load(Ordering::Relaxed);
-            let bypass_color = if chain_bypassed {
-                theme.colors.red
-            } else {
-                theme.colors.dim
-            };
-
-            let bypass_btn = ui.button(
-                egui::RichText::new("BYPASS")
-                    .font(FontId::monospace(11.0))
-                    .color(bypass_color)
-                    .strong(),
+            // Sample rate LED
+            ui.add(
+                LedDisplay::new(format!("{:.0}Hz", self.sample_rate)).color(theme.colors.amber),
             );
-
-            // Draw glow circle next to the bypass button
-            let circle_center = pos2(
-                bypass_btn.rect.right() + 8.0,
-                bypass_btn.rect.center().y,
-            );
-            glow::glow_circle(ui.painter(), circle_center, 3.0, bypass_color, &theme);
-            // Reserve space for the glow indicator
-            ui.add_space(10.0);
-
-            if bypass_btn.clicked() {
-                self.audio_bridge
-                    .chain_bypass()
-                    .store(!chain_bypassed, Ordering::SeqCst);
-            }
             ui.separator();
 
-            // Sample rate — LED display
-            ui.add(LedDisplay::new(format!("{:.0}Hz", self.sample_rate)).color(theme.colors.amber));
-            ui.separator();
-
-            // Buffer size selector
-            let presets = self.get_buffer_presets();
-            let preset_names: Vec<String> = presets
-                .iter()
-                .map(|(_, desc, _)| desc.to_string())
-                .collect();
-            let current_idx = presets
-                .iter()
-                .position(|&(size, _, _)| size == self.buffer_size)
-                .unwrap_or(2); // Default to "Stable"
-
-            let mut selected_preset = None;
-            egui::ComboBox::from_id_salt("buffer_size_selector")
-                .selected_text(
-                    egui::RichText::new(
-                        preset_names
-                            .get(current_idx)
-                            .cloned()
-                            .unwrap_or_else(|| "Unknown".to_string()),
-                    )
-                    .font(FontId::monospace(10.0))
-                    .color(theme.colors.text_secondary),
-                )
-                .width(200.0)
-                .show_ui(ui, |ui| {
-                    for (idx, name) in preset_names.iter().enumerate() {
-                        if ui.selectable_label(idx == current_idx, name).clicked() {
-                            selected_preset = Some(idx);
-                        }
-                    }
-                });
-
-            if let Some((size, _, _)) = selected_preset.and_then(|i| presets.get(i)) {
-                self.set_buffer_size(*size);
-            }
-
-            ui.separator();
-
-            // Latency — LED display
+            // Latency LED
             let latency_ms = self.buffer_size as f32 / self.sample_rate * 1000.0;
             ui.add(
-                LedDisplay::new(format!("{:.1}ms", latency_ms)).color(theme.colors.amber),
+                LedDisplay::new(format!("{latency_ms:.1}ms")).color(theme.colors.amber),
             );
             ui.separator();
 
-            // CPU meter — color-coded by load
+            // CPU meter — fixed-width allocation to prevent sparkline jitter
             let cpu_text = format!("CPU: {:.1}%", self.cpu_usage);
             #[cfg(debug_assertions)]
             let cpu_text = format!("{cpu_text} (debug)");
@@ -833,64 +718,100 @@ impl SonidoApp {
             } else {
                 theme.colors.green
             };
-            ui.label(
-                egui::RichText::new(&cpu_text)
-                    .font(FontId::monospace(11.0))
-                    .color(cpu_color),
+
+            ui.allocate_ui_with_layout(
+                vec2(240.0, 24.0),
+                Layout::left_to_right(Align::Center),
+                |ui| {
+                    ui.set_min_width(240.0);
+                    ui.label(
+                        egui::RichText::new(&cpu_text)
+                            .font(FontId::monospace(11.0))
+                            .color(cpu_color),
+                    );
+                    if !self.cpu_history.is_empty() {
+                        draw_sparkline(ui, &self.cpu_history, cpu_color, 100.0, 24.0);
+                    }
+                },
             );
 
-            // CPU usage sparkline graph (glow oscilloscope style)
-            if !self.cpu_history.is_empty() {
-                draw_sparkline(ui, &self.cpu_history, cpu_color, 100.0, 24.0);
+            // File player transport (inline, only when file input active)
+            if self.file_player.use_file_input() {
+                ui.separator();
+                self.file_player.render_compact(ui);
             }
         });
     }
 
-    /// Render save preset dialog (native only — no filesystem on wasm).
+    /// Save the current session to a JSON file via file dialog.
     #[cfg(not(target_arch = "wasm32"))]
-    fn render_save_dialog(&mut self, ctx: &Context) {
-        if !self.show_save_dialog {
-            return;
+    fn save_session(&self) {
+        if let Some(path) = rfd::FileDialog::new()
+            .set_title("Save Session")
+            .add_filter("Sonido Session", &["json"])
+            .save_file()
+        {
+            let session = self.graph_view.capture_session(
+                &*self.bridge,
+                self.audio_bridge.input_gain().get(),
+                self.audio_bridge.master_volume().get(),
+            );
+            if let Err(e) = session.save(&path) {
+                tracing::error!(error = %e, "failed to save session");
+            }
         }
+    }
 
-        egui::Window::new("Save Preset")
-            .collapsible(false)
-            .resizable(false)
-            .show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    ui.label("Name:");
-                    ui.text_edit_singleline(&mut self.new_preset_name);
-                });
-
-                ui.horizontal(|ui| {
-                    ui.label("Description:");
-                    ui.text_edit_singleline(&mut self.new_preset_description);
-                });
-
-                ui.add_space(8.0);
-
-                ui.horizontal(|ui| {
-                    if ui.button("Cancel").clicked() {
-                        self.show_save_dialog = false;
-                    }
-
-                    if ui.button("Save").clicked() && !self.new_preset_name.is_empty() {
-                        let description = if self.new_preset_description.is_empty() {
-                            None
-                        } else {
-                            Some(self.new_preset_description.as_str())
-                        };
-                        if let Err(e) = self.preset_manager.save_as(
-                            &self.new_preset_name,
-                            description,
-                            &*self.bridge,
-                        ) {
-                            tracing::error!(error = %e, "failed to save preset");
+    /// Load a session from a JSON file via file dialog.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn load_session(&mut self) {
+        if let Some(path) = rfd::FileDialog::new()
+            .set_title("Load Session")
+            .add_filter("Sonido Session", &["json"])
+            .pick_file()
+        {
+            match crate::session::Session::load(&path) {
+                Ok(session) => {
+                    self.graph_view
+                        .restore_session(&session, &self.registry);
+                    // Compile the restored graph and send to audio thread
+                    self.compile_and_apply();
+                    // Restore I/O gains
+                    self.audio_bridge.input_gain().set(session.input_gain);
+                    self.audio_bridge
+                        .master_volume()
+                        .set(session.master_volume);
+                    // Restore per-effect params
+                    for (node_idx, state) in &session.params {
+                        let mut slot = 0usize;
+                        for (i, entry) in session.nodes.iter().enumerate() {
+                            if matches!(
+                                entry.node,
+                                crate::session::SessionNode::Effect { .. }
+                            ) {
+                                if i == *node_idx {
+                                    for (p, &val) in state.params.iter().enumerate() {
+                                        self.bridge.set(
+                                            SlotIndex(slot),
+                                            sonido_gui_core::ParamIndex(p),
+                                            val,
+                                        );
+                                    }
+                                    if state.bypassed {
+                                        self.bridge.set_bypassed(SlotIndex(slot), true);
+                                    }
+                                    break;
+                                }
+                                slot += 1;
+                            }
                         }
-                        self.show_save_dialog = false;
                     }
-                });
-            });
+                }
+                Err(e) => {
+                    tracing::error!(error = %e, "failed to load session");
+                }
+            }
+        }
     }
 }
 
@@ -964,11 +885,22 @@ impl eframe::App for SonidoApp {
             self.audio_resumed = true;
         }
 
-        // Request continuous repaint for metering
+        // Adaptive repaint: 60fps when audio/metering is active, 4fps when idle
+        let is_animating = self.audio_bridge.is_running()
+            || self.file_player.is_playing()
+            || self.metering.output_peak > 0.001;
         #[cfg(target_arch = "wasm32")]
-        ctx.request_repaint_after(std::time::Duration::from_millis(33)); // 30fps
+        ctx.request_repaint_after(std::time::Duration::from_millis(if is_animating {
+            33
+        } else {
+            250
+        }));
         #[cfg(not(target_arch = "wasm32"))]
-        ctx.request_repaint_after(Duration::from_millis(16)); // ~60fps cap
+        ctx.request_repaint_after(Duration::from_millis(if is_animating {
+            16
+        } else {
+            250
+        }));
 
         // Global keyboard shortcuts (only when no text widget is focused)
         let no_widget_focused = ctx.memory(|m| m.focused().is_none());
@@ -994,24 +926,6 @@ impl eframe::App for SonidoApp {
             ui.add_space(2.0);
         });
 
-        // File player bar (above status bar when file input active)
-        if self.file_player.use_file_input() {
-            TopBottomPanel::bottom("file_player").show(ctx, |ui| {
-                ui.add_space(2.0);
-                self.file_player.ui(ui);
-                ui.add_space(2.0);
-            });
-        }
-
-        // Morph bar (above file player, only in multi-effect mode)
-        if !self.single_effect {
-            TopBottomPanel::bottom("morph_bar").show(ctx, |ui| {
-                ui.add_space(2.0);
-                self.render_morph_bar(ui);
-                ui.add_space(2.0);
-            });
-        }
-
         // Main content
         CentralPanel::default().show(ctx, |ui| {
             #[cfg(target_arch = "wasm32")]
@@ -1024,13 +938,14 @@ impl eframe::App for SonidoApp {
                 );
             }
 
-            ui.add_space(8.0);
+            ui.add_space(4.0);
 
-            // Main layout: INPUT (100px) | 16px gap | CENTER (flex) | 16px gap | OUTPUT (100px)
-            // Manual rect splitting avoids the vertical_centered-inside-horizontal width bug.
+            let theme = SonidoTheme::get(ui.ctx());
             let avail = ui.available_rect_before_wrap();
-            let io_width = 100.0;
-            let gap = 16.0;
+
+            // Responsive I/O strip widths from ThemeLayout
+            let io_width = theme.layout.io_strip_width(avail.width());
+            let gap = 8.0;
             let center_width = (avail.width() - 2.0 * io_width - 2.0 * gap).max(200.0);
 
             let input_rect = Rect::from_min_size(avail.min, vec2(io_width, avail.height()));
@@ -1046,7 +961,7 @@ impl eframe::App for SonidoApp {
                 vec2(io_width, avail.height()),
             );
 
-            // Input column
+            // Input strip
             {
                 let mut child = ui.new_child(
                     UiBuilder::new()
@@ -1054,7 +969,7 @@ impl eframe::App for SonidoApp {
                         .max_rect(input_rect)
                         .layout(Layout::top_down(Align::Center)),
                 );
-                self.render_io_section(&mut child);
+                self.render_io_strip(&mut child, true);
             }
 
             // Center column (graph editor + effect panel)
@@ -1070,10 +985,13 @@ impl eframe::App for SonidoApp {
                     // Single-effect mode: show only the effect panel, no graph
                     self.render_effect_panel(&mut child, SlotIndex(0));
                 } else {
-                    // Graph editor fills the upper portion (constrained)
-                    let avail_h = child.available_height();
-                    let graph_h = (avail_h * 0.6).max(200.0);
-                    let theme = SonidoTheme::get(child.ctx());
+                    // Dynamic graph/panel split from ThemeLayout
+                    let content_h = child.available_height();
+                    let panel_content_h = self.estimate_panel_height();
+                    let (graph_h, _panel_h) =
+                        theme.layout.split_vertical(content_h, panel_content_h);
+
+                    let theme_inner = SonidoTheme::get(child.ctx());
                     let selected_slot = child
                         .group(|ui| {
                             ui.set_max_height(graph_h);
@@ -1081,16 +999,32 @@ impl eframe::App for SonidoApp {
                                 ui.label(
                                     egui::RichText::new("GRAPH EDITOR")
                                         .font(FontId::monospace(12.0))
-                                        .color(theme.colors.cyan),
+                                        .color(theme_inner.colors.cyan),
                                 );
                                 ui.add_space(4.0);
+
+                                // Update per-slot activity from output metering
+                                let slot_count = self
+                                    .graph_view
+                                    .snarl
+                                    .node_ids()
+                                    .filter(|(_, n)| matches!(n, SonidoNode::Effect { .. }))
+                                    .count();
+                                self.graph_view.slot_activity =
+                                    vec![self.metering.output_peak; slot_count];
+
                                 self.graph_view.show(ui)
                             })
                             .inner
                         })
                         .inner;
 
-                    child.add_space(16.0);
+                    // Auto-compile when topology changes (connect/disconnect/remove)
+                    if self.graph_view.topology_changed {
+                        self.compile_and_apply();
+                    }
+
+                    child.add_space(8.0);
 
                     // Effect panel for the selected node
                     if let Some(slot_idx) = selected_slot {
@@ -1099,24 +1033,12 @@ impl eframe::App for SonidoApp {
                             self.render_effect_panel(&mut child, slot);
                         }
                     } else {
-                        // Hint when no node is selected
-                        let theme = SonidoTheme::get(child.ctx());
-                        child.vertical_centered(|ui| {
-                            ui.add_space(8.0);
-                            ui.label(
-                                egui::RichText::new(
-                                    "Right-click to add nodes · Click a node to edit params · Compile to apply",
-                                )
-                                .font(FontId::monospace(10.0))
-                                .color(theme.colors.text_secondary)
-                                .italics(),
-                            );
-                        });
+                        Self::render_quick_reference(&mut child);
                     }
                 }
             }
 
-            // Output column
+            // Output strip
             {
                 let mut child = ui.new_child(
                     UiBuilder::new()
@@ -1124,7 +1046,7 @@ impl eframe::App for SonidoApp {
                         .max_rect(output_rect)
                         .layout(Layout::top_down(Align::Center)),
                 );
-                self.render_output_section(&mut child);
+                self.render_io_strip(&mut child, false);
             }
 
             // Advance parent cursor past all three columns
@@ -1137,9 +1059,6 @@ impl eframe::App for SonidoApp {
             ));
         });
 
-        // Dialogs (save dialog is native-only)
-        #[cfg(not(target_arch = "wasm32"))]
-        self.render_save_dialog(ctx);
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {

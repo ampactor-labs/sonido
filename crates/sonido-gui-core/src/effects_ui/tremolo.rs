@@ -1,6 +1,7 @@
 //! Tremolo effect UI panel.
 
-use crate::widgets::{BypassToggle, bridged_combo, bridged_knob};
+use crate::theme::SonidoTheme;
+use crate::widgets::{BypassToggle, bridged_combo, bridged_fader};
 use crate::{ParamBridge, ParamIndex, SlotIndex};
 use egui::Ui;
 use sonido_core::DIVISION_LABELS;
@@ -26,6 +27,13 @@ impl TremoloPanel {
     /// 3 = spread (%), 4 = sync (on/off), 5 = division (note value),
     /// 6 = output (dB).
     pub fn ui(&mut self, ui: &mut Ui, bridge: &dyn ParamBridge, slot: SlotIndex) {
+        let theme = SonidoTheme::get(ui.ctx());
+        let fader_indices: &[usize] = &[0, 1, 3, 6];
+        let param_count = fader_indices.len();
+        let avail_w = ui.available_width();
+        let fader_w = theme.layout.fader_width(avail_w, param_count);
+        let fader_h = theme.layout.fader_height(ui.available_height().min(200.0));
+
         ui.vertical(|ui| {
             ui.horizontal(|ui| {
                 let mut active = !bridge.is_bypassed(slot);
@@ -66,14 +74,10 @@ impl TremoloPanel {
 
             ui.add_space(12.0);
 
-            ui.horizontal(|ui| {
-                bridged_knob(ui, bridge, slot, ParamIndex(0), "RATE");
-                ui.add_space(16.0);
-                bridged_knob(ui, bridge, slot, ParamIndex(1), "DEPTH");
-                ui.add_space(16.0);
-                bridged_knob(ui, bridge, slot, ParamIndex(3), "SPREAD");
-                ui.add_space(16.0);
-                bridged_knob(ui, bridge, slot, ParamIndex(6), "OUTPUT");
+            ui.horizontal_wrapped(|ui| {
+                for &i in fader_indices {
+                    bridged_fader(ui, bridge, slot, ParamIndex(i), fader_w, fader_h);
+                }
             });
         });
     }
