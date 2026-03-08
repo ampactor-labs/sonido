@@ -167,6 +167,19 @@ impl SonidoApp {
 
         tracing::info!(sample_rate = app.sample_rate, "app initialized");
 
+        // Auto-compile the default graph (Input → Output) so audio
+        // passthrough works immediately without requiring the user to
+        // click Compile.
+        if !single_effect {
+            match app
+                .graph_view
+                .compile_to_engine(app.sample_rate, app.buffer_size)
+            {
+                Ok(cmd) => app.audio_bridge.send_command(cmd),
+                Err(e) => tracing::warn!("initial graph compile failed: {e}"),
+            }
+        }
+
         // Start audio
         if let Err(e) = app.start_audio() {
             app.audio_error = Some(e);
@@ -1057,10 +1070,13 @@ impl eframe::App for SonidoApp {
                     // Single-effect mode: show only the effect panel, no graph
                     self.render_effect_panel(&mut child, SlotIndex(0));
                 } else {
-                    // Graph editor fills the upper portion
+                    // Graph editor fills the upper portion (constrained)
+                    let avail_h = child.available_height();
+                    let graph_h = (avail_h * 0.6).max(200.0);
                     let theme = SonidoTheme::get(child.ctx());
                     let selected_slot = child
                         .group(|ui| {
+                            ui.set_max_height(graph_h);
                             ui.vertical_centered(|ui| {
                                 ui.label(
                                     egui::RichText::new("GRAPH EDITOR")
