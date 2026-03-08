@@ -20,7 +20,7 @@ use sonido_gui_core::effects_ui;
 use sonido_gui_core::theme::SonidoTheme;
 use sonido_gui_core::widgets::glow;
 use sonido_gui_core::widgets::morph_bar;
-use sonido_gui_core::{LedDisplay, ParamBridge, SlotIndex};
+use sonido_gui_core::{ParamBridge, SlotIndex};
 use sonido_registry::EffectRegistry;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -87,7 +87,15 @@ impl SonidoApp {
     ///
     /// If `effect` is `Some("name")`, launches in single-effect mode with a
     /// simplified UI showing only that effect (no graph view, no presets).
-    pub fn new(cc: &eframe::CreationContext<'_>, effect: Option<&str>) -> Self {
+    ///
+    /// `requested_sample_rate` and `requested_buffer_size` are initial hints;
+    /// the actual device rate is detected in `start_audio()` and takes priority.
+    pub fn new(
+        cc: &eframe::CreationContext<'_>,
+        effect: Option<&str>,
+        requested_sample_rate: Option<f32>,
+        requested_buffer_size: Option<usize>,
+    ) -> Self {
         let registry = Arc::new(EffectRegistry::new());
 
         let single_effect = effect.is_some();
@@ -110,7 +118,10 @@ impl SonidoApp {
             let all_ids: Vec<&'static str> = registry.all_effects().iter().map(|e| e.id).collect();
             Box::leak(all_ids.into_boxed_slice())
         };
-        let bridge = Arc::new(AtomicParamBridge::new(&registry, chain, 48000.0));
+        let initial_rate = requested_sample_rate.unwrap_or(48000.0);
+        let initial_buffer = requested_buffer_size.unwrap_or(2048);
+
+        let bridge = Arc::new(AtomicParamBridge::new(&registry, chain, initial_rate));
 
         // Bypass all by default in multi-effect mode
         if !single_effect {
@@ -135,8 +146,8 @@ impl SonidoApp {
             morph_state: MorphState::new(),
             file_player: FilePlayer::new(transport_tx),
             cached_panel: None,
-            sample_rate: 48000.0,
-            buffer_size: 2048, // Default buffer size
+            sample_rate: initial_rate,
+            buffer_size: initial_buffer,
             cpu_usage: 0.0,
             audio_error: None,
             cpu_history: Vec::with_capacity(60),
@@ -150,19 +161,22 @@ impl SonidoApp {
         // Apply theme
         app.theme.apply(&cc.egui_ctx);
 
-        tracing::info!(sample_rate = app.sample_rate, "app initialized");
+        // Start audio first — detects actual device sample rate
+        if let Err(e) = app.start_audio() {
+            app.audio_error = Some(e);
+        }
 
-        // Auto-compile the default graph (Input → Output) so audio
-        // passthrough works immediately without requiring the user to
-        // click Compile.
+        tracing::info!(
+            sample_rate = app.sample_rate,
+            buffer_size = app.buffer_size,
+            "app initialized (device rate detected)"
+        );
+
+        // Auto-compile AFTER start_audio so we use the real device rate
         if !single_effect {
             app.compile_and_apply();
         }
 
-        // Start audio
-        if let Err(e) = app.start_audio() {
-            app.audio_error = Some(e);
-        }
         app.file_player.resync_transport();
 
         app
@@ -192,18 +206,9 @@ impl SonidoApp {
     /// Build cpal streams and start audio processing.
     ///
     /// Streams are stored in `_audio_streams` and stay alive until dropped.
-    /// Works identically on native and wasm -- cpal handles threading internally.
+    /// Updates `self.sample_rate` and `self.buffer_size` to the actual values
+    /// negotiated with the audio device.
     fn start_audio(&mut self) -> Result<(), String> {
-        // Query actual device sample rate for GUI display and effect init
-        {
-            use cpal::traits::{DeviceTrait, HostTrait};
-            if let Some(device) = cpal::default_host().default_output_device()
-                && let Ok(config) = device.default_output_config()
-            {
-                self.sample_rate = config.sample_rate() as f32;
-            }
-        }
-
         let bridge = Arc::clone(&self.bridge);
         let registry = Arc::clone(&self.registry);
         let input_gain = self.audio_bridge.input_gain();
@@ -218,7 +223,7 @@ impl SonidoApp {
 
         let error_count = self.audio_bridge.error_count();
 
-        let streams = build_audio_streams(
+        let config = build_audio_streams(
             bridge,
             &registry,
             input_gain,
@@ -233,7 +238,10 @@ impl SonidoApp {
             self.buffer_size,
         )?;
 
-        self._audio_streams = streams;
+        // Update to actual device-negotiated values
+        self.sample_rate = config.sample_rate;
+        self.buffer_size = config.buffer_size;
+        self._audio_streams = config.streams;
         Ok(())
     }
 
@@ -568,7 +576,7 @@ impl SonidoApp {
             ui.add_space(8.0);
             ui.label(
                 egui::RichText::new(
-                    "Right-click to add nodes \u{00b7} Click a node to edit params",
+                    "Right-click to add nodes \u{00b7} Click a node to edit params \u{00b7} Ctrl+Scroll to zoom",
                 )
                 .font(FontId::monospace(10.0))
                 .color(theme.colors.text_secondary)
@@ -654,23 +662,24 @@ impl SonidoApp {
                     }
                 }
 
-                // Bypass toggle right-aligned
+                // Bypass LED dot right-aligned (green = active, red = bypassed)
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     let is_bypassed = self.bridge.is_bypassed(slot);
-                    let bypass_text = if is_bypassed { "BYP" } else { "ON" };
-                    let bypass_color = if is_bypassed {
+                    let led_color = if is_bypassed {
                         theme.colors.red
                     } else {
                         theme.colors.green
                     };
-                    if ui
-                        .button(
-                            egui::RichText::new(bypass_text)
-                                .font(FontId::monospace(10.0))
-                                .color(bypass_color),
-                        )
-                        .clicked()
-                    {
+                    let (led_rect, led_resp) =
+                        ui.allocate_exact_size(vec2(16.0, 16.0), egui::Sense::click());
+                    glow::glow_circle(
+                        ui.painter(),
+                        led_rect.center(),
+                        5.0,
+                        led_color,
+                        &theme,
+                    );
+                    if led_resp.clicked() {
                         self.bridge.set_bypassed(slot, !is_bypassed);
                     }
                 });
@@ -694,16 +703,20 @@ impl SonidoApp {
         let theme = SonidoTheme::get(ui.ctx());
 
         ui.horizontal(|ui| {
-            // Sample rate LED
-            ui.add(
-                LedDisplay::new(format!("{:.0}Hz", self.sample_rate)).color(theme.colors.amber),
+            // Sample rate
+            ui.label(
+                egui::RichText::new(format!("{:.0}Hz", self.sample_rate))
+                    .font(FontId::monospace(11.0))
+                    .color(theme.colors.amber),
             );
             ui.separator();
 
-            // Latency LED
+            // Latency
             let latency_ms = self.buffer_size as f32 / self.sample_rate * 1000.0;
-            ui.add(
-                LedDisplay::new(format!("{latency_ms:.1}ms")).color(theme.colors.amber),
+            ui.label(
+                egui::RichText::new(format!("{latency_ms:.1}ms"))
+                    .font(FontId::monospace(11.0))
+                    .color(theme.colors.amber),
             );
             ui.separator();
 
@@ -724,10 +737,17 @@ impl SonidoApp {
                 Layout::left_to_right(Align::Center),
                 |ui| {
                     ui.set_min_width(240.0);
-                    ui.label(
-                        egui::RichText::new(&cpu_text)
-                            .font(FontId::monospace(11.0))
-                            .color(cpu_color),
+                    // Fixed-width label so sparkline position doesn't jitter
+                    ui.allocate_ui_with_layout(
+                        vec2(120.0, 24.0),
+                        Layout::left_to_right(Align::Center),
+                        |ui| {
+                            ui.label(
+                                egui::RichText::new(&cpu_text)
+                                    .font(FontId::monospace(11.0))
+                                    .color(cpu_color),
+                            );
+                        },
                     );
                     if !self.cpu_history.is_empty() {
                         draw_sparkline(ui, &self.cpu_history, cpu_color, 100.0, 24.0);
@@ -735,11 +755,9 @@ impl SonidoApp {
                 },
             );
 
-            // File player transport (inline, only when file input active)
-            if self.file_player.use_file_input() {
-                ui.separator();
-                self.file_player.render_compact(ui);
-            }
+            // File player / generator transport (inline)
+            ui.separator();
+            self.file_player.render_compact(ui);
         });
     }
 
@@ -904,12 +922,14 @@ impl eframe::App for SonidoApp {
 
         // Global keyboard shortcuts (only when no text widget is focused)
         let no_widget_focused = ctx.memory(|m| m.focused().is_none());
-        if no_widget_focused
-            && ctx.input(|i| i.key_pressed(egui::Key::Space))
-            && self.file_player.use_file_input()
-            && self.file_player.has_file()
-        {
-            self.file_player.toggle_play_pause();
+        if no_widget_focused && ctx.input(|i| i.key_pressed(egui::Key::Space)) {
+            let can_play = match self.file_player.source_mode() {
+                crate::signal_generator::SourceMode::Generator => true,
+                crate::signal_generator::SourceMode::File => self.file_player.has_file(),
+            };
+            if can_play {
+                self.file_player.toggle_play_pause();
+            }
         }
 
         // Header
@@ -991,18 +1011,10 @@ impl eframe::App for SonidoApp {
                     let (graph_h, _panel_h) =
                         theme.layout.split_vertical(content_h, panel_content_h);
 
-                    let theme_inner = SonidoTheme::get(child.ctx());
                     let selected_slot = child
                         .group(|ui| {
                             ui.set_max_height(graph_h);
                             ui.vertical_centered(|ui| {
-                                ui.label(
-                                    egui::RichText::new("GRAPH EDITOR")
-                                        .font(FontId::monospace(12.0))
-                                        .color(theme_inner.colors.cyan),
-                                );
-                                ui.add_space(4.0);
-
                                 // Update per-slot activity from output metering
                                 let slot_count = self
                                     .graph_view

@@ -7,6 +7,7 @@
 //! On native, uses synchronous `rfd::FileDialog`. On wasm, uses
 //! `rfd::AsyncFileDialog` with bytes-based WAV parsing via `hound`.
 
+use crate::signal_generator::{SignalType, SourceMode};
 use crossbeam_channel::Sender;
 use egui::{pos2, vec2, Rect, Sense, Stroke, StrokeKind, Ui};
 use sonido_gui_core::theme::SonidoTheme;
@@ -47,8 +48,27 @@ pub enum TransportCommand {
     Seek(f32),
     /// Enable or disable loop mode.
     SetLoop(bool),
-    /// Switch between file input (`true`) and mic input (`false`).
-    SetFileMode(bool),
+    /// Set the active source mode (generator or file).
+    SetSourceMode(SourceMode),
+    /// Change signal generator type.
+    SetSignalType(SignalType),
+    /// Set generator frequency in Hz.
+    SetGeneratorFreq(f32),
+    /// Set generator amplitude (0.0-1.0).
+    SetGeneratorAmplitude(f32),
+    /// Set sweep parameters.
+    SetSweepParams {
+        /// Sweep start frequency in Hz.
+        start_hz: f32,
+        /// Sweep end frequency in Hz.
+        end_hz: f32,
+        /// Sweep duration in seconds.
+        duration_secs: f32,
+        /// Whether the sweep loops.
+        looping: bool,
+    },
+    /// Set impulse train rate in Hz.
+    SetImpulseRate(f32),
 }
 
 /// GUI-side file player state and controls.
@@ -65,7 +85,14 @@ pub struct FilePlayer {
     position_secs: f32,
     is_playing: bool,
     is_looping: bool,
-    use_file_input: bool,
+    /// Active audio source mode.
+    source_mode: SourceMode,
+    /// Current generator signal type (GUI state mirror).
+    gen_signal_type: SignalType,
+    /// Current generator frequency in Hz.
+    gen_frequency: f32,
+    /// Current generator amplitude (0.0-1.0).
+    gen_amplitude: f32,
     sample_rate: f32,
     has_file: bool,
     /// Receives file path from background file dialog (native only).
@@ -97,7 +124,10 @@ impl FilePlayer {
             position_secs: 0.0,
             is_playing: false,
             is_looping: true,
-            use_file_input: true,
+            source_mode: SourceMode::Generator,
+            gen_signal_type: SignalType::Sine,
+            gen_frequency: 440.0,
+            gen_amplitude: 0.5,
             sample_rate: 48000.0,
             has_file: false,
             #[cfg(not(target_arch = "wasm32"))]
@@ -120,9 +150,9 @@ impl FilePlayer {
         }
     }
 
-    /// Whether file input mode is active.
-    pub fn use_file_input(&self) -> bool {
-        self.use_file_input
+    /// Current audio source mode.
+    pub fn source_mode(&self) -> SourceMode {
+        self.source_mode
     }
 
     /// Whether a file is currently loaded.
@@ -137,30 +167,54 @@ impl FilePlayer {
 
     /// Toggle between play and pause states.
     ///
-    /// If playing, sends [`TransportCommand::Pause`]. If paused, sends
-    /// [`TransportCommand::Play`]. No-op if no file is loaded.
+    /// In generator mode, always toggles. In file mode, no-op if no file is
+    /// loaded.
     pub fn toggle_play_pause(&mut self) {
-        if !self.has_file {
-            return;
-        }
-        if self.is_playing {
-            self.is_playing = false;
-            let _ = self.transport_tx.send(TransportCommand::Pause);
-        } else {
-            self.is_playing = true;
-            let _ = self.transport_tx.send(TransportCommand::Play);
+        match self.source_mode {
+            SourceMode::Generator => {
+                if self.is_playing {
+                    self.is_playing = false;
+                    let _ = self.transport_tx.send(TransportCommand::Pause);
+                } else {
+                    self.is_playing = true;
+                    let _ = self.transport_tx.send(TransportCommand::Play);
+                }
+            }
+            SourceMode::File => {
+                if !self.has_file {
+                    return;
+                }
+                if self.is_playing {
+                    self.is_playing = false;
+                    let _ = self.transport_tx.send(TransportCommand::Pause);
+                } else {
+                    self.is_playing = true;
+                    let _ = self.transport_tx.send(TransportCommand::Play);
+                }
+            }
         }
     }
 
-    /// Re-send current file_mode and file data to the audio thread.
+    /// Re-send current source mode, generator state, and file data to the
+    /// audio thread.
     ///
     /// Called after audio stream restart (buffer size change, preset load)
-    /// because the `AudioProcessor` is recreated with a fresh `FilePlayback`.
+    /// because the `AudioProcessor` is recreated with fresh state.
     pub fn resync_transport(&mut self) {
-        // Always sync the current file_mode
+        // Always sync the current source mode
         let _ = self
             .transport_tx
-            .send(TransportCommand::SetFileMode(self.use_file_input));
+            .send(TransportCommand::SetSourceMode(self.source_mode));
+        // Resync generator state
+        let _ = self
+            .transport_tx
+            .send(TransportCommand::SetSignalType(self.gen_signal_type));
+        let _ = self
+            .transport_tx
+            .send(TransportCommand::SetGeneratorFreq(self.gen_frequency));
+        let _ = self
+            .transport_tx
+            .send(TransportCommand::SetGeneratorAmplitude(self.gen_amplitude));
 
         // Re-send file data and restore playback state
         #[cfg(not(target_arch = "wasm32"))]
@@ -307,30 +361,40 @@ impl FilePlayer {
             .send(TransportCommand::SetLoop(self.is_looping));
     }
 
-    /// Render the input source toggle (Mic / File) for the header bar.
+    /// Render the input source toggle (Generator / File) for the header bar.
     ///
-    /// Arcade-styled: LED dot + monospace label. Green LED when file mode active.
+    /// Arcade-styled: two LED buttons — GEN (green) and FILE (amber).
     pub fn render_source_toggle(&mut self, ui: &mut Ui) {
         let theme = SonidoTheme::get(ui.ctx());
-        let label = if self.use_file_input { "FILE" } else { "MIC" };
-        let color = if self.use_file_input {
+
+        let gen_active = self.source_mode == SourceMode::Generator;
+        let gen_color = if gen_active {
             theme.colors.green
         } else {
-            theme.colors.cyan
+            theme.colors.dim
         };
-
-        if arcade_led_button(ui, label, color, self.use_file_input, &theme).clicked() {
-            self.use_file_input = !self.use_file_input;
+        if arcade_led_button(ui, "GEN", gen_color, gen_active, &theme).clicked() && !gen_active {
+            self.source_mode = SourceMode::Generator;
             let _ = self
                 .transport_tx
-                .send(TransportCommand::SetFileMode(self.use_file_input));
+                .send(TransportCommand::SetSourceMode(SourceMode::Generator));
+            self.is_playing = false;
+            let _ = self.transport_tx.send(TransportCommand::Stop);
+        }
 
-            // If switching away from file mode, stop playback
-            if !self.use_file_input {
-                let _ = self.transport_tx.send(TransportCommand::Stop);
-                self.is_playing = false;
-                self.position_secs = 0.0;
-            }
+        let file_active = self.source_mode == SourceMode::File;
+        let file_color = if file_active {
+            theme.colors.amber
+        } else {
+            theme.colors.dim
+        };
+        if arcade_led_button(ui, "FILE", file_color, file_active, &theme).clicked() && !file_active
+        {
+            self.source_mode = SourceMode::File;
+            let _ = self
+                .transport_tx
+                .send(TransportCommand::SetSourceMode(SourceMode::File));
+            let _ = self.transport_tx.send(TransportCommand::Stop);
         }
     }
 
@@ -351,6 +415,54 @@ impl FilePlayer {
         }
 
         let theme = SonidoTheme::get(ui.ctx());
+
+        if self.source_mode == SourceMode::Generator {
+            // Play / Pause
+            let (play_sym, play_color) = if self.is_playing {
+                ("||", theme.colors.amber)
+            } else {
+                (">", theme.colors.green)
+            };
+            if arcade_led_button(ui, play_sym, play_color, self.is_playing, &theme).clicked() {
+                self.toggle_play_pause();
+            }
+
+            // Signal type combo
+            let current_label = self.gen_signal_type.label();
+            egui::ComboBox::from_id_salt("gen_signal")
+                .selected_text(
+                    egui::RichText::new(current_label)
+                        .font(egui::FontId::monospace(10.0))
+                        .color(theme.colors.text_primary),
+                )
+                .width(90.0)
+                .show_ui(ui, |ui| {
+                    for &t in &SignalType::ALL {
+                        if ui
+                            .selectable_label(self.gen_signal_type == t, t.label())
+                            .clicked()
+                        {
+                            self.gen_signal_type = t;
+                            let _ = self
+                                .transport_tx
+                                .send(TransportCommand::SetSignalType(t));
+                        }
+                    }
+                });
+
+            // Frequency display (for applicable types)
+            if matches!(
+                self.gen_signal_type,
+                SignalType::Sine | SignalType::SawChord
+            ) {
+                ui.label(
+                    egui::RichText::new(format!("{:.0} Hz", self.gen_frequency))
+                        .font(egui::FontId::monospace(10.0))
+                        .color(theme.colors.cyan),
+                );
+            }
+            return;
+        }
 
         // Browse button
         #[cfg(not(target_arch = "wasm32"))]

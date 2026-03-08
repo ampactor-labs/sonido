@@ -18,10 +18,6 @@ use sonido_gui::SonidoApp;
 #[command(about = "Professional DSP effect processor GUI")]
 #[command(version)]
 struct Args {
-    /// Input audio device name (optional, uses default if not specified)
-    #[arg(long)]
-    input: Option<String>,
-
     /// Output audio device name (optional, uses default if not specified)
     #[arg(long)]
     output: Option<String>,
@@ -30,8 +26,8 @@ struct Args {
     #[arg(long, default_value = "48000")]
     sample_rate: u32,
 
-    /// Buffer size in samples (default: 512)
-    #[arg(long, default_value = "512")]
+    /// Buffer size in samples (default: 2048)
+    #[arg(long, default_value = "2048")]
     buffer_size: u32,
 
     /// Launch in single-effect mode with the given effect name.
@@ -58,9 +54,6 @@ fn main() -> eframe::Result<()> {
     tracing::info!(sample_rate = args.sample_rate, "audio config");
     tracing::info!(buffer_size = args.buffer_size, "audio config");
 
-    if let Some(ref input) = args.input {
-        tracing::info!(device = %input, "input device");
-    }
     if let Some(ref output) = args.output {
         tracing::info!(device = %output, "output device");
     }
@@ -74,10 +67,19 @@ fn main() -> eframe::Result<()> {
     };
 
     let effect = args.effect.clone();
+    let sample_rate = args.sample_rate as f32;
+    let buffer_size = args.buffer_size as usize;
     eframe::run_native(
         "Sonido",
         options,
-        Box::new(move |cc| Ok(Box::new(SonidoApp::new(cc, effect.as_deref())))),
+        Box::new(move |cc| {
+            Ok(Box::new(SonidoApp::new(
+                cc,
+                effect.as_deref(),
+                Some(sample_rate),
+                Some(buffer_size),
+            )))
+        }),
     )
 }
 
@@ -105,7 +107,7 @@ fn main() {
             .start(
                 canvas,
                 eframe::WebOptions::default(),
-                Box::new(|cc| Ok(Box::new(SonidoApp::new(cc, None)))),
+                Box::new(|cc| Ok(Box::new(SonidoApp::new(cc, None, None, None)))),
             )
             .await
             .expect("failed to start eframe");

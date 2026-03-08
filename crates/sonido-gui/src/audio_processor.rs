@@ -4,12 +4,16 @@
 //! It contains:
 //! - [`FilePlayback`] — in-memory file buffer with playback position tracking
 //! - [`AudioProcessor`] — per-buffer DSP entry point (commands, param sync, effects, metering)
-//! - [`build_audio_streams`] — factory function to create cpal input/output streams
+//! - [`build_audio_streams`] — factory function to create the cpal output stream
+//!
+//! Audio input is sourced from either the built-in [`SignalGenerator`] or file
+//! playback — there is no microphone input stream.
 
 use crate::atomic_param_bridge::AtomicParamBridge;
 use crate::audio_bridge::{AtomicParam, MeteringData};
 use crate::chain_manager::GraphCommand;
 use crate::file_player::TransportCommand;
+use crate::signal_generator::{SignalGenerator, SourceMode};
 use crossbeam_channel::{Receiver, Sender};
 use sonido_core::graph::GraphEngine;
 use sonido_gui_core::{ParamBridge, SlotIndex};
@@ -33,7 +37,6 @@ pub(crate) struct FilePlayback {
     file_sample_rate: f32,
     playing: bool,
     looping: bool,
-    file_mode: bool,
 }
 
 impl FilePlayback {
@@ -45,7 +48,6 @@ impl FilePlayback {
             file_sample_rate: 48000.0,
             playing: false,
             looping: false,
-            file_mode: true,
         }
     }
 
@@ -97,11 +99,12 @@ pub(crate) struct AudioProcessor {
     command_rx: Receiver<GraphCommand>,
     transport_rx: Receiver<TransportCommand>,
     metering_tx: Sender<MeteringData>,
-    /// Receiver for mic input samples from the input stream.
-    input_rx: Receiver<f32>,
     file_pb: FilePlayback,
+    /// Built-in signal generator (sine, sweep, noise, etc.).
+    signal_gen: SignalGenerator,
+    /// Active audio source mode (generator or file).
+    source_mode: SourceMode,
     out_ch: usize,
-    in_ch: usize,
     buffer_time_secs: f64,
 }
 
@@ -161,12 +164,21 @@ impl AudioProcessor {
                     self.file_pb.position = 0;
                     self.file_pb.playing = false;
                 }
-                TransportCommand::Play => self.file_pb.playing = true,
-                TransportCommand::Pause => self.file_pb.playing = false,
-                TransportCommand::Stop => {
-                    self.file_pb.playing = false;
-                    self.file_pb.position = 0;
-                }
+                TransportCommand::Play => match self.source_mode {
+                    SourceMode::Generator => self.signal_gen.set_playing(true),
+                    SourceMode::File => self.file_pb.playing = true,
+                },
+                TransportCommand::Pause => match self.source_mode {
+                    SourceMode::Generator => self.signal_gen.set_playing(false),
+                    SourceMode::File => self.file_pb.playing = false,
+                },
+                TransportCommand::Stop => match self.source_mode {
+                    SourceMode::Generator => self.signal_gen.stop(),
+                    SourceMode::File => {
+                        self.file_pb.playing = false;
+                        self.file_pb.position = 0;
+                    }
+                },
                 TransportCommand::Seek(secs) => {
                     self.file_pb.position = (secs * self.file_pb.file_sample_rate) as usize;
                     if self.file_pb.position >= self.file_pb.left.len() {
@@ -174,7 +186,22 @@ impl AudioProcessor {
                     }
                 }
                 TransportCommand::SetLoop(v) => self.file_pb.looping = v,
-                TransportCommand::SetFileMode(v) => self.file_pb.file_mode = v,
+                TransportCommand::SetSourceMode(mode) => self.source_mode = mode,
+                TransportCommand::SetSignalType(t) => self.signal_gen.set_signal_type(t),
+                TransportCommand::SetGeneratorFreq(hz) => self.signal_gen.set_frequency(hz),
+                TransportCommand::SetGeneratorAmplitude(amp) => {
+                    self.signal_gen.set_amplitude(amp);
+                }
+                TransportCommand::SetSweepParams {
+                    start_hz,
+                    end_hz,
+                    duration_secs,
+                    looping,
+                } => {
+                    self.signal_gen
+                        .set_sweep_params(start_hz, end_hz, duration_secs, looping);
+                }
+                TransportCommand::SetImpulseRate(hz) => self.signal_gen.set_impulse_rate(hz),
             }
         }
 
@@ -220,40 +247,33 @@ impl AudioProcessor {
         self.sync_bridge_to_graph();
 
         let frames = data.len() / self.out_ch;
-        let file_mode = self.file_pb.file_mode;
-        let has_file = !self.file_pb.left.is_empty();
 
         // Collect raw input samples for this buffer (deinterleaved, pre-gain)
-        let mut raw_left = Vec::with_capacity(frames);
-        let mut raw_right = Vec::with_capacity(frames);
+        let mut raw_left = vec![0.0f32; frames];
+        let mut raw_right = vec![0.0f32; frames];
 
-        for _ in 0..frames {
-            let (in_l_raw, in_r_raw) = if file_mode {
-                for _ in 0..self.in_ch {
-                    let _ = self.input_rx.try_recv();
+        let has_file = !self.file_pb.left.is_empty();
+        match self.source_mode {
+            SourceMode::Generator => {
+                self.signal_gen.generate(&mut raw_left, &mut raw_right);
+                for (l, r) in raw_left.iter_mut().zip(raw_right.iter_mut()) {
+                    *l *= ig;
+                    *r *= ig;
                 }
-                if has_file {
-                    self.file_pb.next_frame()
-                } else {
-                    (0.0, 0.0)
+            }
+            SourceMode::File => {
+                for i in 0..frames {
+                    let (in_l_raw, in_r_raw) = if has_file {
+                        self.file_pb.next_frame()
+                    } else {
+                        (0.0, 0.0)
+                    };
+                    let in_l = if in_l_raw.is_finite() { in_l_raw } else { 0.0 };
+                    let in_r = if in_r_raw.is_finite() { in_r_raw } else { 0.0 };
+                    raw_left[i] = in_l * ig;
+                    raw_right[i] = in_r * ig;
                 }
-            } else if self.in_ch >= 2 {
-                let l = self.input_rx.try_recv().unwrap_or(0.0);
-                let r = self.input_rx.try_recv().unwrap_or(0.0);
-                for _ in 2..self.in_ch {
-                    let _ = self.input_rx.try_recv();
-                }
-                (l, r)
-            } else {
-                let s = self.input_rx.try_recv().unwrap_or(0.0);
-                (s, s)
-            };
-
-            let in_l = if in_l_raw.is_finite() { in_l_raw } else { 0.0 };
-            let in_r = if in_r_raw.is_finite() { in_r_raw } else { 0.0 };
-
-            raw_left.push(in_l * ig);
-            raw_right.push(in_r * ig);
+            }
         }
 
         // Compute input metering (pre-chain)
@@ -349,11 +369,21 @@ impl AudioProcessor {
     }
 }
 
-/// Build and start cpal audio streams.
+/// Actual audio configuration negotiated with the device.
+pub(crate) struct AudioStreamConfig {
+    /// Stream handles — must stay alive for audio to continue.
+    pub streams: Vec<cpal::Stream>,
+    /// Sample rate negotiated with the output device.
+    pub sample_rate: f32,
+    /// Buffer size requested (device may differ per callback).
+    pub buffer_size: usize,
+}
+
+/// Build and start the cpal output stream.
 ///
-/// Creates an output stream (always) and an input stream (if a mic is available).
-/// Returns the stream handles — caller must keep them alive for audio to continue.
-/// Input is optional so the app works without mic permission (e.g., wasm, headless).
+/// Returns the stream handle — caller must keep it alive for audio to continue.
+/// Audio input comes from the built-in signal generator or file playback,
+/// not from a microphone.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn build_audio_streams(
     bridge: Arc<AtomicParamBridge>,
@@ -368,16 +398,13 @@ pub(crate) fn build_audio_streams(
     error_count: Arc<AtomicU32>,
     sample_rate: f32,
     buffer_size: usize,
-) -> Result<Vec<cpal::Stream>, String> {
+) -> Result<AudioStreamConfig, String> {
     use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 
     let host = cpal::default_host();
     let output_device = host
         .default_output_device()
         .ok_or("No output device available")?;
-
-    // Input device is optional (mic permission may be denied on wasm)
-    let input_device = host.default_input_device();
 
     // Use device's actual sample rate; fall back to passed-in value on error
     let (output_channels, sample_rate) = match output_device.default_output_config() {
@@ -409,81 +436,7 @@ pub(crate) fn build_audio_streams(
         }
     }
 
-    // Stereo audio buffer (interleaved L, R pairs)
-    let (tx, rx) = crossbeam_channel::bounded::<f32>(16384);
-
-    let mut streams: Vec<cpal::Stream> = Vec::with_capacity(2);
-
-    // Input stream (if mic available)
-    let tx_fallback = tx.clone();
-    let in_ch = if let Some(ref input_dev) = input_device {
-        let input_channels = input_dev
-            .default_input_config()
-            .map(|c| c.channels())
-            .unwrap_or(1);
-
-        let input_config = cpal::StreamConfig {
-            channels: input_channels,
-            sample_rate: sample_rate as u32,
-            buffer_size: cpal::BufferSize::Fixed(buffer_size as u32),
-        };
-
-        // Pre-fill with silence
-        for _ in 0..(1024 * input_channels as usize) {
-            let _ = tx.try_send(0.0);
-        }
-
-        let running_input = Arc::clone(&running);
-        match input_dev
-            .build_input_stream(
-                &input_config,
-                move |data: &[f32], _: &cpal::InputCallbackInfo| {
-                    if !running_input.load(Ordering::Relaxed) {
-                        return;
-                    }
-                    for &sample in data {
-                        let _ = tx.try_send(sample);
-                    }
-                },
-                {
-                    let ec = Arc::clone(&error_count);
-                    move |err| {
-                        ec.fetch_add(1, Ordering::Relaxed);
-                        tracing::error!(error = %err, "input stream error");
-                    }
-                },
-                None,
-            )
-            .and_then(|stream| {
-                stream
-                    .play()
-                    .map_err(|e| cpal::BuildStreamError::BackendSpecific {
-                        err: cpal::BackendSpecificError {
-                            description: e.to_string(),
-                        },
-                    })?;
-                Ok(stream)
-            }) {
-            Ok(stream) => {
-                streams.push(stream);
-                input_channels as usize
-            }
-            Err(e) => {
-                tracing::warn!(error = %e, "input stream unavailable, mic disabled");
-                for _ in 0..2048 {
-                    let _ = tx_fallback.try_send(0.0);
-                }
-                1
-            }
-        }
-    } else {
-        tracing::warn!("no input device available, mic disabled");
-        // Pre-fill silence so output callback doesn't block
-        for _ in 0..2048 {
-            let _ = tx.try_send(0.0);
-        }
-        1 // default: mono input channel count for deinterleave logic
-    };
+    let mut streams: Vec<cpal::Stream> = Vec::with_capacity(1);
 
     let running_output = Arc::clone(&running);
     let out_ch = output_channels as usize;
@@ -499,10 +452,10 @@ pub(crate) fn build_audio_streams(
         command_rx,
         transport_rx,
         metering_tx,
-        input_rx: rx,
         file_pb: FilePlayback::new(),
+        signal_gen: SignalGenerator::new(sample_rate),
+        source_mode: SourceMode::Generator,
         out_ch,
-        in_ch,
         buffer_time_secs,
     };
 
@@ -540,5 +493,9 @@ pub(crate) fn build_audio_streams(
         "audio streams started"
     );
 
-    Ok(streams)
+    Ok(AudioStreamConfig {
+        streams,
+        sample_rate,
+        buffer_size,
+    })
 }
