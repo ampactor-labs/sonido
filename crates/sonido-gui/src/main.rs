@@ -67,8 +67,8 @@ fn main() -> eframe::Result<()> {
 
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([900.0, 600.0])
-            .with_min_inner_size([800.0, 500.0])
+            .with_inner_size([1000.0, 700.0])
+            .with_min_inner_size([800.0, 550.0])
             .with_title("Sonido"),
         ..Default::default()
     };

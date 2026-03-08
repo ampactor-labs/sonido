@@ -78,6 +78,10 @@ pub struct SonidoApp {
     /// Frames remaining for compile success flash.
     compile_success_frames: u32,
 
+    /// Latched clip indicator for input meter (click to reset).
+    input_clip_latched: bool,
+    /// Latched clip indicator for output meter (click to reset).
+    output_clip_latched: bool,
 }
 
 impl SonidoApp {
@@ -142,6 +146,8 @@ impl SonidoApp {
             single_effect,
             compile_error: None,
             compile_success_frames: 0,
+            input_clip_latched: false,
+            output_clip_latched: false,
         };
 
         // Apply theme
@@ -519,88 +525,119 @@ impl SonidoApp {
         self.file_player.resync_transport();
     }
 
-    /// Render the I/O section with meters and gain controls.
-    fn render_io_section(&mut self, ui: &mut egui::Ui) {
+    /// Render a unified I/O strip (INPUT or OUTPUT endpoint).
+    ///
+    /// `is_input` selects between input gain / output master controls and metering.
+    fn render_io_strip(&mut self, ui: &mut egui::Ui, is_input: bool) {
         let theme = SonidoTheme::get(ui.ctx());
+        let label = if is_input { "INPUT" } else { "OUTPUT" };
 
         ui.group(|ui| {
-            ui.set_min_width(80.0);
+            ui.set_min_width(50.0);
             ui.vertical_centered(|ui| {
                 ui.label(
-                    egui::RichText::new("INPUT")
-                        .font(FontId::monospace(12.0))
+                    egui::RichText::new(label)
+                        .font(FontId::monospace(11.0))
                         .color(theme.colors.cyan),
                 );
 
                 ui.add_space(4.0);
 
-                // Input meter
-                ui.add(
-                    LevelMeter::new(self.metering.input_peak, self.metering.input_rms)
-                        .size(24.0, 100.0),
+                // Meter
+                let (peak, rms) = if is_input {
+                    (self.metering.input_peak, self.metering.input_rms)
+                } else {
+                    (self.metering.output_peak, self.metering.output_rms)
+                };
+                ui.add(LevelMeter::new(peak, rms).size(20.0, 100.0));
+
+                // Clip indicator (latched, click to reset)
+                let clip_latched = if is_input {
+                    &mut self.input_clip_latched
+                } else {
+                    &mut self.output_clip_latched
+                };
+                if peak > 1.0 {
+                    *clip_latched = true;
+                }
+                let clip_color = if *clip_latched {
+                    theme.colors.red
+                } else {
+                    theme.colors.dim
+                };
+                let clip_resp = ui.button(
+                    egui::RichText::new("CLIP")
+                        .font(FontId::monospace(8.0))
+                        .color(clip_color),
                 );
+                if clip_resp.clicked() {
+                    *clip_latched = false;
+                }
 
-                ui.add_space(8.0);
+                ui.add_space(4.0);
 
-                // Input gain knob
-                let input_gain = self.audio_bridge.input_gain();
-                let mut gain_val = input_gain.get();
-                if ui
-                    .add(
-                        Knob::new(&mut gain_val, -20.0, 20.0, "GAIN")
-                            .default(0.0)
-                            .format_db()
-                            .diameter(50.0),
-                    )
-                    .changed()
-                {
-                    input_gain.set(gain_val);
-                    self.preset_manager.mark_modified();
+                // Gain knob
+                if is_input {
+                    let input_gain = self.audio_bridge.input_gain();
+                    let mut gain_val = input_gain.get();
+                    if ui
+                        .add(
+                            Knob::new(&mut gain_val, -20.0, 20.0, "GAIN")
+                                .default(0.0)
+                                .format_db()
+                                .diameter(44.0),
+                        )
+                        .changed()
+                    {
+                        input_gain.set(gain_val);
+                        self.preset_manager.mark_modified();
+                    }
+                } else {
+                    let master_vol_param = self.audio_bridge.master_volume();
+                    let mut master_val = master_vol_param.get();
+                    if ui
+                        .add(
+                            Knob::new(&mut master_val, -40.0, 6.0, "VOL")
+                                .default(0.0)
+                                .format_db()
+                                .diameter(44.0),
+                        )
+                        .changed()
+                    {
+                        master_vol_param.set(master_val);
+                        self.preset_manager.mark_modified();
+                    }
                 }
             });
         });
     }
 
-    /// Render the output section.
-    fn render_output_section(&mut self, ui: &mut egui::Ui) {
+    /// Show a quick-reference hint when no node is selected in the graph.
+    fn render_quick_reference(ui: &mut egui::Ui) {
         let theme = SonidoTheme::get(ui.ctx());
-
-        ui.group(|ui| {
-            ui.set_min_width(80.0);
-            ui.vertical_centered(|ui| {
-                ui.label(
-                    egui::RichText::new("OUTPUT")
-                        .font(FontId::monospace(12.0))
-                        .color(theme.colors.cyan),
-                );
-
-                ui.add_space(4.0);
-
-                // Output meter
-                ui.add(
-                    LevelMeter::new(self.metering.output_peak, self.metering.output_rms)
-                        .size(24.0, 100.0),
-                );
-
-                ui.add_space(8.0);
-
-                // Master volume knob
-                let master_vol_param = self.audio_bridge.master_volume();
-                let mut master_val = master_vol_param.get();
-                if ui
-                    .add(
-                        Knob::new(&mut master_val, -40.0, 6.0, "MASTER")
-                            .default(0.0)
-                            .format_db()
-                            .diameter(50.0),
-                    )
-                    .changed()
-                {
-                    master_vol_param.set(master_val);
-                    self.preset_manager.mark_modified();
-                }
-            });
+        ui.vertical_centered(|ui| {
+            ui.add_space(8.0);
+            ui.label(
+                egui::RichText::new(
+                    "Right-click to add nodes \u{00b7} Click a node to edit params",
+                )
+                .font(FontId::monospace(10.0))
+                .color(theme.colors.text_secondary)
+                .italics(),
+            );
         });
+    }
+
+    /// Estimate the needed effect panel height from the cached panel's param count.
+    fn estimate_panel_height(&self) -> f32 {
+        let param_count = self
+            .cached_panel
+            .as_ref()
+            .map(|(slot, _, _)| self.bridge.param_count(*slot))
+            .unwrap_or(6);
+        // Rough estimate: title row + ~40px per row of 4-5 knobs
+        let rows = ((param_count + 4) / 5).max(1);
+        80.0 + rows as f32 * 60.0
     }
 
     /// Render the effect panel for the selected slot.
@@ -866,13 +903,14 @@ impl eframe::App for SonidoApp {
                 );
             }
 
-            ui.add_space(8.0);
+            ui.add_space(4.0);
 
-            // Main layout: INPUT (100px) | 16px gap | CENTER (flex) | 16px gap | OUTPUT (100px)
-            // Manual rect splitting avoids the vertical_centered-inside-horizontal width bug.
+            let theme = SonidoTheme::get(ui.ctx());
             let avail = ui.available_rect_before_wrap();
-            let io_width = 100.0;
-            let gap = 16.0;
+
+            // Responsive I/O strip widths from ThemeLayout
+            let io_width = theme.layout.io_strip_width(avail.width());
+            let gap = 8.0;
             let center_width = (avail.width() - 2.0 * io_width - 2.0 * gap).max(200.0);
 
             let input_rect = Rect::from_min_size(avail.min, vec2(io_width, avail.height()));
@@ -888,7 +926,7 @@ impl eframe::App for SonidoApp {
                 vec2(io_width, avail.height()),
             );
 
-            // Input column
+            // Input strip
             {
                 let mut child = ui.new_child(
                     UiBuilder::new()
@@ -896,7 +934,7 @@ impl eframe::App for SonidoApp {
                         .max_rect(input_rect)
                         .layout(Layout::top_down(Align::Center)),
                 );
-                self.render_io_section(&mut child);
+                self.render_io_strip(&mut child, true);
             }
 
             // Center column (graph editor + effect panel)
@@ -912,12 +950,13 @@ impl eframe::App for SonidoApp {
                     // Single-effect mode: show only the effect panel, no graph
                     self.render_effect_panel(&mut child, SlotIndex(0));
                 } else {
-                    // Panel-first allocation: reserve space for the effect panel,
-                    // graph editor takes the rest (it has internal zoom/pan).
-                    let avail_h = child.available_height();
-                    let panel_h = 320.0; // 3 rows of knobs (reverb) without scrolling
-                    let graph_h = (avail_h - panel_h - 16.0).max(180.0);
-                    let theme = SonidoTheme::get(child.ctx());
+                    // Dynamic graph/panel split from ThemeLayout
+                    let content_h = child.available_height();
+                    let panel_content_h = self.estimate_panel_height();
+                    let (graph_h, _panel_h) =
+                        theme.layout.split_vertical(content_h, panel_content_h);
+
+                    let theme_inner = SonidoTheme::get(child.ctx());
                     let selected_slot = child
                         .group(|ui| {
                             ui.set_max_height(graph_h);
@@ -925,7 +964,7 @@ impl eframe::App for SonidoApp {
                                 ui.label(
                                     egui::RichText::new("GRAPH EDITOR")
                                         .font(FontId::monospace(12.0))
-                                        .color(theme.colors.cyan),
+                                        .color(theme_inner.colors.cyan),
                                 );
                                 ui.add_space(4.0);
 
@@ -950,7 +989,7 @@ impl eframe::App for SonidoApp {
                         self.compile_and_apply();
                     }
 
-                    child.add_space(16.0);
+                    child.add_space(8.0);
 
                     // Effect panel for the selected node
                     if let Some(slot_idx) = selected_slot {
@@ -959,24 +998,12 @@ impl eframe::App for SonidoApp {
                             self.render_effect_panel(&mut child, slot);
                         }
                     } else {
-                        // Hint when no node is selected
-                        let theme = SonidoTheme::get(child.ctx());
-                        child.vertical_centered(|ui| {
-                            ui.add_space(8.0);
-                            ui.label(
-                                egui::RichText::new(
-                                    "Right-click to add nodes · Click a node to edit params · Compile to apply",
-                                )
-                                .font(FontId::monospace(10.0))
-                                .color(theme.colors.text_secondary)
-                                .italics(),
-                            );
-                        });
+                        Self::render_quick_reference(&mut child);
                     }
                 }
             }
 
-            // Output column
+            // Output strip
             {
                 let mut child = ui.new_child(
                     UiBuilder::new()
@@ -984,7 +1011,7 @@ impl eframe::App for SonidoApp {
                         .max_rect(output_rect)
                         .layout(Layout::top_down(Align::Center)),
                 );
-                self.render_output_section(&mut child);
+                self.render_io_strip(&mut child, false);
             }
 
             // Advance parent cursor past all three columns
