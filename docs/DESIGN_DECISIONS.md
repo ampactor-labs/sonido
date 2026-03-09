@@ -1200,3 +1200,57 @@ Introduce a three-layer kernel architecture:
 - `crates/sonido-effects/src/kernels/` — 19 kernel implementations (one per effect)
 - `crates/sonido-registry/src/lib.rs` — registry creates `KernelAdapter<XxxKernel>`
 - `docs/KERNEL_ARCHITECTURE.md` — full architecture reference, patterns, and new-effect checklist
+
+---
+
+## ADR-029: Hardware Serves the Kernel — Embedded Design Principle
+
+**Status:** Accepted
+
+**Date:** 2026-03-09
+
+### Context
+
+As Sonido expands onto embedded hardware (Daisy Seed, Hothouse), decisions arise at the hardware/software boundary: how audio samples cross from SAI/DMA into the DSP engine, how knob positions become kernel parameters, whether hardware-specific types should appear in DSP code, and who owns smoothing. Without a governing principle, hardware concerns can leak into the kernel and couple the two layers.
+
+### Decision
+
+**All hardware decisions must serve and empower the kernel architecture — not the reverse. The kernel is the system. Hardware is a delivery mechanism.**
+
+This is not a statement about dependency direction (that's already enforced by the crate graph). It's a statement about *design priority*: when a hardware tradeoff exists, the choice that best enables clean kernel use wins.
+
+### Concrete Rules
+
+1. **`from_knobs()` is the canonical ADC bridge.** Every hardware knob/CV input maps to `KernelParams` via `from_knobs(adc_0..adc_N)`. Signature: all inputs are `f32` in `[0.0, 1.0]`; output is a fully-populated `KernelParams`. No HAL types cross this boundary.
+
+2. **Audio format conversion at the hardware boundary, never inside kernels.** SAI delivers `u32` (24-bit left-justified in 32 bits). Convert to `f32` before calling `DspKernel::process_stereo(left: f32, right: f32)`. The kernel always sees normalized float audio.
+
+3. **Sample rate is a runtime parameter, never hardcoded.** Hardware determines the actual rate; `DspKernel::set_sample_rate()` and `KernelAdapter::new(kernel, sr)` accept it at init. Hardcoding 48000 anywhere is a bug.
+
+4. **No HAL types in kernel code.** `DspKernel`, `KernelParams`, and all DSP logic are `no_std`, HAL-free. Firmware crates import kernel crates; kernel crates never import firmware crates.
+
+5. **Smoothing belongs to the platform layer.** `KernelAdapter` owns `SmoothedParam`. Direct kernel use on embedded skips smoothing — ADC values are hardware RC-filtered. Duplicating software smoothing on hardware is waste.
+
+6. **Hardware diagnostics drive kernel validation.** The tier system (blinky → passthrough → single_effect → audio_input_diag → tone_out) is structured to validate kernel integration at each layer, not just hardware function.
+
+### Rationale
+
+The kernel architecture (ADR-028) was designed so the same kernel runs identically on embedded and desktop. This only holds if hardware code stays subordinate — if hardware shapes the kernel API, the kernel loses its platform independence and the architecture collapses to yet another port-per-platform design.
+
+### Alternatives Considered
+
+- **Hardware-native parameter types** (e.g., passing raw ADC counts into the kernel): Rejected — couples DSP math to hardware resolution and range, breaks desktop/plugin use.
+- **Platform-specific kernel variants**: Rejected — the kernel's value is its universality. `from_knobs()` is the single variability point.
+
+### Consequences
+
+- New hardware peripherals require a `from_knobs()` impl and an audio format conversion shim — nothing else.
+- Adding a new effect is hardware-agnostic: implement `DspKernel` + `KernelParams`, add `from_knobs()`, deploy everywhere.
+- Hardware diagnostic examples (`tone_out`, `square_out`, `audio_input_diag`) are first-class validation of the kernel boundary.
+
+### References
+
+- `crates/sonido-core/src/kernel/traits.rs` — `DspKernel::process_stereo()`, `KernelParams::from_knobs()`
+- `crates/sonido-daisy/examples/single_effect.rs` — reference `from_knobs()` usage on hardware
+- `docs/EMBEDDED.md` — Hardware Context governing principle, tier validation system
+- ADR-028 — Kernel Architecture (the system this principle protects)
