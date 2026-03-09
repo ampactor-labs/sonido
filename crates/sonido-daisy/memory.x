@@ -39,3 +39,27 @@ MEMORY
 
 /* Stack at top of DTCM — zero-wait-state access */
 _stack_start = ORIGIN(RAM) + LENGTH(RAM);
+
+/* SAI DMA buffers must be in DMA-accessible D2 SRAM1 (0x30000000).
+ * Without this section, .sram1_bss becomes an orphan and the linker
+ * places it at an unpredictable address → DMA bus fault → HardFault.
+ * The -R .sram1_bss objcopy flag strips this section from the flashed
+ * binary; GroundedArrayCell handles zero-init at runtime. */
+SECTIONS
+{
+    .sram1_bss (NOLOAD) :
+    {
+        . = ALIGN(4);
+        *(.sram1_bss)
+        *(.sram1_bss*)
+        . = ALIGN(4);
+    } > RAM_D2_DMA
+
+    .sdram_bss (NOLOAD) :
+    {
+        . = ALIGN(4);
+        *(.sdram_bss)
+        *(.sdram_bss*)
+        . = ALIGN(4);
+    } > SDRAM
+}
