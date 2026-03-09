@@ -41,7 +41,7 @@
 //! ```bash
 //! cd crates/sonido-daisy
 //! cargo objcopy --example single_effect --release -- -O binary -R .sram1_bss single_effect.bin
-//! # Press RESET — LED pulses (2.5s grace period). Hold BOOT to extend.
+//! # Press RESET, then flash within the 2.5s grace period:
 //! dfu-util -a 0 -s 0x90040000:leave -D single_effect.bin
 //! ```
 

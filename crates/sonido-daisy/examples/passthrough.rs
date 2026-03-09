@@ -16,7 +16,7 @@
 //! ```bash
 //! cd crates/sonido-daisy
 //! cargo objcopy --example passthrough --release -- -O binary -R .sram1_bss passthrough.bin
-//! # Press RESET — LED pulses (2.5s grace period). Hold BOOT to extend.
+//! # Press RESET, then flash within the 2.5s grace period:
 //! dfu-util -a 0 -s 0x90040000:leave -D passthrough.bin
 //! ```
 //!

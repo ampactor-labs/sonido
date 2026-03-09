@@ -8,7 +8,7 @@
 //! ```bash
 //! cd crates/sonido-daisy
 //! cargo objcopy --example bench_kernels --release -- -O binary bench.bin
-//! # Press RESET — LED pulses (2.5s grace period). Hold BOOT to extend.
+//! # Press RESET, then flash within the 2.5s grace period:
 //! dfu-util -a 0 -s 0x90040000:leave -D bench.bin
 //! ```
 //!

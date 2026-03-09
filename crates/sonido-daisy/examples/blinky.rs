@@ -12,7 +12,7 @@
 //! ```bash
 //! cd crates/sonido-daisy
 //! cargo objcopy --example blinky --release -- -O binary blinky.bin
-//! # Press RESET — LED pulses (2.5s grace period). Hold BOOT to extend.
+//! # Press RESET, then flash within the 2.5s grace period:
 //! dfu-util -a 0 -s 0x90040000:leave -D blinky.bin
 //! ```
 
