@@ -45,7 +45,7 @@
 //! ```bash
 //! cd crates/sonido-daisy
 //! cargo objcopy --example gpio_diag --release -- -O binary gpio_diag.bin
-//! # Press RESET — LED pulses (2.5s grace period). Hold BOOT to extend.
+//! # Press RESET, then flash within the 2.5s grace period:
 //! dfu-util -a 0 -s 0x90040000:leave -D gpio_diag.bin
 //! ```
 //!
