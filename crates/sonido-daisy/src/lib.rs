@@ -30,11 +30,15 @@
 use cortex_m::peripheral::DWT;
 use embassy_time::Timer;
 
-/// Blinks the Daisy Seed user LED (PC7) at 1 Hz — universal "firmware is alive" signal.
+/// Pulses the Daisy Seed user LED (PC7) with a double-blink heartbeat pattern.
 ///
-/// Spawn this task in every firmware binary before starting the audio loop so the
-/// LED confirms the firmware is running regardless of whether audio initialises
-/// successfully.
+/// The pattern mimics a cardiac lub-dub: two short flashes close together,
+/// then a longer rest — one cycle per second. Every firmware binary spawns
+/// this task before starting the audio loop so the LED confirms the firmware
+/// is running regardless of whether audio initialises successfully.
+///
+/// Timing (total cycle ≈ 1 s):
+/// - on 80 ms → off 80 ms → on 80 ms → off 760 ms
 ///
 /// # Example
 ///
@@ -47,10 +51,17 @@ use embassy_time::Timer;
 #[embassy_executor::task]
 pub async fn heartbeat(mut led: daisy_embassy::led::UserLed<'static>) {
     loop {
+        // lub
         led.on();
-        Timer::after_millis(500).await;
+        Timer::after_millis(80).await;
         led.off();
-        Timer::after_millis(500).await;
+        Timer::after_millis(80).await;
+        // dub
+        led.on();
+        Timer::after_millis(80).await;
+        led.off();
+        // rest — total cycle ~1 s
+        Timer::after_millis(760).await;
     }
 }
 
