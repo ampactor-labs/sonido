@@ -15,11 +15,6 @@ members = [
     "crates/sonido-plugin",
     "crates/sonido-graph-dsl",
 ]
-exclude = [
-    # Requires thumbv7em-none-eabihf cross-compilation target.
-    # Build from crate dir: cd crates/sonido-daisy && cargo build --release
-    "crates/sonido-daisy",
-]
 default-members = [
     "crates/sonido-core",
     "crates/sonido-effects",
