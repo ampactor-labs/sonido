@@ -60,19 +60,13 @@ impl Widget for BypassToggle<'_> {
                 glow::glow_circle(painter, center, radius, theme.colors.green, &theme);
             } else {
                 // OFF — dim ring outline
-                glow::glow_circle_stroke(
-                    painter, center, radius, theme.colors.dim, 1.5, &theme,
-                );
+                glow::glow_circle_stroke(painter, center, radius, theme.colors.dim, 1.5, &theme);
             }
 
             // Hover ring
             if response.hovered() {
                 let hover_color = theme.colors.cyan.gamma_multiply(0.4);
-                painter.circle_stroke(
-                    center,
-                    radius + 2.0,
-                    Stroke::new(1.0, hover_color),
-                );
+                painter.circle_stroke(center, radius + 2.0, Stroke::new(1.0, hover_color));
             }
 
             // Label

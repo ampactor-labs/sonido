@@ -27,7 +27,11 @@ pub fn glow_circle(
     theme: &SonidoTheme,
 ) {
     if !theme.reduced_fx {
-        painter.circle_filled(center, radius + theme.glow.bloom_radius, bloom_color(color, theme));
+        painter.circle_filled(
+            center,
+            radius + theme.glow.bloom_radius,
+            bloom_color(color, theme),
+        );
     }
     painter.circle_filled(center, radius, color);
 }
@@ -45,7 +49,10 @@ pub fn glow_circle_stroke(
         painter.circle_stroke(
             center,
             radius,
-            Stroke::new(stroke_width + theme.glow.bloom_radius * 2.0, bloom_color(color, theme)),
+            Stroke::new(
+                stroke_width + theme.glow.bloom_radius * 2.0,
+                bloom_color(color, theme),
+            ),
         );
     }
     painter.circle_stroke(center, radius, Stroke::new(stroke_width, color));
@@ -63,7 +70,10 @@ pub fn glow_line(
     if !theme.reduced_fx {
         painter.line_segment(
             [start, end],
-            Stroke::new(stroke_width + theme.glow.bloom_radius * 2.0, bloom_color(color, theme)),
+            Stroke::new(
+                stroke_width + theme.glow.bloom_radius * 2.0,
+                bloom_color(color, theme),
+            ),
         );
     }
     painter.line_segment([start, end], Stroke::new(stroke_width, color));
@@ -105,7 +115,10 @@ pub fn glow_arc(
         .map(|i| {
             let t = i as f32 / segments as f32;
             let angle = start_angle + t * sweep;
-            pos2(center.x + angle.cos() * radius, center.y + angle.sin() * radius)
+            pos2(
+                center.x + angle.cos() * radius,
+                center.y + angle.sin() * radius,
+            )
         })
         .collect();
 

@@ -16,8 +16,8 @@
 mod bridged_knob;
 pub mod fader;
 pub mod glow;
-pub mod led_display;
 mod knob;
+pub mod led_display;
 mod meter;
 mod morph_bar;
 mod toggle;

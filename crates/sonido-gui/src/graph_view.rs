@@ -699,8 +699,7 @@ impl SnarlViewer<SonidoNode> for SonidoViewer<'_> {
             }
             let activity = self.slot_activity.get(slot_idx).copied().unwrap_or(0.0);
             if activity > 0.01 {
-                let led_pos =
-                    egui::pos2(ui.max_rect().right() - 6.0, ui.max_rect().center().y);
+                let led_pos = egui::pos2(ui.max_rect().right() - 6.0, ui.max_rect().center().y);
                 let led_alpha = activity.clamp(0.2, 1.0);
                 let led_color = accent.gamma_multiply(led_alpha);
                 glow::glow_circle(ui.painter(), led_pos, 3.0, led_color, &self.theme);
@@ -736,9 +735,7 @@ impl SnarlViewer<SonidoNode> for SonidoViewer<'_> {
         snarl: &mut Snarl<SonidoNode>,
     ) -> impl egui_snarl::ui::SnarlPin + 'static {
         let color = self.node_accent(&snarl[pin.id.node]);
-        PinInfo::circle()
-            .with_fill(color)
-            .with_wire_color(color)
+        PinInfo::circle().with_fill(color).with_wire_color(color)
     }
 
     fn show_output(
@@ -750,9 +747,7 @@ impl SnarlViewer<SonidoNode> for SonidoViewer<'_> {
     ) -> impl egui_snarl::ui::SnarlPin + 'static {
         // Wire color follows the source (output) node's category.
         let color = self.node_accent(&snarl[pin.id.node]);
-        PinInfo::circle()
-            .with_fill(color)
-            .with_wire_color(color)
+        PinInfo::circle().with_fill(color).with_wire_color(color)
     }
 
     fn has_body(&mut self, _node: &SonidoNode) -> bool {

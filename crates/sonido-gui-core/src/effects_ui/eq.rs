@@ -51,11 +51,7 @@ impl ParametricEqPanel {
         theme: &SonidoTheme,
     ) {
         ui.horizontal(|ui| {
-            ui.label(
-                egui::RichText::new(label)
-                    .color(theme.colors.cyan)
-                    .small(),
-            );
+            ui.label(egui::RichText::new(label).color(theme.colors.cyan).small());
             ui.add_space(8.0);
 
             for offset in 0..3 {

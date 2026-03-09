@@ -190,7 +190,8 @@ fn led_segment_bar(
         let seg_color = lerp_color(cyan, amber, t_seg);
 
         let x = bar_rect.left() + i as f32 * (seg_width + gap);
-        let seg_rect = Rect::from_min_size(egui::pos2(x, bar_rect.top()), vec2(seg_width, seg_height));
+        let seg_rect =
+            Rect::from_min_size(egui::pos2(x, bar_rect.top()), vec2(seg_width, seg_height));
 
         if enabled && i <= slider_seg {
             // Lit segment

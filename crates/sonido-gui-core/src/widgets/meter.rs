@@ -165,10 +165,7 @@ impl Widget for LevelMeter<'_> {
                 // RMS bar
                 if rms_level > 0.001 {
                     let bar_width = inner.width() * rms_level;
-                    let bar_rect = Rect::from_min_size(
-                        inner.min,
-                        vec2(bar_width, inner.height()),
-                    );
+                    let bar_rect = Rect::from_min_size(inner.min, vec2(bar_width, inner.height()));
                     let color = theme.meter_segment_color(rms_level);
                     painter.rect_filled(bar_rect, 0.0, color);
                 }
@@ -192,10 +189,7 @@ impl Widget for LevelMeter<'_> {
                 let label_width = inner.width() - bar_width;
 
                 let bar_left = inner.right() - bar_width;
-                let bar_rect = Rect::from_min_max(
-                    pos2(bar_left, inner.top()),
-                    inner.max,
-                );
+                let bar_rect = Rect::from_min_max(pos2(bar_left, inner.top()), inner.max);
 
                 // Border around bar area only
                 painter.rect_stroke(
@@ -245,10 +239,7 @@ impl Widget for LevelMeter<'_> {
                     if y >= bar_inner.top() && y <= bar_inner.bottom() {
                         // Tick mark
                         painter.line_segment(
-                            [
-                                pos2(tick_right - tick_len, y),
-                                pos2(tick_right, y),
-                            ],
+                            [pos2(tick_right - tick_len, y), pos2(tick_right, y)],
                             Stroke::new(1.0, theme.colors.dim),
                         );
 
@@ -299,10 +290,7 @@ impl Widget for LevelMeter<'_> {
                 }
 
                 if clip_active {
-                    let clip_center = pos2(
-                        bar_rect.center().x,
-                        bar_inner.top() + 3.0,
-                    );
+                    let clip_center = pos2(bar_rect.center().x, bar_inner.top() + 3.0);
                     painter.circle_filled(clip_center, 3.0, theme.colors.red);
                 }
             }

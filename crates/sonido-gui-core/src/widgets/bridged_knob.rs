@@ -11,8 +11,8 @@
 //! - [`bridged_combo`] — combo box for enum parameters
 //! - [`gesture_wrap`] — low-level gesture protocol for custom widgets
 
-use super::fader::Fader;
 use super::Knob;
+use super::fader::Fader;
 use crate::theme::SonidoTheme;
 use crate::widgets::glow;
 use crate::widgets::led_display::LedDisplay;
@@ -295,11 +295,25 @@ pub fn bridged_knob_with_morph(
 
         // A marker — cyan (snapshot A)
         let a_angle = start_angle + norm_a * sweep;
-        draw_marker_tick(painter, center, marker_radius, a_angle, theme.colors.cyan, &theme);
+        draw_marker_tick(
+            painter,
+            center,
+            marker_radius,
+            a_angle,
+            theme.colors.cyan,
+            &theme,
+        );
 
         // B marker — amber (snapshot B)
         let b_angle = start_angle + norm_b * sweep;
-        draw_marker_tick(painter, center, marker_radius, b_angle, theme.colors.amber, &theme);
+        draw_marker_tick(
+            painter,
+            center,
+            marker_radius,
+            b_angle,
+            theme.colors.amber,
+            &theme,
+        );
     }
 
     response
@@ -388,10 +402,7 @@ pub fn bridged_fader(
         .map(|d| (d.min, d.max, d.default))
         .unwrap_or((0.0, 1.0, 0.5));
 
-    let label = desc
-        .as_ref()
-        .map(|d| d.short_name)
-        .unwrap_or("?");
+    let label = desc.as_ref().map(|d| d.short_name).unwrap_or("?");
 
     let normalized = normalize(desc.as_ref(), plain_value, min, max);
     let default_normalized = normalize(desc.as_ref(), default, min, max);

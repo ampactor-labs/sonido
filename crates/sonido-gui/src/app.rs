@@ -672,13 +672,7 @@ impl SonidoApp {
                     };
                     let (led_rect, led_resp) =
                         ui.allocate_exact_size(vec2(16.0, 16.0), egui::Sense::click());
-                    glow::glow_circle(
-                        ui.painter(),
-                        led_rect.center(),
-                        5.0,
-                        led_color,
-                        &theme,
-                    );
+                    glow::glow_circle(ui.painter(), led_rect.center(), 5.0, led_color, &theme);
                     if led_resp.clicked() {
                         self.bridge.set_bypassed(slot, !is_bypassed);
                     }
@@ -790,23 +784,17 @@ impl SonidoApp {
         {
             match crate::session::Session::load(&path) {
                 Ok(session) => {
-                    self.graph_view
-                        .restore_session(&session, &self.registry);
+                    self.graph_view.restore_session(&session, &self.registry);
                     // Compile the restored graph and send to audio thread
                     self.compile_and_apply();
                     // Restore I/O gains
                     self.audio_bridge.input_gain().set(session.input_gain);
-                    self.audio_bridge
-                        .master_volume()
-                        .set(session.master_volume);
+                    self.audio_bridge.master_volume().set(session.master_volume);
                     // Restore per-effect params
                     for (node_idx, state) in &session.params {
                         let mut slot = 0usize;
                         for (i, entry) in session.nodes.iter().enumerate() {
-                            if matches!(
-                                entry.node,
-                                crate::session::SessionNode::Effect { .. }
-                            ) {
+                            if matches!(entry.node, crate::session::SessionNode::Effect { .. }) {
                                 if i == *node_idx {
                                     for (p, &val) in state.params.iter().enumerate() {
                                         self.bridge.set(
@@ -834,7 +822,13 @@ impl SonidoApp {
 }
 
 /// Draw a sparkline graph with phosphor glow from a history of values.
-fn draw_sparkline(ui: &mut egui::Ui, history: &[f32], color: egui::Color32, width: f32, height: f32) {
+fn draw_sparkline(
+    ui: &mut egui::Ui,
+    history: &[f32],
+    color: egui::Color32,
+    width: f32,
+    height: f32,
+) {
     if history.is_empty() {
         return;
     }
@@ -914,11 +908,7 @@ impl eframe::App for SonidoApp {
             250
         }));
         #[cfg(not(target_arch = "wasm32"))]
-        ctx.request_repaint_after(Duration::from_millis(if is_animating {
-            16
-        } else {
-            250
-        }));
+        ctx.request_repaint_after(Duration::from_millis(if is_animating { 16 } else { 250 }));
 
         // Global keyboard shortcuts (only when no text widget is focused)
         let no_widget_focused = ctx.memory(|m| m.focused().is_none());
@@ -1070,7 +1060,6 @@ impl eframe::App for SonidoApp {
                 ),
             ));
         });
-
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {

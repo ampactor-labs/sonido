@@ -393,11 +393,7 @@ impl SignalGenerator {
     fn gen_impulse(&mut self, left: &mut [f32], right: &mut [f32]) {
         let amp = self.amplitude;
         for (l, r) in left.iter_mut().zip(right.iter_mut()) {
-            let sample = if self.impulse_counter == 0 {
-                amp
-            } else {
-                0.0
-            };
+            let sample = if self.impulse_counter == 0 { amp } else { 0.0 };
             *l = sample;
             *r = sample;
             self.impulse_counter += 1;
@@ -416,11 +412,7 @@ impl SignalGenerator {
         let freqs = [root_freq, root_freq * 5.0 / 4.0, root_freq * 3.0 / 2.0];
         let inv_sr = 1.0 / self.sample_rate as f64;
         let amp = self.amplitude / 3.0; // equal voice mix
-        let phase_incs: [f64; 3] = [
-            freqs[0] * inv_sr,
-            freqs[1] * inv_sr,
-            freqs[2] * inv_sr,
-        ];
+        let phase_incs: [f64; 3] = [freqs[0] * inv_sr, freqs[1] * inv_sr, freqs[2] * inv_sr];
 
         for (l, r) in left.iter_mut().zip(right.iter_mut()) {
             let mut sum: f64 = 0.0;
@@ -500,10 +492,7 @@ mod tests {
         let mean: f32 = left.iter().sum::<f32>() / left.len() as f32;
         let variance: f32 =
             left.iter().map(|&s| (s - mean).powi(2)).sum::<f32>() / left.len() as f32;
-        assert!(
-            variance > 0.01,
-            "white noise variance too low: {variance}"
-        );
+        assert!(variance > 0.01, "white noise variance too low: {variance}");
     }
 
     #[test]
@@ -599,14 +588,8 @@ mod tests {
         for (i, (&l, &r)) in left.iter().zip(right.iter()).enumerate() {
             assert!(l.is_finite(), "sample {i} left is not finite: {l}");
             assert!(r.is_finite(), "sample {i} right is not finite: {r}");
-            assert!(
-                l.abs() < 2.0,
-                "sample {i} left out of range: {l}"
-            );
-            assert!(
-                r.abs() < 2.0,
-                "sample {i} right out of range: {r}"
-            );
+            assert!(l.abs() < 2.0, "sample {i} left out of range: {l}");
+            assert!(r.abs() < 2.0, "sample {i} right out of range: {r}");
         }
     }
 }

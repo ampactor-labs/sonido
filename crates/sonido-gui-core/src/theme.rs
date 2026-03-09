@@ -310,8 +310,7 @@ impl SonidoTheme {
 
         // Widget colors — dim base, amber accents
         visuals.widgets.noninteractive.bg_fill = self.colors.void;
-        visuals.widgets.noninteractive.fg_stroke =
-            Stroke::new(1.0, self.colors.text_secondary);
+        visuals.widgets.noninteractive.fg_stroke = Stroke::new(1.0, self.colors.text_secondary);
         visuals.widgets.noninteractive.corner_radius = CornerRadius::same(4);
 
         visuals.widgets.inactive.bg_fill = self.colors.dim;

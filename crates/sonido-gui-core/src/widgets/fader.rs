@@ -177,10 +177,7 @@ impl Widget for Fader<'_> {
             let thumb_y = track_rect.bottom() - *self.value * track_rect.height();
             let thumb_w = self.width * 0.8;
             let thumb_x = rect.center().x - thumb_w * 0.5;
-            let thumb_rect = Rect::from_min_size(
-                pos2(thumb_x, thumb_y - 1.5),
-                vec2(thumb_w, 3.0),
-            );
+            let thumb_rect = Rect::from_min_size(pos2(thumb_x, thumb_y - 1.5), vec2(thumb_w, 3.0));
             painter.rect_filled(thumb_rect, 1.0, color);
 
             // Label below track

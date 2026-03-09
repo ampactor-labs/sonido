@@ -37,18 +37,18 @@ const DIGIT_SEGMENTS: [u8; 10] = [
 fn char_segments(c: char) -> Option<u8> {
     match c {
         '0'..='9' => Some(DIGIT_SEGMENTS[(c as u8 - b'0') as usize]),
-        '-' => Some(0b1000000),       // G only
-        ' ' => Some(0),              // all off (ghost only)
-        'd' => Some(0b1011110),       // B C D E G
-        'b' => Some(0b1111100),       // C D E F G
-        'B' => Some(0b1111100),       // same as b
-        'H' => Some(0b1110110),       // B C E F G
-        'h' => Some(0b1110100),       // C E F G
-        'k' => Some(0b1110100),       // approximation
-        'z' => Some(0b1011011),       // same as 2
-        ':' => None,                  // special: draw as two dots
-        '.' => None,                  // special: draw as single dot
-        _ => Some(0),                // unsupported -> blank
+        '-' => Some(0b1000000), // G only
+        ' ' => Some(0),         // all off (ghost only)
+        'd' => Some(0b1011110), // B C D E G
+        'b' => Some(0b1111100), // C D E F G
+        'B' => Some(0b1111100), // same as b
+        'H' => Some(0b1110110), // B C E F G
+        'h' => Some(0b1110100), // C E F G
+        'k' => Some(0b1110100), // approximation
+        'z' => Some(0b1011011), // same as 2
+        ':' => None,            // special: draw as two dots
+        '.' => None,            // special: draw as single dot
+        _ => Some(0),           // unsupported -> blank
     }
 }
 
@@ -159,8 +159,20 @@ impl Widget for LedDisplay {
                     ':' => {
                         // Colon: two dots vertically centered
                         let mid_x = x + dw * 0.5;
-                        glow::glow_circle(painter, pos2(mid_x, rect.top() + dh * 0.3), 1.5, color, &theme);
-                        glow::glow_circle(painter, pos2(mid_x, rect.top() + dh * 0.7), 1.5, color, &theme);
+                        glow::glow_circle(
+                            painter,
+                            pos2(mid_x, rect.top() + dh * 0.3),
+                            1.5,
+                            color,
+                            &theme,
+                        );
+                        glow::glow_circle(
+                            painter,
+                            pos2(mid_x, rect.top() + dh * 0.7),
+                            1.5,
+                            color,
+                            &theme,
+                        );
                         x += gap + 8.0;
                         continue;
                     }
@@ -168,7 +180,16 @@ impl Widget for LedDisplay {
                 }
 
                 let segments = char_segments(ch).unwrap_or(0);
-                draw_7seg(painter, origin, dw, dh, segments, color, ghost_color, self.show_ghosts);
+                draw_7seg(
+                    painter,
+                    origin,
+                    dw,
+                    dh,
+                    segments,
+                    color,
+                    ghost_color,
+                    self.show_ghosts,
+                );
                 x += dw + gap;
             }
         }
@@ -196,19 +217,40 @@ fn draw_7seg(
     // Segment endpoints: (start, end)
     let seg_lines: [(Pos2, Pos2); 7] = [
         // A: top horizontal
-        (pos2(origin.x + pad, origin.y), pos2(origin.x + w - pad, origin.y)),
+        (
+            pos2(origin.x + pad, origin.y),
+            pos2(origin.x + w - pad, origin.y),
+        ),
         // B: top-right vertical
-        (pos2(origin.x + w, origin.y + pad), pos2(origin.x + w, origin.y + half_h - pad)),
+        (
+            pos2(origin.x + w, origin.y + pad),
+            pos2(origin.x + w, origin.y + half_h - pad),
+        ),
         // C: bottom-right vertical
-        (pos2(origin.x + w, origin.y + half_h + pad), pos2(origin.x + w, origin.y + h - pad)),
+        (
+            pos2(origin.x + w, origin.y + half_h + pad),
+            pos2(origin.x + w, origin.y + h - pad),
+        ),
         // D: bottom horizontal
-        (pos2(origin.x + pad, origin.y + h), pos2(origin.x + w - pad, origin.y + h)),
+        (
+            pos2(origin.x + pad, origin.y + h),
+            pos2(origin.x + w - pad, origin.y + h),
+        ),
         // E: bottom-left vertical
-        (pos2(origin.x, origin.y + half_h + pad), pos2(origin.x, origin.y + h - pad)),
+        (
+            pos2(origin.x, origin.y + half_h + pad),
+            pos2(origin.x, origin.y + h - pad),
+        ),
         // F: top-left vertical
-        (pos2(origin.x, origin.y + pad), pos2(origin.x, origin.y + half_h - pad)),
+        (
+            pos2(origin.x, origin.y + pad),
+            pos2(origin.x, origin.y + half_h - pad),
+        ),
         // G: middle horizontal
-        (pos2(origin.x + pad, origin.y + half_h), pos2(origin.x + w - pad, origin.y + half_h)),
+        (
+            pos2(origin.x + pad, origin.y + half_h),
+            pos2(origin.x + w - pad, origin.y + half_h),
+        ),
     ];
 
     for (i, &(start, end)) in seg_lines.iter().enumerate() {

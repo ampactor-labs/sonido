@@ -9,7 +9,7 @@
 
 use crate::signal_generator::{SignalType, SourceMode};
 use crossbeam_channel::Sender;
-use egui::{pos2, vec2, Rect, Sense, Stroke, StrokeKind, Ui};
+use egui::{Rect, Sense, Stroke, StrokeKind, Ui, pos2, vec2};
 use sonido_gui_core::theme::SonidoTheme;
 use sonido_gui_core::widgets::glow;
 use sonido_gui_core::widgets::led_display::LedDisplay;
@@ -443,9 +443,7 @@ impl FilePlayer {
                             .clicked()
                         {
                             self.gen_signal_type = t;
-                            let _ = self
-                                .transport_tx
-                                .send(TransportCommand::SetSignalType(t));
+                            let _ = self.transport_tx.send(TransportCommand::SetSignalType(t));
                         }
                     }
                 });
@@ -578,9 +576,7 @@ impl FilePlayer {
                             .clicked()
                         {
                             self.gen_signal_type = t;
-                            let _ = self
-                                .transport_tx
-                                .send(TransportCommand::SetSignalType(t));
+                            let _ = self.transport_tx.send(TransportCommand::SetSignalType(t));
                         }
                     }
                 });
@@ -599,18 +595,15 @@ impl FilePlayer {
                 );
                 let mut log_freq = self.gen_frequency.ln();
                 let resp = ui.add(
-                    egui::Slider::new(
-                        &mut log_freq,
-                        (20.0_f32).ln()..=(20000.0_f32).ln(),
-                    )
-                    .show_value(false)
-                    .custom_formatter(|v, _| format!("{:.0} Hz", v.exp()))
-                    .custom_parser(|s| {
-                        s.trim_end_matches(" Hz")
-                            .parse::<f64>()
-                            .ok()
-                            .map(|v| v.ln())
-                    }),
+                    egui::Slider::new(&mut log_freq, (20.0_f32).ln()..=(20000.0_f32).ln())
+                        .show_value(false)
+                        .custom_formatter(|v, _| format!("{:.0} Hz", v.exp()))
+                        .custom_parser(|s| {
+                            s.trim_end_matches(" Hz")
+                                .parse::<f64>()
+                                .ok()
+                                .map(|v| v.ln())
+                        }),
                 );
                 if resp.changed() {
                     self.gen_frequency = log_freq.exp();
@@ -772,9 +765,7 @@ impl FilePlayer {
                 } else {
                     0.0
                 };
-                if let Some(new_pos) =
-                    segmented_progress_bar(ui, fill_ratio, 200.0, 14.0, &theme)
-                {
+                if let Some(new_pos) = segmented_progress_bar(ui, fill_ratio, 200.0, 14.0, &theme) {
                     let seek_pos = new_pos * self.duration_secs;
                     let _ = self.transport_tx.send(TransportCommand::Seek(seek_pos));
                     self.position_secs = seek_pos;
@@ -908,9 +899,9 @@ fn segmented_progress_bar(
 
     // Click/drag to seek
     let new_pos = if response.clicked() || response.dragged() {
-        response.interact_pointer_pos().map(|pos| {
-            ((pos.x - rect.left()) / rect.width()).clamp(0.0, 1.0)
-        })
+        response
+            .interact_pointer_pos()
+            .map(|pos| ((pos.x - rect.left()) / rect.width()).clamp(0.0, 1.0))
     } else {
         None
     };

@@ -1097,8 +1097,7 @@ impl ProcessingGraph {
                             // Fully bypassed and fade complete — copy input to output,
                             // skip effect processing entirely (massive CPU savings).
                             if *input_buf != *output_buf {
-                                let (inp, out) =
-                                    pool.get_ref_and_mut(*input_buf, *output_buf);
+                                let (inp, out) = pool.get_ref_and_mut(*input_buf, *output_buf);
                                 out.left[..len].copy_from_slice(&inp.left[..len]);
                                 out.right[..len].copy_from_slice(&inp.right[..len]);
                             }
@@ -1107,10 +1106,8 @@ impl ProcessingGraph {
                             // Phase 1: Save dry signal before effect processing.
                             if bypass_fading {
                                 let src = pool.get(*input_buf);
-                                node.bypass_buf.left[..len]
-                                    .copy_from_slice(&src.left[..len]);
-                                node.bypass_buf.right[..len]
-                                    .copy_from_slice(&src.right[..len]);
+                                node.bypass_buf.left[..len].copy_from_slice(&src.left[..len]);
+                                node.bypass_buf.right[..len].copy_from_slice(&src.right[..len]);
                             }
 
                             // Phase 2: Process through effect.
@@ -1122,8 +1119,7 @@ impl ProcessingGraph {
                                         &mut buf.right[..len],
                                     );
                                 } else {
-                                    let (inp, out) =
-                                        pool.get_ref_and_mut(*input_buf, *output_buf);
+                                    let (inp, out) = pool.get_ref_and_mut(*input_buf, *output_buf);
                                     effect.process_block_stereo(
                                         &inp.left[..len],
                                         &inp.right[..len],
@@ -1138,16 +1134,10 @@ impl ProcessingGraph {
                                 let out = pool.get_mut(*output_buf);
                                 for i in 0..len {
                                     let fade = node.bypass_fade.advance();
-                                    out.left[i] = wet_dry_mix(
-                                        node.bypass_buf.left[i],
-                                        out.left[i],
-                                        fade,
-                                    );
-                                    out.right[i] = wet_dry_mix(
-                                        node.bypass_buf.right[i],
-                                        out.right[i],
-                                        fade,
-                                    );
+                                    out.left[i] =
+                                        wet_dry_mix(node.bypass_buf.left[i], out.left[i], fade);
+                                    out.right[i] =
+                                        wet_dry_mix(node.bypass_buf.right[i], out.right[i], fade);
                                 }
                             }
                         }
