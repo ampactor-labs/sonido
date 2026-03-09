@@ -162,9 +162,115 @@ See ADR-028 in `docs/DESIGN_DECISIONS.md`.
 
 ---
 
-## New Capabilities (v0.3+)
+## Near-Term Priorities (v0.3)
 
-Capability expansions that require new crates or significant architectural additions.
+Informed by analysis of DigiTech's design philosophy (Tom Cram era): musicality over technical correctness, dynamic response to playing dynamics ("volume knob cleanup"), and platform-appropriate design. These priorities target the gap between "correct DSP" and "inspiring instrument."
+
+### Dynamic Waveshaper Response
+
+**What it is:** Input-level-aware distortion that changes character with playing dynamics — not just gain, but the waveshaping transfer function itself. Roll back the guitar volume, and the clipping mode softens from hard clip to gentle saturation. Dig in hard, and harmonic content shifts from even to odd harmonics. This is the "volume knob cleanup" behavior that defines great analog distortion circuits.
+
+**Why it matters:** Sonido's distortion has 4 static waveshaper modes. Real tube amps and classic transistor circuits have a continuous, level-dependent response where the transfer function shape changes with input amplitude. This is the single most-cited quality gap between digital and analog distortion. Tom Cram's DigiTech designs (Whammy, DOD reissues) prioritized this dynamic feel above all other DSP qualities.
+
+**Implementation approach:**
+- Envelope follower modulates waveshaper blend coefficient in real time
+- Low input → soft clip (smooth tanh), high input → harder asymmetric clip
+- Configurable response curve and sensitivity
+- Builds on existing `EnvelopeFollower` + distortion kernel
+
+**Estimated scope:** ~200–400 LOC modification to `DistortionKernel` + new `DynamicWaveshaper` utility in sonido-core.
+
+**Status:** Not started. High priority — addresses the most fundamental quality gap.
+
+---
+
+### Pitch Shifting / Harmonizer
+
+**What it is:** Real-time chromatic pitch shifting with harmonizer modes. Single-voice pitch shift (clean octave up/down, fixed intervals) and multi-voice harmonizer (intelligent harmony based on key/scale).
+
+**Why it matters:** Pitch shifting is the most commercially successful guitar DSP category (DigiTech Whammy alone sustained the company for decades). It's also a prerequisite for the Space Station 2.0 vision. No pitch shifting capability exists in Sonido today.
+
+**Implementation approach:**
+- Phase vocoder in sonido-core (overlap-add FFT, ~800 LOC)
+- Fixed interval modes: octave, 5th, 4th, 3rd, minor 3rd
+- Whammy-style expression pedal sweep (continuous pitch bend)
+- Chromatic quantization option (snap to nearest semitone)
+- Polyphonic tracking as a stretch goal
+
+**Dependencies:** FFT infrastructure exists in sonido-analysis. Needs real-time bridge.
+
+**Estimated scope:** ~1,200–1,800 LOC for phase vocoder + pitch shift effect kernel.
+
+**Status:** Not started. Second highest priority after dynamic waveshaper.
+
+---
+
+### Amp & Cabinet Simulation
+
+**What it is:** Algorithmic amp modeling (preamp stages, tone stack, power amp compression) paired with cabinet impulse response (IR) convolution. Not neural capture — algorithmic models for the amp, convolution for the cab.
+
+**Why it matters:** Amp+cab sim is table stakes for any guitar processor used without a physical amplifier. The existing Preamp effect is a clean gain stage. Musicians expect at minimum a few amp voicings (clean, crunch, high gain) with matching cabinet responses.
+
+**Implementation approach:**
+- Amp model: cascaded gain stages with tone stack (TMB) using existing SVF/biquad
+- 3–5 amp voicings as parameter presets (clean Fender-ish, crunch Marshall-ish, high-gain Mesa-ish)
+- Cabinet IR: uniform-partition convolution reverb (~1,500 LOC, also enables convolution reverb effect)
+- Ship with 5–10 Creative Commons cabinet IRs
+- IR loader for user-supplied WAV files
+
+**Dependencies:** Convolution engine (new). Amp modeling builds on existing filter primitives.
+
+**Estimated scope:** ~800 LOC amp model kernel + ~1,500 LOC convolution engine.
+
+**Status:** Not started.
+
+---
+
+### MIDI CC Mapping & Expression Pedal
+
+**What it is:** Runtime MIDI CC-to-parameter routing with learn mode, plus expression pedal support with configurable response curves.
+
+**Why it matters:** External control transforms a processor from a studio tool into a performance instrument. Expression pedal control is the foundation for scene morphing, wah, and Whammy-style pitch bending. MIDI CC mapping enables integration with DAWs, controllers, and pedalboard switchers.
+
+**Implementation approach:**
+- MIDI CC routing table: `HashMap<(u8, u8), (SlotIndex, ParamIndex)>` (channel, CC → effect param)
+- Learn mode: next CC received maps to selected parameter
+- Expression pedal: special CC (typically CC11 or CC100) with per-mapping response curves
+- Response curves: linear, logarithmic, S-curve, custom LUT (already designed in sonido-platform)
+- GUI: MIDI mapping overlay showing active assignments
+
+**Dependencies:** MIDI input (new for GUI — CLI `realtime` already handles MIDI). Expression pedal is a special case of CC mapping.
+
+**Estimated scope:** ~600 LOC MIDI routing + ~300 LOC GUI overlay.
+
+**Status:** Not started. Platform traits for expression/CC already exist in sonido-platform.
+
+---
+
+### Curated Preset Library
+
+**What it is:** A library of musically useful preset chains — not just "default distortion" but complete signal paths designed for specific musical contexts (blues rhythm, shoegaze wash, funk clean, etc.).
+
+**Why it matters:** DigiTech's most successful products (Whammy, Space Station, RP series) shipped with curated presets that demonstrated the hardware's capability and gave players immediate musical results. Sonido has a preset system but ships with only factory defaults per effect. A curated library turns "DSP framework" into "instrument."
+
+**Implementation approach:**
+- 20–30 preset chains in `presets/curated/` as TOML files
+- Categories: clean, crunch, high gain, ambient, experimental, utility
+- Each preset includes a description and suggested use case
+- GUI preset browser with category filtering
+- Presets reference effects by registry ID + parameter values
+
+**Dependencies:** None — preset system already works.
+
+**Estimated scope:** Mostly creative work (designing the presets). ~200 LOC for category browser UI.
+
+**Status:** Not started.
+
+---
+
+### Expanded Capabilities (v0.3+)
+
+Additional capability expansions that require new crates or significant architectural work.
 
 ### Wave Digital Filter Library (sonido-wdf)
 
@@ -411,6 +517,18 @@ More powerful approach: conditioned networks, where a single GRU takes a style p
 **Status:** Research stage. Worth tracking; not a near-term deliverable.
 
 ---
+
+## Design Philosophy
+
+Informed by analysis of DigiTech's R&D approach under Tom Cram and the broader pedal industry:
+
+**Musicality over technical correctness.** A waveshaper that responds to playing dynamics is more valuable than one with lower THD. Optimize for how it *feels* to play through, not how it measures on a bench. Golden file tests ensure correctness; the creative challenge is making correct DSP that also inspires.
+
+**Dynamic response to playing.** The best analog circuits change character with input level — not just volume, but tonal quality, harmonic content, and feel. Digital effects should exploit this: envelope followers modulating waveshaper curves, input dynamics driving effect parameters, compression that breathes with the player.
+
+**Platform-appropriate design.** Some effects are better analog (simple fuzz, germanium character). Some are only possible digital (pitch shifting, spectral freeze, topology morphing). Focus Sonido's effort on effects where digital has a genuine advantage, and model analog circuits (via WDF) where their character matters.
+
+**Expression as a first-class feature.** An effect with expression pedal control is a different instrument than the same effect with fixed parameters. Scene morphing, Whammy-style pitch bending, and real-time topology changes are the capabilities that create "what IS that?" moments. Every new effect should consider its expression mapping.
 
 ## Development Principles
 

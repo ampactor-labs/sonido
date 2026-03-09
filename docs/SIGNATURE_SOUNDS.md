@@ -26,6 +26,28 @@ exploited it for sounds that can't be made any other way.
 
 ## Design Principles
 
+### Musicality Over Correctness (The Tom Cram Principle)
+
+DigiTech's best products — Whammy, Space Station, DOD reissues — succeeded because
+R&D prioritized *feel* over spec sheets. Tom Cram's team evaluated effects by
+playing through them, not by measuring THD. A waveshaper that cleans up when you
+roll back the guitar volume is more valuable than one with 0.001% lower distortion.
+This is the "volume knob cleanup" test: does the effect respond to playing dynamics
+the way a great amp does?
+
+**Implications for Sonido:** Every effect should be evaluated by playing through it
+with a real guitar signal (or the built-in signal generator). Golden file tests
+ensure correctness; the creative bar is whether the effect makes you want to keep
+playing.
+
+### Dynamic Response
+
+The best analog circuits change character with input level — not just volume, but
+tonal quality, harmonic content, and feel. A tube amp's transfer function morphs
+continuously from clean headroom through soft saturation to hard clipping. Digital
+effects should exploit this: envelope followers modulating waveshaper curves, input
+dynamics driving effect depth, compression that breathes.
+
 ### Real-Time Expression
 
 The performance IS the sound. Parameters should respond to physical gestures --
@@ -58,6 +80,46 @@ not afterthoughts.
 ---
 
 ## Candidate Ideas
+
+### 0. Dynamic Waveshaper Response
+
+**Concept:** Distortion that changes character based on playing dynamics — not just
+gain scaling, but the actual waveshaping transfer function morphing continuously
+with input level. Roll back the guitar volume and the clipping softens from hard
+clip to gentle saturation. Dig in hard and harmonic content shifts from even to
+odd harmonics. This is the "volume knob cleanup" that defines every great tube amp
+and the best transistor circuits (DOD 250, Klon Centaur, TS808).
+
+**Existing infrastructure:**
+- `DistortionKernel` with 4 waveshaper modes (soft clip, hard clip, foldback, asymmetric)
+- `EnvelopeFollower` for input level tracking
+- `KernelParams` for per-sample parameter access
+- ADAA anti-aliasing already in the distortion hot path
+
+**What's novel:** Most digital distortions select a fixed transfer function and
+apply it at all levels. Dynamic waveshaping blends between transfer functions based
+on instantaneous input envelope. The blend coefficient becomes the "feel" parameter
+— how aggressively the character shifts with dynamics. At maximum sensitivity, you
+get tube-like cleanup; at zero, you get the traditional fixed waveshaper.
+
+**Implementation sketch:**
+- `DynamicWaveshaper` utility: takes envelope value + blend curve → waveshaper mix coefficient
+- Modify `DistortionKernel` to blend between soft-clip and current mode based on envelope
+- New params: `dynamics` (sensitivity 0-100%), `response` (envelope attack/release)
+- Envelope follower per-sample, not per-block (responsive to individual pick attacks)
+- Optional: asymmetric response (fast attack for pick transient, slow release for sustain)
+
+**Why this is #0:** This is the single most impactful change Sonido can make. It
+transforms distortion from "technically correct" to "feels like an amp." Every
+guitarist evaluates distortion by rolling back the volume knob. If it doesn't clean
+up, it's digital. If it does, it's magic.
+
+**References:**
+- David Yeh, "Digital Implementation of Musical Distortion Circuits" (DAFx-2008) — dynamic waveshaping models
+- Tom Cram (DigiTech/DOD) — "volume knob cleanup" as the primary design target for digital distortion
+- Klon Centaur circuit analysis — level-dependent germanium diode clipping crossover
+
+---
 
 ### 1. Scene Morphing
 
@@ -336,6 +398,7 @@ that would require 6 simultaneous knob turns.
 
 | Idea | Novelty | Existing infra | Implementation effort | Priority |
 |------|---------|----------------|----------------------|----------|
+| Dynamic Waveshaper | High | High (distortion kernel, envelope) | Low | **0th** |
 | Scene Morphing | Medium | High (`lerp()`, expression planned) | Low-Medium | **1st** |
 | Living Topology | High | High (DAG, crossfade, DSL) | Medium | **2nd** |
 | Cross-Domain DSP | Very High | High (analysis crate) | Medium-High | **3rd** |
@@ -343,11 +406,17 @@ that would require 6 simultaneous knob turns.
 | Space Station 2.0 | Medium | High (synth, DAG) | High (pitch detect) | 5th |
 | Adaptive Effects | Very High | Medium (LMS exists, needs RT bridge) | High | 6th |
 
-Scene morphing and living topology are the highest-leverage starting points:
-they build on infrastructure that already works and create genuinely new
-interaction paradigms. Cross-domain DSP is the most novel -- no commercial
-product uses PAC or adaptive filtering for guitar effects -- but requires
-bridging the offline analysis path to real-time processing.
+Dynamic waveshaper response is the highest-leverage single change: low effort
+(~200-400 LOC), builds on existing distortion kernel and envelope follower,
+and directly addresses the #1 quality gap between digital and analog distortion.
+This is the "does it clean up when you roll back the volume?" test that every
+guitarist applies instinctively.
+
+Scene morphing and living topology follow as the next highest-leverage
+starting points: they build on infrastructure that already works and create
+genuinely new interaction paradigms. Cross-domain DSP is the most novel --
+no commercial product uses PAC or adaptive filtering for guitar effects --
+but requires bridging the offline analysis path to real-time processing.
 
 ---
 
