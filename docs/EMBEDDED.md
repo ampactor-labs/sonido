@@ -3,8 +3,9 @@
 Deploying Sonido on the Electrosmith Daisy Seed (STM32H750 Cortex-M7) and the
 Cleveland Music Co. Hothouse DIY pedal platform.
 
-> **Current hardware:** Daisy Seed 65 MB (Rev 7 / PCM3060), bare board + USB.
-> Hothouse kit arriving separately — Phases 3-4 require it.
+> **Current hardware:** Daisy Seed 65 MB (Rev 7 / PCM3060) + Hothouse DIY pedal
+> platform (assembled, not yet validated). Phases 1-2 require bare Seed + USB;
+> Phases 3-4 require the Hothouse for audio I/O and controls.
 
 ---
 
@@ -33,7 +34,7 @@ Cleveland Music Co. Hothouse DIY pedal platform.
 |--------|---------|------|:-----------:|-----|
 | ITCM | `0x0000_0000` | 64 KB | 0 (instruction only) | Code hot paths |
 | DTCM | `0x2000_0000` | 128 KB | 0 (data only) | Audio buffers, stack, hot DSP state |
-| AXI SRAM | `0x2400_0000` | 512 KB | 0–1 | Delay lines, reverb buffers, heap |
+| AXI SRAM | `0x2400_0000` | 512 KB (480 KB usable under BOOT_SRAM) | 0–1 | Delay lines, reverb buffers, heap |
 | D2 SRAM1 | `0x3000_0000` | 128 KB | 1–2 | DMA buffers (SAI audio) |
 | D2 SRAM2 | `0x3002_0000` | 128 KB | 1–2 | DMA buffers |
 | D2 SRAM3 | `0x3004_0000` | 32 KB | 1–2 | Small peripheral buffers |
@@ -54,7 +55,7 @@ Codec ADC → SAI RX → DMA → SRAM buffer (ping)
 ```
 
 - **DMA double-buffer** — CPU processes one half while DMA fills/drains the other
-- **Block size** — 32 samples default (0.67 ms at 48 kHz), configurable to 64
+- **Block size** — 32 samples default in libDaisy C++ (0.67 ms at 48 kHz). Sonido uses 128 samples (2.67 ms) — see `BLOCK_SIZE` in `sonido-daisy/src/lib.rs`
 - **Format** — 24-bit I2S, processed as `f32` internally
 - **Known limitation** — Embassy uses a circular-buffer workaround, not hardware
   M0AR/M1AR double-buffer registers
@@ -346,67 +347,16 @@ cargo run --example <name> --release
 
 ## Troubleshooting
 
-### USB Cable
-
-The single most common issue. **Charge-only cables have 2 wires (power only)**;
-data cables have 4 wires (power + D+/D-). If `lsusb` shows nothing after
-entering DFU mode, try a different cable.
-
-### DFU Device Not Detected
-
-```bash
-lsusb | grep "0483:df11"
-```
-
-Should show `STMicroelectronics STM Device in DFU Mode`. If not:
-
-1. Verify DFU entry: hold BOOT, press/release RESET, release BOOT
-2. Try a different USB cable (charge-only cables won't work)
-3. Check udev rules (see Prerequisites)
-4. Try a different USB port (avoid hubs)
-
-### "Invalid DFU suffix signature" Warning
-
-```
-Warning: Invalid DFU suffix signature
-A valid DFU suffix will be required in a future dfu-util release!!!
-```
-
-This warning is **benign** — `cargo objcopy` outputs raw binaries without DFU
-suffix metadata. The flash still works. Ignore it.
-
-### "Error during download get_status"
-
-```
-dfu-util: Error during download get_status
-```
-
-This is **normal** when using the `:leave` flag in the DFU address. It means
-the device reset out of DFU mode after flashing — which is what you want.
-
-### LED Shows SOS Pattern
-
-Three short blinks, three long, three short = the bootloader found an invalid
-binary. Common causes:
-
-- Flashed a debug build (too large for 480 KB SRAM limit) — use `--release`
-- Wrong linker script (binary targets internal flash instead of SRAM)
-- Corrupted flash — re-flash with DFU
-
-### No USB Serial After Flashing bench_kernels
-
-1. Wait 2-3 seconds after reset for USB enumeration
-2. Check `dmesg | tail` for `cdc_acm` messages
-3. Unplug and replug USB to force re-enumeration
-4. Verify the correct device: `ls /dev/ttyACM*`
-
-### Breadboarding Without Soldered Headers
-
-If your Seed has headers but you're not on a carrier board: **DGND and AGND
-must be connected to each other**, even when powered only via USB. Without this
-connection, the analog ground plane floats and the codec may not initialize.
-On a bare Seed with no breakout, this isn't an issue — the PCB connects them
-internally.
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| `lsusb` shows nothing in DFU mode | Charge-only USB cable (2 wires, no D+/D-) | Use a data cable (4 wires) |
+| `lsusb` shows nothing in DFU mode | DFU not entered | Hold BOOT → press/release RESET → release BOOT |
+| `lsusb` shows nothing in DFU mode | Missing udev rule | See Prerequisites |
+| "Invalid DFU suffix signature" warning | `cargo objcopy` raw binary has no DFU metadata | **Benign** — ignore |
+| "Error during download get_status" | `:leave` flag resets device out of DFU | **Normal** — flash succeeded |
+| SOS blink pattern (3 short, 3 long, 3 short) | Invalid binary in QSPI | Use `--release` (debug too large for 480 KB SRAM) |
+| No `/dev/ttyACM*` after bench flash | USB re-enumeration delay | Wait 2-3s, check `dmesg \| tail`, replug USB |
+| Codec won't init on breadboard | DGND/AGND not connected | Bridge DGND↔AGND (carrier boards do this internally) |
 
 ---
 
@@ -488,12 +438,12 @@ Open-source hardware (CC BY-SA 4.0). Stereo version (Sep 2024+): 6 knobs, 3 togg
 
 | Hothouse | Daisy Pin | STM32 GPIO | ADC Channel | sonido Mapping |
 |----------|-----------|------------|:-----------:|----------------|
-| KNOB_1 | D16 | PA3 | 1 | `ControlId::hardware(0x00)` |
-| KNOB_2 | D17 | PB1 | 2 | `ControlId::hardware(0x01)` |
-| KNOB_3 | D18 | PA7 | 3 | `ControlId::hardware(0x02)` |
-| KNOB_4 | D19 | PA6 | 4 | `ControlId::hardware(0x03)` |
-| KNOB_5 | D20 | PC1 | 5 | `ControlId::hardware(0x04)` |
-| KNOB_6 | D21 | PC4 | 6 | `ControlId::hardware(0x05)` |
+| KNOB_1 | D16 | PA3 | 0 | `ControlId::hardware(0x00)` |
+| KNOB_2 | D17 | PB1 | 1 | `ControlId::hardware(0x01)` |
+| KNOB_3 | D18 | PA7 | 2 | `ControlId::hardware(0x02)` |
+| KNOB_4 | D19 | PA6 | 3 | `ControlId::hardware(0x03)` |
+| KNOB_5 | D20 | PC1 | 4 | `ControlId::hardware(0x04)` |
+| KNOB_6 | D21 | PC4 | 5 | `ControlId::hardware(0x05)` |
 
 **Toggle Switches** (3-way, 2 GPIO pins each):
 
@@ -599,68 +549,10 @@ hardware controls to effect parameters. The Daisy/Hothouse firmware:
 
 ## Hardware Interface Gaps
 
-Features needed for production pedal deployment.
-Tracked in [ROADMAP.md](ROADMAP.md) — Embedded Hardening section.
-
-### Expression Pedal
-
-TRS expression pedals output variable voltage via potentiometer wiper.
-Real pedals need:
-
-- **Calibration** — per-pedal min/max (typical sweep 0.05–0.92, not 0.0–1.0)
-- **Response curves** — log for volume, S-curve for wah, custom LUT for morphing
-- **Polarity detection** — tip-hot vs ring-hot, auto-detect on first sweep
-
-Implementation: `ControlType::Expression` in `sonido-platform` with
-`ExpressionConfig`.
-
-### CV Input (Eurorack)
-
-- **Unipolar** — 0–5V
-- **Bipolar** — ±5V (requires external conditioning; Daisy ADC reads 0–3.3V)
-
-Implementation: `ControlType::CvInput` with voltage range and scaling parameters.
-
-### MIDI CC Routing
-
-Via UART (pins D13/D14):
-
-- CC learn mode (footswitch-triggered)
-- Program Change → preset recall
-- MIDI Clock → `TempoManager` sync
-- Running status parsing for bandwidth efficiency
-
-Namespace: `ControlId::midi(0x02XX)`.
-
-### Pot Calibration
-
-Real pots read 0.003–0.991, not 0.0–1.0.
-
-- Per-pot min/max stored in flash
-- Dead zones near boundaries (prevents jitter)
-- Hysteresis — require N-step ADC change before updating (noise rejection)
-
-### Control Curves
-
-Per-control response shaping:
-
-| Curve | Use Case |
-|-------|----------|
-| Linear | Most parameters (depth, mix, rate) |
-| Logarithmic | Frequency, volume (perceptual linearity) |
-| Reverse log | Attack/release times |
-| S-curve | Crossfade, morph position |
-| Custom LUT | 16–32 point lookup table for arbitrary response |
-
-Applied in `ControlMapper::map_control()` after calibration, before dispatch.
-
-### Debounce
-
-`Debouncer<const N: usize>` in `sonido-platform`:
-
-- Configurable window (default 30ms)
-- Edge-triggered mode for footswitches
-- Level-triggered mode for toggles
+Features needed for production pedal deployment: expression pedal input, CV input
+(Eurorack), MIDI CC routing, pot calibration, control curves, parameter pages,
+and debounce. Full details and implementation plans are in
+[ROADMAP.md — Embedded Hardening](ROADMAP.md#embedded-hardening).
 
 ---
 

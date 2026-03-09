@@ -44,14 +44,15 @@ fn main() -> ! {
 
     // Blink forever — cortex_m::asm::delay() is an intrinsic that
     // the compiler cannot optimize out, unlike a nop loop.
-    // At the bootloader's default ~64 MHz, 20M cycles ≈ 300ms.
+    // The Electrosmith bootloader initializes the system clock to 400 MHz
+    // before jumping to user code. 200M cycles ≈ 500ms at 400 MHz.
     loop {
         // Set PC7 high
         unsafe { core::ptr::write_volatile(GPIOC_BSRR, 1 << 7) };
-        cortex_m::asm::delay(20_000_000);
+        cortex_m::asm::delay(200_000_000);
 
         // Set PC7 low (reset = bit 7 + 16)
         unsafe { core::ptr::write_volatile(GPIOC_BSRR, 1 << (7 + 16)) };
-        cortex_m::asm::delay(20_000_000);
+        cortex_m::asm::delay(200_000_000);
     }
 }

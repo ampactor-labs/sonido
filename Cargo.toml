@@ -15,6 +15,9 @@ members = [
     "crates/sonido-plugin",
     "crates/sonido-graph-dsl",
 ]
+exclude = [
+    "crates/sonido-daisy",
+]
 default-members = [
     "crates/sonido-core",
     "crates/sonido-effects",

@@ -26,6 +26,8 @@ exploited it for sounds that can't be made any other way.
 
 ## Design Principles
 
+These principles also inform the [Roadmap — Design Philosophy](ROADMAP.md#design-philosophy) section.
+
 ### Musicality Over Correctness (The Tom Cram Principle)
 
 DigiTech's best products — Whammy, Space Station, DOD reissues — succeeded because

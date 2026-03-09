@@ -164,7 +164,7 @@ See ADR-028 in `docs/DESIGN_DECISIONS.md`.
 
 ## Near-Term Priorities (v0.3)
 
-Informed by analysis of DigiTech's design philosophy (Tom Cram era): musicality over technical correctness, dynamic response to playing dynamics ("volume knob cleanup"), and platform-appropriate design. These priorities target the gap between "correct DSP" and "inspiring instrument."
+Informed by analysis of DigiTech's design philosophy (Tom Cram era): musicality over technical correctness, dynamic response to playing dynamics ("volume knob cleanup"), and platform-appropriate design. These priorities target the gap between "correct DSP" and "inspiring instrument." See [Signature Sounds](SIGNATURE_SOUNDS.md) for the creative brainstorming behind these priorities.
 
 ### Dynamic Waveshaper Response
 
@@ -268,7 +268,7 @@ Informed by analysis of DigiTech's design philosophy (Tom Cram era): musicality 
 
 ---
 
-### Expanded Capabilities (v0.3+)
+## Expanded Capabilities (v0.3+)
 
 Additional capability expansions that require new crates or significant architectural work.
 
