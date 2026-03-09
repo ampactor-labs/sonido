@@ -355,6 +355,7 @@ input-side, or output-side.
 | `tone_out.rs` | DAC → analog output path | 440 Hz sine wave to output jack |
 | `square_out.rs` | DAC → analog output path (max amplitude) | 1 kHz full-scale square wave to output jack |
 | `audio_input_diag.rs` | Codec ADC input noise floor | RMS/peak/dBFS via USB serial every 1 second |
+| `temp_diag.rs` | STM32H750 CPU temperature | °C + session min/max via USB serial every 2 seconds; warns above 80°C |
 
 #### Build & Flash
 
