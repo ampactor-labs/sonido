@@ -9,6 +9,7 @@ publish = false
 [dependencies]
 sonido-core = { path = "../sonido-core", default-features = false }
 sonido-effects = { path = "../sonido-effects", default-features = false }
+libm = "0.2"
 
 # Embassy async runtime
 embassy-executor = { version = "0.9", features = ["arch-cortex-m", "executor-thread"] }
