@@ -542,7 +542,7 @@ impl ReverbKernel {
             let base = scale_to_rate(FDN_TUNINGS_44K[i], sample_rate) as f32;
             let capacity = (base + mod_depth) as usize + 4;
             let mut delay = InterpolatedDelay::new(capacity);
-            delay.set_interpolation(Interpolation::Cubic);
+            delay.set_interpolation(Interpolation::Linear);
             delay
         });
 
@@ -849,7 +849,7 @@ impl DspKernel for ReverbKernel {
             let base = scale_to_rate(FDN_TUNINGS_44K[i], sample_rate) as f32;
             let capacity = (base + mod_depth) as usize + 4;
             let mut delay = InterpolatedDelay::new(capacity);
-            delay.set_interpolation(Interpolation::Cubic);
+            delay.set_interpolation(Interpolation::Linear);
             delay
         });
         self.fdn_base_delays =

@@ -42,8 +42,8 @@
 //! let (left, right) = kernel.process_stereo(input_l, input_r, &params);
 //! ```
 
-use core::f32::consts::TAU;
-use libm::{fabsf, sinf};
+use libm::fabsf;
+use sonido_core::fast_math::fast_sin_turns;
 use sonido_core::kernel::{DspKernel, KernelParams, SmoothingStyle};
 use sonido_core::{
     ParamDescriptor, ParamFlags, ParamId, ParamScale, ParamUnit, fast_db_to_linear,
@@ -202,7 +202,7 @@ impl KernelParams for RingModParams {
 ///
 /// The ring modulator has minimal internal state: a single phase accumulator
 /// in `[0.0, 1.0)` that advances by `freq_hz / sample_rate` each sample.
-/// The carrier waveform is synthesized from this phase using `libm` math.
+/// The carrier waveform is synthesized from this phase using `fast_sin_turns`.
 pub struct RingModKernel {
     /// Sample rate in Hz. Needed to compute the phase increment from `freq_hz`.
     sample_rate: f32,
@@ -232,7 +232,7 @@ impl RingModKernel {
     /// Returns a bipolar value in [-1.0, 1.0] according to the waveform index.
     ///
     /// Waveform index mapping:
-    /// - `0`: Sine — `sin(2π · phase)` via `libm::sinf`
+    /// - `0`: Sine — `fast_sin_turns(phase)` (phase already in turns [0, 1))
     /// - `1`: Triangle — bipolar triangle from phase: `4·|phase - 0.5| - 1`
     /// - `2` (or higher): Square — `+1` for phase < 0.5, `-1` otherwise
     ///
@@ -240,7 +240,7 @@ impl RingModKernel {
     #[inline]
     fn carrier_value(&self, waveform: u8) -> f32 {
         match waveform {
-            0 => sinf(self.phase * TAU),
+            0 => fast_sin_turns(self.phase),
             // Bipolar triangle wave: amplitude 1 at phase=0.25, -1 at phase=0.75, 0 at 0 and 0.5.
             // Formula: 4·|phase - 0.5| - 1  maps [0,1) phase uniformly to [-1,1] bipolar triangle.
             1 => 4.0 * fabsf(self.phase - 0.5) - 1.0,

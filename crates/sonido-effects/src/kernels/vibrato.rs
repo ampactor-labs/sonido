@@ -64,6 +64,9 @@ use sonido_core::{
 /// organic tape wow-and-flutter character when summed.
 const NUM_VIBRATOS: usize = 6;
 
+/// Reciprocal of `NUM_VIBRATOS` for multiplication instead of division.
+const INV_NUM_VIBRATOS: f32 = 1.0 / NUM_VIBRATOS as f32;
+
 /// Base delay in samples used by every `VibratoUnit`.
 ///
 /// This provides headroom so the LFO's negative modulation excursion can never
@@ -368,14 +371,14 @@ impl DspKernel for VibratoKernel {
         for vib in &mut self.vibratos_l {
             wet_l += vib.process(left, depth_scale);
         }
-        wet_l /= NUM_VIBRATOS as f32;
+        wet_l *= INV_NUM_VIBRATOS;
 
         // ── Right channel: sum all six units and average ──
         let mut wet_r = 0.0_f32;
         for vib in &mut self.vibratos_r {
             wet_r += vib.process(right, depth_scale);
         }
-        wet_r /= NUM_VIBRATOS as f32;
+        wet_r *= INV_NUM_VIBRATOS;
 
         // ── Wet/dry mix → output level ──
         let (out_l, out_r) = wet_dry_mix_stereo(left, right, wet_l, wet_r, mix);
@@ -395,7 +398,7 @@ impl DspKernel for VibratoKernel {
         for vib in &mut self.vibratos_l {
             wet += vib.process(input, depth_scale);
         }
-        wet /= NUM_VIBRATOS as f32;
+        wet *= INV_NUM_VIBRATOS;
 
         wet_dry_mix(input, wet, mix) * output
     }

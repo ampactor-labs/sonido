@@ -13,6 +13,7 @@
 //! | [`fast_db_to_linear`] | [`db_to_linear`](crate::db_to_linear) | Gain, level metering | < 0.05 dB |
 //! | [`fast_linear_to_db`] | [`linear_to_db`](crate::linear_to_db) | Gain, level metering | < 0.05 dB |
 //! | [`fast_sin_turns`] | `libm::sinf` | LFO modulation | < 0.001 |
+//! | [`fast_cos_turns`] | `libm::cosf` | LFO modulation (phase-shifted) | < 0.001 |
 //! | [`fast_tan`] | `libm::tanf` | Filter coefficients | < 0.1% (f < sr/4) |
 //! | [`fast_tanh`] | `libm::tanhf` | Saturation, soft clip | < 0.024 abs (\|x\| < 3) |
 //!
@@ -32,6 +33,7 @@
 //! | `fast_log2` | ~10 | ~200 (`logf`) |
 //! | `fast_exp2` | ~15 | ~150 (`expf`) |
 //! | `fast_sin_turns` | ~16 | ~100 (`sinf`) |
+//! | `fast_cos_turns` | ~20 | ~100 (`cosf`) |
 //! | `fast_tan` | ~12 | ~120 (`tanf`) |
 //! | `fast_tanh` | ~8 | ~80 (`tanhf`) |
 //!
@@ -200,6 +202,32 @@ pub fn fast_sin_turns(turns: f32) -> f32 {
     // Bhaskara correction: 0.225·y·(y − 1) + y
     // Reduces max error from 0.056 to ~0.001
     sign * (0.225 * y * (y - 1.0) + y)
+}
+
+/// Cosine approximation using turns (0.0–1.0 = one full cycle).
+///
+/// Equivalent to `cos(2π·turns)`. Implemented as `fast_sin_turns(turns + 0.25)`
+/// since cos(x) = sin(x + π/2) and π/2 in turns is 0.25.
+///
+/// Max error: same as [`fast_sin_turns`] (~0.06%).
+///
+/// # Cortex-M7 Performance
+///
+/// ~20 cycles (same as `fast_sin_turns` plus one addition).
+///
+/// # Examples
+///
+/// ```
+/// use sonido_core::fast_math::fast_cos_turns;
+///
+/// assert!((fast_cos_turns(0.0) - 1.0).abs() < 0.002);
+/// assert!(fast_cos_turns(0.25).abs() < 0.002);
+/// assert!((fast_cos_turns(0.5) + 1.0).abs() < 0.002);
+/// assert!(fast_cos_turns(0.75).abs() < 0.002);
+/// ```
+#[inline]
+pub fn fast_cos_turns(turns: f32) -> f32 {
+    fast_sin_turns(turns + 0.25)
 }
 
 /// Fast tangent for small positive angles.
@@ -459,6 +487,51 @@ mod tests {
             assert!(
                 (a - b).abs() < 0.003,
                 "Symmetry broken at d={d}: {a} vs {b}"
+            );
+        }
+    }
+
+    // ---- fast_cos_turns ----
+
+    #[test]
+    fn cos_cardinal_points() {
+        assert!((fast_cos_turns(0.0) - 1.0).abs() < 0.002);
+        assert!(fast_cos_turns(0.25).abs() < 0.002);
+        assert!((fast_cos_turns(0.5) + 1.0).abs() < 0.002);
+        assert!(fast_cos_turns(0.75).abs() < 0.002);
+    }
+
+    #[test]
+    fn cos_accuracy_sweep() {
+        let mut max_err: f32 = 0.0;
+        for i in 0..1000 {
+            let turns = i as f32 / 1000.0;
+            let exact = libm::cosf(turns * core::f32::consts::TAU);
+            let approx = fast_cos_turns(turns);
+            let err = (approx - exact).abs();
+            if err > max_err {
+                max_err = err;
+            }
+        }
+        assert!(max_err < 0.002, "Max cos error {max_err:.6} exceeds 0.002");
+    }
+
+    #[test]
+    fn cos_wraps_outside_unit() {
+        assert!((fast_cos_turns(1.5) - fast_cos_turns(0.5)).abs() < 0.002);
+        assert!((fast_cos_turns(-0.25) - fast_cos_turns(0.75)).abs() < 0.002);
+    }
+
+    #[test]
+    fn cos_sin_quadrature() {
+        // cos(t) = sin(t + 0.25) — verify the identity holds at several points
+        for i in 0..20 {
+            let turns = i as f32 / 20.0;
+            let cos_val = fast_cos_turns(turns);
+            let sin_shifted = fast_sin_turns(turns + 0.25);
+            assert!(
+                (cos_val - sin_shifted).abs() < 1e-6,
+                "Quadrature mismatch at turns={turns}: cos={cos_val}, sin+0.25={sin_shifted}"
             );
         }
     }

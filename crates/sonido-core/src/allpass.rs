@@ -5,6 +5,7 @@
 
 use crate::InterpolatedDelay;
 use crate::Interpolation;
+use crate::fast_math::fast_sin_turns;
 use crate::flush_denormal;
 
 /// Schroeder allpass filter for diffusion.
@@ -266,7 +267,7 @@ impl ModulatedAllpass {
             base_delay: delay_samples,
             mod_depth_samples,
             mod_phase: 0.0,
-            mod_phase_inc: core::f32::consts::TAU * mod_rate / sample_rate,
+            mod_phase_inc: mod_rate / sample_rate,
         }
     }
 
@@ -276,13 +277,14 @@ impl ModulatedAllpass {
     /// `output = -g·input + delayed`, `write = input + g·delayed`.
     #[inline]
     pub fn process(&mut self, input: f32) -> f32 {
-        let modulated_delay = self.base_delay + self.mod_depth_samples * libm::sinf(self.mod_phase);
+        let modulated_delay =
+            self.base_delay + self.mod_depth_samples * fast_sin_turns(self.mod_phase);
         let delayed = self.delay.read(modulated_delay);
 
-        // Advance LFO phase with wrap
+        // Advance LFO phase (turns: 0.0–1.0 = one full cycle)
         self.mod_phase += self.mod_phase_inc;
-        if self.mod_phase >= core::f32::consts::TAU {
-            self.mod_phase -= core::f32::consts::TAU;
+        if self.mod_phase >= 1.0 {
+            self.mod_phase -= 1.0;
         }
 
         // Schroeder allpass: output = -input + delayed

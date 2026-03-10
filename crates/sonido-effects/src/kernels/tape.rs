@@ -530,6 +530,10 @@ pub struct TapeKernel {
     last_bump_freq: f32,
     /// Last hf_rolloff_hz value used to update the static HF filter. NaN forces init.
     last_hf_freq: f32,
+    /// Cached cutoff for level-dependent HF filter (left). NaN = needs init.
+    last_hf_cutoff_l: f32,
+    /// Cached cutoff for level-dependent HF filter (right). NaN = needs init.
+    last_hf_cutoff_r: f32,
 }
 
 impl TapeKernel {
@@ -620,6 +624,8 @@ impl TapeKernel {
             last_head_bump: f32::NAN,
             last_bump_freq: f32::NAN,
             last_hf_freq: f32::NAN,
+            last_hf_cutoff_l: f32::NAN,
+            last_hf_cutoff_r: f32::NAN,
         }
     }
 
@@ -687,6 +693,8 @@ impl TapeKernel {
     /// ```
     ///
     /// where `drive_norm` = (drive_linear - 1.0) / 14.85 clamped to [0, 1].
+    /// Coefficients are cached and only recomputed when the cutoff changes by
+    /// more than 1 Hz, avoiding expensive trig per sample.
     #[inline]
     fn apply_level_hf_l(&mut self, signal: f32, input: f32, drive: f32) -> f32 {
         let nyquist = self.sample_rate * 0.45;
@@ -695,16 +703,20 @@ impl TapeKernel {
         let drive_norm = ((drive - 1.0) / 14.85).clamp(0.0, 1.0);
         let level = self.env_l.process(libm::fabsf(input));
         let cutoff = (hf_max - (hf_max - hf_min) * level * drive_norm).clamp(hf_min, hf_max);
-        let coeffs = lowpass_coefficients(cutoff, 0.707, self.sample_rate);
-        self.hf_filter_l
-            .set_coefficients(coeffs.0, coeffs.1, coeffs.2, coeffs.3, coeffs.4, coeffs.5);
+        if (cutoff - self.last_hf_cutoff_l).abs() > 1.0 || self.last_hf_cutoff_l.is_nan() {
+            let coeffs = lowpass_coefficients(cutoff, 0.707, self.sample_rate);
+            self.hf_filter_l
+                .set_coefficients(coeffs.0, coeffs.1, coeffs.2, coeffs.3, coeffs.4, coeffs.5);
+            self.last_hf_cutoff_l = cutoff;
+        }
         self.hf_filter_l.process(signal)
     }
 
     /// Apply level-dependent HF lowpass to the right channel.
     ///
     /// Identical algorithm to [`apply_level_hf_l`] but uses the right-channel
-    /// envelope follower and biquad.
+    /// envelope follower and biquad. Coefficients are cached and only recomputed
+    /// when the cutoff changes by more than 1 Hz.
     #[inline]
     fn apply_level_hf_r(&mut self, signal: f32, input: f32, drive: f32) -> f32 {
         let nyquist = self.sample_rate * 0.45;
@@ -713,9 +725,12 @@ impl TapeKernel {
         let drive_norm = ((drive - 1.0) / 14.85).clamp(0.0, 1.0);
         let level = self.env_r.process(libm::fabsf(input));
         let cutoff = (hf_max - (hf_max - hf_min) * level * drive_norm).clamp(hf_min, hf_max);
-        let coeffs = lowpass_coefficients(cutoff, 0.707, self.sample_rate);
-        self.hf_filter_r
-            .set_coefficients(coeffs.0, coeffs.1, coeffs.2, coeffs.3, coeffs.4, coeffs.5);
+        if (cutoff - self.last_hf_cutoff_r).abs() > 1.0 || self.last_hf_cutoff_r.is_nan() {
+            let coeffs = lowpass_coefficients(cutoff, 0.707, self.sample_rate);
+            self.hf_filter_r
+                .set_coefficients(coeffs.0, coeffs.1, coeffs.2, coeffs.3, coeffs.4, coeffs.5);
+            self.last_hf_cutoff_r = cutoff;
+        }
         self.hf_filter_r.process(signal)
     }
 }
@@ -829,6 +844,9 @@ impl DspKernel for TapeKernel {
 
         self.hf_static_l.reset();
         self.hf_static_r.reset();
+
+        self.last_hf_cutoff_l = f32::NAN;
+        self.last_hf_cutoff_r = f32::NAN;
     }
 
     fn set_sample_rate(&mut self, sample_rate: f32) {
