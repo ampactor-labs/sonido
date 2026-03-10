@@ -6,6 +6,7 @@
 use crate::InterpolatedDelay;
 use crate::Interpolation;
 use crate::OnePole;
+use crate::fast_math::fast_sin_turns;
 use crate::flush_denormal;
 
 /// Comb filter with feedback and damping.
@@ -86,9 +87,8 @@ impl CombFilter {
     /// a one-pole lowpass filter and into the delay line.
     #[inline]
     pub fn process(&mut self, input: f32) -> f32 {
-        // Read from the end of the delay line
-        let delay_samples = (self.delay.capacity() - 1) as f32;
-        let output = self.delay.read(delay_samples);
+        // Read from the end of the delay line (integer position, no interpolation needed)
+        let output = self.delay.read_integer(self.delay.capacity() - 1);
 
         // One-pole lowpass in feedback path (damping)
         // filterstore = output * (1 - damp) + filterstore * damp
@@ -297,7 +297,7 @@ impl ModulatedComb {
         // Extra capacity for modulation excursion + 2 samples for cubic interpolation
         let capacity = (delay_samples + mod_depth_samples) as usize + 4;
         let mut delay = InterpolatedDelay::new(capacity);
-        delay.set_interpolation(Interpolation::Cubic);
+        delay.set_interpolation(Interpolation::Linear);
 
         Self {
             delay,
@@ -306,7 +306,7 @@ impl ModulatedComb {
             base_delay: delay_samples,
             mod_depth_samples,
             mod_phase: 0.0,
-            mod_phase_inc: core::f32::consts::TAU * mod_rate / sample_rate,
+            mod_phase_inc: mod_rate / sample_rate,
         }
     }
 
@@ -317,13 +317,14 @@ impl ModulatedComb {
     /// a one-pole lowpass before being summed with the input.
     #[inline]
     pub fn process(&mut self, input: f32) -> f32 {
-        let modulated_delay = self.base_delay + self.mod_depth_samples * libm::sinf(self.mod_phase);
+        let modulated_delay =
+            self.base_delay + self.mod_depth_samples * fast_sin_turns(self.mod_phase);
         let output = self.delay.read(modulated_delay);
 
-        // Advance LFO phase with wrap
+        // Advance LFO phase (turns: 0.0–1.0 = one full cycle)
         self.mod_phase += self.mod_phase_inc;
-        if self.mod_phase >= core::f32::consts::TAU {
-            self.mod_phase -= core::f32::consts::TAU;
+        if self.mod_phase >= 1.0 {
+            self.mod_phase -= 1.0;
         }
 
         // Damping in feedback path

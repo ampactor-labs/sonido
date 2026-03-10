@@ -65,8 +65,8 @@ impl AllpassFilter {
     /// delay_input = input + delayed * feedback
     #[inline]
     pub fn process(&mut self, input: f32) -> f32 {
-        let delay_samples = (self.delay.capacity() - 1) as f32;
-        let delayed = self.delay.read(delay_samples);
+        // Integer read — no interpolation needed for fixed delay
+        let delayed = self.delay.read_integer(self.delay.capacity() - 1);
 
         // Schroeder allpass: output = -input + delayed
         let output = -input + delayed;
@@ -259,7 +259,7 @@ impl ModulatedAllpass {
         // Extra capacity for modulation excursion + margin for cubic interpolation
         let capacity = (delay_samples + mod_depth_samples) as usize + 4;
         let mut delay = InterpolatedDelay::new(capacity);
-        delay.set_interpolation(Interpolation::Cubic);
+        delay.set_interpolation(Interpolation::Linear);
 
         Self {
             delay,

@@ -176,7 +176,7 @@ async fn main(spawner: Spawner) {
 
     // Initialize 64 MB SDRAM via FMC — configures MPU + power-up sequence.
     // Must come after embassy_stm32::init() (enables FMC clock via PLL2_R).
-    let sdram_ptr = sonido_daisy::init_sdram!(p, &mut cp.MPU, &mut cp.SCB);
+    let sdram_ptr = sonido_daisy::init_sdram!(p, &mut cp.MPU, &mut cp.SCB, &mut cp.CPUID);
     unsafe {
         HEAP.init(sdram_ptr as usize, sonido_daisy::sdram::SDRAM_SIZE);
     }

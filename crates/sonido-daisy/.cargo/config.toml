@@ -6,6 +6,7 @@ runner = "probe-rs run --chip STM32H750IBKx"
 rustflags = [
     "-C", "link-arg=-Tlink.x",
     "-C", "link-arg=-Tdefmt.x",
+    "-C", "target-cpu=cortex-m7",
 ]
 
 [env]

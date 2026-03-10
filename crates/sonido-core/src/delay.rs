@@ -172,6 +172,23 @@ impl InterpolatedDelay {
         }
     }
 
+    /// Reads a delayed sample at an exact integer position (no interpolation).
+    ///
+    /// This is faster than [`read()`](Self::read) when the delay time is always
+    /// an integer number of samples (e.g., fixed comb/allpass filters in reverb).
+    /// Skips all interpolation math — a single array lookup.
+    ///
+    /// # Arguments
+    ///
+    /// * `delay_samples` - Delay time in whole samples
+    #[inline]
+    pub fn read_integer(&self, delay_samples: usize) -> f32 {
+        let len = self.buffer.len();
+        let delay_clamped = delay_samples.min(len - 1);
+        let read_pos = (self.write_pos + len - delay_clamped - 1) % len;
+        self.buffer[read_pos]
+    }
+
     /// Writes a sample to the delay line and advances the write position.
     ///
     /// # Arguments

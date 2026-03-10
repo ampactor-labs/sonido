@@ -32,11 +32,11 @@
 //! let p = embassy_stm32::init(config);
 //! let mut cp = unsafe { cortex_m::Peripherals::steal() };
 //!
-//! let sdram_ptr = init_sdram!(p, &mut cp.MPU, &mut cp.SCB);
+//! let sdram_ptr = init_sdram!(p, &mut cp.MPU, &mut cp.SCB, &mut cp.CPUID);
 //! unsafe { HEAP.init(sdram_ptr as usize, sdram::SDRAM_SIZE); }
 //! ```
 
-use cortex_m::peripheral::{MPU, SCB};
+use cortex_m::peripheral::{CPUID, MPU, SCB};
 
 /// Re-export the FMC device definition for the Daisy Seed's SDRAM chip.
 pub use stm32_fmc::devices::as4c16m32msa_6::As4c16m32msa as SdramDevice;
@@ -66,7 +66,7 @@ pub const SDRAM_BASE: usize = 0xC000_0000;
 /// (Device type, non-cacheable) — functional but slow. Fixed here.
 ///
 /// Called by the [`init_sdram!`] macro. Not typically called directly.
-pub fn configure_mpu(mpu: &mut MPU, scb: &mut SCB) {
+pub fn configure_mpu(mpu: &mut MPU, scb: &mut SCB, cpuid: &mut CPUID) {
     // ARM®v7-M Architecture Reference Manual, Section B3.5
     const MEMFAULTENA: u32 = 1 << 16;
 
@@ -107,6 +107,15 @@ pub fn configure_mpu(mpu: &mut MPU, scb: &mut SCB) {
         cortex_m::asm::dsb();
         cortex_m::asm::isb();
     }
+
+    // Enable Cortex-M7 L1 caches (16 KB each, disabled by default after reset).
+    // I-cache: ~3x speedup on instruction fetches from flash/AXI SRAM.
+    // D-cache: ~3-5x speedup on SDRAM delay line reads (4-8 wait states → ~1 cycle).
+    //
+    // Note: DMA buffers live in D2 SRAM (.sram1_bss at 0x30000000), which is a
+    // separate non-cacheable region — no cache coherency issues with SAI DMA.
+    scb.enable_icache();
+    scb.enable_dcache(cpuid);
 }
 
 /// Initializes the Daisy Seed's 64 MB external SDRAM.
@@ -119,7 +128,7 @@ pub fn configure_mpu(mpu: &mut MPU, scb: &mut SCB) {
 /// Pass this to the heap allocator:
 ///
 /// ```ignore
-/// let ptr = init_sdram!(p, &mut cp.MPU, &mut cp.SCB);
+/// let ptr = init_sdram!(p, &mut cp.MPU, &mut cp.SCB, &mut cp.CPUID);
 /// unsafe { HEAP.init(ptr as usize, sdram::SDRAM_SIZE); }
 /// ```
 ///
@@ -136,8 +145,8 @@ pub fn configure_mpu(mpu: &mut MPU, scb: &mut SCB) {
 /// - PLL2_R must provide the FMC clock (configured by [`rcc_config`](crate::rcc_config))
 #[macro_export]
 macro_rules! init_sdram {
-    ($p:ident, $mpu:expr, $scb:expr) => {{
-        $crate::sdram::configure_mpu($mpu, $scb);
+    ($p:ident, $mpu:expr, $scb:expr, $cpuid:expr) => {{
+        $crate::sdram::configure_mpu($mpu, $scb, $cpuid);
 
         let mut sdram = embassy_stm32::fmc::Fmc::sdram_a13bits_d32bits_4banks_bank1(
             $p.FMC,
