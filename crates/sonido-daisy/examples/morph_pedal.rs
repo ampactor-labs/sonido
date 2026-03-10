@@ -122,6 +122,7 @@ enum ActiveSound {
 // ── Sound Snapshot ────────────────────────────────────────────────────────
 
 /// Parameter snapshot for one sound (A or B) across all 3 slots.
+#[derive(Clone)]
 struct SoundSnapshot {
     /// Parameter values per slot.
     params: [[f32; MAX_PARAMS]; NUM_SLOTS],
@@ -158,6 +159,43 @@ impl SoundSnapshot {
                     effect.effect_set_param(p, self.params[slot][p]);
                 }
             }
+        }
+    }
+}
+
+// ── Preset ───────────────────────────────────────────────────────────────
+
+/// Maximum number of saveable presets (heap-resident, survives until power-off).
+const MAX_PRESETS: usize = 9;
+
+/// Complete pedal state stored as a preset.
+/// Fields are read during preset load (Phase 3 — future work).
+#[derive(Clone)]
+#[allow(dead_code)]
+struct Preset {
+    /// Effect IDs (indices into ALL_EFFECTS) for each slot.
+    effect_indices: [usize; NUM_SLOTS],
+    /// Routing topology.
+    routing: Routing,
+    /// Sound A parameter snapshot.
+    sound_a: SoundSnapshot,
+    /// Sound B parameter snapshot.
+    sound_b: SoundSnapshot,
+    /// Morph speed in seconds.
+    morph_speed: f32,
+    /// Whether this slot has been written to.
+    occupied: bool,
+}
+
+impl Preset {
+    fn empty() -> Self {
+        Self {
+            effect_indices: [0; NUM_SLOTS],
+            routing: Routing::Serial,
+            sound_a: SoundSnapshot::new(),
+            sound_b: SoundSnapshot::new(),
+            morph_speed: 2.0,
+            occupied: false,
         }
     }
 }
@@ -322,10 +360,15 @@ async fn main(spawner: embassy_executor::Spawner) {
     let mut morph_t: f32 = 0.0; // 0.0 = Sound A, 1.0 = Sound B
     let mut morph_speed: f32 = 2.0; // seconds for full morph
 
+    // Preset storage (heap-resident, survives until power-off)
+    let mut presets: [Preset; MAX_PRESETS] = core::array::from_fn(|_| Preset::empty());
+    let mut next_preset_slot: usize = 0;
+
     // Footswitch state machine
     let mut fs1_held: u16 = 0;
     let mut fs2_held: u16 = 0;
     let mut both_held: u16 = 0;
+    let mut both_held_peak: u16 = 0; // tracks max both_held before release
     let mut fs1_was_pressed = false;
     let mut fs2_was_pressed = false;
 
@@ -441,6 +484,9 @@ async fn main(spawner: embassy_executor::Spawner) {
 
                     if both_pressed {
                         both_held += 1;
+                        if both_held > both_held_peak {
+                            both_held_peak = both_held;
+                        }
                     } else {
                         both_held = 0;
                     }
@@ -474,8 +520,40 @@ async fn main(spawner: embassy_executor::Spawner) {
                         }
                     }
 
-                    // FS1 release actions
-                    if fs1_was_pressed && !fs1_pressed && both_held < BYPASS_HOLD {
+                    // Detect both-FS tap: both were pressed, now either released,
+                    // peak hold was short (< TAP_LIMIT) and didn't reach bypass.
+                    let both_tapped = both_held_peak > 0
+                        && both_held_peak < TAP_LIMIT
+                        && (!fs1_pressed || !fs2_pressed)
+                        && (fs1_was_pressed && fs2_was_pressed)
+                        && (!fs1_pressed && !fs2_pressed);
+
+                    if both_tapped {
+                        match mode {
+                            Mode::Explore => {
+                                // Lock effect into slot — confirmation blink
+                                defmt::info!(
+                                    "LOCKED slot {} = {}",
+                                    focused_slot + 1,
+                                    current_effects[focused_slot]
+                                );
+                                led2.set_high();
+                                led2_counter = 30; // longer blink = confirmation
+                            }
+                            _ => {} // No both-tap action in BUILD/MORPH
+                        }
+                        // Reset peak — don't fire individual FS actions
+                        both_held_peak = 0;
+                    }
+
+                    // Reset peak when both released
+                    if !fs1_pressed && !fs2_pressed {
+                        both_held_peak = 0;
+                    }
+
+                    // FS1 release actions (skip if both-tap just fired)
+                    let was_both = both_held_peak > 0 || both_tapped;
+                    if fs1_was_pressed && !fs1_pressed && !was_both && both_held < BYPASS_HOLD {
                         match mode {
                             Mode::Explore => {
                                 if fs1_held < TAP_LIMIT {
@@ -515,8 +593,8 @@ async fn main(spawner: embassy_executor::Spawner) {
                         }
                     }
 
-                    // FS2 release actions
-                    if fs2_was_pressed && !fs2_pressed && both_held < BYPASS_HOLD {
+                    // FS2 release actions (skip if both-tap just fired)
+                    if fs2_was_pressed && !fs2_pressed && !was_both && both_held < BYPASS_HOLD {
                         match mode {
                             Mode::Explore => {
                                 if fs2_held < TAP_LIMIT {
@@ -530,13 +608,24 @@ async fn main(spawner: embassy_executor::Spawner) {
                                 }
                             }
                             Mode::Build => {
-                                // FS2 tap = save preset (future — for now just blink)
                                 if fs2_held < TAP_LIMIT {
-                                    // Save current snapshots
+                                    // Save preset to next available slot
                                     match active_sound {
                                         ActiveSound::A => sound_a.capture_from_graph(&graph, &node_ids),
                                         ActiveSound::B => sound_b.capture_from_graph(&graph, &node_ids),
                                     }
+                                    let slot = next_preset_slot;
+                                    presets[slot] = Preset {
+                                        effect_indices,
+                                        routing,
+                                        sound_a: sound_a.clone(),
+                                        sound_b: sound_b.clone(),
+                                        morph_speed,
+                                        occupied: true,
+                                    };
+                                    next_preset_slot = (slot + 1) % MAX_PRESETS;
+                                    defmt::info!("PRESET saved to slot {}", slot + 1);
+                                    // Confirmation: blink LED2 (slot+1) times
                                     led2.set_high();
                                     led2_counter = 20;
                                 }
