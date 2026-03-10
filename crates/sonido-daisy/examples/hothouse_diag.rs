@@ -84,8 +84,7 @@ use panic_probe as _;
 use static_cell::StaticCell;
 
 use sonido_daisy::{
-    BLOCK_SIZE, BufWriter, ClockProfile, SAMPLE_RATE, heartbeat, led::UserLed, u24_to_f32,
-    usb_task,
+    BLOCK_SIZE, BufWriter, ClockProfile, SAMPLE_RATE, heartbeat, led::UserLed, u24_to_f32, usb_task,
 };
 
 // ── Heap ──────────────────────────────────────────────────────────────────
@@ -165,20 +164,20 @@ const TEMP_SAMPLE_TIME: SampleTime = SampleTime::CYCLES810_5;
 /// Returns: 1=UP, 0=MID, 2=DN (matches GPIO_BITS encoding).
 fn decode_toggle(up: &Input<'_>, dn: &Input<'_>) -> u32 {
     match (up.is_low(), dn.is_low()) {
-        (true, false) => 1,  // UP
-        (false, true) => 2,  // DN
-        _ => 0,              // MID (or fault → treat as MID)
+        (true, false) => 1, // UP
+        (false, true) => 2, // DN
+        _ => 0,             // MID (or fault → treat as MID)
     }
 }
 
 // ── USB static buffers (StaticCell — no unsafe required) ─────────────────
 
-static EP_OUT_BUF:  StaticCell<[u8; 256]>      = StaticCell::new();
-static CONFIG_DESC: StaticCell<[u8; 256]>      = StaticCell::new();
-static BOS_DESC:    StaticCell<[u8; 256]>      = StaticCell::new();
-static MSOS_DESC:   StaticCell<[u8; 256]>      = StaticCell::new();
-static CONTROL_BUF: StaticCell<[u8; 64]>       = StaticCell::new();
-static CDC_STATE:   StaticCell<State<'static>> = StaticCell::new();
+static EP_OUT_BUF: StaticCell<[u8; 256]> = StaticCell::new();
+static CONFIG_DESC: StaticCell<[u8; 256]> = StaticCell::new();
+static BOS_DESC: StaticCell<[u8; 256]> = StaticCell::new();
+static MSOS_DESC: StaticCell<[u8; 256]> = StaticCell::new();
+static CONTROL_BUF: StaticCell<[u8; 64]> = StaticCell::new();
+static CDC_STATE: StaticCell<State<'static>> = StaticCell::new();
 
 // ── report_task ───────────────────────────────────────────────────────────
 
@@ -193,9 +192,7 @@ static CDC_STATE:   StaticCell<State<'static>> = StaticCell::new();
 /// reports once every 2 seconds. On write error, breaks back to
 /// `wait_connection()` for clean USB reconnection.
 #[embassy_executor::task]
-async fn report_task(
-    mut class: CdcAcmClass<'static, Driver<'static, peripherals::USB_OTG_FS>>,
-) {
+async fn report_task(mut class: CdcAcmClass<'static, Driver<'static, peripherals::USB_OTG_FS>>) {
     let mut buf = [0u8; 256];
 
     loop {
@@ -208,24 +205,29 @@ async fn report_task(
             embassy_time::Timer::after_millis(2000).await;
 
             // ── Read all atomics ──
-            let rms_fp   = RMS_FP.load(Ordering::Relaxed);
-            let peak_fp  = PEAK_FP.load(Ordering::Relaxed);
+            let rms_fp = RMS_FP.load(Ordering::Relaxed);
+            let peak_fp = PEAK_FP.load(Ordering::Relaxed);
             let dbfs_x10 = DBFS_X10.load(Ordering::Relaxed);
             let knobs: [u32; 6] = core::array::from_fn(|i| KNOBS[i].load(Ordering::Relaxed));
-            let gpio     = GPIO_BITS.load(Ordering::Relaxed);
-            let temp     = TEMP_C.load(Ordering::Relaxed);
+            let gpio = GPIO_BITS.load(Ordering::Relaxed);
+            let temp = TEMP_C.load(Ordering::Relaxed);
 
             // ── Format ──
             let mut w = BufWriter::new(&mut buf);
 
             // AUDIO section
             let dbfs_sign = if dbfs_x10 < 0 { "-" } else { "" };
-            let dbfs_abs  = if dbfs_x10 < 0 { -dbfs_x10 } else { dbfs_x10 } as u32;
-            let _ = write!(w,
+            let dbfs_abs = if dbfs_x10 < 0 { -dbfs_x10 } else { dbfs_x10 } as u32;
+            let _ = write!(
+                w,
                 "AUDIO in={}{}.{}dBFS rms={}.{:04} peak={}.{:04}",
-                dbfs_sign, dbfs_abs / 10, dbfs_abs % 10,
-                rms_fp / 10000, rms_fp % 10000,
-                peak_fp / 10000, peak_fp % 10000,
+                dbfs_sign,
+                dbfs_abs / 10,
+                dbfs_abs % 10,
+                rms_fp / 10000,
+                rms_fp % 10000,
+                peak_fp / 10000,
+                peak_fp % 10000,
             );
 
             // Knobs section
@@ -236,16 +238,34 @@ async fn report_task(
                 } else {
                     let _ = write!(w, "K{}=0.{:02}", i + 1, k);
                 }
-                if i < 5 { let _ = write!(w, " "); }
+                if i < 5 {
+                    let _ = write!(w, " ");
+                }
             }
 
             // GPIO section
             let fs1 = if gpio & 1 != 0 { "ON" } else { "OFF" };
             let fs2 = if gpio & 2 != 0 { "ON" } else { "OFF" };
-            let t1 = match (gpio >> 2) & 3 { 1 => "UP", 2 => "DN", _ => "MID" };
-            let t2 = match (gpio >> 4) & 3 { 1 => "UP", 2 => "DN", _ => "MID" };
-            let t3 = match (gpio >> 6) & 3 { 1 => "UP", 2 => "DN", _ => "MID" };
-            let _ = write!(w, " | FS1={} FS2={} T1={} T2={} T3={}", fs1, fs2, t1, t2, t3);
+            let t1 = match (gpio >> 2) & 3 {
+                1 => "UP",
+                2 => "DN",
+                _ => "MID",
+            };
+            let t2 = match (gpio >> 4) & 3 {
+                1 => "UP",
+                2 => "DN",
+                _ => "MID",
+            };
+            let t3 = match (gpio >> 6) & 3 {
+                1 => "UP",
+                2 => "DN",
+                _ => "MID",
+            };
+            let _ = write!(
+                w,
+                " | FS1={} FS2={} T1={} T2={} T3={}",
+                fs1, fs2, t1, t2, t3
+            );
 
             // CPU temp
             let _ = write!(w, " | CPU {}C\r\n", temp);
@@ -272,6 +292,9 @@ async fn report_task(
 
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
+    // D2 SRAM clocks are disabled at reset — enable before heap init.
+    sonido_daisy::enable_d2_sram();
+
     // Heap at D2 SRAM (256 KB)
     unsafe {
         HEAP.init(0x3000_8000, 256 * 1024);
@@ -287,16 +310,16 @@ async fn main(spawner: Spawner) {
     defmt::info!("hothouse_diag: initializing...");
 
     // ── GPIO pins ──
-    let mut led1 = Output::new(p.PA5, Level::Low, Speed::Low);   // LED 1 (K1 > 50%)
-    let mut led2 = Output::new(p.PA4, Level::Low, Speed::Low);   // LED 2 (FS1 or FS2)
-    let foot1  = Input::new(p.PA0,  Pull::Up);  // Footswitch 1
-    let foot2  = Input::new(p.PD11, Pull::Up);  // Footswitch 2
-    let tog1_up  = Input::new(p.PB4,  Pull::Up);
-    let tog1_dn  = Input::new(p.PB5,  Pull::Up);
-    let tog2_up  = Input::new(p.PG10, Pull::Up);
-    let tog2_dn  = Input::new(p.PG11, Pull::Up);
-    let tog3_up  = Input::new(p.PD2,  Pull::Up);
-    let tog3_dn  = Input::new(p.PC12, Pull::Up);
+    let mut led1 = Output::new(p.PA5, Level::Low, Speed::Low); // LED 1 (K1 > 50%)
+    let mut led2 = Output::new(p.PA4, Level::Low, Speed::Low); // LED 2 (FS1 or FS2)
+    let foot1 = Input::new(p.PA0, Pull::Up); // Footswitch 1
+    let foot2 = Input::new(p.PD11, Pull::Up); // Footswitch 2
+    let tog1_up = Input::new(p.PB4, Pull::Up);
+    let tog1_dn = Input::new(p.PB5, Pull::Up);
+    let tog2_up = Input::new(p.PG10, Pull::Up);
+    let tog2_dn = Input::new(p.PG11, Pull::Up);
+    let tog3_up = Input::new(p.PD2, Pull::Up);
+    let tog3_dn = Input::new(p.PC12, Pull::Up);
 
     // ── ADC1 for knobs ──
     let mut adc1 = Adc::new(p.ADC1);
@@ -380,15 +403,17 @@ async fn main(spawner: Spawner) {
 
                 // ── Accumulate RMS + peak (mono average) ──
                 for i in (0..input.len()).step_by(2) {
-                    let left  = u24_to_f32(input[i]);
+                    let left = u24_to_f32(input[i]);
                     let right = u24_to_f32(input[i + 1]);
-                    let mono  = (left + right) * 0.5;
+                    let mono = (left + right) * 0.5;
                     sum_sq += mono * mono;
                     let abs_val = libm::fabsf(mono);
-                    if abs_val > peak { peak = abs_val; }
+                    if abs_val > peak {
+                        peak = abs_val;
+                    }
                 }
                 block_count += 1;
-                poll_count  += 1;
+                poll_count += 1;
 
                 // ── Control poll (every 150 blocks ≈ 100 ms) ──
                 if poll_count >= POLL_EVERY {
@@ -411,14 +436,25 @@ async fn main(spawner: Spawner) {
                     // Read GPIO
                     let fs1 = foot1.is_low() as u32;
                     let fs2 = foot2.is_low() as u32;
-                    let t1  = decode_toggle(&tog1_up, &tog1_dn);
-                    let t2  = decode_toggle(&tog2_up, &tog2_dn);
-                    let t3  = decode_toggle(&tog3_up, &tog3_dn);
-                    GPIO_BITS.store(fs1 | (fs2 << 1) | (t1 << 2) | (t2 << 4) | (t3 << 6), Ordering::Relaxed);
+                    let t1 = decode_toggle(&tog1_up, &tog1_dn);
+                    let t2 = decode_toggle(&tog2_up, &tog2_dn);
+                    let t3 = decode_toggle(&tog3_up, &tog3_dn);
+                    GPIO_BITS.store(
+                        fs1 | (fs2 << 1) | (t1 << 2) | (t2 << 4) | (t3 << 6),
+                        Ordering::Relaxed,
+                    );
 
                     // LED feedback (use local k1_pct, not redundant atomic load)
-                    if k1_pct > 50 { led1.set_high(); } else { led1.set_low(); }
-                    if fs1 != 0 || fs2 != 0 { led2.set_high(); } else { led2.set_low(); }
+                    if k1_pct > 50 {
+                        led1.set_high();
+                    } else {
+                        led1.set_low();
+                    }
+                    if fs1 != 0 || fs2 != 0 {
+                        led2.set_high();
+                    } else {
+                        led2.set_low();
+                    }
 
                     // CPU temperature (RM0433: T = 80×(raw−CAL1)/(CAL2−CAL1) + 30)
                     let raw_temp = adc3.blocking_read(&mut temp_ch, TEMP_SAMPLE_TIME);

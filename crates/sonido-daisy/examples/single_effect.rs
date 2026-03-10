@@ -96,6 +96,9 @@ const KNOB_SAMPLE_TIME: SampleTime = SampleTime::CYCLES32_5;
 
 #[embassy_executor::main]
 async fn main(spawner: embassy_executor::Spawner) {
+    // D2 SRAM clocks are disabled at reset — enable before heap init.
+    sonido_daisy::enable_d2_sram();
+
     // Initialize heap at D2 SRAM (256 KB)
     unsafe {
         HEAP.init(0x3000_8000, 256 * 1024);
@@ -119,9 +122,9 @@ async fn main(spawner: embassy_executor::Spawner) {
     let mut knob3_pin = p.PA6; // KNOB_3 (Output)
     let mut knob4_pin = p.PC1; // KNOB_4 (Mix)
 
-    let tog1_up = Input::new(p.PB4, Pull::Up);   // TOGGLE_1 up
-    let tog1_down = Input::new(p.PB5, Pull::Up);  // TOGGLE_1 down
-    let footswitch = Input::new(p.PA0, Pull::Up);  // FOOTSWITCH_1
+    let tog1_up = Input::new(p.PB4, Pull::Up); // TOGGLE_1 up
+    let tog1_down = Input::new(p.PB5, Pull::Up); // TOGGLE_1 down
+    let footswitch = Input::new(p.PA0, Pull::Up); // FOOTSWITCH_1
     let mut led = Output::new(p.PA5, Level::High, Speed::Low); // LED_1 (start active)
 
     // ── Construct audio peripherals directly ──
@@ -226,8 +229,7 @@ async fn main(spawner: embassy_executor::Spawner) {
                     let left_in = u24_to_f32(input[i]);
                     let right_in = u24_to_f32(input[i + 1]);
 
-                    let (left_out, right_out) =
-                        kernel.process_stereo(left_in, right_in, &params);
+                    let (left_out, right_out) = kernel.process_stereo(left_in, right_in, &params);
 
                     output[i] = f32_to_u24(left_out);
                     output[i + 1] = f32_to_u24(right_out);

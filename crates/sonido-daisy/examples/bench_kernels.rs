@@ -115,11 +115,7 @@ fn format_results(results: &[u32; NUM_KERNELS], buf: &mut [u8]) -> usize {
 
     let mut w = BufWriter::new(buf);
     let _ = writeln!(w, "\r\n=== Sonido Kernel Benchmarks ===");
-    let _ = writeln!(
-        w,
-        "sample_rate=48000 block_size={}\r",
-        BLOCK_SIZE
-    );
+    let _ = writeln!(w, "sample_rate=48000 block_size={}\r", BLOCK_SIZE);
     let _ = writeln!(
         w,
         "budget: {}cyc @480MHz (Performance) | {}cyc @400MHz (Efficient)\r",
@@ -162,33 +158,42 @@ fn format_results(results: &[u32; NUM_KERNELS], buf: &mut [u8]) -> usize {
 }
 
 // Static buffers for USB CDC ACM — StaticCell guarantees single-init safety without unsafe.
-static OUTPUT_BUF: StaticCell<[u8; 2048]>      = StaticCell::new();
-static EP_OUT_BUF:  StaticCell<[u8; 256]>      = StaticCell::new();
-static CONFIG_DESC: StaticCell<[u8; 256]>      = StaticCell::new();
-static BOS_DESC:    StaticCell<[u8; 256]>      = StaticCell::new();
-static MSOS_DESC:   StaticCell<[u8; 256]>      = StaticCell::new();
-static CONTROL_BUF: StaticCell<[u8; 64]>       = StaticCell::new();
-static CDC_STATE:   StaticCell<State<'static>> = StaticCell::new();
+static OUTPUT_BUF: StaticCell<[u8; 2048]> = StaticCell::new();
+static EP_OUT_BUF: StaticCell<[u8; 256]> = StaticCell::new();
+static CONFIG_DESC: StaticCell<[u8; 256]> = StaticCell::new();
+static BOS_DESC: StaticCell<[u8; 256]> = StaticCell::new();
+static MSOS_DESC: StaticCell<[u8; 256]> = StaticCell::new();
+static CONTROL_BUF: StaticCell<[u8; 64]> = StaticCell::new();
+static CDC_STATE: StaticCell<State<'static>> = StaticCell::new();
 
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
-    // Initialize heap — point at D2 SRAM (0x30008000, 256 KB).
-    unsafe {
-        HEAP.init(0x3000_8000, 256 * 1024);
-    }
-
     let config = sonido_daisy::rcc_config(ClockProfile::Performance);
     let p = embassy_stm32::init(config);
+
+    // SAFETY: embassy-executor 0.9 may consume cortex_m::Peripherals internally.
+    let mut cp = unsafe { cortex_m::Peripherals::steal() };
+
+    // Initialize 64 MB SDRAM via FMC — configures MPU + power-up sequence.
+    // Must come after embassy_stm32::init() (enables FMC clock via PLL2_R).
+    let sdram_ptr = sonido_daisy::init_sdram!(p, &mut cp.MPU, &mut cp.SCB);
+    unsafe {
+        HEAP.init(sdram_ptr as usize, sonido_daisy::sdram::SDRAM_SIZE);
+    }
 
     let led = UserLed::new(p.PC7);
     spawner.spawn(heartbeat(led)).unwrap();
 
-    let mut cp = cortex_m::Peripherals::take().unwrap();
     enable_cycle_counter(&mut cp.DCB, &mut cp.DWT);
 
-    defmt::info!("=== Running benchmarks... ===");
-
-    // --- Run all benchmarks first (before USB init) ---
+    // --- Run all benchmarks with diagnostic yields ---
+    // Count heartbeats to identify which group crashes:
+    //   ~1 beat  = crash in DWT/cycle counter setup
+    //   ~2 beats = crash in group A (preamp..eq)
+    //   ~3 beats = crash in group B (wah..tremolo)
+    //   ~4 beats = crash in group C (delay..reverb)
+    //   ~5 beats = crash in group D (limiter..stage)
+    //   continuous = all benchmarks passed
     let mut results = [0u32; NUM_KERNELS];
 
     bench!(results, 0, PreampKernel, PreampParams);
@@ -201,11 +206,13 @@ async fn main(spawner: Spawner) {
     bench!(results, 7, FlangerKernel, FlangerParams);
     bench!(results, 8, PhaserKernel, PhaserParams);
     bench!(results, 9, TremoloKernel, TremoloParams);
+
     bench!(results, 10, DelayKernel, DelayParams);
     bench!(results, 11, FilterKernel, FilterParams);
     bench!(results, 12, VibratoKernel, VibratoParams);
     bench!(results, 13, TapeKernel, TapeParams);
     bench!(results, 14, ReverbKernel, ReverbParams);
+
     bench!(results, 15, LimiterKernel, LimiterParams);
     bench!(results, 16, BitcrusherKernel, BitcrusherParams);
     bench!(results, 17, RingModKernel, RingModParams);

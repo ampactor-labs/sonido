@@ -55,7 +55,7 @@ Codec ADC → SAI RX → DMA → SRAM buffer (ping)
 ```
 
 - **DMA double-buffer** — CPU processes one half while DMA fills/drains the other
-- **Block size** — 32 samples default in libDaisy C++ (0.67 ms at 48 kHz). Sonido uses 128 samples (2.67 ms) — see `BLOCK_SIZE` in `sonido-daisy/src/lib.rs`
+- **Block size** — 32 samples (0.67 ms at 48 kHz), matching libDaisy C++ default — see `BLOCK_SIZE` in `sonido-daisy/src/lib.rs`
 - **Format** — 24-bit I2S, processed as `f32` internally
 - **Known limitation** — Embassy uses a circular-buffer workaround, not hardware
   M0AR/M1AR double-buffer registers
@@ -163,10 +163,10 @@ let rms_fp = RMS_FP.load(Ordering::Relaxed);
 | Symbol | Value | Purpose |
 |--------|-------|---------|
 | `SAMPLE_RATE` | 48,000.0 Hz | Default audio sample rate |
-| `BLOCK_SIZE` | 128 samples | DMA half-transfer size |
+| `BLOCK_SIZE` | 32 samples | DMA half-transfer size |
 | `CHANNELS` | 2 | Stereo |
-| `DMA_BUFFER_SIZE` | 512 | `BLOCK_SIZE * CHANNELS * 2` (double-buffer) |
-| `CYCLES_PER_BLOCK` | 1,280,000 | CPU cycles available per block at 480 MHz |
+| `DMA_BUFFER_SIZE` | 128 | `BLOCK_SIZE * CHANNELS * 2` (double-buffer) |
+| `CYCLES_PER_BLOCK` | 320,000 | CPU cycles available per block at 480 MHz |
 | `measure_cycles(\|\| { })` | — | DWT cycle counter wrapper |
 | `enable_cycle_counter()` | — | Call once at startup before measuring |
 
@@ -174,20 +174,19 @@ let rms_fp = RMS_FP.load(Ordering::Relaxed);
 
 | Crate | Version | Purpose |
 |-------|:-------:|---------|
-| `embassy-stm32` | 0.5 | Async HAL — SAI, DMA, GPIO, ADC |
+| `embassy-stm32` | 0.5 | Async HAL — SAI, DMA, GPIO, ADC, FMC |
 | `embassy-executor` | 0.9 | Async task executor for Cortex-M |
 | `embassy-time` | 0.5 | Timer and delay utilities |
-| `daisy-embassy` | 0.2 | Daisy Seed BSP — codec init, audio interface |
-| `cortex-m` | 0.7 | Low-level Cortex-M access — DWT, SCB |
+| `embassy-usb` | 0.5 | USB CDC ACM serial output |
+| `stm32-fmc` | 0.4 | SDRAM controller (AS4C16M32MSA-6 device definition) |
+| `cortex-m` | 0.7 | Low-level Cortex-M access — DWT, SCB, MPU |
 | `cortex-m-rt` | 0.7 | Runtime — vector table, entry point |
-| `embedded-alloc` | 0.6 | Heap allocator for DSP buffer allocations |
+| `embedded-alloc` | 0.6 | Heap allocator (backed by SDRAM) |
+| `grounded` | 0.2 | DMA buffer management (GroundedArrayCell) |
+| `static_cell` | 2 | Safe static initialization for USB buffers |
 | `defmt` | 1.0 | Efficient embedded logging |
 | `defmt-rtt` | 1.1 | RTT transport for defmt |
 | `panic-probe` | 1.0 | Panic handler with defmt output |
-
-**Feature flags:**
-- `seed_1_2` *(default)* — Rev 7 PCM3060 codec
-- `seed_1_1` — Rev 5 WM8731 codec
 
 ---
 
@@ -532,15 +531,16 @@ cargo run --example <name> --release
 
 ## Memory Budget
 
+Heap lives in 64 MB SDRAM. Memory is abundant — CPU cycles are the constraint.
+
 Each `InterpolatedDelay` buffer = `max_delay_samples * 4` bytes (f32).
 
 | Effect | Buffer Size @ 48 kHz | Notes |
 |--------|:--------------------:|-------|
 | Reverb (stereo) | ~110 KB | 8+8 combs + 4+4 allpasses |
 | Reverb (mono) | ~55 KB | Half the buffers |
-| Delay (2s, stereo) | ~750 KB | **Exceeds AXI SRAM** — needs SDRAM |
-| Delay (500ms, stereo) | ~188 KB | Fits in AXI SRAM |
-| Delay (300ms, mono) | ~56 KB | Default delay time |
+| Delay (2s, stereo) | ~750 KB | Fits in SDRAM (0.001% of 64 MB) |
+| Delay (500ms, stereo) | ~188 KB | Fits in SDRAM |
 | Chorus | ~8 KB | 20ms max delay |
 | Flanger | ~4 KB | ~10ms max delay |
 | All others | < 1 KB each | Phaser, Distortion, Compressor, Gate, etc. |
@@ -549,43 +549,68 @@ Each `InterpolatedDelay` buffer = `max_delay_samples * 4` bytes (f32).
 
 ```
 AXI SRAM (480 KB usable, 0-wait — code executes here)
-├── .text + .rodata (firmware code, ~90 KB for full bench)
-└── ~390 KB headroom
+├── .text + .rodata (firmware code, ~90–160 KB)
+└── ~320–390 KB headroom
 
-DTCM (128 KB, 0-wait — data)
+DTCM (128 KB, 0-wait — data, hot path)
 ├── Stack (8–16 KB)
-├── .bss + .data (globals, filter state)
-└── ~100 KB for hot per-sample DSP state
+├── .bss + .data (globals, filter coefficients)
+└── ~100 KB for per-sample DSP state (local vars in process_stereo)
 
-D2 SRAM (288 KB, 1–2 wait — heap + DMA)
-├── Heap allocator (~256 KB) — delay lines, comb buffers
-├── Audio DMA buffers (SAI, 2 KB)
-└── ~30 KB headroom
+D2 SRAM (288 KB, 1–2 wait — DMA only)
+├── Audio DMA buffers (SAI TX/RX, .sram1_bss section, ~2 KB)
+└── Reserved for future DMA peripherals
 
-SDRAM (64 MB, 4–8 wait)
-├── Long delay lines (> 500ms)
-├── Sampler / looper buffers
+SDRAM (64 MB, 4–8 wait, MPU cacheable — heap)
+├── Global heap allocator (all Vec/Box allocations)
+├── Delay lines (768 KB for 2s stereo delay)
+├── Reverb comb/allpass buffers (~110 KB stereo)
+├── Sampler / looper buffers (up to ~10 min at 48 kHz)
 └── Large lookup tables
 ```
 
+**Hot/cold path separation:** The per-sample audio callback runs from DTCM
+stack (0-wait local variables) and reads/writes delay lines in SDRAM via
+the Cortex-M7 L1 data cache. Sequential delay line access (1 read + 1
+write per sample) is cache-friendly: a 32-byte cache line holds 8 `f32`
+samples, giving ~87.5% hit rate. Cold-path operations (kernel `new()`,
+parameter changes, effect swaps) touch SDRAM uncached during allocation —
+this is fine since they run once, not per-sample.
+
+**SDRAM initialization:** The FMC controller and SDRAM power-up sequence
+must be run by each application — the bootloader does not initialize SDRAM.
+Use the [`init_sdram!`] macro after `embassy_stm32::init()`:
+
+```rust
+let p = embassy_stm32::init(config);
+let mut cp = unsafe { cortex_m::Peripherals::steal() };
+let sdram_ptr = sonido_daisy::init_sdram!(p, &mut cp.MPU, &mut cp.SCB);
+unsafe { HEAP.init(sdram_ptr as usize, sonido_daisy::sdram::SDRAM_SIZE); }
+```
+
+The macro configures MPU Region 0 at `0xC000_0000` (write-back cacheable),
+sets up all 54 FMC GPIO pins, and runs the AS4C16M32MSA-6 power-up sequence.
+
 ### Chain Configurations
 
-**Comfortable** — < 300 KB, fits AXI SRAM with headroom:
+With the heap in 64 MB SDRAM, memory is no longer a constraint for
+effect chains. Any combination of all 19 effects fits comfortably.
+CPU budget is the limiting factor.
+
+**Comfortable** — CPU < 50%:
 
 | Chain | Memory | CPU Est. |
 |-------|-------:|---------:|
-| Preamp → Distortion → Chorus → Delay(300ms) | ~65 KB | ~30% |
-| Gate → Tape → Flanger → Delay(300ms) | ~62 KB | ~22% |
+| Preamp → Distortion → Chorus → Delay(2s) | ~780 KB | ~30% |
+| Gate → Tape → Flanger → Delay(2s) | ~780 KB | ~22% |
 | Preamp → Wah → Distortion → Chorus | ~10 KB | ~32% |
 
 **Tight** — CPU 50–80%:
 
 | Chain | Memory | CPU Est. |
 |-------|-------:|---------:|
-| Preamp → Distortion → Chorus → Delay → Reverb(mono) | ~120 KB | ~78% |
-| Compressor → Distortion → Reverb(mono) | ~57 KB | ~77% |
-
-**Needs SDRAM** — any chain with stereo Delay > 500ms.
+| Preamp → Distortion → Chorus → Delay → Reverb | ~890 KB | ~78% |
+| Compressor → Distortion → Reverb(stereo) | ~112 KB | ~77% |
 
 **CPU budget exceeded** — EQ or Vibrato (>100% alone), Phaser + Reverb (>124%).
 See [Benchmarks](BENCHMARKS.md) for full Cortex-M7 cycle estimates. Phase 2
@@ -712,7 +737,7 @@ hardware controls to effect parameters. The Daisy/Hothouse firmware:
 
 | Gap | Detail |
 |-----|--------|
-| Memory placement | Large buffers (delay >500ms) need linker sections for SDRAM |
+| D-cache enable | MPU marks SDRAM cacheable, but Cortex-M7 D-cache is not yet enabled — SDRAM runs at raw 4–8 wait states. Enabling requires a second MPU region for D2 SRAM DMA buffers (non-cacheable) to prevent DMA coherence issues. |
 | Block processing | Biquad/SVF have per-sample `process()` only — block version would improve CM7 cache behavior |
 
 ---

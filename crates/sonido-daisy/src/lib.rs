@@ -31,10 +31,29 @@ pub mod adc;
 pub mod audio;
 pub mod led;
 pub mod rcc;
+pub mod sdram;
 
 pub use rcc::{ClockProfile, cycles_per_block, rcc_config};
 
 use cortex_m::peripheral::DWT;
+
+/// Enables D2-domain SRAM1/2/3 clocks via RCC AHB2ENR.
+///
+/// On STM32H750, D2 SRAM clocks are **disabled after reset**. Any access
+/// to addresses in the 0x3000_0000–0x3004_7FFF range (D2 SRAM1/2/3) before
+/// enabling these clocks causes a bus fault → HardFault.
+///
+/// Call this **before** initialising the heap or touching DMA buffers.
+/// It is safe to call multiple times (idempotent OR-write).
+pub fn enable_d2_sram() {
+    // RCC AHB2ENR register: 0x5802_44DC
+    // Bit 29 = SRAM1EN, Bit 30 = SRAM2EN, Bit 31 = SRAM3EN
+    const RCC_AHB2ENR: *mut u32 = 0x5802_44DC as *mut u32;
+    unsafe {
+        let val = core::ptr::read_volatile(RCC_AHB2ENR);
+        core::ptr::write_volatile(RCC_AHB2ENR, val | (0b111 << 29));
+    }
+}
 use embassy_stm32::{peripherals, usb};
 use embassy_time::Timer;
 use embassy_usb::UsbDevice;

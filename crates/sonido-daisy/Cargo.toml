@@ -16,10 +16,13 @@ static_cell = "2"
 # DMA buffer management (replaces daisy-embassy's internal use)
 grounded = "0.2"
 
+# SDRAM controller (AS4C16M32MSA-6 device definition + FMC init sequence)
+stm32-fmc = "0.4"
+
 # Embassy async runtime
 embassy-executor = { version = "0.9", features = ["arch-cortex-m", "executor-thread"] }
-embassy-time = "0.5"
-embassy-stm32 = { version = "0.5", features = ["stm32h750ib", "defmt"] }
+embassy-time = { version = "0.5", features = ["tick-hz-32_768"] }
+embassy-stm32 = { version = "0.5", features = ["stm32h750ib", "defmt", "time-driver-tim5"] }
 embassy-usb = "0.5"
 
 # Cortex-M

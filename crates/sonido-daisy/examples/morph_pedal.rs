@@ -53,7 +53,9 @@ use embedded_alloc::LlffHeap as Heap;
 use panic_probe as _;
 
 use sonido_core::graph::{NodeId, ProcessingGraph};
-use sonido_daisy::{BLOCK_SIZE, ClockProfile, SAMPLE_RATE, f32_to_u24, heartbeat, led::UserLed, u24_to_f32};
+use sonido_daisy::{
+    BLOCK_SIZE, ClockProfile, SAMPLE_RATE, f32_to_u24, heartbeat, led::UserLed, u24_to_f32,
+};
 use sonido_registry::EffectRegistry;
 
 // ── Heap ──────────────────────────────────────────────────────────────────
@@ -65,11 +67,24 @@ static HEAP: Heap = Heap::empty();
 
 /// All 19 effects in signal-chain order for browsing.
 const ALL_EFFECTS: &[&str] = &[
-    "preamp", "distortion", "bitcrusher",
-    "compressor", "gate", "limiter",
-    "chorus", "flanger", "phaser", "tremolo",
-    "vibrato", "wah", "ringmod",
-    "eq", "filter", "delay", "tape", "reverb",
+    "preamp",
+    "distortion",
+    "bitcrusher",
+    "compressor",
+    "gate",
+    "limiter",
+    "chorus",
+    "flanger",
+    "phaser",
+    "tremolo",
+    "vibrato",
+    "wah",
+    "ringmod",
+    "eq",
+    "filter",
+    "delay",
+    "tape",
+    "reverb",
     "stage",
 ];
 
@@ -205,9 +220,9 @@ impl Preset {
 /// Decodes a 3-position toggle: UP=0, MID=1, DN=2.
 fn decode_toggle(up: &Input<'_>, dn: &Input<'_>) -> u8 {
     match (up.is_low(), dn.is_low()) {
-        (true, false) => 0,  // UP
-        (false, true) => 2,  // DN
-        _ => 1,              // MID (or fault)
+        (true, false) => 0, // UP
+        (false, true) => 2, // DN
+        _ => 1,             // MID (or fault)
     }
 }
 
@@ -228,9 +243,8 @@ fn build_graph(
     let inp = g.add_input();
     let out = g.add_output();
 
-    let nodes: [NodeId; NUM_SLOTS] = core::array::from_fn(|i| {
-        g.add_effect(registry.create(effects[i], sr).unwrap())
-    });
+    let nodes: [NodeId; NUM_SLOTS] =
+        core::array::from_fn(|i| g.add_effect(registry.create(effects[i], sr).unwrap()));
 
     match routing {
         Routing::Serial => {
@@ -275,6 +289,9 @@ static BYPASSED: AtomicBool = AtomicBool::new(false);
 
 #[embassy_executor::main]
 async fn main(spawner: embassy_executor::Spawner) {
+    // D2 SRAM clocks are disabled at reset — enable before heap init.
+    sonido_daisy::enable_d2_sram();
+
     // Initialize heap at D2 SRAM (256 KB)
     unsafe {
         HEAP.init(0x3000_8000, 256 * 1024);
@@ -293,12 +310,12 @@ async fn main(spawner: embassy_executor::Spawner) {
 
     let mut adc = Adc::new(p.ADC1);
     let mut knob_pins = (
-        p.PA3,  // KNOB_1
-        p.PB1,  // KNOB_2
-        p.PA7,  // KNOB_3
-        p.PA6,  // KNOB_4
-        p.PC1,  // KNOB_5
-        p.PC4,  // KNOB_6
+        p.PA3, // KNOB_1
+        p.PB1, // KNOB_2
+        p.PA7, // KNOB_3
+        p.PA6, // KNOB_4
+        p.PC1, // KNOB_5
+        p.PC4, // KNOB_6
     );
 
     let tog1_up = Input::new(p.PB4, Pull::Up);
@@ -312,7 +329,7 @@ async fn main(spawner: embassy_executor::Spawner) {
     let foot2 = Input::new(p.PD11, Pull::Up);
 
     let mut led1 = Output::new(p.PA5, Level::High, Speed::Low); // Active indicator
-    let mut led2 = Output::new(p.PA4, Level::Low, Speed::Low);  // Mode feedback
+    let mut led2 = Output::new(p.PA4, Level::Low, Speed::Low); // Mode feedback
 
     // ── Audio setup ──
 
@@ -440,9 +457,9 @@ async fn main(spawner: embassy_executor::Spawner) {
                         }
                         Mode::Morph => {
                             morph_speed = match t1 {
-                                0 => 0.5,  // UP = Fast
-                                2 => 5.0,  // DN = Slow
-                                _ => 2.0,  // MID = Medium
+                                0 => 0.5, // UP = Fast
+                                2 => 5.0, // DN = Slow
+                                _ => 2.0, // MID = Medium
                             };
                         }
                     }
@@ -559,7 +576,11 @@ async fn main(spawner: embassy_executor::Spawner) {
                                 if fs1_held < TAP_LIMIT {
                                     // Previous effect
                                     let idx = &mut effect_indices[focused_slot];
-                                    *idx = if *idx == 0 { ALL_EFFECTS.len() - 1 } else { *idx - 1 };
+                                    *idx = if *idx == 0 {
+                                        ALL_EFFECTS.len() - 1
+                                    } else {
+                                        *idx - 1
+                                    };
                                     current_effects[focused_slot] = ALL_EFFECTS[*idx];
                                     needs_rebuild = true;
                                     // Blink LED2
@@ -611,8 +632,12 @@ async fn main(spawner: embassy_executor::Spawner) {
                                 if fs2_held < TAP_LIMIT {
                                     // Save preset to next available slot
                                     match active_sound {
-                                        ActiveSound::A => sound_a.capture_from_graph(&graph, &node_ids),
-                                        ActiveSound::B => sound_b.capture_from_graph(&graph, &node_ids),
+                                        ActiveSound::A => {
+                                            sound_a.capture_from_graph(&graph, &node_ids)
+                                        }
+                                        ActiveSound::B => {
+                                            sound_b.capture_from_graph(&graph, &node_ids)
+                                        }
                                     }
                                     let slot = next_preset_slot;
                                     presets[slot] = Preset {
@@ -639,8 +664,12 @@ async fn main(spawner: embassy_executor::Spawner) {
                     }
 
                     // Reset hold counters on release
-                    if !fs1_pressed { fs1_held = 0; }
-                    if !fs2_pressed { fs2_held = 0; }
+                    if !fs1_pressed {
+                        fs1_held = 0;
+                    }
+                    if !fs2_pressed {
+                        fs2_held = 0;
+                    }
                     fs1_was_pressed = fs1_pressed;
                     fs2_was_pressed = fs2_pressed;
 
@@ -652,11 +681,8 @@ async fn main(spawner: embassy_executor::Spawner) {
                             ActiveSound::B => sound_b.capture_from_graph(&graph, &node_ids),
                         }
 
-                        let (new_graph, new_nodes) = build_graph(
-                            &registry,
-                            &current_effects,
-                            routing,
-                        );
+                        let (new_graph, new_nodes) =
+                            build_graph(&registry, &current_effects, routing);
                         graph = new_graph;
                         node_ids = new_nodes;
 
@@ -673,7 +699,8 @@ async fn main(spawner: embassy_executor::Spawner) {
                     if mode == Mode::Morph {
                         for slot in 0..NUM_SLOTS {
                             if let Some(effect) = graph.effect_with_params_mut(node_ids[slot]) {
-                                let count = sound_a.param_counts[slot].min(sound_b.param_counts[slot]);
+                                let count =
+                                    sound_a.param_counts[slot].min(sound_b.param_counts[slot]);
                                 for p_idx in 0..count {
                                     let a = sound_a.params[slot][p_idx];
                                     let b = sound_b.params[slot][p_idx];
@@ -700,7 +727,11 @@ async fn main(spawner: embassy_executor::Spawner) {
                                 let phase = poll_counter % 100; // 100 polls = 1s
                                 match active_sound {
                                     ActiveSound::A => {
-                                        if phase < 10 { led2.set_high(); } else { led2.set_low(); }
+                                        if phase < 10 {
+                                            led2.set_high();
+                                        } else {
+                                            led2.set_low();
+                                        }
                                     }
                                     ActiveSound::B => {
                                         if phase < 5 || (10..15).contains(&phase) {

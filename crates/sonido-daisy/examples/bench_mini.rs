@@ -22,15 +22,19 @@ use sonido_effects::kernels::{PreampKernel, PreampParams};
 
 #[embassy_executor::main]
 async fn main(_spawner: Spawner) {
-    // Init heap — but PreampKernel doesn't allocate, this is just for the linker
-    unsafe { HEAP.init(0x3000_8000, 256 * 1024); }
+    // D2 SRAM clocks are disabled at reset — enable before heap init.
+    sonido_daisy::enable_d2_sram();
+    unsafe {
+        HEAP.init(0x3000_8000, 256 * 1024);
+    }
 
     let config = sonido_daisy::rcc_config(ClockProfile::Performance);
     let p = embassy_stm32::init(config);
 
     let mut led = Output::new(p.PC7, Level::Low, Speed::Low);
 
-    let mut cp = cortex_m::Peripherals::take().unwrap();
+    // SAFETY: embassy-executor may consume cortex_m::Peripherals internally.
+    let mut cp = unsafe { cortex_m::Peripherals::steal() };
     enable_cycle_counter(&mut cp.DCB, &mut cp.DWT);
 
     defmt::info!("bench_mini: running preamp benchmark");
