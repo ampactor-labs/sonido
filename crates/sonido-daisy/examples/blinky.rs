@@ -24,9 +24,11 @@ use embassy_executor::Spawner;
 use embassy_time::Timer;
 use panic_probe as _;
 
+use sonido_daisy::ClockProfile;
+
 #[embassy_executor::main]
 async fn main(_spawner: Spawner) {
-    let config = daisy_embassy::default_rcc();
+    let config = sonido_daisy::rcc_config(ClockProfile::Performance);
     let p = embassy_stm32::init(config);
 
     // Daisy Seed onboard LED is on PC7

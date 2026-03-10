@@ -7,8 +7,8 @@
 //! # Architecture
 //!
 //! A single `start_callback` closure handles both audio processing and control
-//! polling. daisy-embassy's callback runs in the Embassy executor thread (not a
-//! hardware ISR), so blocking ADC reads (~1 us each) are safe.
+//! polling. The callback runs in the Embassy executor thread (not a hardware
+//! ISR), so blocking ADC reads (~1 us each) are safe.
 //!
 //! - **Audio processing** runs every block (1500 Hz at 48 kHz / 32 samples).
 //! - **Control polling** runs every 15th block (~100 Hz): reads 4 ADC knobs,
@@ -31,9 +31,9 @@
 //! | FOOTSWITCH_1 | PA0 (pull-up)| Bypass toggle on release                      |
 //! | LED_1        | PA5          | Active (on) / Bypassed (off)                  |
 //!
-//! Note: we construct `AudioPeripherals` directly instead of using `new_daisy_board!`
+//! Note: we construct `AudioPeripherals` directly instead of using a board macro
 //! because the board macro consumes all GPIO pins (including the ones we need for
-//! knobs, toggles, and footswitch). Audio only requires SAI1, I2C2, DMA, and the
+//! knobs, toggles, and footswitch). Audio only requires SAI1, DMA, and the
 //! codec pins (PE2-PE6).
 //!
 //! # Build & Flash
@@ -60,7 +60,7 @@ use embedded_alloc::LlffHeap as Heap;
 use panic_probe as _;
 
 use sonido_core::kernel::DspKernel;
-use sonido_daisy::{SAMPLE_RATE, f32_to_u24, heartbeat, u24_to_f32};
+use sonido_daisy::{ClockProfile, SAMPLE_RATE, f32_to_u24, heartbeat, led::UserLed, u24_to_f32};
 use sonido_effects::kernels::{DistortionKernel, DistortionParams};
 
 // ── Heap allocator (DistortionKernel needs alloc for ADAA state) ─────────
@@ -101,17 +101,17 @@ async fn main(spawner: embassy_executor::Spawner) {
         HEAP.init(0x3000_8000, 256 * 1024);
     }
 
-    let config = daisy_embassy::default_rcc();
+    let config = sonido_daisy::rcc_config(ClockProfile::Performance);
     let p = hal::init(config);
 
-    let led = daisy_embassy::led::UserLed::new(p.PC7);
+    let led = UserLed::new(p.PC7);
     spawner.spawn(heartbeat(led)).unwrap();
 
     defmt::info!("sonido-daisy single_effect: initializing...");
 
     // ── Extract control pins BEFORE constructing audio peripherals ──
     // The ADC, knob, toggle, footswitch, and LED pins are used by the
-    // control loop. Audio only needs SAI1, I2C2, DMA, and codec pins.
+    // control loop. Audio only needs SAI1, DMA, and codec pins.
 
     let mut adc = Adc::new(p.ADC1);
     let mut knob1_pin = p.PA3; // KNOB_1 (Drive)
@@ -125,15 +125,11 @@ async fn main(spawner: embassy_executor::Spawner) {
     let mut led = Output::new(p.PA5, Level::High, Speed::Low); // LED_1 (start active)
 
     // ── Construct audio peripherals directly ──
-    // We skip new_daisy_board!() because it consumes all GPIO pins.
-    // Audio only needs SAI1 + I2C2 + DMA channels + codec pins (PE2-PE6).
-    let audio_peripherals = daisy_embassy::audio::AudioPeripherals {
-        codec_pins: daisy_embassy::codec_pins!(p),
+    let audio_peripherals = sonido_daisy::audio::AudioPeripherals {
+        codec_pins: sonido_daisy::codec_pins!(p),
         sai1: p.SAI1,
-        i2c2: p.I2C2,
         dma1_ch0: p.DMA1_CH0,
         dma1_ch1: p.DMA1_CH1,
-        dma1_ch2: p.DMA1_CH2,
     };
 
     let interface = audio_peripherals
@@ -148,33 +144,28 @@ async fn main(spawner: embassy_executor::Spawner) {
 
     // ── Start audio + control callback ──
     //
-    // daisy-embassy's start_callback runs an infinite async loop: it awaits
-    // DMA completion, calls our closure synchronously, then awaits the next
-    // block. The closure is FnMut, not async — but it runs in the executor
-    // thread, NOT a hardware ISR. This means blocking_read (~1us per knob
-    // at CYCLES32_5 on 480 MHz) is safe here.
+    // The callback runs an infinite async loop: it awaits DMA completion,
+    // calls our closure synchronously, then awaits the next block. The
+    // closure is FnMut, not async — but it runs in the executor thread,
+    // NOT a hardware ISR. This means blocking_read (~1us per knob at
+    // CYCLES32_5 on 480 MHz) is safe here.
     //
     // We integrate control polling directly into the callback at a decimated
-    // rate: every 15th invocation (~100 Hz at 1500 blocks/sec). This avoids
-    // the complexity of spawning a separate Embassy task with 'static
-    // peripheral ownership.
+    // rate: every 15th invocation (~100 Hz at 1500 blocks/sec).
     //
     // Both slices are 64 interleaved u32 values: [L0, R0, L1, R1, ..., L31, R31]
 
-    // Control state for footswitch debounce
-    static FOOT_WAS_PRESSED: AtomicBool = AtomicBool::new(false);
-    static POLL_COUNTER: AtomicU16 = AtomicU16::new(0);
+    // Control state for footswitch debounce (closure-private, no atomics needed)
+    let mut poll_counter: u16 = 0;
+    let mut foot_was_pressed = false;
 
-    // Move ADC and pins into the callback. This works because the callback
-    // closure captures them by move, and start_callback runs forever.
     defmt::unwrap!(
         interface
             .start_callback(move |input, output| {
                 // ── Control polling (every 15th block = ~100 Hz) ──
-                let count = POLL_COUNTER.load(Ordering::Relaxed).wrapping_add(1);
-                POLL_COUNTER.store(count, Ordering::Relaxed);
+                poll_counter = poll_counter.wrapping_add(1);
 
-                if count % 15 == 0 {
+                if poll_counter % 15 == 0 {
                     // Read ADC knobs (blocking_read takes ~1us each — negligible)
                     let raw1: u16 = adc.blocking_read(&mut knob1_pin, KNOB_SAMPLE_TIME);
                     let raw2: u16 = adc.blocking_read(&mut knob2_pin, KNOB_SAMPLE_TIME);
@@ -199,8 +190,7 @@ async fn main(spawner: embassy_executor::Spawner) {
 
                     // Footswitch bypass toggle (fire on release)
                     let foot_pressed = footswitch.is_low();
-                    let was_pressed = FOOT_WAS_PRESSED.load(Ordering::Relaxed);
-                    if was_pressed && !foot_pressed {
+                    if foot_was_pressed && !foot_pressed {
                         let active = !ACTIVE.load(Ordering::Relaxed);
                         ACTIVE.store(active, Ordering::Relaxed);
                         if active {
@@ -209,7 +199,7 @@ async fn main(spawner: embassy_executor::Spawner) {
                             led.set_low();
                         }
                     }
-                    FOOT_WAS_PRESSED.store(foot_pressed, Ordering::Relaxed);
+                    foot_was_pressed = foot_pressed;
                 }
 
                 // ── Audio processing ──

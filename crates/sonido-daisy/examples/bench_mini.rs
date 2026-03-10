@@ -17,7 +17,7 @@ use embassy_time::Timer;
 use panic_probe as _;
 
 use sonido_core::kernel::DspKernel;
-use sonido_daisy::{BLOCK_SIZE, SAMPLE_RATE, enable_cycle_counter, measure_cycles};
+use sonido_daisy::{BLOCK_SIZE, ClockProfile, SAMPLE_RATE, enable_cycle_counter, measure_cycles};
 use sonido_effects::kernels::{PreampKernel, PreampParams};
 
 #[embassy_executor::main]
@@ -25,7 +25,7 @@ async fn main(_spawner: Spawner) {
     // Init heap — but PreampKernel doesn't allocate, this is just for the linker
     unsafe { HEAP.init(0x3000_8000, 256 * 1024); }
 
-    let config = daisy_embassy::default_rcc();
+    let config = sonido_daisy::rcc_config(ClockProfile::Performance);
     let p = embassy_stm32::init(config);
 
     let mut led = Output::new(p.PC7, Level::Low, Speed::Low);

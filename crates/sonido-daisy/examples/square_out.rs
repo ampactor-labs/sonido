@@ -22,13 +22,12 @@
 #![no_std]
 #![no_main]
 
-use daisy_embassy::new_daisy_board;
 use defmt_rtt as _;
 use embassy_executor::Spawner;
 use embassy_stm32 as hal;
 use panic_probe as _;
 
-use sonido_daisy::{f32_to_u24, heartbeat};
+use sonido_daisy::{ClockProfile, f32_to_u24, heartbeat, led::UserLed};
 
 /// Half-period in samples for 1 kHz at 48 kHz sample rate.
 ///
@@ -37,18 +36,22 @@ const HALF_PERIOD: u32 = 24;
 
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
-    let config = daisy_embassy::default_rcc();
+    let config = sonido_daisy::rcc_config(ClockProfile::Performance);
     let p = hal::init(config);
-    let board = new_daisy_board!(p);
 
     defmt::info!("square_out: 1 kHz full-scale square wave starting");
 
-    // Spawn LED heartbeat as independent async task (not in audio callback)
-    let led = board.user_led;
+    let led = UserLed::new(p.PC7);
     spawner.spawn(heartbeat(led)).unwrap();
 
-    let interface = board
-        .audio_peripherals
+    let audio_peripherals = sonido_daisy::audio::AudioPeripherals {
+        codec_pins: sonido_daisy::codec_pins!(p),
+        sai1: p.SAI1,
+        dma1_ch0: p.DMA1_CH0,
+        dma1_ch1: p.DMA1_CH1,
+    };
+
+    let interface = audio_peripherals
         .prepare_interface(Default::default())
         .await;
     let mut interface = defmt::unwrap!(interface.start_interface().await);

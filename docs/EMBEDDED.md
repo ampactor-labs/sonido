@@ -90,11 +90,70 @@ cargo check -p sonido-daisy \
 
 - **Audio**: `start_callback()` loop — async, yields every DMA transfer (~0.667 ms at 48 kHz, 32-sample blocks). Other tasks run between transfers.
 - **LED / UI**: Use `sonido_daisy::heartbeat` — the shared 1 Hz blink task in `src/lib.rs`. Every binary spawns it before audio init: `let led = board.user_led; spawner.spawn(heartbeat(led)).unwrap();`. Never define a local heartbeat.
-- **USB / Serial**: Same spawned-task pattern. See `audio_input_diag.rs`.
+- **USB / Serial**: Same spawned-task pattern. See `hothouse_diag.rs`.
 - **Audio callback runs in executor context** (not ISR) — it is safe to call Embassy primitives from the callback.
 - **Task return type**: Use `async fn task(...) { }` (implicit `()` return), not `-> !`. Embassy 0.9 task macro behavior with `-> !` is unverified on STM32H750.
 
 Reference implementation: `~/.cargo/registry/src/.../daisy-embassy-0.2.3/examples/passthrough.rs`
+
+### Embassy Patterns
+
+#### StaticCell for USB Buffers
+
+All examples use `StaticCell<T>` from the `static_cell` crate for USB buffer
+allocation. This avoids `static mut` and the associated `unsafe` blocks:
+
+```rust
+use static_cell::StaticCell;
+use embassy_usb::class::cdc_acm::State;
+
+static EP_OUT_BUF:  StaticCell<[u8; 256]>      = StaticCell::new();
+static CONFIG_DESC: StaticCell<[u8; 256]>      = StaticCell::new();
+static BOS_DESC:    StaticCell<[u8; 256]>      = StaticCell::new();
+static MSOS_DESC:   StaticCell<[u8; 256]>      = StaticCell::new();
+static CONTROL_BUF: StaticCell<[u8; 64]>       = StaticCell::new();
+static CDC_STATE:   StaticCell<State<'static>> = StaticCell::new();
+
+// In main — no unsafe needed:
+let cdc_state = CDC_STATE.init(State::new());
+let mut builder = embassy_usb::Builder::new(
+    driver, config,
+    CONFIG_DESC.init([0; 256]),
+    BOS_DESC.init([0; 256]),
+    MSOS_DESC.init([0; 256]),
+    CONTROL_BUF.init([0; 64]),
+);
+```
+
+#### Shared Tasks from sonido_daisy
+
+Import shared Embassy tasks instead of defining them locally:
+
+```rust
+use sonido_daisy::{heartbeat, usb_task};
+
+// In main:
+spawner.spawn(heartbeat(led)).unwrap();
+spawner.spawn(usb_task(usb)).unwrap();
+```
+
+#### Atomic Shared State (Audio Callback ↔ Tasks)
+
+The audio callback runs synchronously in the Embassy executor thread at
+1500 Hz. Data crosses the callback↔task boundary via atomics with `Relaxed`
+ordering (single-core Cortex-M7, no cache coherence issues):
+
+```rust
+use core::sync::atomic::{AtomicU32, AtomicI32, Ordering};
+
+static RMS_FP: AtomicU32 = AtomicU32::new(0);
+
+// In audio callback:
+RMS_FP.store((rms * 10000.0) as u32, Ordering::Relaxed);
+
+// In report task:
+let rms_fp = RMS_FP.load(Ordering::Relaxed);
+```
 
 ### Library — `src/lib.rs`
 
@@ -354,12 +413,11 @@ input-side, or output-side.
 |---------|---------------|--------|
 | `tone_out.rs` | DAC → analog output path | 440 Hz sine wave to output jack |
 | `square_out.rs` | DAC → analog output path (max amplitude) | 1 kHz full-scale square wave to output jack |
-| `audio_input_diag.rs` | Codec ADC input noise floor | RMS/peak/dBFS via USB serial every 1 second |
-| `temp_diag.rs` | STM32H750 CPU temperature | °C + session min/max via USB serial every 2 seconds; warns above 80°C |
+| `hothouse_diag.rs` | Input levels + 6 knobs + GPIO (FS, toggles) + CPU temp | `AUDIO in=-46.8dBFS ... \| K1=... \| FS1=... \| CPU 52C` via USB serial every 2 seconds |
 
 #### Build & Flash
 
-All three diagnostics follow the same pattern. From `crates/sonido-daisy/`:
+All diagnostics follow the same pattern. From `crates/sonido-daisy/`:
 
 ```bash
 cd crates/sonido-daisy
@@ -367,24 +425,24 @@ cargo objcopy --example <name> --release -- -O binary -R .sram1_bss <name>.bin
 dfu-util -a 0 -s 0x90040000:leave -D <name>.bin
 ```
 
-For example, to flash `tone_out`:
+For example, to flash `hothouse_diag`:
 
 ```bash
-cargo objcopy --example tone_out --release -- -O binary -R .sram1_bss tone_out.bin
-dfu-util -a 0 -s 0x90040000:leave -D tone_out.bin
+cargo objcopy --example hothouse_diag --release -- -O binary -R .sram1_bss hothouse_diag.bin
+dfu-util -a 0 -s 0x90040000:leave -D hothouse_diag.bin
 ```
 
-`audio_input_diag` reports over USB serial after flashing:
+`hothouse_diag` reports over USB serial after flashing:
 
 ```bash
 cat /dev/ttyACM0
 # or: screen /dev/ttyACM0 115200
 ```
 
-Output repeats every second:
+Output repeats every 2 seconds:
 
 ```
-IN: rms=0.0023 peak=0.0089 dBFS=-52.8
+AUDIO in=-46.8dBFS rms=0.0045 peak=0.0078 | K1=0.512 K2=0.000 K3=1.000 K4=0.250 K5=0.750 K6=0.333 | FS1=0 FS2=0 SW1=MID SW2=MID SW3=UP | CPU 52C
 ```
 
 #### Diagnostic Test Sequence
@@ -406,14 +464,16 @@ When debugging audio issues on the Hothouse, run these in order:
    effectively disconnected from the output jack — the analog circuit is
    completely overriding it.
 
-3. **Flash `audio_input_diag`** — with nothing plugged into the input jack,
-   read the USB serial output and check the RMS level.
+3. **Flash `hothouse_diag`** — with nothing plugged into the input jack,
+   read the USB serial output and check the audio RMS level.
    - **High RMS with nothing plugged in** → noise is being injected before the
      codec ADC (input op-amp oscillation, ground loop, or power supply issue).
    - **Low RMS with nothing plugged in** → input side is clean; the problem is
      output-only.
    - **RMS changes when a cable/instrument is plugged in** → codec ADC is
      reading real signal. The analog input path works.
+   - **K1–K6 values respond to knob turns** → ADC and control path work.
+   - **CPU temp > 80°C** → thermal issue; check enclosure ventilation.
 
 ### Build & Flash Reference
 
