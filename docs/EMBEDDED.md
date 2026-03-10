@@ -80,21 +80,24 @@ cargo check -p sonido-daisy \
 |:----:|---------|-------------------|-----------------|
 | 1 | `blinky_bare.rs` | Toolchain, flash, BOOT_SRAM path | Seed + USB |
 | 1 | `blinky.rs` | Embassy runtime + clock init | Seed + USB |
-| 2 | `bench_kernels.rs` | DWT cycle counts for all 19 kernels | Seed + USB |
-| 3 | `passthrough.rs` *(stub)* | Codec, DMA, audio path | Seed + audio I/O |
-| 4 | `single_effect.rs` *(stub)* | Real-time DSP, ADC parameter mapping | Seed + audio I/O + pot |
+| 2 | `bench_kernels.rs` | DWT cycle counts for all 19 kernels (dual-budget) | Seed + USB |
+| 3 | `passthrough.rs` | Codec, DMA, audio path | Seed + audio I/O |
+| 3 | `hothouse_diag.rs` | All Hothouse hardware (knobs, toggles, FS, temp) | Hothouse |
+| 4 | `single_effect.rs` | Real-time DSP, ADC parameter mapping (distortion) | Hothouse |
+| 5 | `morph_pedal.rs` | ProcessingGraph + EffectRegistry on embedded | Hothouse |
 
 ### Modern Rust on Daisy Seed
 
-**daisy-embassy** is the canonical approach. Key patterns:
+**sonido-daisy** owns the full platform layer (clock, audio, ADC, LED). Key patterns:
 
-- **Audio**: `start_callback()` loop — async, yields every DMA transfer (~0.667 ms at 48 kHz, 32-sample blocks). Other tasks run between transfers.
-- **LED / UI**: Use `sonido_daisy::heartbeat` — the shared 1 Hz blink task in `src/lib.rs`. Every binary spawns it before audio init: `let led = board.user_led; spawner.spawn(heartbeat(led)).unwrap();`. Never define a local heartbeat.
+- **Clock**: `sonido_daisy::rcc_config(ClockProfile::Performance)` or `::Efficient` — 480 MHz / 400 MHz with proper PLL2_P ADC clock fix.
+- **Audio**: `AudioPeripherals` + `start_callback()` — async loop, yields every DMA transfer (~0.667 ms at 48 kHz, 32-sample blocks).
+- **LED / UI**: Use `sonido_daisy::heartbeat` — the shared lub-dub blink task. Every binary spawns it: `spawner.spawn(heartbeat(UserLed::new(p.PC7))).unwrap();`.
 - **USB / Serial**: Same spawned-task pattern. See `hothouse_diag.rs`.
-- **Audio callback runs in executor context** (not ISR) — it is safe to call Embassy primitives from the callback.
-- **Task return type**: Use `async fn task(...) { }` (implicit `()` return), not `-> !`. Embassy 0.9 task macro behavior with `-> !` is unverified on STM32H750.
+- **Audio callback runs in executor context** (not ISR) — blocking ADC reads (~1 µs) are safe.
+- **Task return type**: Use `async fn task(...) { }` (implicit `()` return), not `-> !`.
 
-Reference implementation: `~/.cargo/registry/src/.../daisy-embassy-0.2.3/examples/passthrough.rs`
+Reference implementation: `crates/sonido-daisy/examples/single_effect.rs`
 
 ### Embassy Patterns
 

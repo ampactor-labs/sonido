@@ -9,6 +9,7 @@ publish = false
 [dependencies]
 sonido-core = { path = "../sonido-core", default-features = false }
 sonido-effects = { path = "../sonido-effects", default-features = false }
+sonido-registry = { path = "../sonido-registry", default-features = false }
 libm = "0.2"
 static_cell = "2"
 
