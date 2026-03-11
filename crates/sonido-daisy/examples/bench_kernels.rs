@@ -176,10 +176,12 @@ async fn main(spawner: Spawner) {
 
     // Initialize 64 MB SDRAM via FMC — configures MPU + power-up sequence.
     // Must come after embassy_stm32::init() (enables FMC clock via PLL2_R).
-    let sdram_ptr = sonido_daisy::init_sdram!(p, &mut cp.MPU, &mut cp.SCB, &mut cp.CPUID);
+    let sdram_ptr = sonido_daisy::init_sdram!(p, &mut cp.MPU, &mut cp.SCB);
     unsafe {
         HEAP.init(sdram_ptr as usize, sonido_daisy::sdram::SDRAM_SIZE);
     }
+    // No audio DMA — safe to enable D-cache immediately for SDRAM performance.
+    sonido_daisy::sdram::enable_dcache();
 
     let led = UserLed::new(p.PC7);
     spawner.spawn(heartbeat(led)).unwrap();

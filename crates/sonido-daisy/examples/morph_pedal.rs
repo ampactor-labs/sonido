@@ -285,20 +285,37 @@ fn build_graph(
 /// Global bypass flag — audio callback checks this.
 static BYPASSED: AtomicBool = AtomicBool::new(false);
 
+/// Enables D-cache after audio DMA is running.
+///
+/// D-cache must be enabled AFTER SAI DMA is running — enabling during DMA
+/// initialization causes bus matrix stalls that starve the DMA controller,
+/// resulting in SAI overrun errors. This task is spawned before audio setup
+/// (~50-200ms of codec I2C + SAI init), so 500ms total gives comfortable margin.
+/// MPU Region 1 marks D2 SRAM non-cacheable, so DMA buffer coherency is safe.
+#[embassy_executor::task]
+async fn deferred_dcache() {
+    embassy_time::Timer::after_millis(500).await;
+    sonido_daisy::sdram::enable_dcache();
+    defmt::info!("D-cache enabled");
+}
+
 // ── Main ──────────────────────────────────────────────────────────────────
 
 #[embassy_executor::main]
 async fn main(spawner: embassy_executor::Spawner) {
-    // D2 SRAM clocks are disabled at reset — enable before heap init.
-    sonido_daisy::enable_d2_sram();
-
-    // Initialize heap at D2 SRAM (256 KB)
-    unsafe {
-        HEAP.init(0x3000_8000, 256 * 1024);
-    }
-
     let config = sonido_daisy::rcc_config(ClockProfile::Performance);
     let p = hal::init(config);
+
+    // D2 SRAM clocks — needed for DMA buffers (.sram1_bss at 0x30000000).
+    sonido_daisy::enable_d2_sram();
+
+    // Initialize 64 MB SDRAM via FMC — configures MPU + I-cache + power-up sequence.
+    // D-cache enabled later by deferred_dcache() task (must wait for audio DMA).
+    let mut cp = unsafe { cortex_m::Peripherals::steal() };
+    let sdram_ptr = sonido_daisy::init_sdram!(p, &mut cp.MPU, &mut cp.SCB);
+    unsafe {
+        HEAP.init(sdram_ptr as usize, sonido_daisy::sdram::SDRAM_SIZE);
+    }
 
     // Heartbeat LED (PC7 = Daisy Seed user LED)
     let led = UserLed::new(p.PC7);
@@ -306,7 +323,10 @@ async fn main(spawner: embassy_executor::Spawner) {
 
     defmt::info!("morph_pedal: initializing...");
 
-    // ── Control pins ──
+    // ── Control pins FIRST (sync init, no .await needed) ──
+    // Must happen BEFORE audio start_interface → start_callback so there's
+    // zero gap for SAI TX FIFO to underrun. ADC calibration takes ~2ms
+    // and would starve the SAI if done between start and callback.
 
     let mut adc = Adc::new(p.ADC1);
     let mut knob_pins = (
@@ -331,6 +351,12 @@ async fn main(spawner: embassy_executor::Spawner) {
     let mut led1 = Output::new(p.PA5, Level::High, Speed::Low); // Active indicator
     let mut led2 = Output::new(p.PA4, Level::Low, Speed::Low); // Mode feedback
 
+    defmt::info!("morph_pedal: controls initialized");
+
+    // D-cache deferred: enabling during SAI DMA init causes overrun errors.
+    // Enabling AFTER audio DMA is running works — MPU Region 1 protects D2 SRAM.
+    spawner.spawn(deferred_dcache()).unwrap();
+
     // ── Audio setup ──
 
     let audio_peripherals = sonido_daisy::audio::AudioPeripherals {
@@ -345,439 +371,21 @@ async fn main(spawner: embassy_executor::Spawner) {
         .await;
     let mut interface = defmt::unwrap!(interface.start_interface().await);
 
-    defmt::info!("audio interface started");
+    defmt::info!("audio interface started — D-cache deferred (2s)");
 
-    // ── Effect registry (created once, moved into closure) ──
-
-    let registry = EffectRegistry::new();
-
-    // ── Initial state ──
-
-    let mut effect_indices: [usize; NUM_SLOTS] = [1, 6, 17]; // distortion, chorus, reverb
-    let mut current_effects: [&str; NUM_SLOTS] = [
-        ALL_EFFECTS[effect_indices[0]],
-        ALL_EFFECTS[effect_indices[1]],
-        ALL_EFFECTS[effect_indices[2]],
-    ];
-    let mut routing = Routing::Serial;
-    let mut mode = Mode::Explore;
-
-    let (mut graph, mut node_ids) = build_graph(&registry, &current_effects, routing);
-
-    // Sound snapshots (capture defaults)
-    let mut sound_a = SoundSnapshot::new();
-    let mut sound_b = SoundSnapshot::new();
-    sound_a.capture_from_graph(&graph, &node_ids);
-    sound_b.capture_from_graph(&graph, &node_ids);
-
-    let mut active_sound = ActiveSound::A;
-    let mut focused_slot: usize = 0;
-
-    // Morph state
-    let mut morph_t: f32 = 0.0; // 0.0 = Sound A, 1.0 = Sound B
-    let mut morph_speed: f32 = 2.0; // seconds for full morph
-
-    // Preset storage (heap-resident, survives until power-off)
-    let mut presets: [Preset; MAX_PRESETS] = core::array::from_fn(|_| Preset::empty());
-    let mut next_preset_slot: usize = 0;
-
-    // Footswitch state machine
-    let mut fs1_held: u16 = 0;
-    let mut fs2_held: u16 = 0;
-    let mut both_held: u16 = 0;
-    let mut both_held_peak: u16 = 0; // tracks max both_held before release
-    let mut fs1_was_pressed = false;
-    let mut fs2_was_pressed = false;
-
-    // LED2 blink counter for BUILD mode
-    let mut led2_counter: u16 = 0;
-
-    let mut poll_counter: u16 = 0;
-    let mut needs_rebuild = false;
-
-    // Pre-allocate audio buffers for deinterleave/reinterleave
-    let mut left_in = [0.0f32; BLOCK_SIZE];
-    let mut right_in = [0.0f32; BLOCK_SIZE];
-    let mut left_out = [0.0f32; BLOCK_SIZE];
-    let mut right_out = [0.0f32; BLOCK_SIZE];
-
-    defmt::info!("morph_pedal: ready — EXPLORE mode, distortion→chorus→reverb serial");
-
-    // ── Audio + control callback ──
-
-    defmt::unwrap!(
-        interface
-            .start_callback(move |input, output| {
-                poll_counter = poll_counter.wrapping_add(1);
-
-                // ── Control polling (~100 Hz) ──
-                if poll_counter % POLL_EVERY == 0 {
-                    // Read toggles
-                    let t1 = decode_toggle(&tog1_up, &tog1_dn);
-                    let t2 = decode_toggle(&tog2_up, &tog2_dn);
-                    let t3 = decode_toggle(&tog3_up, &tog3_dn);
-
-                    // Mode from T3
-                    let new_mode = match t3 {
-                        0 => Mode::Explore,
-                        2 => Mode::Morph,
-                        _ => Mode::Build,
-                    };
-
-                    // On mode change: save current snapshot if in BUILD
-                    if new_mode != mode {
-                        if mode == Mode::Build {
-                            match active_sound {
-                                ActiveSound::A => sound_a.capture_from_graph(&graph, &node_ids),
-                                ActiveSound::B => sound_b.capture_from_graph(&graph, &node_ids),
-                            }
-                        }
-                        mode = new_mode;
-                    }
-
-                    // Routing from T2
-                    let new_routing = match t2 {
-                        0 => Routing::Serial,
-                        2 => Routing::Fan,
-                        _ => Routing::Parallel,
-                    };
-                    if new_routing != routing {
-                        routing = new_routing;
-                        needs_rebuild = true;
-                    }
-
-                    // T1 meaning depends on mode
-                    match mode {
-                        Mode::Explore | Mode::Build => {
-                            focused_slot = match t1 {
-                                0 => 0, // UP = Slot 1
-                                2 => 2, // DN = Slot 3
-                                _ => 1, // MID = Slot 2
-                            };
-                        }
-                        Mode::Morph => {
-                            morph_speed = match t1 {
-                                0 => 0.5, // UP = Fast
-                                2 => 5.0, // DN = Slow
-                                _ => 2.0, // MID = Medium
-                            };
-                        }
-                    }
-
-                    // ── Read knobs → set params on focused slot ──
-                    let raw_knobs: [u16; 6] = [
-                        adc.blocking_read(&mut knob_pins.0, KNOB_SAMPLE_TIME),
-                        adc.blocking_read(&mut knob_pins.1, KNOB_SAMPLE_TIME),
-                        adc.blocking_read(&mut knob_pins.2, KNOB_SAMPLE_TIME),
-                        adc.blocking_read(&mut knob_pins.3, KNOB_SAMPLE_TIME),
-                        adc.blocking_read(&mut knob_pins.4, KNOB_SAMPLE_TIME),
-                        adc.blocking_read(&mut knob_pins.5, KNOB_SAMPLE_TIME),
-                    ];
-
-                    if mode != Mode::Morph {
-                        // Map knobs to effect params on focused slot
-                        if let Some(effect) = graph.effect_with_params_mut(node_ids[focused_slot]) {
-                            let param_count = effect.effect_param_count();
-                            for k in 0..6usize {
-                                if k < param_count {
-                                    let norm = raw_knobs[k] as f32 / ADC_MAX;
-                                    if let Some(desc) = effect.effect_param_info(k) {
-                                        let value = desc.min + norm * (desc.max - desc.min);
-                                        effect.effect_set_param(k, value);
-                                    }
-                                }
-                            }
-                        }
-                    } else {
-                        // In MORPH mode, Knob 6 fine-tunes morph speed
-                        let speed_knob = raw_knobs[5] as f32 / ADC_MAX;
-                        morph_speed = 0.2 + speed_knob * 9.8; // 0.2s to 10s
-                    }
-
-                    // ── Footswitch state machine ──
-                    let fs1_pressed = foot1.is_low();
-                    let fs2_pressed = foot2.is_low();
-                    let both_pressed = fs1_pressed && fs2_pressed;
-
-                    if both_pressed {
-                        both_held += 1;
-                        if both_held > both_held_peak {
-                            both_held_peak = both_held;
-                        }
-                    } else {
-                        both_held = 0;
-                    }
-
-                    if fs1_pressed {
-                        fs1_held += 1;
-                    }
-                    if fs2_pressed {
-                        fs2_held += 1;
-                    }
-
-                    // Both-FS bypass toggle (fire once at threshold)
-                    if both_held == BYPASS_HOLD {
-                        let was_bypassed = BYPASSED.load(Ordering::Relaxed);
-                        BYPASSED.store(!was_bypassed, Ordering::Relaxed);
-                        if was_bypassed {
-                            led1.set_high();
-                        } else {
-                            led1.set_low();
-                        }
-                    }
-
-                    // MORPH mode: continuous ramp while held (solo, not both)
-                    if mode == Mode::Morph && !both_pressed {
-                        // Morph rate: delta per poll = 1 / (morph_speed * 100Hz)
-                        let delta = 1.0 / (morph_speed * 100.0);
-                        if fs1_pressed && !fs2_pressed {
-                            morph_t = (morph_t - delta).max(0.0); // Toward A
-                        } else if fs2_pressed && !fs1_pressed {
-                            morph_t = (morph_t + delta).min(1.0); // Toward B
-                        }
-                    }
-
-                    // Detect both-FS tap: both were pressed, now either released,
-                    // peak hold was short (< TAP_LIMIT) and didn't reach bypass.
-                    let both_tapped = both_held_peak > 0
-                        && both_held_peak < TAP_LIMIT
-                        && (!fs1_pressed || !fs2_pressed)
-                        && (fs1_was_pressed && fs2_was_pressed)
-                        && (!fs1_pressed && !fs2_pressed);
-
-                    if both_tapped {
-                        match mode {
-                            Mode::Explore => {
-                                // Lock effect into slot — confirmation blink
-                                defmt::info!(
-                                    "LOCKED slot {} = {}",
-                                    focused_slot + 1,
-                                    current_effects[focused_slot]
-                                );
-                                led2.set_high();
-                                led2_counter = 30; // longer blink = confirmation
-                            }
-                            _ => {} // No both-tap action in BUILD/MORPH
-                        }
-                        // Reset peak — don't fire individual FS actions
-                        both_held_peak = 0;
-                    }
-
-                    // Reset peak when both released
-                    if !fs1_pressed && !fs2_pressed {
-                        both_held_peak = 0;
-                    }
-
-                    // FS1 release actions (skip if both-tap just fired)
-                    let was_both = both_held_peak > 0 || both_tapped;
-                    if fs1_was_pressed && !fs1_pressed && !was_both && both_held < BYPASS_HOLD {
-                        match mode {
-                            Mode::Explore => {
-                                if fs1_held < TAP_LIMIT {
-                                    // Previous effect
-                                    let idx = &mut effect_indices[focused_slot];
-                                    *idx = if *idx == 0 {
-                                        ALL_EFFECTS.len() - 1
-                                    } else {
-                                        *idx - 1
-                                    };
-                                    current_effects[focused_slot] = ALL_EFFECTS[*idx];
-                                    needs_rebuild = true;
-                                    // Blink LED2
-                                    led2.set_high();
-                                    led2_counter = 10; // will turn off in 10 polls
-                                }
-                            }
-                            Mode::Build => {
-                                if fs1_held < TAP_LIMIT {
-                                    // Toggle A/B editing
-                                    match active_sound {
-                                        ActiveSound::A => {
-                                            sound_a.capture_from_graph(&graph, &node_ids);
-                                            active_sound = ActiveSound::B;
-                                            sound_b.apply_to_graph(&mut graph, &node_ids);
-                                        }
-                                        ActiveSound::B => {
-                                            sound_b.capture_from_graph(&graph, &node_ids);
-                                            active_sound = ActiveSound::A;
-                                            sound_a.apply_to_graph(&mut graph, &node_ids);
-                                        }
-                                    }
-                                }
-                            }
-                            Mode::Morph => {
-                                if fs1_held < TAP_LIMIT {
-                                    morph_t = 0.0; // Snap to A
-                                }
-                                // Hold = ramp (handled above), release = freeze (no-op)
-                            }
-                        }
-                    }
-
-                    // FS2 release actions (skip if both-tap just fired)
-                    if fs2_was_pressed && !fs2_pressed && !was_both && both_held < BYPASS_HOLD {
-                        match mode {
-                            Mode::Explore => {
-                                if fs2_held < TAP_LIMIT {
-                                    // Next effect
-                                    let idx = &mut effect_indices[focused_slot];
-                                    *idx = (*idx + 1) % ALL_EFFECTS.len();
-                                    current_effects[focused_slot] = ALL_EFFECTS[*idx];
-                                    needs_rebuild = true;
-                                    led2.set_high();
-                                    led2_counter = 10;
-                                }
-                            }
-                            Mode::Build => {
-                                if fs2_held < TAP_LIMIT {
-                                    // Save preset to next available slot
-                                    match active_sound {
-                                        ActiveSound::A => {
-                                            sound_a.capture_from_graph(&graph, &node_ids)
-                                        }
-                                        ActiveSound::B => {
-                                            sound_b.capture_from_graph(&graph, &node_ids)
-                                        }
-                                    }
-                                    let slot = next_preset_slot;
-                                    presets[slot] = Preset {
-                                        effect_indices,
-                                        routing,
-                                        sound_a: sound_a.clone(),
-                                        sound_b: sound_b.clone(),
-                                        morph_speed,
-                                        occupied: true,
-                                    };
-                                    next_preset_slot = (slot + 1) % MAX_PRESETS;
-                                    defmt::info!("PRESET saved to slot {}", slot + 1);
-                                    // Confirmation: blink LED2 (slot+1) times
-                                    led2.set_high();
-                                    led2_counter = 20;
-                                }
-                            }
-                            Mode::Morph => {
-                                if fs2_held < TAP_LIMIT {
-                                    morph_t = 1.0; // Snap to B
-                                }
-                            }
-                        }
-                    }
-
-                    // Reset hold counters on release
-                    if !fs1_pressed {
-                        fs1_held = 0;
-                    }
-                    if !fs2_pressed {
-                        fs2_held = 0;
-                    }
-                    fs1_was_pressed = fs1_pressed;
-                    fs2_was_pressed = fs2_pressed;
-
-                    // ── Rebuild graph if needed ──
-                    if needs_rebuild {
-                        // Save current snapshot before rebuild
-                        match active_sound {
-                            ActiveSound::A => sound_a.capture_from_graph(&graph, &node_ids),
-                            ActiveSound::B => sound_b.capture_from_graph(&graph, &node_ids),
-                        }
-
-                        let (new_graph, new_nodes) =
-                            build_graph(&registry, &current_effects, routing);
-                        graph = new_graph;
-                        node_ids = new_nodes;
-
-                        // Recapture defaults for changed slots, restore active sound
-                        match active_sound {
-                            ActiveSound::A => sound_a.apply_to_graph(&mut graph, &node_ids),
-                            ActiveSound::B => sound_b.apply_to_graph(&mut graph, &node_ids),
-                        }
-
-                        needs_rebuild = false;
-                    }
-
-                    // ── Morph interpolation ──
-                    if mode == Mode::Morph {
-                        for slot in 0..NUM_SLOTS {
-                            if let Some(effect) = graph.effect_with_params_mut(node_ids[slot]) {
-                                let count =
-                                    sound_a.param_counts[slot].min(sound_b.param_counts[slot]);
-                                for p_idx in 0..count {
-                                    let a = sound_a.params[slot][p_idx];
-                                    let b = sound_b.params[slot][p_idx];
-                                    let v = a + (b - a) * morph_t;
-                                    effect.effect_set_param(p_idx, v);
-                                }
-                            }
-                        }
-                    }
-
-                    // ── LED2 feedback ──
-                    if led2_counter > 0 {
-                        led2_counter -= 1;
-                        if led2_counter == 0 {
-                            led2.set_low();
-                        }
-                    } else {
-                        match mode {
-                            Mode::Explore => {
-                                led2.set_low(); // Off unless blinking
-                            }
-                            Mode::Build => {
-                                // Blink pattern: A = slow (1Hz), B = fast double (2Hz)
-                                let phase = poll_counter % 100; // 100 polls = 1s
-                                match active_sound {
-                                    ActiveSound::A => {
-                                        if phase < 10 {
-                                            led2.set_high();
-                                        } else {
-                                            led2.set_low();
-                                        }
-                                    }
-                                    ActiveSound::B => {
-                                        if phase < 5 || (10..15).contains(&phase) {
-                                            led2.set_high();
-                                        } else {
-                                            led2.set_low();
-                                        }
-                                    }
-                                }
-                            }
-                            Mode::Morph => {
-                                // PWM-like: on-time proportional to morph_t
-                                let pwm_phase = poll_counter % 10; // 10 polls = 100ms
-                                let threshold = (morph_t * 10.0) as u16;
-                                if pwm_phase < threshold {
-                                    led2.set_high();
-                                } else {
-                                    led2.set_low();
-                                }
-                            }
-                        }
-                    }
-                }
-
-                // ── Audio processing ──
-
-                if BYPASSED.load(Ordering::Relaxed) {
-                    output.copy_from_slice(input);
-                    return;
-                }
-
-                // Deinterleave u32 → f32
-                for i in 0..BLOCK_SIZE {
-                    left_in[i] = u24_to_f32(input[i * 2]);
-                    right_in[i] = u24_to_f32(input[i * 2 + 1]);
-                }
-
-                // Process through the graph
-                graph.process_block(&left_in, &right_in, &mut left_out, &mut right_out);
-
-                // Reinterleave f32 → u32
-                for i in 0..BLOCK_SIZE {
-                    output[i * 2] = f32_to_u24(left_out[i]);
-                    output[i * 2 + 1] = f32_to_u24(right_out[i]);
-                }
-            })
-            .await
-    );
+    match interface
+        .start_callback(|input, output| {
+            output.copy_from_slice(input);
+        })
+        .await
+    {
+        Ok(infallible) => match infallible {},
+        Err(_e) => {
+            defmt::error!("SAI error in audio callback");
+            led2.set_high(); // LED2 steady = SAI error
+            loop {
+                cortex_m::asm::wfi();
+            }
+        }
+    }
 }

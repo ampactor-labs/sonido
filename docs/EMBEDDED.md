@@ -516,6 +516,7 @@ cargo run --example <name> --release
 | "Error during download get_status" | `:leave` flag resets device out of DFU | **Normal** — flash succeeded |
 | SOS blink pattern (3 short, 3 long, 3 short) | Invalid binary in QSPI | Use `--release` (debug too large for 480 KB SRAM) |
 | No `/dev/ttyACM*` after bench flash | USB re-enumeration delay | Wait 2-3s, check `dmesg \| tail`, replug USB |
+| SAI overrun error with SDRAM + audio | D-cache enabled during DMA init | Use `deferred_dcache()` task — enable D-cache AFTER audio DMA starts (see [D-Cache Timing](#d-cache-timing-critical)) |
 | Codec won't init on breadboard | DGND/AGND not connected | Bridge DGND↔AGND (carrier boards do this internally) |
 | Firmware flashed but doesn't run (no LED activity) | dfu-util QSPI write unreliable | Verify with `blinky` first; update bootloader to v6.3 via [flash.daisy.audio](https://flash.daisy.audio/) |
 | Firmware flashed but doesn't run (no LED activity) | Stale bootloader | Update to v6.3+ at [flash.daisy.audio](https://flash.daisy.audio/) (select "Flash Latest Bootloader") |
@@ -589,7 +590,55 @@ unsafe { HEAP.init(sdram_ptr as usize, sonido_daisy::sdram::SDRAM_SIZE); }
 ```
 
 The macro configures MPU Region 0 at `0xC000_0000` (write-back cacheable),
-sets up all 54 FMC GPIO pins, and runs the AS4C16M32MSA-6 power-up sequence.
+MPU Region 1 at `0x3000_0000` (D2 SRAM non-cacheable for DMA buffers),
+enables I-cache, sets up all 54 FMC GPIO pins, and runs the AS4C16M32MSA-6
+power-up sequence.
+
+### D-Cache Timing (Critical)
+
+**D-cache must be enabled AFTER SAI DMA is running.** Enabling during DMA
+initialization causes bus matrix stalls that starve the DMA controller,
+resulting in SAI overrun errors. This is an undocumented interaction between
+the Cortex-M7 cache enable sequence and Embassy's ring buffer DMA driver.
+
+The `init_sdram!` macro enables I-cache (safe — instruction fetches are
+read-only) but intentionally does NOT enable D-cache. Call
+`sonido_daisy::sdram::enable_dcache()` separately:
+
+| Scenario | When to call `enable_dcache()` |
+|----------|-------------------------------|
+| No audio (benchmarks, diagnostics) | Immediately after `init_sdram!` |
+| With audio (morph pedal, effects) | Deferred task, ~500ms after spawn (before audio setup) |
+
+```rust
+// Pattern for firmware WITH audio:
+#[embassy_executor::task]
+async fn deferred_dcache() {
+    embassy_time::Timer::after_millis(500).await;
+    sonido_daisy::sdram::enable_dcache();
+}
+
+// Spawn BEFORE audio setup starts:
+spawner.spawn(deferred_dcache()).unwrap();
+// ... audio setup + start_callback() ...
+```
+
+```rust
+// Pattern for firmware WITHOUT audio:
+let sdram_ptr = sonido_daisy::init_sdram!(p, &mut cp.MPU, &mut cp.SCB);
+unsafe { HEAP.init(sdram_ptr as usize, sonido_daisy::sdram::SDRAM_SIZE); }
+sonido_daisy::sdram::enable_dcache(); // safe — no DMA running
+```
+
+**Why it works after DMA is running:** MPU Region 1 marks the entire D2 SRAM
+range (`0x3000_0000`, 512 KB) as Normal Non-Cacheable (`TEX=001, C=0, B=0`).
+Once enabled, D-cache respects these attributes and will not cache DMA buffer
+accesses, preserving coherency. The problem is only during the cache enable
+*sequence* itself, which briefly stalls the AXI bus matrix.
+
+**Performance impact:** D-cache gives ~3–5x speedup on SDRAM delay line reads
+(4–8 wait states → ~1 cycle for cache hits). Without D-cache, a 3-effect chain
+that uses 73% budget at 480 MHz would use ~250%+ — unusable.
 
 ### Chain Configurations
 
@@ -612,9 +661,11 @@ CPU budget is the limiting factor.
 | Preamp → Distortion → Chorus → Delay → Reverb | ~890 KB | ~78% |
 | Compressor → Distortion → Reverb(stereo) | ~112 KB | ~77% |
 
-**CPU budget exceeded** — EQ or Vibrato (>100% alone), Phaser + Reverb (>124%).
-See [Benchmarks](BENCHMARKS.md) for full Cortex-M7 cycle estimates. Phase 2
-benchmarks will provide real measurements to validate these.
+After the 4.5x performance optimization (commit `1c2194d` — D-cache, I-cache,
+`target-cpu=cortex-m7`, DSP micro-optimizations), all 19 effects individually
+fit under budget at 480 MHz. Total for all 19 is ~564K cycles (176% budget),
+so chains of 3-4 effects are comfortable. See [Benchmarks](BENCHMARKS.md) for
+measured Cortex-M7 cycle counts.
 
 ---
 
@@ -737,7 +788,6 @@ hardware controls to effect parameters. The Daisy/Hothouse firmware:
 
 | Gap | Detail |
 |-----|--------|
-| D-cache enable | MPU marks SDRAM cacheable, but Cortex-M7 D-cache is not yet enabled — SDRAM runs at raw 4–8 wait states. Enabling requires a second MPU region for D2 SRAM DMA buffers (non-cacheable) to prevent DMA coherence issues. |
 | Block processing | Biquad/SVF have per-sample `process()` only — block version would improve CM7 cache behavior |
 
 ---
