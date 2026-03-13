@@ -6,9 +6,19 @@ license = "MIT OR Apache-2.0"
 description = "Sonido DSP firmware for Electrosmith Daisy Seed (STM32H750 Cortex-M7)"
 publish = false
 
+[features]
+## Enables `EmbeddedAdapter`, `adc_to_param`, and DSP-dependent library modules.
+## Required for DSP examples (single_effect, morph_pedal, hothouse_diag).
+## Not needed for simple examples (blinky, passthrough) that don't use alloc.
+alloc = []
+## Enables `HothousePlatform` (`PlatformController` impl backed by `ControlBuffer`).
+## Pulls in `sonido-platform`.
+platform = ["alloc", "dep:sonido-platform"]
+
 [dependencies]
 sonido-core = { path = "../sonido-core", default-features = false }
 sonido-effects = { path = "../sonido-effects", default-features = false }
+sonido-platform = { path = "../sonido-platform", default-features = false, optional = true }
 sonido-registry = { path = "../sonido-registry", default-features = false }
 libm = "0.2"
 static_cell = "2"
@@ -38,3 +48,9 @@ embedded-alloc = "0.6"
 
 # Panic handler
 panic-probe = { version = "1.0", features = ["print-defmt"] }
+
+# ── Example feature requirements ─────────────────────────────────────
+
+[[example]]
+name = "morph_pedal"
+required-features = ["alloc"]

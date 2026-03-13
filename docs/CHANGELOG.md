@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **sonido-daisy: Modular control/audio layer** — 4 new library modules extracted from example code:
+  - `controls.rs` — lock-free `ControlBuffer` with IIR smoothing, change detection, LED bridge (pure `core`, no Embassy/alloc)
+  - `hothouse.rs` — `HothouseControls`, `hothouse_control_task` (50 Hz Embassy task), `hothouse_pins!` macro, `decode_toggle`
+  - `embedded_adapter.rs` — `EmbeddedAdapter<K>` zero-smoothing `Effect + ParameterInfo` bridge for `DspKernel` (feature `alloc`)
+  - `param_map.rs` — `adc_to_param()` scale-aware ADC→parameter conversion with STEPPED rounding (feature `alloc`)
+- **sonido-daisy: Feature flags** — `alloc` and `platform` features gate DSP-dependent modules; simple examples compile without heap allocator
+
+### Fixed
+- **sonido-daisy: Blocking ADC in audio callback** — all Hothouse examples (`single_effect`, `morph_pedal`, `hothouse_diag`) now run ADC+GPIO reads in a separate 50 Hz Embassy task via `ControlBuffer`, matching libDaisy's architecture. Previously, blocking ADC reads in the audio DMA callback caused hard faults and board lockups on STM32H750.
+
 ### Changed
 - **Morph Pedal v2**: Complete firmware rewrite (`morph_pedal.rs`)
   - Boot to passthrough — no pre-populated effects, Input→Output only

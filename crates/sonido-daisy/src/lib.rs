@@ -29,10 +29,24 @@
 
 pub mod adc;
 pub mod audio;
+pub mod controls;
+pub mod hothouse;
 pub mod led;
 pub mod rcc;
 pub mod sdram;
 
+/// Zero-smoothing DspKernel wrapper — requires `alloc` feature.
+#[cfg(feature = "alloc")]
+pub mod embedded_adapter;
+/// Scale-aware ADC→parameter conversion — requires `alloc` feature.
+#[cfg(feature = "alloc")]
+pub mod param_map;
+
+pub use controls::ControlBuffer;
+#[cfg(feature = "alloc")]
+pub use embedded_adapter::EmbeddedAdapter;
+#[cfg(feature = "alloc")]
+pub use param_map::adc_to_param;
 pub use rcc::{ClockProfile, cycles_per_block, rcc_config};
 
 use cortex_m::peripheral::DWT;
