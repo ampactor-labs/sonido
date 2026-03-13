@@ -9,13 +9,18 @@
 //! | 6 ADC knobs      | All potentiometers via ADC1 (0.0–1.0 normalized)       |
 //! | GPIO (footswitches)| FS1 / FS2 momentary switches (active-low, pull-up)   |
 //! | GPIO (toggle sw) | 3 × 3-position toggles, 2 pins each                   |
-//! | CPU temperature  | STM32H750 internal sensor via ADC3 (idle ≈ 40–60 °C)  |
 //! | User LEDs        | LED1 mirrors KNOB_1 > 50%; LED2 mirrors FS1 or FS2    |
+//!
+//! # Architecture
+//!
+//! ADC and GPIO reads run in [`hothouse_control_task`] (50 Hz), NOT inside the
+//! audio DMA callback. Shared state flows through a lock-free [`HothouseBuffer`].
+//! This matches libDaisy's design where `seed.adc` runs via DMA independently
+//! of audio.
 //!
 //! # Expected baseline values
 //!
 //! - `AUDIO in=…dBFS`: ≈ −47 dBFS with nothing plugged in (analog noise floor)
-//! - `CPU …C`: 40–60 °C at idle, 50–75 °C under DSP load
 //! - All knobs: 0.00–1.00 as you rotate them
 //! - FS1/FS2: OFF at rest, ON while pressed
 //! - Toggles: UP / MID / DN depending on switch position
@@ -24,9 +29,9 @@
 //!
 //! ```bash
 //! cd crates/sonido-daisy
-//! cargo objcopy --example hothouse_diag --release -- -O binary -R .sram1_bss hothouse_diag.bin
+//! cargo objcopy --example hothouse_diag --release -- -O binary -R .sram1_bss firmware/hothouse_diag.bin
 //! # Press RESET, then flash within the 2.5s grace period:
-//! dfu-util -a 0 -s 0x90040000:leave -D hothouse_diag.bin
+//! dfu-util -a 0 -s 0x90040000:leave -D firmware/hothouse_diag.bin
 //! ```
 //!
 //! # USB serial output
@@ -36,32 +41,32 @@
 //! # or: screen /dev/ttyACM0 115200
 //! ```
 //!
-//! One line per second (only when terminal is connected / DTR asserted):
+//! One line every 2 seconds (only when terminal is connected / DTR asserted):
 //!
 //! ```text
-//! AUDIO in=-46.8dBFS rms=0.0045 peak=0.0078 | K1=0.50 K2=0.73 K3=0.00 K4=1.00 K5=0.50 K6=0.25 | FS1=OFF FS2=OFF T1=UP T2=MID T3=DN | CPU 52C
+//! AUDIO in=-46.8dBFS rms=0.0045 peak=0.0078 | K1=0.50 K2=0.73 K3=0.00 K4=1.00 K5=0.50 K6=0.25 | FS1=OFF FS2=OFF T1=UP T2=MID T3=DN
 //! ```
 //!
-//! # Hardware pin mapping
+//! # Hardware pin mapping (Cleveland Music Co. Hothouse / Electro-Smith Daisy Seed)
 //!
-//! | Function        | Pin   | Notes                                    |
-//! |-----------------|-------|------------------------------------------|
-//! | LED 1 out       | PA5   | Active-high; mirrors KNOB_1 > 50%        |
-//! | LED 2 out       | PA4   | Active-high; mirrors FS1 or FS2 pressed  |
-//! | Footswitch 1    | PA0   | Input, pull-up; `.is_low()` = pressed    |
-//! | Footswitch 2    | PD11  | Input, pull-up                           |
-//! | Toggle 1 Up     | PB4   | Input, pull-up; active-low               |
-//! | Toggle 1 Down   | PB5   | Input, pull-up; active-low               |
-//! | Toggle 2 Up     | PG10  | Input, pull-up; active-low               |
-//! | Toggle 2 Down   | PG11  | Input, pull-up; active-low               |
-//! | Toggle 3 Up     | PD2   | Input, pull-up; active-low               |
-//! | Toggle 3 Down   | PC12  | Input, pull-up; active-low               |
-//! | KNOB_1          | PA3   | ADC1_INP15                               |
-//! | KNOB_2          | PB1   | ADC1_INP5                                |
-//! | KNOB_3          | PA7   | ADC1_INP7                                |
-//! | KNOB_4          | PA6   | ADC1_INP3                                |
-//! | KNOB_5          | PC1   | ADC1_INP11                               |
-//! | KNOB_6          | PC4   | ADC1_INP4                                |
+//! | Function        | Daisy Pin | STM32 | ADC Channel | Notes                    |
+//! |-----------------|-----------|-------|-------------|--------------------------|
+//! | LED 1 out       | D22       | PA5   | —           | Active-high              |
+//! | LED 2 out       | D23       | PA4   | —           | Active-high              |
+//! | Footswitch 1    | D25       | PA0   | —           | Pull-up; active-low      |
+//! | Footswitch 2    | D26       | PD11  | —           | Pull-up; active-low      |
+//! | Toggle 1 Up     | D9        | PB4   | —           | Pull-up; active-low      |
+//! | Toggle 1 Down   | D10       | PB5   | —           | Pull-up; active-low      |
+//! | Toggle 2 Up     | D7        | PG10  | —           | Pull-up; active-low      |
+//! | Toggle 2 Down   | D8        | PG11  | —           | Pull-up; active-low      |
+//! | Toggle 3 Up     | D5        | PD2   | —           | Pull-up; active-low      |
+//! | Toggle 3 Down   | D6        | PC12  | —           | Pull-up; active-low      |
+//! | KNOB_1          | D16       | PA3   | ADC1_INP15  |                          |
+//! | KNOB_2          | D17       | PB1   | ADC1_INP5   |                          |
+//! | KNOB_3          | D18       | PA7   | ADC1_INP7   |                          |
+//! | KNOB_4          | D19       | PA6   | ADC1_INP3   |                          |
+//! | KNOB_5          | D20       | PC1   | ADC1_INP11  |                          |
+//! | KNOB_6          | D21       | PC4   | ADC1_INP4   |                          |
 
 #![no_std]
 #![no_main]
@@ -74,8 +79,6 @@ use core::sync::atomic::{AtomicI32, AtomicU32, Ordering};
 use defmt_rtt as _;
 use embassy_executor::Spawner;
 use embassy_stm32 as hal;
-use embassy_stm32::adc::{Adc, SampleTime};
-use embassy_stm32::gpio::{Input, Level, Output, Pull, Speed};
 use embassy_stm32::usb::Driver;
 use embassy_stm32::{bind_interrupts, peripherals, usb};
 use embassy_usb::class::cdc_acm::{CdcAcmClass, State};
@@ -83,8 +86,11 @@ use embedded_alloc::LlffHeap as Heap;
 use panic_probe as _;
 use static_cell::StaticCell;
 
+use sonido_daisy::controls::HothouseBuffer;
+use sonido_daisy::hothouse::hothouse_control_task;
 use sonido_daisy::{
-    BLOCK_SIZE, BufWriter, ClockProfile, SAMPLE_RATE, heartbeat, led::UserLed, u24_to_f32, usb_task,
+    BLOCK_SIZE, BufWriter, ClockProfile, SAMPLE_RATE, heartbeat, led::UserLed, u24_to_f32,
+    usb_task,
 };
 
 // ── Heap ──────────────────────────────────────────────────────────────────
@@ -98,7 +104,11 @@ bind_interrupts!(struct Irqs {
     OTG_FS => usb::InterruptHandler<peripherals::USB_OTG_FS>;
 });
 
-// ── Shared atomic state (audio callback → report_task) ───────────────────
+// ── Shared control buffer ─────────────────────────────────────────────────
+
+static CONTROLS: HothouseBuffer = HothouseBuffer::new();
+
+// ── Shared audio measurement (audio callback → report_task) ───────────────
 
 /// RMS level × 10000 (fixed-point) from last completed 1-second window.
 static RMS_FP: AtomicU32 = AtomicU32::new(0);
@@ -107,68 +117,18 @@ static RMS_FP: AtomicU32 = AtomicU32::new(0);
 static PEAK_FP: AtomicU32 = AtomicU32::new(0);
 
 /// dBFS × 10 as a signed integer.
-///
-/// -96.0 dBFS → -960. 0.0 dBFS → 0.
 static DBFS_X10: AtomicI32 = AtomicI32::new(-960);
-
-/// Normalized knob readings × 100 (0–100 maps to 0.00–1.00).
-static KNOBS: [AtomicU32; 6] = [
-    const { AtomicU32::new(0) },
-    const { AtomicU32::new(0) },
-    const { AtomicU32::new(0) },
-    const { AtomicU32::new(0) },
-    const { AtomicU32::new(0) },
-    const { AtomicU32::new(0) },
-];
-
-/// Packed GPIO state.
-///
-/// Bit layout:
-/// - bit 0: FS1 pressed (1=pressed)
-/// - bit 1: FS2 pressed (1=pressed)
-/// - bits 2–3: Toggle 1 (0=MID, 1=UP, 2=DN)
-/// - bits 4–5: Toggle 2 (0=MID, 1=UP, 2=DN)
-/// - bits 6–7: Toggle 3 (0=MID, 1=UP, 2=DN)
-static GPIO_BITS: AtomicU32 = AtomicU32::new(0);
-
-/// CPU temperature in degrees Celsius.
-static TEMP_C: AtomicI32 = AtomicI32::new(0);
 
 // ── Constants ─────────────────────────────────────────────────────────────
 
 /// Blocks per 1-second measurement window: 48 000 / 32 = 1500.
 const BLOCKS_PER_WINDOW: u32 = (SAMPLE_RATE as u32) / (BLOCK_SIZE as u32);
 
-/// ADC control poll rate: every 150 blocks ≈ 100 ms.
-const POLL_EVERY: u32 = 150;
-
 /// Minimum RMS for valid dBFS calculation; below this, report −96.0.
 const RMS_FLOOR: f32 = 1e-10;
 
 /// Reciprocal of total samples in a 1-second window (precomputed for the callback).
 const INV_WINDOW_SAMPLES: f32 = 1.0 / ((BLOCK_SIZE as u32 * BLOCKS_PER_WINDOW) as f32);
-
-/// ADC sample time for knob readings (32.5 cycles, ≈ adequate for pots).
-const KNOB_SAMPLE_TIME: SampleTime = SampleTime::CYCLES32_5;
-
-/// ADC sample time for internal temperature sensor.
-///
-/// STM32H750 datasheet requires ≥ 9 µs. CYCLES810_5 at 100 MHz = 8.1 µs —
-/// slightly short but adequate for diagnostic purposes (within ~2 °C).
-const TEMP_SAMPLE_TIME: SampleTime = SampleTime::CYCLES810_5;
-
-// ── Toggle decode ─────────────────────────────────────────────────────────
-
-/// Decodes a 3-position toggle from its two GPIO pins (both pull-up, active-low).
-///
-/// Returns: 1=UP, 0=MID, 2=DN (matches GPIO_BITS encoding).
-fn decode_toggle(up: &Input<'_>, dn: &Input<'_>) -> u32 {
-    match (up.is_low(), dn.is_low()) {
-        (true, false) => 1, // UP
-        (false, true) => 2, // DN
-        _ => 0,             // MID (or fault → treat as MID)
-    }
-}
 
 // ── USB static buffers (StaticCell — no unsafe required) ─────────────────
 
@@ -181,16 +141,7 @@ static CDC_STATE: StaticCell<State<'static>> = StaticCell::new();
 
 // ── report_task ───────────────────────────────────────────────────────────
 
-/// Reads measurement atomics every second and writes one line to USB serial.
-///
-/// Output format (matches the spec):
-/// ```text
-/// AUDIO in=-46.8dBFS rms=0.0045 peak=0.0078 | K1=0.50 K2=0.73 K3=0.00 K4=1.00 K5=0.50 K6=0.25 | FS1=OFF FS2=OFF T1=UP T2=MID T3=DN | CPU 52C
-/// ```
-///
-/// Blocks on `wait_connection()` until a host opens the serial port, then
-/// reports once every 2 seconds. On write error, breaks back to
-/// `wait_connection()` for clean USB reconnection.
+/// Reads measurement atomics + control buffer every 2 seconds and writes one line to USB serial.
 #[embassy_executor::task]
 async fn report_task(mut class: CdcAcmClass<'static, Driver<'static, peripherals::USB_OTG_FS>>) {
     let mut buf = [0u8; 256];
@@ -204,13 +155,20 @@ async fn report_task(mut class: CdcAcmClass<'static, Driver<'static, peripherals
         loop {
             embassy_time::Timer::after_millis(2000).await;
 
-            // ── Read all atomics ──
+            // ── Read audio measurements ──
             let rms_fp = RMS_FP.load(Ordering::Relaxed);
             let peak_fp = PEAK_FP.load(Ordering::Relaxed);
             let dbfs_x10 = DBFS_X10.load(Ordering::Relaxed);
-            let knobs: [u32; 6] = core::array::from_fn(|i| KNOBS[i].load(Ordering::Relaxed));
-            let gpio = GPIO_BITS.load(Ordering::Relaxed);
-            let temp = TEMP_C.load(Ordering::Relaxed);
+
+            // ── Read control state from ControlBuffer ──
+            let knobs: [u32; 6] = core::array::from_fn(|i| {
+                (CONTROLS.read_knob(i) * 100.0) as u32
+            });
+            let fs1 = CONTROLS.read_footswitch(0);
+            let fs2 = CONTROLS.read_footswitch(1);
+            let t1 = CONTROLS.read_toggle(0);
+            let t2 = CONTROLS.read_toggle(1);
+            let t3 = CONTROLS.read_toggle(2);
 
             // ── Format ──
             let mut w = BufWriter::new(&mut buf);
@@ -243,32 +201,25 @@ async fn report_task(mut class: CdcAcmClass<'static, Driver<'static, peripherals
                 }
             }
 
-            // GPIO section
-            let fs1 = if gpio & 1 != 0 { "ON" } else { "OFF" };
-            let fs2 = if gpio & 2 != 0 { "ON" } else { "OFF" };
-            let t1 = match (gpio >> 2) & 3 {
-                1 => "UP",
-                2 => "DN",
-                _ => "MID",
-            };
-            let t2 = match (gpio >> 4) & 3 {
-                1 => "UP",
-                2 => "DN",
-                _ => "MID",
-            };
-            let t3 = match (gpio >> 6) & 3 {
-                1 => "UP",
-                2 => "DN",
-                _ => "MID",
+            // GPIO section — toggle encoding: 0=UP, 1=MID, 2=DN
+            let fs1_str = if fs1 { "ON" } else { "OFF" };
+            let fs2_str = if fs2 { "ON" } else { "OFF" };
+            let toggle_str = |pos: u8| -> &str {
+                match pos {
+                    0 => "UP",
+                    2 => "DN",
+                    _ => "MID",
+                }
             };
             let _ = write!(
                 w,
-                " | FS1={} FS2={} T1={} T2={} T3={}",
-                fs1, fs2, t1, t2, t3
+                " | FS1={} FS2={} T1={} T2={} T3={}\r\n",
+                fs1_str,
+                fs2_str,
+                toggle_str(t1),
+                toggle_str(t2),
+                toggle_str(t3),
             );
-
-            // CPU temp
-            let _ = write!(w, " | CPU {}C\r\n", temp);
 
             let len = w.pos;
 
@@ -309,46 +260,13 @@ async fn main(spawner: Spawner) {
 
     defmt::info!("hothouse_diag: initializing...");
 
-    // ── GPIO pins ──
-    let mut led1 = Output::new(p.PA5, Level::Low, Speed::Low); // LED 1 (K1 > 50%)
-    let mut led2 = Output::new(p.PA4, Level::Low, Speed::Low); // LED 2 (FS1 or FS2)
-    let foot1 = Input::new(p.PA0, Pull::Up); // Footswitch 1
-    let foot2 = Input::new(p.PD11, Pull::Up); // Footswitch 2
-    let tog1_up = Input::new(p.PB4, Pull::Up);
-    let tog1_dn = Input::new(p.PB5, Pull::Up);
-    let tog2_up = Input::new(p.PG10, Pull::Up);
-    let tog2_dn = Input::new(p.PG11, Pull::Up);
-    let tog3_up = Input::new(p.PD2, Pull::Up);
-    let tog3_dn = Input::new(p.PC12, Pull::Up);
+    // ── Extract control pins and spawn control task ──
+    let ctrl = sonido_daisy::hothouse_pins!(p);
+    spawner
+        .spawn(hothouse_control_task(ctrl, &CONTROLS))
+        .unwrap();
 
-    // ── ADC1 for knobs ──
-    let mut adc1 = Adc::new(p.ADC1);
-    let mut knob1_pin = p.PA3;
-    let mut knob2_pin = p.PB1;
-    let mut knob3_pin = p.PA7;
-    let mut knob4_pin = p.PA6;
-    let mut knob5_pin = p.PC1;
-    let mut knob6_pin = p.PC4;
-
-    // ── ADC3 for CPU temperature ──
-    let mut adc3 = Adc::new(p.ADC3);
-    // FIX: enable_temperature() sets VSENSEEN=1 in ADC3_COMMON CCR,
-    // physically connecting the temp sensor. Without this, the ADC reads
-    // garbage voltage that maps to ~103°C.
-    let mut temp_ch = sonido_daisy::adc::enable_temperature(&mut adc3);
-
-    // Cache factory calibration values (read-only flash, never changes).
-    let (ts_cal1, ts_cal2) = sonido_daisy::adc::read_calibration();
-
-    // ── Audio peripherals (direct construction — not board macro) ──
-    let audio_peripherals = sonido_daisy::audio::AudioPeripherals {
-        codec_pins: sonido_daisy::codec_pins!(p),
-        sai1: p.SAI1,
-        dma1_ch0: p.DMA1_CH0,
-        dma1_ch1: p.DMA1_CH1,
-    };
-
-    // ── USB CDC ACM (StaticCell — no unsafe) ──
+    // ── USB CDC ACM ──
     let driver = Driver::new_fs(
         p.USB_OTG_FS,
         Irqs,
@@ -378,9 +296,16 @@ async fn main(spawner: Spawner) {
     spawner.spawn(usb_task(usb)).unwrap();
     spawner.spawn(report_task(class)).unwrap();
 
-    defmt::info!("hothouse_diag: USB initialized, starting audio + control loop");
+    defmt::info!("hothouse_diag: USB initialized, starting audio");
 
-    // ── Audio interface ──
+    // ── Audio interface (passthrough only — no ADC in callback) ──
+    let audio_peripherals = sonido_daisy::audio::AudioPeripherals {
+        codec_pins: sonido_daisy::codec_pins!(p),
+        sai1: p.SAI1,
+        dma1_ch0: p.DMA1_CH0,
+        dma1_ch1: p.DMA1_CH1,
+    };
+
     let interface = audio_peripherals
         .prepare_interface(Default::default())
         .await;
@@ -388,12 +313,11 @@ async fn main(spawner: Spawner) {
 
     defmt::info!("hothouse_diag: audio interface started — passthrough active");
 
-    // ── Audio + control callback ──
-    // Measurement accumulators (captured by the closure)
+    // Audio callback: passthrough + level metering only.
+    // LED feedback is driven via ControlBuffer (control task reads + drives GPIO).
     let mut sum_sq: f32 = 0.0;
     let mut peak: f32 = 0.0;
     let mut block_count: u32 = 0;
-    let mut poll_count: u32 = 0;
 
     defmt::unwrap!(
         interface
@@ -413,56 +337,6 @@ async fn main(spawner: Spawner) {
                     }
                 }
                 block_count += 1;
-                poll_count += 1;
-
-                // ── Control poll (every 150 blocks ≈ 100 ms) ──
-                if poll_count >= POLL_EVERY {
-                    poll_count = 0;
-
-                    // Read 6 knobs
-                    let k: [u16; 6] = [
-                        adc1.blocking_read(&mut knob1_pin, KNOB_SAMPLE_TIME),
-                        adc1.blocking_read(&mut knob2_pin, KNOB_SAMPLE_TIME),
-                        adc1.blocking_read(&mut knob3_pin, KNOB_SAMPLE_TIME),
-                        adc1.blocking_read(&mut knob4_pin, KNOB_SAMPLE_TIME),
-                        adc1.blocking_read(&mut knob5_pin, KNOB_SAMPLE_TIME),
-                        adc1.blocking_read(&mut knob6_pin, KNOB_SAMPLE_TIME),
-                    ];
-                    let k1_pct = (k[0] as u32 * 100) / 65535;
-                    for (i, &raw) in k.iter().enumerate() {
-                        KNOBS[i].store((raw as u32 * 100) / 65535, Ordering::Relaxed);
-                    }
-
-                    // Read GPIO
-                    let fs1 = foot1.is_low() as u32;
-                    let fs2 = foot2.is_low() as u32;
-                    let t1 = decode_toggle(&tog1_up, &tog1_dn);
-                    let t2 = decode_toggle(&tog2_up, &tog2_dn);
-                    let t3 = decode_toggle(&tog3_up, &tog3_dn);
-                    GPIO_BITS.store(
-                        fs1 | (fs2 << 1) | (t1 << 2) | (t2 << 4) | (t3 << 6),
-                        Ordering::Relaxed,
-                    );
-
-                    // LED feedback (use local k1_pct, not redundant atomic load)
-                    if k1_pct > 50 {
-                        led1.set_high();
-                    } else {
-                        led1.set_low();
-                    }
-                    if fs1 != 0 || fs2 != 0 {
-                        led2.set_high();
-                    } else {
-                        led2.set_low();
-                    }
-
-                    // CPU temperature (RM0433: T = 80×(raw−CAL1)/(CAL2−CAL1) + 30)
-                    let raw_temp = adc3.blocking_read(&mut temp_ch, TEMP_SAMPLE_TIME);
-                    TEMP_C.store(
-                        sonido_daisy::adc::raw_to_celsius(raw_temp, ts_cal1, ts_cal2),
-                        Ordering::Relaxed,
-                    );
-                }
 
                 // ── Publish 1-second audio measurement ──
                 if block_count >= BLOCKS_PER_WINDOW {
@@ -481,6 +355,19 @@ async fn main(spawner: Spawner) {
                     peak = 0.0;
                     block_count = 0;
                 }
+
+                // ── LED feedback via ControlBuffer ──
+                // LED1: mirrors KNOB_1 > 50%
+                let k1 = CONTROLS.read_knob(0);
+                CONTROLS.write_led(0, if k1 > 0.5 { 1.0 } else { 0.0 });
+
+                // LED2: mirrors FS1 or FS2 pressed
+                let fs1 = CONTROLS.read_footswitch(0);
+                let fs2 = CONTROLS.read_footswitch(1);
+                CONTROLS.write_led(
+                    1,
+                    if fs1 || fs2 { 1.0 } else { 0.0 },
+                );
             })
             .await
     );

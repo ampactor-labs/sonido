@@ -51,18 +51,16 @@ use core::sync::atomic::{AtomicBool, Ordering};
 
 use defmt_rtt as _;
 use embassy_stm32 as hal;
-use embassy_stm32::adc::{Adc, SampleTime};
-use embassy_stm32::gpio::{Input, Level, Output, Pull, Speed};
 use embedded_alloc::LlffHeap as Heap;
 use panic_probe as _;
 
 use sonido_core::graph::ProcessingGraph;
-use sonido_core::{
-    DspKernel, Effect, EffectWithParams, KernelParams, ParamDescriptor, ParamFlags, ParamScale,
-    ParameterInfo,
-};
+use sonido_core::{EffectWithParams, ParamFlags};
+use sonido_daisy::controls::HothouseBuffer;
+use sonido_daisy::hothouse::hothouse_control_task;
 use sonido_daisy::{
-    BLOCK_SIZE, ClockProfile, SAMPLE_RATE, f32_to_u24, heartbeat, led::UserLed, u24_to_f32,
+    BLOCK_SIZE, ClockProfile, EmbeddedAdapter, SAMPLE_RATE, adc_to_param, f32_to_u24, heartbeat,
+    led::UserLed, u24_to_f32,
 };
 use sonido_effects::{
     BitcrusherKernel, ChorusKernel, CompressorKernel, DelayKernel, DistortionKernel, FilterKernel,
@@ -74,6 +72,10 @@ use sonido_effects::{
 
 #[global_allocator]
 static HEAP: Heap = Heap::empty();
+
+// ── Shared control buffer ───────────────────────────────────────────────────
+
+static CONTROLS: HothouseBuffer = HothouseBuffer::new();
 
 // ── Constants ───────────────────────────────────────────────────────────────
 
@@ -88,12 +90,6 @@ const NUM_SLOTS: usize = 3;
 
 /// Control poll rate: every 15th block ≈ 100 Hz at 48 kHz / 32 samples.
 const POLL_EVERY: u16 = 15;
-
-/// ADC sample time for potentiometers.
-const KNOB_SAMPLE_TIME: SampleTime = SampleTime::CYCLES32_5;
-
-/// Maximum raw ADC value (16-bit resolution).
-const ADC_MAX: f32 = 65535.0;
 
 /// Footswitch tap threshold: 30 polls × ~10ms = 300ms.
 const TAP_LIMIT: u16 = 30;
@@ -184,93 +180,10 @@ enum Routing {
     Fan,
 }
 
-// ── EmbeddedAdapter ─────────────────────────────────────────────────────────
-
-/// Direct kernel wrapper with zero smoothing overhead.
-///
-/// Implements `Effect + ParameterInfo` (and thus `EffectWithParams` via blanket
-/// impl) by delegating directly to the kernel. `set_param()` writes to the
-/// kernel's typed params struct immediately — the value is live on the next
-/// `process_stereo()` call. No `SmoothedParam`, no per-sample advancement.
-///
-/// This is the embedded counterpart to `KernelAdapter`: same interface, zero
-/// smoothing. ADCs are hardware-filtered; smoothing is redundant on embedded.
-struct EmbeddedAdapter<K: DspKernel> {
-    kernel: K,
-    params: K::Params,
-}
-
-impl<K: DspKernel> EmbeddedAdapter<K> {
-    /// Create a new adapter with default parameter values.
-    fn new(kernel: K) -> Self {
-        Self {
-            params: K::Params::from_defaults(),
-            kernel,
-        }
-    }
-}
-
-impl<K: DspKernel> Effect for EmbeddedAdapter<K> {
-    fn process(&mut self, input: f32) -> f32 {
-        self.kernel.process(input, &self.params)
-    }
-
-    fn process_stereo(&mut self, left: f32, right: f32) -> (f32, f32) {
-        self.kernel.process_stereo(left, right, &self.params)
-    }
-
-    fn process_block(&mut self, input: &[f32], output: &mut [f32]) {
-        self.kernel.process_block(input, output, &self.params);
-    }
-
-    fn process_block_stereo(
-        &mut self,
-        left_in: &[f32],
-        right_in: &[f32],
-        left_out: &mut [f32],
-        right_out: &mut [f32],
-    ) {
-        self.kernel
-            .process_block_stereo(left_in, right_in, left_out, right_out, &self.params);
-    }
-
-    fn is_true_stereo(&self) -> bool {
-        self.kernel.is_true_stereo()
-    }
-
-    fn set_sample_rate(&mut self, sample_rate: f32) {
-        self.kernel.set_sample_rate(sample_rate);
-    }
-
-    fn reset(&mut self) {
-        self.kernel.reset();
-        self.params = K::Params::from_defaults();
-    }
-
-    fn latency_samples(&self) -> usize {
-        self.kernel.latency_samples()
-    }
-}
-
-impl<K: DspKernel> ParameterInfo for EmbeddedAdapter<K> {
-    fn param_count(&self) -> usize {
-        K::Params::COUNT
-    }
-
-    fn param_info(&self, index: usize) -> Option<ParamDescriptor> {
-        K::Params::descriptor(index)
-    }
-
-    fn get_param(&self, index: usize) -> f32 {
-        self.params.get(index)
-    }
-
-    fn set_param(&mut self, index: usize, value: f32) {
-        self.params.set(index, value);
-    }
-}
-
 // ── Effect factory ──────────────────────────────────────────────────────────
+
+/// Node ID type re-exported for convenience.
+use sonido_core::graph::NodeId;
 
 /// Create an effect by `EFFECT_LIST` index. Returns `None` for out-of-range.
 ///
@@ -294,33 +207,6 @@ fn create_effect(idx: usize, sr: f32) -> Option<Box<dyn EffectWithParams + Send>
         12 => Some(Box::new(EmbeddedAdapter::new(BitcrusherKernel::new(sr)))),
         13 => Some(Box::new(EmbeddedAdapter::new(RingModKernel::new(sr)))),
         _ => None,
-    }
-}
-
-// ── ADC scaling ─────────────────────────────────────────────────────────────
-
-/// Scale-aware ADC-to-parameter conversion using `ParamDescriptor::scale`.
-///
-/// Gives `from_knobs()`-quality response curves: logarithmic for frequency
-/// knobs, linear for dB/mix, power curves for custom params. STEPPED params
-/// are rounded to nearest integer.
-#[inline]
-fn adc_to_param(desc: &ParamDescriptor, norm: f32) -> f32 {
-    let val = match desc.scale {
-        ParamScale::Linear => desc.min + norm * (desc.max - desc.min),
-        ParamScale::Logarithmic => {
-            let log_min = libm::log2f(if desc.min > 1e-6 { desc.min } else { 1e-6 });
-            let log_max = libm::log2f(desc.max);
-            libm::exp2f(log_min + norm * (log_max - log_min))
-        }
-        ParamScale::Power(exp) => {
-            desc.min + libm::powf(norm, exp) * (desc.max - desc.min)
-        }
-    };
-    if desc.flags.contains(ParamFlags::STEPPED) {
-        libm::roundf(val)
-    } else {
-        val
     }
 }
 
@@ -432,22 +318,7 @@ impl Preset {
     }
 }
 
-// ── Toggle decode ───────────────────────────────────────────────────────────
-
-/// Decodes a 3-position toggle: UP=0, MID=1, DN=2.
-#[inline]
-fn decode_toggle(up: &Input<'_>, dn: &Input<'_>) -> u8 {
-    match (up.is_low(), dn.is_low()) {
-        (true, false) => 0, // UP
-        (false, true) => 2, // DN
-        _ => 1,             // MID (or fault)
-    }
-}
-
 // ── Graph construction ──────────────────────────────────────────────────────
-
-/// Node ID type re-exported for convenience.
-use sonido_core::graph::NodeId;
 
 /// Build a `ProcessingGraph` from the current slot configuration.
 ///
@@ -580,10 +451,10 @@ fn prev_populated(effect_indices: &[Option<usize>; NUM_SLOTS], current: usize) -
 /// Single blink on LED2 for init milestone tracking.
 ///
 /// Count the LED2 blinks to identify the last milestone reached before a crash.
-async fn milestone(led: &mut Output<'_>) {
-    led.set_high();
+async fn milestone(controls: &HothouseBuffer) {
+    controls.write_led(1, 1.0);
     embassy_time::Timer::after_millis(200).await;
-    led.set_low();
+    controls.write_led(1, 0.0);
     embassy_time::Timer::after_millis(400).await;
 }
 
@@ -628,32 +499,15 @@ async fn main(spawner: embassy_executor::Spawner) {
 
     defmt::info!("morph_pedal v2: initializing...");
 
-    // ── Control pins FIRST (sync init, no .await needed) ──
-    // Must happen BEFORE audio start_interface → start_callback so there's
-    // zero gap for SAI TX FIFO to underrun.
+    // ── Extract control pins and spawn control task ──
+    // Must happen BEFORE audio start_interface → start_callback.
+    let ctrl = sonido_daisy::hothouse_pins!(p);
+    spawner
+        .spawn(hothouse_control_task(ctrl, &CONTROLS))
+        .unwrap();
 
-    let mut adc = Adc::new(p.ADC1);
-    let mut knob_pins = (
-        p.PA3, // KNOB_1
-        p.PB1, // KNOB_2
-        p.PA7, // KNOB_3
-        p.PA6, // KNOB_4
-        p.PC1, // KNOB_5
-        p.PC4, // KNOB_6
-    );
-
-    let tog1_up = Input::new(p.PB4, Pull::Up);
-    let tog1_dn = Input::new(p.PB5, Pull::Up);
-    let tog2_up = Input::new(p.PG10, Pull::Up);
-    let tog2_dn = Input::new(p.PG11, Pull::Up);
-    let tog3_up = Input::new(p.PD2, Pull::Up);
-    let tog3_dn = Input::new(p.PC12, Pull::Up);
-
-    let foot1 = Input::new(p.PA0, Pull::Up);
-    let foot2 = Input::new(p.PD11, Pull::Up);
-
-    let mut led1 = Output::new(p.PA5, Level::High, Speed::Low); // Active indicator
-    let mut led2 = Output::new(p.PA4, Level::Low, Speed::Low); // Mode feedback
+    // LED1 starts on (active indicator).
+    CONTROLS.write_led(0, 1.0);
 
     defmt::info!("morph_pedal v2: controls initialized");
 
@@ -664,20 +518,23 @@ async fn main(spawner: embassy_executor::Spawner) {
     // Starts at 0 so first FS2 tap creates filter (index 0).
     let mut browse_cursor: [usize; NUM_SLOTS] = [0; NUM_SLOTS];
 
-    // Read initial toggle positions BEFORE graph build.
-    let t2_init = decode_toggle(&tog2_up, &tog2_dn);
+    // Read initial toggle positions from ControlBuffer.
+    // Give the control task one cycle to populate.
+    embassy_time::Timer::after_millis(30).await;
+
+    let t2_init = CONTROLS.read_toggle(1);
     let mut routing = match t2_init {
         0 => Routing::Serial,
         2 => Routing::Fan,
         _ => Routing::Parallel,
     };
-    let t3_init = decode_toggle(&tog3_up, &tog3_dn);
+    let t3_init = CONTROLS.read_toggle(2);
     let mut mode = match t3_init {
         0 => Mode::Explore,
         2 => Mode::Morph,
         _ => Mode::Build,
     };
-    let t1_init = decode_toggle(&tog1_up, &tog1_dn);
+    let t1_init = CONTROLS.read_toggle(0);
     let mut focused_slot: usize = match t1_init {
         0 => 0,
         2 => 2,
@@ -734,8 +591,8 @@ async fn main(spawner: embassy_executor::Spawner) {
     let mut right_out = [0.0f32; BLOCK_SIZE];
 
     // ── Milestones before SAI starts ──
-    milestone(&mut led2).await; // 1: init complete (controls + graph)
-    milestone(&mut led2).await; // 2: ready to start audio
+    milestone(&CONTROLS).await; // 1: init complete (controls + graph)
+    milestone(&CONTROLS).await; // 2: ready to start audio
 
     // Spawn deferred D-cache BEFORE audio setup.
     spawner.spawn(deferred_dcache()).unwrap();
@@ -750,14 +607,16 @@ async fn main(spawner: embassy_executor::Spawner) {
     let interface = audio_peripherals
         .prepare_interface(Default::default())
         .await;
-    milestone(&mut led2).await; // 3: codec configured, about to start SAI
+    milestone(&CONTROLS).await; // 3: codec configured, about to start SAI
 
     let mut interface = match interface.start_interface().await {
         Ok(running) => running,
         Err(_e) => {
             defmt::error!("SAI start_interface failed");
             loop {
-                led2.toggle();
+                CONTROLS.write_led(1, 1.0);
+                embassy_time::Timer::after_millis(50).await;
+                CONTROLS.write_led(1, 0.0);
                 embassy_time::Timer::after_millis(50).await;
             }
         }
@@ -793,10 +652,10 @@ async fn main(spawner: embassy_executor::Spawner) {
                 return;
             }
 
-            // ── Read toggles ──
-            let t1 = decode_toggle(&tog1_up, &tog1_dn);
-            let t2 = decode_toggle(&tog2_up, &tog2_dn);
-            let t3 = decode_toggle(&tog3_up, &tog3_dn);
+            // ── Read toggles from ControlBuffer ──
+            let t1 = CONTROLS.read_toggle(0);
+            let t2 = CONTROLS.read_toggle(1);
+            let t3 = CONTROLS.read_toggle(2);
 
             // ── Mode from T3 ──
             let new_mode = match t3 {
@@ -895,16 +754,8 @@ async fn main(spawner: embassy_executor::Spawner) {
                 }
             }
 
-            // ── Read knobs ──
-            let raw_knobs: [u16; 6] = [
-                adc.blocking_read(&mut knob_pins.0, KNOB_SAMPLE_TIME),
-                adc.blocking_read(&mut knob_pins.1, KNOB_SAMPLE_TIME),
-                adc.blocking_read(&mut knob_pins.2, KNOB_SAMPLE_TIME),
-                adc.blocking_read(&mut knob_pins.3, KNOB_SAMPLE_TIME),
-                adc.blocking_read(&mut knob_pins.4, KNOB_SAMPLE_TIME),
-                adc.blocking_read(&mut knob_pins.5, KNOB_SAMPLE_TIME),
-            ];
-            let norm_knobs: [f32; 6] = core::array::from_fn(|k| raw_knobs[k] as f32 / ADC_MAX);
+            // ── Read knobs from ControlBuffer ──
+            let norm_knobs: [f32; 6] = core::array::from_fn(|k| CONTROLS.read_knob(k));
 
             // ── Apply knobs based on mode ──
             match mode {
@@ -979,9 +830,9 @@ async fn main(spawner: embassy_executor::Spawner) {
                 }
             }
 
-            // ── Footswitch state machine ──
-            let fs1_pressed = foot1.is_low();
-            let fs2_pressed = foot2.is_low();
+            // ── Footswitch state machine (read from ControlBuffer) ──
+            let fs1_pressed = CONTROLS.read_footswitch(0);
+            let fs2_pressed = CONTROLS.read_footswitch(1);
             let both_pressed = fs1_pressed && fs2_pressed;
 
             if both_pressed {
@@ -1005,10 +856,10 @@ async fn main(spawner: embassy_executor::Spawner) {
                 let was_bypassed = BYPASSED.load(Ordering::Relaxed);
                 BYPASSED.store(!was_bypassed, Ordering::Relaxed);
                 if was_bypassed {
-                    led1.set_high();
+                    CONTROLS.write_led(0, 1.0);
                 } else {
-                    led1.set_low();
-                    led2.set_low();
+                    CONTROLS.write_led(0, 0.0);
+                    CONTROLS.write_led(1, 0.0);
                 }
             }
 
@@ -1045,7 +896,7 @@ async fn main(spawner: embassy_executor::Spawner) {
                         };
                         next_preset_slot = (slot + 1) % MAX_PRESETS;
                         defmt::info!("PRESET saved to slot {}", slot + 1);
-                        led2.set_high();
+                        CONTROLS.write_led(1, 1.0);
                         led2_counter = 20;
                     }
                     Mode::Explore => {
@@ -1063,7 +914,7 @@ async fn main(spawner: embassy_executor::Spawner) {
                                 load_preset_cursor = (idx + 1) % MAX_PRESETS;
                                 needs_rebuild = true;
                                 defmt::info!("PRESET loaded from slot {}", idx + 1);
-                                led2.set_high();
+                                CONTROLS.write_led(1, 1.0);
                                 led2_counter = 20;
                                 found = true;
                                 break;
@@ -1102,7 +953,7 @@ async fn main(spawner: embassy_executor::Spawner) {
                                 focused_slot + 1,
                                 EFFECT_LIST[*cursor].id
                             );
-                            led2.set_high();
+                            CONTROLS.write_led(1, 1.0);
                             led2_counter = 10;
                         }
                         Mode::Build => {
@@ -1134,7 +985,7 @@ async fn main(spawner: embassy_executor::Spawner) {
                                 focused_slot + 1,
                                 EFFECT_LIST[*cursor].id
                             );
-                            led2.set_high();
+                            CONTROLS.write_led(1, 1.0);
                             led2_counter = 10;
                         }
                         Mode::Build => {
@@ -1203,17 +1054,17 @@ async fn main(spawner: embassy_executor::Spawner) {
                 interpolate_and_apply(&mut graph, &node_ids, &sound_a, &sound_b, morph_t);
             }
 
-            // ── LED2 feedback ──
+            // ── LED2 feedback via ControlBuffer ──
             if BYPASSED.load(Ordering::Relaxed) {
-                led2.set_low();
+                CONTROLS.write_led(1, 0.0);
             } else if led2_counter > 0 {
                 led2_counter -= 1;
                 if led2_counter == 0 {
-                    led2.set_low();
+                    CONTROLS.write_led(1, 0.0);
                 }
             } else {
                 match mode {
-                    Mode::Explore => led2.set_low(),
+                    Mode::Explore => CONTROLS.write_led(1, 0.0),
                     Mode::Build => {
                         // Blink pattern = slot number (1/2/3 rapid pulses, pause).
                         // 100-tick cycle: pulses in first half, dark in second half.
@@ -1224,12 +1075,12 @@ async fn main(spawner: embassy_executor::Spawner) {
                         if phase < pulse_window {
                             let within = phase % 10;
                             if within < 5 {
-                                led2.set_high();
+                                CONTROLS.write_led(1, 1.0);
                             } else {
-                                led2.set_low();
+                                CONTROLS.write_led(1, 0.0);
                             }
                         } else {
-                            led2.set_low();
+                            CONTROLS.write_led(1, 0.0);
                         }
                     }
                     Mode::Morph => {
@@ -1237,9 +1088,9 @@ async fn main(spawner: embassy_executor::Spawner) {
                         let pwm_phase = poll_counter % 10;
                         let threshold = (morph_t * 10.0) as u16;
                         if pwm_phase < threshold {
-                            led2.set_high();
+                            CONTROLS.write_led(1, 1.0);
                         } else {
-                            led2.set_low();
+                            CONTROLS.write_led(1, 0.0);
                         }
                     }
                 }

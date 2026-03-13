@@ -100,10 +100,65 @@ cargo check -p sonido-daisy \
 - **Audio**: `AudioPeripherals` + `start_callback()` — async loop, yields every DMA transfer (~0.667 ms at 48 kHz, 32-sample blocks).
 - **LED / UI**: Use `sonido_daisy::heartbeat` — the shared lub-dub blink task. Every binary spawns it: `spawner.spawn(heartbeat(UserLed::new(p.PC7))).unwrap();`.
 - **USB / Serial**: Same spawned-task pattern. See `hothouse_diag.rs`.
-- **Audio callback runs in executor context** (not ISR) — blocking ADC reads (~1 µs) are safe.
+- **Audio callback is real-time** — NEVER block in the audio callback. No ADC reads, no USB, no allocation. Only pure DSP math and lock-free ControlBuffer reads. Blocking ADC reads (~8 µs at CYCLES387_5) cause DMA overruns → hard faults.
 - **Task return type**: Use `async fn task(...) { }` (implicit `()` return), not `-> !`.
 
 Reference implementation: `crates/sonido-daisy/examples/single_effect.rs`
+
+### Control / Audio Separation
+
+ADC and GPIO reads run in a separate Embassy task (`hothouse_control_task`) at 50 Hz, matching libDaisy's architecture where `seed.adc` runs via DMA independently of audio. Shared state flows through a lock-free `ControlBuffer` using `Relaxed` atomics.
+
+```
+┌─────────────────────┐              ┌──────────────────────┐
+│ hothouse_control_task│  ControlBuffer  │   Audio Callback     │
+│ (50 Hz, async task) │───────────────→│ (1500 Hz, real-time) │
+│                     │  (lock-free)    │                      │
+│ • ADC knob reads    │              │ • read_knob()         │
+│ • GPIO toggle reads │              │ • read_toggle()       │
+│ • GPIO footswitches │              │ • read_footswitch()   │
+│ • IIR smoothing     │  ←────────────│ • write_led()         │
+│ • LED GPIO output   │  LED bridge   │                      │
+└─────────────────────┘              └──────────────────────┘
+```
+
+**Library modules:**
+
+| Module | Purpose | Dependencies |
+|--------|---------|-------------|
+| `controls.rs` | `ControlBuffer<KNOBS,TOGGLES,FS,LEDS>` — lock-free shared state with IIR smoothing, change detection, LED bridge | `core` only |
+| `hothouse.rs` | `HothouseControls`, `hothouse_control_task`, `hothouse_pins!` macro, `decode_toggle` | `controls.rs` + Embassy |
+| `embedded_adapter.rs` | `EmbeddedAdapter<K>` — zero-smoothing `Effect + ParameterInfo` for `DspKernel` | `sonido-core` (feature `alloc`) |
+| `param_map.rs` | `adc_to_param()` — scale-aware ADC→parameter conversion with STEPPED rounding | `sonido-core` (feature `alloc`) |
+
+**Usage pattern** (all Hothouse examples):
+
+```rust
+use sonido_daisy::controls::HothouseBuffer;
+use sonido_daisy::hothouse::hothouse_control_task;
+
+static CONTROLS: HothouseBuffer = HothouseBuffer::new();
+
+#[embassy_executor::main]
+async fn main(spawner: Spawner) {
+    // ... clock + peripheral init ...
+
+    // Extract control pins BEFORE audio peripherals (both consume from p)
+    let ctrl = sonido_daisy::hothouse_pins!(p);
+    spawner.spawn(hothouse_control_task(ctrl, &CONTROLS)).unwrap();
+
+    // ... audio setup ...
+
+    interface.start_callback(move |input, output| {
+        // Lock-free reads — never blocks
+        let drive = CONTROLS.read_knob(0);
+        let toggle = CONTROLS.read_toggle(0);
+        let foot = CONTROLS.read_footswitch(0);
+        CONTROLS.write_led(0, 1.0); // LED bridge
+        // ... DSP processing ...
+    }).await;
+}
+```
 
 ### Embassy Patterns
 
@@ -146,23 +201,30 @@ spawner.spawn(heartbeat(led)).unwrap();
 spawner.spawn(usb_task(usb)).unwrap();
 ```
 
-#### Atomic Shared State (Audio Callback ↔ Tasks)
+#### Lock-Free Shared State (Audio Callback ↔ Tasks)
 
 The audio callback runs synchronously in the Embassy executor thread at
-1500 Hz. Data crosses the callback↔task boundary via atomics with `Relaxed`
-ordering (single-core Cortex-M7, no cache coherence issues):
+1500 Hz. Data crosses the callback↔task boundary via `ControlBuffer` — a
+generic lock-free buffer using `Relaxed` atomics (single-core Cortex-M7,
+no cache coherence issues). `HothouseBuffer` is the Hothouse-specific alias:
 
 ```rust
-use core::sync::atomic::{AtomicU32, AtomicI32, Ordering};
+use sonido_daisy::controls::HothouseBuffer;
 
-static RMS_FP: AtomicU32 = AtomicU32::new(0);
+static CONTROLS: HothouseBuffer = HothouseBuffer::new();
 
-// In audio callback:
-RMS_FP.store((rms * 10000.0) as u32, Ordering::Relaxed);
+// Control task (writer, 50 Hz): IIR-smoothed ADC values
+// hothouse_control_task writes knobs, toggles, footswitches
 
-// In report task:
-let rms_fp = RMS_FP.load(Ordering::Relaxed);
+// Audio callback (reader, 1500 Hz): lock-free reads
+let drive = CONTROLS.read_knob(0);     // 0.0–1.0, smoothed
+let (val, changed) = CONTROLS.read_knob_changed(0); // with change flag
+CONTROLS.write_led(0, 1.0);           // LED bridge (callback→task)
 ```
+
+For application-specific atomics (e.g., audio level metering in
+`hothouse_diag.rs`), raw `AtomicU32`/`AtomicI32` with `Relaxed` ordering
+remain appropriate.
 
 ### Library — `src/lib.rs`
 
@@ -175,6 +237,17 @@ let rms_fp = RMS_FP.load(Ordering::Relaxed);
 | `CYCLES_PER_BLOCK` | 320,000 | CPU cycles available per block at 480 MHz |
 | `measure_cycles(\|\| { })` | — | DWT cycle counter wrapper |
 | `enable_cycle_counter()` | — | Call once at startup before measuring |
+| `ControlBuffer` | — | Re-export from `controls.rs` |
+| `EmbeddedAdapter` | — | Re-export from `embedded_adapter.rs` (feature `alloc`) |
+| `adc_to_param()` | — | Re-export from `param_map.rs` (feature `alloc`) |
+
+### Feature Flags
+
+| Feature | Enables | Required By |
+|---------|---------|-------------|
+| *(none)* | Core library: audio, controls, hothouse, LED, RCC | Simple examples (blinky, passthrough) |
+| `alloc` | `EmbeddedAdapter`, `adc_to_param`, DSP-dependent modules | morph_pedal, bench_kernels |
+| `platform` | `HothousePlatform` (`PlatformController` impl) + implies `alloc` | Future platform integration |
 
 ### Dependencies
 
