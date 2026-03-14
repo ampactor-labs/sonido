@@ -159,7 +159,7 @@ impl FirstOrderAllpass {
 /// | 6 | `max_freq_hz` | Hz | 200–20000 | 4000.0 |
 /// | 7 | `sync` | index | 0–1 (Off/On) | 0.0 |
 /// | 8 | `division` | index | 0–11 (note division) | 3.0 |
-/// | 9 | `output_db` | dB | −20–20 | 0.0 |
+/// | 9 | `output_db` | dB | −20–+6 | 0.0 |
 #[derive(Debug, Clone, Copy)]
 pub struct PhaserParams {
     /// LFO rate in Hz.
@@ -203,7 +203,7 @@ pub struct PhaserParams {
     pub division: f32,
     /// Output level in decibels.
     ///
-    /// Range: −20 to +20 dB. Applied after wet/dry mix.
+    /// Range: −20 to +6 dB. Applied after wet/dry mix.
     pub output_db: f32,
 }
 
@@ -225,23 +225,23 @@ impl Default for PhaserParams {
 }
 
 impl PhaserParams {
-    /// Build params directly from hardware knob readings (0.0–1.0 normalized).
+    /// Creates parameters from normalized 0–1 knob readings.
     ///
-    /// Maps ADC readings to user-facing parameter ranges for embedded deployment.
-    /// All inputs are expected in `[0.0, 1.0]`.
+    /// Curves (logarithmic for frequency, linear for others) are derived from
+    /// [`ParamDescriptor`] — same mapping as GUI and plugin hosts. Sync,
+    /// division, and output are fixed at their defaults (Off, Quarter, 0 dB).
     ///
-    /// # Parameter mapping
+    /// | Argument | Index | Parameter | Range |
+    /// |----------|-------|-----------|-------|
+    /// | `rate` | 0 | `rate` | 0.05–5.0 Hz |
+    /// | `depth` | 1 | `depth_pct` | 0–100 % |
+    /// | `stages` | 2 | `stages` | 2–12 (linear) |
+    /// | `feedback` | 3 | `feedback_pct` | 0–95 % |
+    /// | `mix` | 4 | `mix_pct` | 0–100 % |
+    /// | `min_freq_hz` | 5 | `min_freq_hz` | 20–2000 Hz (log) |
+    /// | `max_freq_hz` | 6 | `max_freq_hz` | 200–20000 Hz (log) |
     ///
-    /// - `rate`     → 0.05–5.0 Hz  (linear)
-    /// - `depth`    → 0–100 %      (linear)
-    /// - `stages`   → 2–12         (maps to even integer: 2 4 6 8 10 12)
-    /// - `feedback` → 0–95 %       (linear)
-    /// - `mix`      → 0–100 %      (linear)
-    /// - `min_freq_hz` → 20–2000 Hz   (linear; log feels more natural but hardware ADC is linear)
-    /// - `max_freq_hz` → 200–20000 Hz (linear)
-    ///
-    /// Sync and division are fixed at Off / Quarter for embedded use
-    /// (no BPM source available on standalone hardware).
+    /// Fixed: sync=Off (0), division=Quarter (index 3), output=0 dB.
     pub fn from_knobs(
         rate: f32,
         depth: f32,
@@ -251,21 +251,7 @@ impl PhaserParams {
         min_freq_hz: f32,
         max_freq_hz: f32,
     ) -> Self {
-        // Stages: 6 even steps across [0,1] → 2, 4, 6, 8, 10, 12
-        let stages_raw = libm::floorf(stages * 5.99) as u32;
-        let stages_val = ((stages_raw + 1) * 2) as f32; // 2,4,6,8,10,12
-        Self {
-            rate: 0.05 + rate * (5.0 - 0.05), // 0.05–5.0 Hz
-            depth_pct: depth * 100.0,         // 0–100 %
-            stages: stages_val.clamp(2.0, 12.0),
-            feedback_pct: feedback * 95.0,              // 0–95 %
-            mix_pct: mix * 100.0,                       // 0–100 %
-            min_freq_hz: 20.0 + min_freq_hz * 1980.0,   // 20–2000 Hz
-            max_freq_hz: 200.0 + max_freq_hz * 19800.0, // 200–20000 Hz
-            sync: 0.0,
-            division: 3.0, // Quarter note — sensible embedded default
-            output_db: 0.0,
-        }
+        Self::from_normalized(&[rate, depth, stages, feedback, mix, min_freq_hz, max_freq_hz])
     }
 }
 

@@ -206,25 +206,25 @@ impl Default for StageParams {
 }
 
 impl StageParams {
-    /// Build params directly from hardware knob readings (0.0–1.0 normalized).
+    /// Creates parameters from normalized 0–1 knob readings.
     ///
-    /// Convenience constructor for embedded targets where ADC values map to
-    /// parameter ranges. Stepped parameters are threshold-rounded (≥ 0.5 = On).
+    /// Curves (logarithmic for frequency/time, linear for percentage) are
+    /// derived from [`ParamDescriptor`] — same mapping as GUI and plugin hosts.
     ///
     /// # Arguments (all 0.0–1.0)
     ///
     /// - `gain`:      Input gain knob → −40 to +12 dB
     /// - `width`:     Width knob → 0 to 200 %
     /// - `balance`:   Balance knob → −100 to +100 %
-    /// - `phase_l`:   Phase-L toggle → 0 or 1 (stepped at 0.5)
-    /// - `phase_r`:   Phase-R toggle → 0 or 1 (stepped at 0.5)
-    /// - `channel`:   Channel mode → 0–3 (scaled, rounded)
-    /// - `dc_block`:  DC block toggle → 0 or 1
-    /// - `bass_mono`: Bass mono toggle → 0 or 1
+    /// - `phase_l`:   Phase-L toggle → 0 or 1 (stepped)
+    /// - `phase_r`:   Phase-R toggle → 0 or 1 (stepped)
+    /// - `channel`:   Channel mode → 0–3 (stepped)
+    /// - `dc_block`:  DC block toggle → 0 or 1 (stepped)
+    /// - `bass_mono`: Bass mono toggle → 0 or 1 (stepped)
     /// - `bass_freq`: Bass frequency → 20–500 Hz (logarithmic)
     /// - `haas`:      Haas delay → 0–30 ms
-    /// - `haas_side`: Haas side toggle → 0 or 1
-    /// - `output`:    Output level → −20 to +20 dB
+    /// - `haas_side`: Haas side toggle → 0 or 1 (stepped)
+    /// - `output`:    Output level → −20 to +6 dB
     #[allow(clippy::too_many_arguments)]
     pub fn from_knobs(
         gain: f32,
@@ -240,22 +240,10 @@ impl StageParams {
         haas_side: f32,
         output: f32,
     ) -> Self {
-        // Logarithmic mapping for bass_freq: 20 * (500/20)^t = 20 * 25^t
-        let bass_freq_hz = 20.0 * libm::powf(25.0, bass_freq.clamp(0.0, 1.0));
-        Self {
-            gain_db: gain.clamp(0.0, 1.0) * 52.0 - 40.0, // −40 to +12 dB
-            width_pct: width.clamp(0.0, 1.0) * 200.0,    // 0–200 %
-            balance_pct: balance.clamp(0.0, 1.0) * 200.0 - 100.0, // −100 to +100 %
-            phase_l: if phase_l >= 0.5 { 1.0 } else { 0.0 },
-            phase_r: if phase_r >= 0.5 { 1.0 } else { 0.0 },
-            channel: libm::roundf(channel.clamp(0.0, 1.0) * 3.0).clamp(0.0, 3.0),
-            dc_block: if dc_block >= 0.5 { 1.0 } else { 0.0 },
-            bass_mono: if bass_mono >= 0.5 { 1.0 } else { 0.0 },
-            bass_freq_hz: bass_freq_hz.clamp(20.0, 500.0),
-            haas_ms: haas.clamp(0.0, 1.0) * 30.0, // 0–30 ms
-            haas_side: if haas_side >= 0.5 { 1.0 } else { 0.0 },
-            output_db: output.clamp(0.0, 1.0) * 40.0 - 20.0, // −20 to +20 dB
-        }
+        Self::from_normalized(&[
+            gain, width, balance, phase_l, phase_r, channel, dc_block, bass_mono, bass_freq, haas,
+            haas_side, output,
+        ])
     }
 }
 
@@ -825,8 +813,8 @@ mod tests {
             p.haas_ms
         );
         assert!(
-            (p.output_db - 20.0).abs() < 0.1,
-            "Output at 1.0 should be 20 dB, got {}",
+            (p.output_db - 6.0).abs() < 0.1,
+            "Output at 1.0 should be +6 dB, got {}",
             p.output_db
         );
 

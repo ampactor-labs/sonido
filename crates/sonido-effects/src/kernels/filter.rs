@@ -85,24 +85,17 @@ impl Default for FilterParams {
 }
 
 impl FilterParams {
-    /// Build params directly from hardware knob readings (0.0–1.0 normalized).
+    /// Creates parameters from normalized 0–1 knob readings.
     ///
-    /// Convenience for embedded targets where ADC values map to parameter
-    /// ranges. Cutoff uses a logarithmic mapping from 20 Hz to 20 kHz,
-    /// matching the `Logarithmic` scale of the descriptor.
+    /// Curves (logarithmic for frequency/time, linear for percentage) are
+    /// derived from [`ParamDescriptor`] — same mapping as GUI and plugin hosts.
     ///
     /// # Parameters
     /// - `cutoff`: normalized 0.0–1.0 → 20–20000 Hz (logarithmic)
     /// - `resonance`: normalized 0.0–1.0 → 0.1–20.0 (linear)
-    /// - `output`: normalized 0.0–1.0 → −20–20 dB (linear)
+    /// - `output`: normalized 0.0–1.0 → −20–+6 dB (linear)
     pub fn from_knobs(cutoff: f32, resonance: f32, output: f32) -> Self {
-        // Logarithmic mapping for cutoff: 20 * (20000/20)^t = 20 * 1000^t
-        let cutoff_hz = 20.0 * libm::powf(1000.0, cutoff.clamp(0.0, 1.0));
-        Self {
-            cutoff_hz,
-            resonance: 0.1 + resonance.clamp(0.0, 1.0) * 19.9, // 0.1–20.0
-            output_db: output.clamp(0.0, 1.0) * 40.0 - 20.0,   // −20–20 dB
-        }
+        Self::from_normalized(&[cutoff, resonance, output])
     }
 }
 
@@ -527,10 +520,10 @@ mod tests {
             "resonance should be ~10.05, got {}",
             params.resonance
         );
-        // Output at 0.5 → 0.5 * 40 - 20 = 0.0 dB
+        // Output at 0.5 → -20 + 0.5 * 26 = -7.0 dB
         assert!(
-            params.output_db.abs() < 0.01,
-            "output at 0.5 should be 0 dB, got {}",
+            (params.output_db - (-7.0)).abs() < 0.01,
+            "output at 0.5 should be -7 dB, got {}",
             params.output_db
         );
     }

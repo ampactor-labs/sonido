@@ -11,7 +11,7 @@
 //! | KNOB_2       | PB1          | Decay (0–100%)                                |
 //! | KNOB_3       | PA7          | Damping (0–100%)                              |
 //! | KNOB_4       | PA6          | Mix / dry-wet (0–100%)                        |
-//! | KNOB_5       | PC1          | Output level (−20 to +20 dB)                  |
+//! | KNOB_5       | PC1          | Output level (−20 to +6 dB)                   |
 //! | KNOB_6       | PC4          | Predelay (0–100 ms)                           |
 //! | TOGGLE_1 up  | PB4          | Width: Up=Wide (100%)                         |
 //! | TOGGLE_1 mid | (neither)    | Width: Mid=Normal (50%)                       |
@@ -111,7 +111,7 @@ async fn main(spawner: embassy_executor::Spawner) {
                 let decay = CONTROLS.read_knob(1); // K2: Decay
                 let damp = CONTROLS.read_knob(2); // K3: Damping
                 let mix = CONTROLS.read_knob(3); // K4: Mix
-                let out_level = CONTROLS.read_knob(4); // K5: Output level
+                let out_level = CONTROLS.read_knob(4); // K5: Output (−20 to +6 dB)
                 let predelay = CONTROLS.read_knob(5); // K6: Predelay
 
                 // Toggle 1: stereo width (UP=100%, MID=50%, DN=0%)

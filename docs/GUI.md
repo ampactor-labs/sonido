@@ -280,7 +280,7 @@ The interpolation mirrors `KernelParams::lerp()`:
 
 ### Preamp
 - **Gain**: -20 to +20 dB
-- **Output**: -20 to +20 dB output level
+- **Output**: -20 to +6 dB output level
 - **Headroom**: 6 to 40 dB clipping ceiling
 
 ### Distortion

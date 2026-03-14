@@ -197,22 +197,18 @@ impl Default for VibratoParams {
 }
 
 impl VibratoParams {
-    /// Build params directly from hardware knob readings (0.0–1.0 normalized).
+    /// Creates parameters from normalized 0–1 knob readings.
     ///
-    /// Convenience constructor for embedded targets where ADC values map
-    /// linearly to parameter ranges.
+    /// Curves (logarithmic for frequency/time, linear for percentage) are
+    /// derived from [`ParamDescriptor`] — same mapping as GUI and plugin hosts.
     ///
     /// # Arguments
     ///
     /// - `depth` — 0.0 → 0 %, 1.0 → 400 %
     /// - `mix` — 0.0 → 0 %, 1.0 → 100 %
-    /// - `output` — 0.0 → −20 dB, 0.5 → 0 dB, 1.0 → +20 dB
+    /// - `output` — 0.0 → −20 dB, 1.0 → +6 dB
     pub fn from_knobs(depth: f32, mix: f32, output: f32) -> Self {
-        Self {
-            depth_pct: depth * 400.0,        // 0–400 %
-            mix_pct: mix * 100.0,            // 0–100 %
-            output_db: output * 40.0 - 20.0, // −20–+20 dB
-        }
+        Self::from_normalized(&[depth, mix, output])
     }
 }
 
@@ -617,8 +613,8 @@ mod tests {
             max.mix_pct
         );
         assert!(
-            (max.output_db - 20.0).abs() < 0.01,
-            "Output at 1.0 should be +20 dB, got {}",
+            (max.output_db - 6.0).abs() < 0.01,
+            "Output at 1.0 should be +6 dB, got {}",
             max.output_db
         );
 
@@ -653,8 +649,8 @@ mod tests {
             mid.mix_pct
         );
         assert!(
-            mid.output_db.abs() < 0.01,
-            "Output at 0.5 should be 0 dB, got {}",
+            (mid.output_db - (-7.0)).abs() < 0.1,
+            "Output at 0.5 should be -7 dB, got {}",
             mid.output_db
         );
     }

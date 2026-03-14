@@ -231,23 +231,23 @@ impl Default for TapeParams {
 }
 
 impl TapeParams {
-    /// Build params from hardware knob readings (0.0-1.0 normalized).
+    /// Creates parameters from normalized 0–1 knob readings.
     ///
-    /// Convenience for embedded targets where ADC values map linearly to
-    /// parameter ranges.
+    /// Curves (logarithmic for frequency/time, linear for percentage) are
+    /// derived from [`ParamDescriptor`] — same mapping as GUI and plugin hosts.
     ///
     /// # Parameters
     ///
-    /// - `drive`: Drive knob (0-1) -> 0-24 dB
-    /// - `saturation`: Saturation knob (0-1) -> 0-100 %
-    /// - `hf_rolloff`: HF rolloff knob (0-1) -> 1000-20000 Hz (linear)
-    /// - `bias`: Bias knob (0-1) -> -0.2 to 0.2 (centre = 0.0)
-    /// - `wow`: Wow depth knob (0-1) -> 0-1
-    /// - `flutter`: Flutter depth knob (0-1) -> 0-1
-    /// - `hysteresis`: Hysteresis knob (0-1) -> 0-0.5
-    /// - `head_bump`: Head bump level knob (0-1) -> 0-1
-    /// - `bump_freq`: Bump freq knob (0-1) -> 40-200 Hz (linear)
-    /// - `output`: Output knob (0-1) -> -12 to 12 dB
+    /// - `drive`: Drive knob (0–1) → 0–24 dB
+    /// - `saturation`: Saturation knob (0–1) → 0–100 %
+    /// - `hf_rolloff`: HF rolloff knob (0–1) → 1000–20000 Hz (logarithmic)
+    /// - `bias`: Bias knob (0–1) → -0.2 to 0.2 (centre = 0.0)
+    /// - `wow`: Wow depth knob (0–1) → 0–1
+    /// - `flutter`: Flutter depth knob (0–1) → 0–1
+    /// - `hysteresis`: Hysteresis knob (0–1) → 0–0.5
+    /// - `head_bump`: Head bump level knob (0–1) → 0–1
+    /// - `bump_freq`: Bump freq knob (0–1) → 40–200 Hz (logarithmic)
+    /// - `output`: Output knob (0–1) → -12 to +12 dB
     #[allow(clippy::too_many_arguments)]
     pub fn from_knobs(
         drive: f32,
@@ -261,18 +261,10 @@ impl TapeParams {
         bump_freq: f32,
         output: f32,
     ) -> Self {
-        Self {
-            drive_db: drive * 24.0,
-            saturation_pct: saturation * 100.0,
-            hf_rolloff_hz: 1000.0 + hf_rolloff * 19000.0,
-            bias: bias * 0.4 - 0.2,
-            wow: wow.clamp(0.0, 1.0),
-            flutter: flutter.clamp(0.0, 1.0),
-            hysteresis: hysteresis * 0.5,
-            head_bump: head_bump.clamp(0.0, 1.0),
-            bump_freq_hz: 40.0 + bump_freq * 160.0,
-            output_db: output * 24.0 - 12.0,
-        }
+        Self::from_normalized(&[
+            drive, saturation, hf_rolloff, bias, wow, flutter, hysteresis, head_bump, bump_freq,
+            output,
+        ])
     }
 }
 

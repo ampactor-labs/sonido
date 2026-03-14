@@ -107,7 +107,7 @@ const CHANGE_EPSILON: f32 = 0.001;
 /// | 6 | `high_freq_hz` | Hz | 1000–15000 | 5000.0 |
 /// | 7 | `high_gain_db` | dB | −12–12 | 0.0 |
 /// | 8 | `high_q` | ratio | 0.5–5.0 | 1.0 |
-/// | 9 | `output_db` | dB | −20–20 | 0.0 |
+/// | 9 | `output_db` | dB | −20–+6 | 0.0 |
 #[derive(Debug, Clone, Copy)]
 pub struct EqParams {
     /// Low band center frequency in Hz.
@@ -157,7 +157,7 @@ pub struct EqParams {
 
     /// Output level in decibels.
     ///
-    /// Range: −20.0 to 20.0 dB, default 0.0.
+    /// Range: −20.0 to +6.0 dB, default 0.0.
     pub output_db: f32,
 }
 
@@ -179,23 +179,23 @@ impl Default for EqParams {
 }
 
 impl EqParams {
-    /// Build params directly from hardware knob readings (0.0–1.0 normalized).
+    /// Creates parameters from normalized 0–1 knob readings.
     ///
-    /// Convenience for embedded targets where ADC values map to parameter
-    /// ranges. Frequency controls use logarithmic mapping to match auditory
-    /// perception; gain and Q use linear mapping.
+    /// Curves (logarithmic for frequency, linear for gain/Q) are derived from
+    /// [`ParamDescriptor`] — same mapping as GUI and plugin hosts.
     ///
-    /// # Parameters
-    /// - `low_f`: normalized 0.0–1.0 → 20–500 Hz (logarithmic)
-    /// - `low_g`: normalized 0.0–1.0 → −12–12 dB (linear)
-    /// - `low_q`: normalized 0.0–1.0 → 0.5–5.0 (linear)
-    /// - `mid_f`: normalized 0.0–1.0 → 200–5000 Hz (logarithmic)
-    /// - `mid_g`: normalized 0.0–1.0 → −12–12 dB (linear)
-    /// - `mid_q`: normalized 0.0–1.0 → 0.5–5.0 (linear)
-    /// - `high_f`: normalized 0.0–1.0 → 1000–15000 Hz (logarithmic)
-    /// - `high_g`: normalized 0.0–1.0 → −12–12 dB (linear)
-    /// - `high_q`: normalized 0.0–1.0 → 0.5–5.0 (linear)
-    /// - `output`: normalized 0.0–1.0 → −20–20 dB (linear)
+    /// | Argument | Index | Parameter | Range |
+    /// |----------|-------|-----------|-------|
+    /// | `low_f` | 0 | `low_freq_hz` | 20–500 Hz (log) |
+    /// | `low_g` | 1 | `low_gain_db` | −12–12 dB |
+    /// | `low_q` | 2 | `low_q` | 0.5–5.0 |
+    /// | `mid_f` | 3 | `mid_freq_hz` | 200–5000 Hz (log) |
+    /// | `mid_g` | 4 | `mid_gain_db` | −12–12 dB |
+    /// | `mid_q` | 5 | `mid_q` | 0.5–5.0 |
+    /// | `high_f` | 6 | `high_freq_hz` | 1000–15000 Hz (log) |
+    /// | `high_g` | 7 | `high_gain_db` | −12–12 dB |
+    /// | `high_q` | 8 | `high_q` | 0.5–5.0 |
+    /// | `output` | 9 | `output_db` | −20–+6 dB |
     #[allow(clippy::too_many_arguments)]
     pub fn from_knobs(
         low_f: f32,
@@ -209,26 +209,9 @@ impl EqParams {
         high_q: f32,
         output: f32,
     ) -> Self {
-        // Logarithmic frequency mapping: min * (max/min)^t
-        // Low: 20 * (500/20)^t = 20 * 25^t
-        let low_freq_hz = 20.0 * libm::powf(25.0, low_f.clamp(0.0, 1.0));
-        // Mid: 200 * (5000/200)^t = 200 * 25^t
-        let mid_freq_hz = 200.0 * libm::powf(25.0, mid_f.clamp(0.0, 1.0));
-        // High: 1000 * (15000/1000)^t = 1000 * 15^t
-        let high_freq_hz = 1000.0 * libm::powf(15.0, high_f.clamp(0.0, 1.0));
-
-        Self {
-            low_freq_hz,
-            low_gain_db: low_g.clamp(0.0, 1.0) * 24.0 - 12.0, // −12–12 dB
-            low_q: 0.5 + low_q.clamp(0.0, 1.0) * 4.5,         // 0.5–5.0
-            mid_freq_hz,
-            mid_gain_db: mid_g.clamp(0.0, 1.0) * 24.0 - 12.0, // −12–12 dB
-            mid_q: 0.5 + mid_q.clamp(0.0, 1.0) * 4.5,         // 0.5–5.0
-            high_freq_hz,
-            high_gain_db: high_g.clamp(0.0, 1.0) * 24.0 - 12.0, // −12–12 dB
-            high_q: 0.5 + high_q.clamp(0.0, 1.0) * 4.5,         // 0.5–5.0
-            output_db: output.clamp(0.0, 1.0) * 40.0 - 20.0,    // −20–20 dB
-        }
+        Self::from_normalized(&[
+            low_f, low_g, low_q, mid_f, mid_g, mid_q, high_f, high_g, high_q, output,
+        ])
     }
 }
 
@@ -892,10 +875,10 @@ mod tests {
             params.high_gain_db
         );
 
-        // Mid-point output (0.5) → (0.5 * 40 - 20) = 0.0 dB
+        // Mid-point output (0.5) → -20 + 0.5 * 26 = -7.0 dB
         assert!(
-            params.output_db.abs() < 0.01,
-            "output_db should be 0 at mid-point, got {}",
+            (params.output_db - (-7.0)).abs() < 0.01,
+            "output_db should be -7 at mid-point, got {}",
             params.output_db
         );
 
@@ -939,8 +922,8 @@ mod tests {
             "low_q at 1 should be 5.0"
         );
         assert!(
-            (max_params.output_db - 20.0).abs() < 0.01,
-            "output at 1 should be 20 dB"
+            (max_params.output_db - 6.0).abs() < 0.01,
+            "output at 1 should be +6 dB"
         );
     }
 

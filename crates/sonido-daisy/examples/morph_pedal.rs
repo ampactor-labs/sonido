@@ -146,20 +146,62 @@ struct EffectEntry {
 /// |12 | bitcrusher | 0:Bits(S)   | 1:Down(S)    | 2:Jitter     | --            | 3:Mix| 4:Out   |
 /// |13 | ringmod    | 0:Freq      | 1:Depth      | 2:Wave(S)    | --            | 3:Mix| 4:Out   |
 const EFFECT_LIST: [EffectEntry; NUM_EFFECTS] = [
-    EffectEntry { id: "filter",     knobs: [0, 1, NULL_KNOB, NULL_KNOB, NULL_KNOB, 2] },
-    EffectEntry { id: "tremolo",    knobs: [0, 1, 2, 3, NULL_KNOB, 6] },
-    EffectEntry { id: "vibrato",    knobs: [0, NULL_KNOB, NULL_KNOB, NULL_KNOB, 1, 2] },
-    EffectEntry { id: "chorus",     knobs: [0, 1, 4, 3, 2, 8] },
-    EffectEntry { id: "phaser",     knobs: [0, 1, 2, 3, 4, 9] },
-    EffectEntry { id: "flanger",    knobs: [0, 1, 2, 4, 3, 7] },
-    EffectEntry { id: "delay",      knobs: [0, 1, 4, 3, 2, 9] },
-    EffectEntry { id: "reverb",     knobs: [0, 1, 2, 3, 4, 7] },
-    EffectEntry { id: "tape",       knobs: [0, 1, 2, 4, 5, 9] },
-    EffectEntry { id: "compressor", knobs: [0, 1, 2, 3, 10, 4] },
-    EffectEntry { id: "wah",        knobs: [0, 1, 2, 3, NULL_KNOB, 4] },
-    EffectEntry { id: "distortion", knobs: [0, 1, 3, NULL_KNOB, 4, 2] },
-    EffectEntry { id: "bitcrusher", knobs: [0, 1, 2, NULL_KNOB, 3, 4] },
-    EffectEntry { id: "ringmod",    knobs: [0, 1, 2, NULL_KNOB, 3, 4] },
+    EffectEntry {
+        id: "filter",
+        knobs: [0, 1, NULL_KNOB, NULL_KNOB, NULL_KNOB, 2],
+    },
+    EffectEntry {
+        id: "tremolo",
+        knobs: [0, 1, 2, 3, NULL_KNOB, 6],
+    },
+    EffectEntry {
+        id: "vibrato",
+        knobs: [0, NULL_KNOB, NULL_KNOB, NULL_KNOB, 1, 2],
+    },
+    EffectEntry {
+        id: "chorus",
+        knobs: [0, 1, 4, 3, 2, 8],
+    },
+    EffectEntry {
+        id: "phaser",
+        knobs: [0, 1, 2, 3, 4, 9],
+    },
+    EffectEntry {
+        id: "flanger",
+        knobs: [0, 1, 2, 4, 3, 7],
+    },
+    EffectEntry {
+        id: "delay",
+        knobs: [0, 1, 4, 3, 2, 9],
+    },
+    EffectEntry {
+        id: "reverb",
+        knobs: [0, 1, 2, 3, 4, 7],
+    },
+    EffectEntry {
+        id: "tape",
+        knobs: [0, 1, 2, 4, 5, 9],
+    },
+    EffectEntry {
+        id: "compressor",
+        knobs: [0, 1, 2, 3, 10, 4],
+    },
+    EffectEntry {
+        id: "wah",
+        knobs: [0, 1, 2, 3, NULL_KNOB, 4],
+    },
+    EffectEntry {
+        id: "distortion",
+        knobs: [0, 1, 3, NULL_KNOB, 4, 2],
+    },
+    EffectEntry {
+        id: "bitcrusher",
+        knobs: [0, 1, 2, NULL_KNOB, 3, 4],
+    },
+    EffectEntry {
+        id: "ringmod",
+        knobs: [0, 1, 2, NULL_KNOB, 3, 4],
+    },
 ];
 
 // ── Enums ───────────────────────────────────────────────────────────────────
@@ -236,12 +278,7 @@ impl SoundSnapshot {
     }
 
     /// Capture one slot's parameters and STEPPED flags from the graph.
-    fn capture_slot(
-        &mut self,
-        slot: usize,
-        graph: &ProcessingGraph,
-        node_id: Option<NodeId>,
-    ) {
+    fn capture_slot(&mut self, slot: usize, graph: &ProcessingGraph, node_id: Option<NodeId>) {
         if let Some(nid) = node_id {
             if let Some(effect) = graph.effect_with_params_ref(nid) {
                 let count = effect.effect_param_count().min(MAX_PARAMS);
@@ -259,29 +296,22 @@ impl SoundSnapshot {
     }
 
     /// Capture all slots from the graph.
-    fn capture_all(
-        &mut self,
-        graph: &ProcessingGraph,
-        node_ids: &[Option<NodeId>; NUM_SLOTS],
-    ) {
+    fn capture_all(&mut self, graph: &ProcessingGraph, node_ids: &[Option<NodeId>; NUM_SLOTS]) {
         for slot in 0..NUM_SLOTS {
             self.capture_slot(slot, graph, node_ids[slot]);
         }
     }
 
     /// Apply snapshot values to all slots in the graph.
-    fn apply_to_graph(
-        &self,
-        graph: &mut ProcessingGraph,
-        node_ids: &[Option<NodeId>; NUM_SLOTS],
-    ) {
+    fn apply_to_graph(&self, graph: &mut ProcessingGraph, node_ids: &[Option<NodeId>; NUM_SLOTS]) {
         for slot in 0..NUM_SLOTS {
             if let Some(nid) = node_ids[slot]
-                && let Some(effect) = graph.effect_with_params_mut(nid) {
-                    for p in 0..self.param_counts[slot] {
-                        effect.effect_set_param(p, self.params[slot][p]);
-                    }
+                && let Some(effect) = graph.effect_with_params_mut(nid)
+            {
+                for p in 0..self.param_counts[slot] {
+                    effect.effect_set_param(p, self.params[slot][p]);
                 }
+            }
         }
     }
 }
@@ -340,11 +370,12 @@ fn build_graph(
 
     for (slot, idx) in effect_indices.iter().enumerate() {
         if let Some(effect_idx) = idx
-            && let Some(effect) = create_effect(*effect_idx, sr) {
-                let nid = g.add_effect(effect);
-                node_ids[slot] = Some(nid);
-                populated.push((slot, nid));
-            }
+            && let Some(effect) = create_effect(*effect_idx, sr)
+        {
+            let nid = g.add_effect(effect);
+            node_ids[slot] = Some(nid);
+            populated.push((slot, nid));
+        }
     }
 
     if populated.is_empty() {
@@ -408,17 +439,22 @@ fn interpolate_and_apply(
 ) {
     for slot in 0..NUM_SLOTS {
         if let Some(nid) = node_ids[slot]
-            && let Some(effect) = graph.effect_with_params_mut(nid) {
-                let count = a.param_counts[slot].min(b.param_counts[slot]);
-                for p in 0..count {
-                    let val = if a.stepped[slot][p] {
-                        if t < 0.5 { a.params[slot][p] } else { b.params[slot][p] }
+            && let Some(effect) = graph.effect_with_params_mut(nid)
+        {
+            let count = a.param_counts[slot].min(b.param_counts[slot]);
+            for p in 0..count {
+                let val = if a.stepped[slot][p] {
+                    if t < 0.5 {
+                        a.params[slot][p]
                     } else {
-                        a.params[slot][p] + (b.params[slot][p] - a.params[slot][p]) * t
-                    };
-                    effect.effect_set_param(p, val);
-                }
+                        b.params[slot][p]
+                    }
+                } else {
+                    a.params[slot][p] + (b.params[slot][p] - a.params[slot][p]) * t
+                };
+                effect.effect_set_param(p, val);
             }
+        }
     }
 }
 
@@ -548,8 +584,7 @@ async fn main(spawner: embassy_executor::Spawner) {
     );
 
     // Build initial graph (passthrough — no effects yet).
-    let (mut graph, mut node_ids) =
-        build_graph(&effect_indices, routing, SAMPLE_RATE, BLOCK_SIZE);
+    let (mut graph, mut node_ids) = build_graph(&effect_indices, routing, SAMPLE_RATE, BLOCK_SIZE);
     defmt::info!("graph built: passthrough (no effects)");
 
     // Sound snapshots (boxed — saves stack in closure captures).
@@ -762,49 +797,48 @@ async fn main(spawner: embassy_executor::Spawner) {
                 Mode::Explore => {
                     // Knobs control focused slot's effect via curated mapping.
                     if let Some(eff_idx) = effect_indices[focused_slot]
-                        && let Some(nid) = node_ids[focused_slot] {
-                            let entry = &EFFECT_LIST[eff_idx];
-                            if let Some(effect) = graph.effect_with_params_mut(nid) {
-                                for k in 0..6 {
-                                    let param_idx = entry.knobs[k];
-                                    if param_idx != NULL_KNOB
-                                        && let Some(desc) =
-                                            effect.effect_param_info(param_idx as usize)
-                                        {
-                                            let val = adc_to_param(&desc, norm_knobs[k]);
-                                            effect.effect_set_param(param_idx as usize, val);
-                                        }
+                        && let Some(nid) = node_ids[focused_slot]
+                    {
+                        let entry = &EFFECT_LIST[eff_idx];
+                        if let Some(effect) = graph.effect_with_params_mut(nid) {
+                            for k in 0..6 {
+                                let param_idx = entry.knobs[k];
+                                if param_idx != NULL_KNOB
+                                    && let Some(desc) = effect.effect_param_info(param_idx as usize)
+                                {
+                                    let val = adc_to_param(&desc, norm_knobs[k]);
+                                    effect.effect_set_param(param_idx as usize, val);
                                 }
                             }
                         }
+                    }
                 }
                 Mode::Build => {
                     // Knobs update Sound B for build_slot.
                     if let Some(eff_idx) = effect_indices[build_slot]
-                        && let Some(nid) = node_ids[build_slot] {
-                            let entry = &EFFECT_LIST[eff_idx];
-                            // Get descriptors from graph to scale ADC properly.
-                            // Read descriptors first (immutable borrow).
-                            let mut param_vals: [(u8, f32); 6] = [(NULL_KNOB, 0.0); 6];
-                            if let Some(effect) = graph.effect_with_params_ref(nid) {
-                                for k in 0..6 {
-                                    let param_idx = entry.knobs[k];
-                                    if param_idx != NULL_KNOB
-                                        && let Some(desc) =
-                                            effect.effect_param_info(param_idx as usize)
-                                        {
-                                            param_vals[k] =
-                                                (param_idx, adc_to_param(&desc, norm_knobs[k]));
-                                        }
-                                }
-                            }
-                            // Write to sound_b snapshot.
-                            for &(pidx, val) in &param_vals {
-                                if pidx != NULL_KNOB {
-                                    sound_b.params[build_slot][pidx as usize] = val;
+                        && let Some(nid) = node_ids[build_slot]
+                    {
+                        let entry = &EFFECT_LIST[eff_idx];
+                        // Get descriptors from graph to scale ADC properly.
+                        // Read descriptors first (immutable borrow).
+                        let mut param_vals: [(u8, f32); 6] = [(NULL_KNOB, 0.0); 6];
+                        if let Some(effect) = graph.effect_with_params_ref(nid) {
+                            for k in 0..6 {
+                                let param_idx = entry.knobs[k];
+                                if param_idx != NULL_KNOB
+                                    && let Some(desc) = effect.effect_param_info(param_idx as usize)
+                                {
+                                    param_vals[k] = (param_idx, adc_to_param(&desc, norm_knobs[k]));
                                 }
                             }
                         }
+                        // Write to sound_b snapshot.
+                        for &(pidx, val) in &param_vals {
+                            if pidx != NULL_KNOB {
+                                sound_b.params[build_slot][pidx as usize] = val;
+                            }
+                        }
+                    }
 
                     // Apply T1 preview.
                     match t1 {
@@ -818,9 +852,7 @@ async fn main(spawner: embassy_executor::Spawner) {
                         }
                         _ => {
                             // 50% lerp preview.
-                            interpolate_and_apply(
-                                &mut graph, &node_ids, &sound_a, &sound_b, 0.5,
-                            );
+                            interpolate_and_apply(&mut graph, &node_ids, &sound_a, &sound_b, 0.5);
                         }
                     }
                 }
@@ -867,9 +899,17 @@ async fn main(spawner: embassy_executor::Spawner) {
             if mode == Mode::Morph && !both_pressed {
                 let delta = 1.0 / (morph_speed * 100.0);
                 if fs1_pressed && !fs2_pressed {
-                    morph_t = if morph_t > delta { morph_t - delta } else { 0.0 };
+                    morph_t = if morph_t > delta {
+                        morph_t - delta
+                    } else {
+                        0.0
+                    };
                 } else if fs2_pressed && !fs1_pressed {
-                    morph_t = if morph_t + delta < 1.0 { morph_t + delta } else { 1.0 };
+                    morph_t = if morph_t + delta < 1.0 {
+                        morph_t + delta
+                    } else {
+                        1.0
+                    };
                 }
             }
 
@@ -935,72 +975,72 @@ async fn main(spawner: embassy_executor::Spawner) {
 
             // ── FS1 release actions ──
             let was_both = both_held_peak > 0 || both_tapped;
-            if fs1_was_pressed && !fs1_pressed && !was_both && both_held < BYPASS_HOLD
-                && fs1_held < TAP_LIMIT {
-                    match mode {
-                        Mode::Explore => {
-                            // Scroll LEFT in focused slot.
-                            let cursor = &mut browse_cursor[focused_slot];
-                            *cursor = if *cursor == 0 {
-                                NUM_EFFECTS - 1
-                            } else {
-                                *cursor - 1
-                            };
-                            effect_indices[focused_slot] = Some(*cursor);
-                            needs_rebuild = true;
-                            defmt::info!(
-                                "slot {} ← {}",
-                                focused_slot + 1,
-                                EFFECT_LIST[*cursor].id
-                            );
-                            CONTROLS.write_led(1, 1.0);
-                            led2_counter = 10;
-                        }
-                        Mode::Build => {
-                            // Capture current build_slot's B, go to previous slot.
-                            // (sound_b already up-to-date from knob writes)
-                            let prev = prev_populated(&effect_indices, build_slot);
-                            if prev != build_slot {
-                                build_slot = prev;
-                                led2_blink_pattern = (build_slot + 1) as u8;
-                                defmt::info!("BUILD ← slot {}", build_slot + 1);
-                            }
-                        }
-                        Mode::Morph => {} // Morph uses held, not tap.
+            if fs1_was_pressed
+                && !fs1_pressed
+                && !was_both
+                && both_held < BYPASS_HOLD
+                && fs1_held < TAP_LIMIT
+            {
+                match mode {
+                    Mode::Explore => {
+                        // Scroll LEFT in focused slot.
+                        let cursor = &mut browse_cursor[focused_slot];
+                        *cursor = if *cursor == 0 {
+                            NUM_EFFECTS - 1
+                        } else {
+                            *cursor - 1
+                        };
+                        effect_indices[focused_slot] = Some(*cursor);
+                        needs_rebuild = true;
+                        defmt::info!("slot {} ← {}", focused_slot + 1, EFFECT_LIST[*cursor].id);
+                        CONTROLS.write_led(1, 1.0);
+                        led2_counter = 10;
                     }
+                    Mode::Build => {
+                        // Capture current build_slot's B, go to previous slot.
+                        // (sound_b already up-to-date from knob writes)
+                        let prev = prev_populated(&effect_indices, build_slot);
+                        if prev != build_slot {
+                            build_slot = prev;
+                            led2_blink_pattern = (build_slot + 1) as u8;
+                            defmt::info!("BUILD ← slot {}", build_slot + 1);
+                        }
+                    }
+                    Mode::Morph => {} // Morph uses held, not tap.
                 }
+            }
 
             // ── FS2 release actions ──
-            if fs2_was_pressed && !fs2_pressed && !was_both && both_held < BYPASS_HOLD
-                && fs2_held < TAP_LIMIT {
-                    match mode {
-                        Mode::Explore => {
-                            // Scroll RIGHT in focused slot.
-                            let cursor = &mut browse_cursor[focused_slot];
-                            *cursor = (*cursor + 1) % NUM_EFFECTS;
-                            effect_indices[focused_slot] = Some(*cursor);
-                            needs_rebuild = true;
-                            defmt::info!(
-                                "slot {} → {}",
-                                focused_slot + 1,
-                                EFFECT_LIST[*cursor].id
-                            );
-                            CONTROLS.write_led(1, 1.0);
-                            led2_counter = 10;
-                        }
-                        Mode::Build => {
-                            // Capture current build_slot's B, go to next slot.
-                            // (sound_b already up-to-date from knob writes)
-                            let next = next_populated(&effect_indices, build_slot);
-                            if next != build_slot {
-                                build_slot = next;
-                                led2_blink_pattern = (build_slot + 1) as u8;
-                                defmt::info!("BUILD → slot {}", build_slot + 1);
-                            }
-                        }
-                        Mode::Morph => {} // Morph uses held, not tap.
+            if fs2_was_pressed
+                && !fs2_pressed
+                && !was_both
+                && both_held < BYPASS_HOLD
+                && fs2_held < TAP_LIMIT
+            {
+                match mode {
+                    Mode::Explore => {
+                        // Scroll RIGHT in focused slot.
+                        let cursor = &mut browse_cursor[focused_slot];
+                        *cursor = (*cursor + 1) % NUM_EFFECTS;
+                        effect_indices[focused_slot] = Some(*cursor);
+                        needs_rebuild = true;
+                        defmt::info!("slot {} → {}", focused_slot + 1, EFFECT_LIST[*cursor].id);
+                        CONTROLS.write_led(1, 1.0);
+                        led2_counter = 10;
                     }
+                    Mode::Build => {
+                        // Capture current build_slot's B, go to next slot.
+                        // (sound_b already up-to-date from knob writes)
+                        let next = next_populated(&effect_indices, build_slot);
+                        if next != build_slot {
+                            build_slot = next;
+                            led2_blink_pattern = (build_slot + 1) as u8;
+                            defmt::info!("BUILD → slot {}", build_slot + 1);
+                        }
+                    }
+                    Mode::Morph => {} // Morph uses held, not tap.
                 }
+            }
 
             // Reset hold counters on release.
             if !fs1_pressed {
@@ -1033,16 +1073,12 @@ async fn main(spawner: embassy_executor::Spawner) {
                     match t1 {
                         0 => sound_a.apply_to_graph(&mut graph, &node_ids),
                         2 => sound_b.apply_to_graph(&mut graph, &node_ids),
-                        _ => interpolate_and_apply(
-                            &mut graph, &node_ids, &sound_a, &sound_b, 0.5,
-                        ),
+                        _ => interpolate_and_apply(&mut graph, &node_ids, &sound_a, &sound_b, 0.5),
                     }
                 } else if mode == Mode::Explore {
                     sound_a.apply_to_graph(&mut graph, &node_ids);
                 } else if mode == Mode::Morph {
-                    interpolate_and_apply(
-                        &mut graph, &node_ids, &sound_a, &sound_b, morph_t,
-                    );
+                    interpolate_and_apply(&mut graph, &node_ids, &sound_a, &sound_b, morph_t);
                 }
 
                 needs_rebuild = false;

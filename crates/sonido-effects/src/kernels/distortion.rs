@@ -98,18 +98,12 @@ impl Default for DistortionParams {
 }
 
 impl DistortionParams {
-    /// Build params directly from hardware knob readings (0.0–1.0 normalized).
+    /// Creates parameters from normalized 0–1 knob readings.
     ///
-    /// Convenience for embedded targets where ADC values map linearly
-    /// to parameter ranges.
+    /// Curves (logarithmic for frequency/time, linear for percentage) are
+    /// derived from [`ParamDescriptor`] — same mapping as GUI and plugin hosts.
     pub fn from_knobs(drive: f32, tone: f32, output: f32, shape: f32, mix: f32) -> Self {
-        Self {
-            drive_db: drive * 40.0,            // 0–40 dB
-            tone_db: tone * 24.0 - 12.0,       // −12–12 dB
-            output_db: output * 40.0 - 20.0,   // −20–20 dB
-            shape: libm::floorf(shape * 3.99), // 0, 1, 2, 3
-            mix_pct: mix * 100.0,              // 0–100%
-        }
+        Self::from_normalized(&[drive, tone, output, shape, mix])
     }
 }
 
@@ -456,12 +450,30 @@ mod tests {
 
     #[test]
     fn kernel_params_from_knobs() {
-        let params = DistortionParams::from_knobs(0.5, 0.5, 0.5, 0.25, 1.0);
-        assert!((params.drive_db - 20.0).abs() < 0.1);
-        assert!((params.tone_db - 0.0).abs() < 0.1);
-        assert!((params.output_db - 0.0).abs() < 0.1);
-        assert_eq!(params.shape, 0.0);
-        assert!((params.mix_pct - 100.0).abs() < 0.1);
+        // After rewiring, from_knobs delegates to from_normalized.
+        // Verify it matches from_normalized for the same inputs.
+        let inputs = [0.5_f32, 0.5, 0.5, 0.25, 1.0];
+        let via_knobs =
+            DistortionParams::from_knobs(inputs[0], inputs[1], inputs[2], inputs[3], inputs[4]);
+        let via_norm = DistortionParams::from_normalized(&inputs);
+        assert!((via_knobs.drive_db - via_norm.drive_db).abs() < 1e-5);
+        assert!((via_knobs.tone_db - via_norm.tone_db).abs() < 1e-5);
+        assert!((via_knobs.output_db - via_norm.output_db).abs() < 1e-5);
+        assert!((via_knobs.shape - via_norm.shape).abs() < 1e-5);
+        assert!((via_knobs.mix_pct - via_norm.mix_pct).abs() < 1e-5);
+
+        // Boundary checks: 0.0 → min, 1.0 → max
+        let p_min = DistortionParams::from_knobs(0.0, 0.0, 0.0, 0.0, 0.0);
+        assert!((p_min.drive_db - 0.0).abs() < 0.01, "drive min");
+        assert!((p_min.output_db - (-20.0)).abs() < 0.01, "output min");
+
+        let p_max = DistortionParams::from_knobs(1.0, 1.0, 1.0, 1.0, 1.0);
+        assert!((p_max.drive_db - 40.0).abs() < 0.01, "drive max");
+        assert!(
+            (p_max.output_db - 6.0).abs() < 0.01,
+            "output max (OUTPUT_MAX_DB=6)"
+        );
+        assert!((p_max.mix_pct - 100.0).abs() < 0.01, "mix max");
     }
 
     // ── Adapter integration tests ──

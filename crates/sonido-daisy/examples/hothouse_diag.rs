@@ -89,8 +89,7 @@ use static_cell::StaticCell;
 use sonido_daisy::controls::HothouseBuffer;
 use sonido_daisy::hothouse::hothouse_control_task;
 use sonido_daisy::{
-    BLOCK_SIZE, BufWriter, ClockProfile, SAMPLE_RATE, heartbeat, led::UserLed, u24_to_f32,
-    usb_task,
+    BLOCK_SIZE, BufWriter, ClockProfile, SAMPLE_RATE, heartbeat, led::UserLed, u24_to_f32, usb_task,
 };
 
 // ── Heap ──────────────────────────────────────────────────────────────────
@@ -161,9 +160,7 @@ async fn report_task(mut class: CdcAcmClass<'static, Driver<'static, peripherals
             let dbfs_x10 = DBFS_X10.load(Ordering::Relaxed);
 
             // ── Read control state from ControlBuffer ──
-            let knobs: [u32; 6] = core::array::from_fn(|i| {
-                (CONTROLS.read_knob(i) * 100.0) as u32
-            });
+            let knobs: [u32; 6] = core::array::from_fn(|i| (CONTROLS.read_knob(i) * 100.0) as u32);
             let fs1 = CONTROLS.read_footswitch(0);
             let fs2 = CONTROLS.read_footswitch(1);
             let t1 = CONTROLS.read_toggle(0);
@@ -364,10 +361,7 @@ async fn main(spawner: Spawner) {
                 // LED2: mirrors FS1 or FS2 pressed
                 let fs1 = CONTROLS.read_footswitch(0);
                 let fs2 = CONTROLS.read_footswitch(1);
-                CONTROLS.write_led(
-                    1,
-                    if fs1 || fs2 { 1.0 } else { 0.0 },
-                );
+                CONTROLS.write_led(1, if fs1 || fs2 { 1.0 } else { 0.0 });
             })
             .await
     );

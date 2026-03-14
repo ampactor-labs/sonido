@@ -168,11 +168,10 @@ impl LimiterParams {
     /// Convenience for embedded targets where ADC values map linearly to parameter
     /// ranges. Argument order follows the `KernelParams` index order.
     ///
-    /// - `threshold`: 0.0 → −30 dB, 1.0 → 0 dB
-    /// - `ceiling`: 0.0 → −30 dB, 1.0 → 0 dB
-    /// - `release`: 0.0 → 10 ms, 1.0 → 500 ms
-    /// - `lookahead`: 0.0 → 0 ms, 1.0 → 10 ms
-    /// - `output`: 0.0 → −20 dB, 1.0 → +20 dB
+    /// Creates parameters from normalized 0–1 knob readings.
+    ///
+    /// Curves (logarithmic for frequency/time, linear for percentage) are
+    /// derived from [`ParamDescriptor`] — same mapping as GUI and plugin hosts.
     pub fn from_knobs(
         threshold: f32,
         ceiling: f32,
@@ -180,13 +179,7 @@ impl LimiterParams {
         lookahead: f32,
         output: f32,
     ) -> Self {
-        Self {
-            threshold_db: threshold * 30.0 - 30.0, // −30–0 dB
-            ceiling_db: ceiling * 30.0 - 30.0,     // −30–0 dB
-            release_ms: release * 490.0 + 10.0,    // 10–500 ms
-            lookahead_ms: lookahead * 10.0,        // 0–10 ms
-            output_db: output * 40.0 - 20.0,       // −20–+20 dB
-        }
+        Self::from_normalized(&[threshold, ceiling, release, lookahead, output])
     }
 }
 
@@ -869,6 +862,6 @@ mod tests {
         assert!((max.ceiling_db - 0.0).abs() < 0.01, "max ceiling");
         assert!((max.release_ms - 500.0).abs() < 0.01, "max release");
         assert!((max.lookahead_ms - 10.0).abs() < 0.01, "max lookahead");
-        assert!((max.output_db - 20.0).abs() < 0.01, "max output");
+        assert!((max.output_db - 6.0).abs() < 0.01, "max output");
     }
 }

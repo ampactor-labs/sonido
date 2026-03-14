@@ -99,7 +99,7 @@ const VOICE4_RATE_RATIO: f32 = 1.17;
 /// | 5 | `base_delay_ms` | ms | 5–25 | 15.0 |
 /// | 6 | `sync` | index (0=Off, 1=On) | 0–1 | 0 |
 /// | 7 | `division` | index (0–11) | 0–11 | 3 |
-/// | 8 | `output_db` | dB | −20–20 | 0.0 |
+/// | 8 | `output_db` | dB | −20–+6 | 0.0 |
 #[derive(Debug, Clone, Copy)]
 pub struct ChorusParams {
     /// LFO rate in Hz. Voices 1–2 use this directly; voice 3 uses rate × 0.73,
@@ -148,7 +148,7 @@ pub struct ChorusParams {
     /// the current BPM).
     pub division: f32,
 
-    /// Output level in decibels (−20 to +20 dB).
+    /// Output level in decibels (−20 to +6 dB).
     pub output_db: f32,
 }
 
@@ -169,31 +169,38 @@ impl Default for ChorusParams {
 }
 
 impl ChorusParams {
-    /// Build params directly from hardware knob readings (0.0–1.0 normalized).
+    /// Creates parameters from normalized 0–1 knob readings.
     ///
-    /// Convenience constructor for embedded targets where ADC values map
-    /// linearly to parameter ranges. The `voices` and `sync` knobs are
-    /// quantised to their respective step counts.
+    /// Curves are derived from [`ParamDescriptor`] — same mapping as GUI and
+    /// plugin hosts. Voices, base delay, sync, and division are fixed at their
+    /// embedded defaults (2 voices, 15 ms, no sync, quarter note).
     ///
-    /// # Arguments
+    /// | Argument | Index | Parameter | Range |
+    /// |----------|-------|-----------|-------|
+    /// | `rate` | 0 | `rate` | 0.1–10.0 Hz |
+    /// | `depth` | 1 | `depth_pct` | 0–100 % |
+    /// | `mix` | 2 | `mix_pct` | 0–100 % |
+    /// | `feedback` | 4 | `feedback_pct` | 0–70 % |
+    /// | `output` | 8 | `output_db` | −20–+6 dB |
     ///
-    /// - `rate`:      Rate knob, 0.0–1.0 → 0.1–10.0 Hz
-    /// - `depth`:     Depth knob, 0.0–1.0 → 0–100 %
-    /// - `mix`:       Mix knob, 0.0–1.0 → 0–100 %
-    /// - `feedback`:  Feedback knob, 0.0–1.0 → 0–70 %
-    /// - `output`:    Output level knob, 0.0–1.0 → −20–+20 dB
+    /// Fixed: voices=2, base_delay=15 ms, sync=Off, division=Quarter.
     pub fn from_knobs(rate: f32, depth: f32, mix: f32, feedback: f32, output: f32) -> Self {
-        Self {
-            rate: 0.1 + rate * 9.9,          // 0.1–10.0 Hz
-            depth_pct: depth * 100.0,        // 0–100 %
-            mix_pct: mix * 100.0,            // 0–100 %
-            voices: 2.0,                     // fixed at 2 for embedded simplicity
-            feedback_pct: feedback * 70.0,   // 0–70 %
-            base_delay_ms: 15.0,             // fixed centre point for embedded
-            sync: 0.0,                       // no sync on hardware
-            division: 3.0,                   // quarter note (unused when sync=Off)
-            output_db: output * 40.0 - 20.0, // −20–+20 dB
-        }
+        // Fixed normalized values for embedded defaults:
+        //   voices=2 in [2,4]      → norm = 0.0
+        //   base_delay=15 in [5,25] → norm = 0.5
+        //   sync=Off               → norm = 0.0
+        //   division=3 in [0,11]   → norm = 3/11 ≈ 0.272727
+        Self::from_normalized(&[
+            rate,
+            depth,
+            mix,
+            0.0, // voices = 2 (min)
+            feedback,
+            0.5,        // base_delay_ms = 15 ms (midpoint of 5–25)
+            0.0,        // sync = Off
+            3.0 / 11.0, // division = Quarter note (index 3)
+            output,
+        ])
     }
 }
 
@@ -818,8 +825,8 @@ mod tests {
             p.feedback_pct
         );
         assert!(
-            (p.output_db - 20.0).abs() < 0.01,
-            "Output at 1.0 should be ~+20 dB, got {}",
+            (p.output_db - 6.0).abs() < 0.01,
+            "Output at 1.0 should be ~+6 dB, got {}",
             p.output_db
         );
 

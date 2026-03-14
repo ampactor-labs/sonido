@@ -104,7 +104,7 @@ impl WahMode {
 /// | 1 | `resonance` | (Q factor) | 1–10 | 5.0 |
 /// | 2 | `sensitivity_pct` | % | 0–100 | 50.0 |
 /// | 3 | `mode` | index | 0–1 (Auto/Manual) | 0.0 |
-/// | 4 | `output_db` | dB | −20–20 | 0.0 |
+/// | 4 | `output_db` | dB | −20–+6 | 0.0 |
 ///
 /// `ParamId` values match the classic `Wah` effect exactly (base 600) so
 /// saved automation and presets remain compatible.
@@ -136,7 +136,7 @@ pub struct WahParams {
 
     /// Output level in decibels.
     ///
-    /// Range: −20.0–20.0 dB.
+    /// Range: −20.0–+6.0 dB.
     pub output_db: f32,
 }
 
@@ -153,33 +153,20 @@ impl Default for WahParams {
 }
 
 impl WahParams {
-    /// Build params directly from hardware knob readings (0.0–1.0 normalized).
+    /// Creates parameters from normalized 0–1 knob readings.
     ///
-    /// Convenience for embedded targets where ADC values map linearly to
-    /// parameter ranges. Frequency uses a logarithmic mapping so that
-    /// equal knob travel equals equal musical intervals.
+    /// Curves (logarithmic for frequency, linear for resonance/sensitivity) are
+    /// derived from [`ParamDescriptor`] — same mapping as GUI and plugin hosts.
     ///
-    /// | Knob | Parameter | Range |
-    /// |------|-----------|-------|
-    /// | `freq` | `freq_hz` | 200–2000 Hz (log) |
-    /// | `reso` | `resonance` | 1–10 |
-    /// | `sens` | `sensitivity_pct` | 0–100 % |
-    /// | `mode` | `mode` | 0 or 1 (snaps at 0.5) |
-    /// | `output` | `output_db` | −20–20 dB |
+    /// | Argument | Index | Parameter | Range |
+    /// |----------|-------|-----------|-------|
+    /// | `freq` | 0 | `freq_hz` | 200–2000 Hz (log) |
+    /// | `reso` | 1 | `resonance` | 1–10 |
+    /// | `sens` | 2 | `sensitivity_pct` | 0–100 % |
+    /// | `mode` | 3 | `mode` | 0 or 1 (Auto/Manual) |
+    /// | `output` | 4 | `output_db` | −20–+6 dB |
     pub fn from_knobs(freq: f32, reso: f32, sens: f32, mode: f32, output: f32) -> Self {
-        // Logarithmic frequency mapping: 200 Hz at 0.0, 2000 Hz at 1.0.
-        // log10(200) ≈ 2.301, log10(2000) ≈ 3.301, span = 1.0 decade.
-        let log_min = libm::log10f(MIN_FREQ);
-        let log_max = libm::log10f(MAX_FREQ);
-        let freq_hz = libm::powf(10.0, log_min + freq.clamp(0.0, 1.0) * (log_max - log_min));
-
-        Self {
-            freq_hz,
-            resonance: 1.0 + reso.clamp(0.0, 1.0) * 9.0, // 1–10
-            sensitivity_pct: sens.clamp(0.0, 1.0) * 100.0, // 0–100 %
-            mode: libm::floorf(mode.clamp(0.0, 1.0) * 1.99), // 0.0 or 1.0
-            output_db: output.clamp(0.0, 1.0) * 40.0 - 20.0, // −20–20 dB
-        }
+        Self::from_normalized(&[freq, reso, sens, mode, output])
     }
 }
 
@@ -652,9 +639,9 @@ mod tests {
         // Mode knob at 0.0 → Auto (0.0)
         assert_eq!(params.mode, 0.0);
 
-        // Output mid-point: 0.5 * 40 - 20 = 0 dB
+        // Output mid-point: -20 + 0.5 * 26 = -7.0 dB
         assert!(
-            (params.output_db - 0.0).abs() < 0.01,
+            (params.output_db - (-7.0)).abs() < 0.01,
             "output_db={}",
             params.output_db
         );

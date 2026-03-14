@@ -87,24 +87,18 @@ impl Default for BitcrusherParams {
 }
 
 impl BitcrusherParams {
-    /// Build params directly from hardware knob readings (0.0–1.0 normalized).
+    /// Creates parameters from normalized 0–1 knob readings.
     ///
-    /// Convenience for embedded targets where ADC values map linearly
-    /// to parameter ranges. Argument order follows the `impl_params!` index order.
+    /// Curves (logarithmic for frequency/time, linear for percentage) are
+    /// derived from [`ParamDescriptor`] — same mapping as GUI and plugin hosts.
     ///
-    /// - `bits`: 0.0 → 2 bits, 1.0 → 16 bits
-    /// - `rate`: 0.0 → 1× downsample, 1.0 → 64× downsample
+    /// - `bits`: 0.0 → 2 bits, 1.0 → 16 bits (stepped)
+    /// - `rate`: 0.0 → 1× downsample, 1.0 → 64× downsample (stepped)
     /// - `jitter`: 0.0 → no jitter, 1.0 → 100% jitter
     /// - `mix`: 0.0 → dry, 1.0 → fully wet
-    /// - `output`: 0.0 → −20 dB, 1.0 → +20 dB
+    /// - `output`: 0.0 → −20 dB, 1.0 → +6 dB
     pub fn from_knobs(bits: f32, rate: f32, jitter: f32, mix: f32, output: f32) -> Self {
-        Self {
-            bits: libm::floorf(bits * 14.0 + 2.0).clamp(2.0, 16.0), // 2–16, integer steps
-            rate: libm::floorf(rate * 63.0 + 1.0).clamp(1.0, 64.0), // 1–64, integer steps
-            jitter_pct: jitter * 100.0,                             // 0–100%
-            mix_pct: mix * 100.0,                                   // 0–100%
-            output_db: output * 40.0 - 20.0,                        // −20–+20 dB
-        }
+        Self::from_normalized(&[bits, rate, jitter, mix, output])
     }
 }
 
@@ -610,7 +604,7 @@ mod tests {
         );
         assert!((max_params.jitter_pct - 100.0).abs() < 1e-4);
         assert!((max_params.mix_pct - 100.0).abs() < 1e-4);
-        assert!((max_params.output_db - 20.0).abs() < 1e-4);
+        assert!((max_params.output_db - 6.0).abs() < 1e-4);
     }
 
     #[test]
