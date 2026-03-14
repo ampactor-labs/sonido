@@ -66,7 +66,7 @@ const FOLDBACK_THRESHOLD: f32 = 0.8;
 ///
 /// | Index | Field | Unit | Range | Default |
 /// |-------|-------|------|-------|---------|
-/// | 0 | `drive_db` | dB | 0–40 | 12.0 |
+/// | 0 | `drive_db` | dB | 0–40 | 8.0 |
 /// | 1 | `tone_db` | dB | −12–12 | 0.0 |
 /// | 2 | `output_db` | dB | −20–20 | 0.0 |
 /// | 3 | `shape` | index | 0–3 | 0 (SoftClip) |
@@ -88,7 +88,7 @@ pub struct DistortionParams {
 impl Default for DistortionParams {
     fn default() -> Self {
         Self {
-            drive_db: 12.0,
+            drive_db: 8.0,
             tone_db: 0.0,
             output_db: 0.0,
             shape: 0.0,
@@ -113,7 +113,7 @@ impl KernelParams for DistortionParams {
     fn descriptor(index: usize) -> Option<ParamDescriptor> {
         match index {
             0 => Some(
-                ParamDescriptor::gain_db("Drive", "Drive", 0.0, 40.0, 12.0)
+                ParamDescriptor::gain_db("Drive", "Drive", 0.0, 40.0, 8.0)
                     .with_id(ParamId(200), "dist_drive"),
             ),
             1 => Some(
@@ -327,7 +327,7 @@ mod tests {
     #[test]
     fn kernel_default_params() {
         let params = DistortionParams::default();
-        assert_eq!(params.drive_db, 12.0);
+        assert_eq!(params.drive_db, 8.0);
         assert_eq!(params.tone_db, 0.0);
         assert_eq!(params.output_db, 0.0);
         assert_eq!(params.shape, 0.0);
