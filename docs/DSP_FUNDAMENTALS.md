@@ -713,7 +713,7 @@ Nonlinear effects (distortion, saturation, wah) generate gain that depends on th
 
 ### Universal Output Level
 
-All effects in Sonido expose an `output` parameter (last index in `ParameterInfo`) that provides ±20 dB of post-processing level control. The output level is applied as a linear gain multiplier at the end of the processing chain, after all DSP but before the final output.
+All effects in Sonido expose an `output` parameter (last index in `ParameterInfo`) that provides -20 to +6 dB of post-processing level control. The output level is applied as a linear gain multiplier at the end of the processing chain, after all DSP but before the final output.
 
 The `gain.rs` module provides the shared implementation (`gain.rs:1-30`):
 

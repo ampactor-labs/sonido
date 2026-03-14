@@ -52,9 +52,7 @@ pub fn adc_to_param(desc: &ParamDescriptor, normalized: f32) -> f32 {
             let log_max = libm::log2f(desc.max);
             libm::exp2f(log_min + normalized * (log_max - log_min))
         }
-        ParamScale::Power(exp) => {
-            desc.min + libm::powf(normalized, exp) * (desc.max - desc.min)
-        }
+        ParamScale::Power(exp) => desc.min + libm::powf(normalized, exp) * (desc.max - desc.min),
     };
     if desc.flags.contains(ParamFlags::STEPPED) {
         libm::roundf(val)

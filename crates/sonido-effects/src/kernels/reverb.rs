@@ -278,22 +278,10 @@ impl Default for ReverbParams {
 }
 
 impl ReverbParams {
-    /// Build params directly from hardware knob readings (0.0–1.0 normalized).
+    /// Creates parameters from normalized 0–1 knob readings.
     ///
-    /// Convenience constructor for embedded targets where ADC values map
-    /// linearly to parameter ranges. All eight parameters accept normalized
-    /// 0.0–1.0 knob values.
-    ///
-    /// # Arguments
-    ///
-    /// - `room`:     Room size knob, 0.0–1.0 → 0–100%
-    /// - `decay`:    Decay knob, 0.0–1.0 → 0–100%
-    /// - `damp`:     Damping knob, 0.0–1.0 → 0–100%
-    /// - `predelay`: Pre-delay knob, 0.0–1.0 → 0–100 ms
-    /// - `mix`:      Mix knob, 0.0–1.0 → 0–100%
-    /// - `width`:    Stereo width knob, 0.0–1.0 → 0–100%
-    /// - `er_level`: Early reflections level knob, 0.0–1.0 → 0–100%
-    /// - `output`:   Output level knob, 0.0–1.0 → −20–+20 dB
+    /// Curves (logarithmic for frequency/time, linear for percentage) are
+    /// derived from [`ParamDescriptor`] — same mapping as GUI and plugin hosts.
     #[allow(clippy::too_many_arguments)]
     pub fn from_knobs(
         room: f32,
@@ -305,16 +293,7 @@ impl ReverbParams {
         er_level: f32,
         output: f32,
     ) -> Self {
-        Self {
-            room_size_pct: room * 100.0,     // 0–100%
-            decay_pct: decay * 100.0,        // 0–100%
-            damping_pct: damp * 100.0,       // 0–100%
-            predelay_ms: predelay * 100.0,   // 0–100 ms
-            mix_pct: mix * 100.0,            // 0–100%
-            width_pct: width * 100.0,        // 0–100%
-            er_level_pct: er_level * 100.0,  // 0–100%
-            output_db: output * 40.0 - 20.0, // −20–+20 dB
-        }
+        Self::from_normalized(&[room, decay, damp, predelay, mix, width, er_level, output])
     }
 }
 
@@ -1083,8 +1062,8 @@ mod tests {
             max.er_level_pct
         );
         assert!(
-            (max.output_db - 20.0).abs() < 0.01,
-            "Output at 1.0 should be +20 dB, got {}",
+            (max.output_db - 6.0).abs() < 0.01,
+            "Output at 1.0 should be +6 dB, got {}",
             max.output_db
         );
 
@@ -1139,8 +1118,8 @@ mod tests {
             mid.predelay_ms
         );
         assert!(
-            mid.output_db.abs() < 0.01,
-            "Output at 0.5 should be 0 dB, got {}",
+            (mid.output_db - (-7.0)).abs() < 0.1,
+            "Output at 0.5 should be -7 dB, got {}",
             mid.output_db
         );
     }

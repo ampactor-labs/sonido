@@ -17,7 +17,7 @@
 //! |--------------|--------------|-----------------------------------------------|
 //! | KNOB_1       | PA3          | Drive (0-40 dB)                               |
 //! | KNOB_2       | PB1          | Tone (-12 to 12 dB)                           |
-//! | KNOB_3       | PA6          | Output level (-20 to 20 dB)                   |
+//! | KNOB_3       | PA6          | Output level (−20 to +6 dB)                   |
 //! | KNOB_4       | PC1          | Mix / dry-wet (0-100%)                        |
 //! | TOGGLE_1 up  | PB4          | Distortion mode: Up=Overdrive (SoftClip)      |
 //! | TOGGLE_1 mid | (neither)    | Distortion mode: Mid=Distortion (HardClip)    |
@@ -137,7 +137,7 @@ async fn main(spawner: embassy_executor::Spawner) {
                 // HothouseControls order: 0=PA3, 1=PB1, 2=PA7, 3=PA6, 4=PC1
                 let drive = CONTROLS.read_knob(0); // K1=PA3
                 let tone = CONTROLS.read_knob(1); // K2=PB1
-                let out_level = CONTROLS.read_knob(3); // K4=PA6 (Output level)
+                let out_level = CONTROLS.read_knob(3); // K4=PA6 (Output, −20 to +6 dB)
                 let mix = CONTROLS.read_knob(4); // K5=PC1 (Mix)
 
                 // Read toggle switch: 0=UP, 1=MID, 2=DN → mode 0/1/2

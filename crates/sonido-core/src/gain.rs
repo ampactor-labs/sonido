@@ -20,7 +20,7 @@
 //!
 //! The output level operates in linear gain internally (for multiplication in
 //! the audio path) but exposes a dB interface for parameter get/set. The range
-//! is [`OUTPUT_MIN_DB`] to [`OUTPUT_MAX_DB`] (−20 to +20 dB), clamped on set.
+//! is [`OUTPUT_MIN_DB`] to [`OUTPUT_MAX_DB`] (−20 to +6 dB), clamped on set.
 
 use crate::{ParamDescriptor, SmoothedParam, db_to_linear, linear_to_db};
 
@@ -28,7 +28,7 @@ use crate::{ParamDescriptor, SmoothedParam, db_to_linear, linear_to_db};
 pub const OUTPUT_MIN_DB: f32 = -20.0;
 
 /// Maximum output level in dB.
-pub const OUTPUT_MAX_DB: f32 = 20.0;
+pub const OUTPUT_MAX_DB: f32 = 6.0;
 
 /// Create a [`SmoothedParam`] for the standard output level (0 dB, 10 ms smoothing).
 ///

@@ -129,21 +129,12 @@ impl Default for PreampParams {
 }
 
 impl PreampParams {
-    /// Build params directly from hardware knob readings (0.0–1.0 normalized).
+    /// Creates parameters from normalized 0–1 knob readings.
     ///
-    /// Convenience constructor for embedded targets where ADC pot values map
-    /// linearly to parameter ranges. Each argument is a normalized 0.0–1.0 value
-    /// from a potentiometer or CV input.
-    ///
-    /// - `gain`   → 0.0–40.0 dB
-    /// - `tone`   → −12.0–12.0 dB  (0.5 = flat)
-    /// - `output` → −20.0–20.0 dB  (0.5 = 0 dB)
+    /// Curves (logarithmic for frequency/time, linear for percentage) are
+    /// derived from [`ParamDescriptor`] — same mapping as GUI and plugin hosts.
     pub fn from_knobs(gain: f32, tone: f32, output: f32) -> Self {
-        Self {
-            gain_db: gain * 40.0,
-            tone_db: tone * 24.0 - 12.0,
-            output_db: output * 40.0 - 20.0,
-        }
+        Self::from_normalized(&[gain, tone, output])
     }
 }
 
@@ -701,9 +692,12 @@ mod tests {
         let p = PreampParams::from_knobs(0.5, 1.0, 0.5);
         assert!((p.tone_db - 12.0).abs() < 0.01, "tone knob 1.0 → +12 dB");
 
-        // 0.5 on output → 0.0 dB
+        // 0.5 on output → -20 + 0.5*26 = -7.0 dB  (output range is -20..+6)
         let p = PreampParams::from_knobs(0.5, 0.5, 0.5);
-        assert!((p.output_db - 0.0).abs() < 0.01, "output knob 0.5 → 0 dB");
+        assert!(
+            (p.output_db - (-7.0)).abs() < 0.01,
+            "output knob 0.5 → -7 dB"
+        );
 
         // 0.0 on output → -20.0 dB
         let p = PreampParams::from_knobs(0.5, 0.5, 0.0);
@@ -712,12 +706,9 @@ mod tests {
             "output knob 0.0 → -20 dB"
         );
 
-        // 1.0 on output → 20.0 dB
+        // 1.0 on output → +6.0 dB  (OUTPUT_MAX_DB = 6.0)
         let p = PreampParams::from_knobs(0.5, 0.5, 1.0);
-        assert!(
-            (p.output_db - 20.0).abs() < 0.01,
-            "output knob 1.0 → +20 dB"
-        );
+        assert!((p.output_db - 6.0).abs() < 0.01, "output knob 1.0 → +6 dB");
     }
 
     #[test]

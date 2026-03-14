@@ -36,7 +36,7 @@
 //!
 //! No Embassy, no sonido-core, no alloc. Only `core::sync::atomic`.
 
-use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, Ordering};
 
 /// Change detection epsilon: ~10x the ADC jitter at `CYCLES387_5` sample time.
 ///
@@ -258,8 +258,7 @@ impl<const KNOBS: usize, const TOGGLES: usize, const FOOTSWITCHES: usize, const 
         let val = self.toggles[index].load(Ordering::Relaxed);
         let changed = self.toggles_changed[index].swap(false, Ordering::Relaxed);
         if changed {
-            self.toggles_prev[index]
-                .store(val, Ordering::Relaxed);
+            self.toggles_prev[index].store(val, Ordering::Relaxed);
         }
         (val, changed)
     }
@@ -300,11 +299,7 @@ impl<const KNOBS: usize, const TOGGLES: usize, const FOOTSWITCHES: usize, const 
 // Safety: ControlBuffer is Send+Sync because all fields are atomic.
 // The AtomicXxx types are Send+Sync, and the struct contains only those.
 // This is needed because the buffer is shared between Embassy tasks via &'static.
-unsafe impl<
-        const KNOBS: usize,
-        const TOGGLES: usize,
-        const FOOTSWITCHES: usize,
-        const LEDS: usize,
-    > Sync for ControlBuffer<KNOBS, TOGGLES, FOOTSWITCHES, LEDS>
+unsafe impl<const KNOBS: usize, const TOGGLES: usize, const FOOTSWITCHES: usize, const LEDS: usize>
+    Sync for ControlBuffer<KNOBS, TOGGLES, FOOTSWITCHES, LEDS>
 {
 }

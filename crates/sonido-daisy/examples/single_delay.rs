@@ -12,7 +12,7 @@
 //! | KNOB_2       | PB1          | Feedback (0–95%)                              |
 //! | KNOB_3       | PA7          | Diffusion (0–100%)                            |
 //! | KNOB_4       | PA6          | Mix / dry-wet (0–100%)                        |
-//! | KNOB_5       | PC1          | Output level (−20 to +20 dB)                  |
+//! | KNOB_5       | PC1          | Output level (−20 to +6 dB)                   |
 //! | KNOB_6       | PC4          | Feedback LP filter (200–20k Hz, log)          |
 //! | TOGGLE_1 up  | PB4          | Mode: Up=Ping-pong                            |
 //! | TOGGLE_1 mid | (neither)    | Mode: Mid=Stereo                              |
@@ -66,10 +66,14 @@ async fn main(spawner: embassy_executor::Spawner) {
         HEAP.init(sdram_ptr as usize, sonido_daisy::sdram::SDRAM_SIZE);
     }
 
+    // Enable D-cache immediately — no audio DMA running yet, so bus matrix
+    // stall concern doesn't apply. Required before large SDRAM allocations:
+    // uncached vec![0.0; 96000] writes 384 KB through FMC, which crashes
+    // without D-cache (cache controller handles burst timing to SDRAM).
+    sonido_daisy::sdram::enable_dcache();
+
     let led = UserLed::new(p.PC7);
     spawner.spawn(heartbeat(led)).unwrap();
-
-    defmt::info!("single_delay: initializing...");
 
     let ctrl = sonido_daisy::hothouse_pins!(p);
     spawner
@@ -77,6 +81,9 @@ async fn main(spawner: embassy_executor::Spawner) {
         .unwrap();
 
     CONTROLS.write_led(0, 1.0);
+
+    // Allocate delay kernel — 757 KB from SDRAM (D-cache now active).
+    let mut kernel = DelayKernel::new(SAMPLE_RATE);
 
     let audio_peripherals = sonido_daisy::audio::AudioPeripherals {
         codec_pins: sonido_daisy::codec_pins!(p),
@@ -90,9 +97,7 @@ async fn main(spawner: embassy_executor::Spawner) {
         .await;
     let mut interface = defmt::unwrap!(interface.start_interface().await);
 
-    defmt::info!("audio interface started — delay active");
-
-    let mut kernel = DelayKernel::new(SAMPLE_RATE);
+    defmt::info!("M7: audio interface started — delay active");
 
     let mut active = true;
     let mut foot_was_pressed = false;
@@ -116,7 +121,7 @@ async fn main(spawner: embassy_executor::Spawner) {
                 let feedback = CONTROLS.read_knob(1); // K2: Feedback
                 let diffusion = CONTROLS.read_knob(2); // K3: Diffusion
                 let mix = CONTROLS.read_knob(3); // K4: Mix
-                let out_level = CONTROLS.read_knob(4); // K5: Output level
+                let out_level = CONTROLS.read_knob(4); // K5: Output (−20 to +6 dB)
                 let fb_lp = CONTROLS.read_knob(5); // K6: Feedback LP filter
 
                 // Toggle 1: ping-pong mode (UP=ping-pong, MID/DN=stereo)

@@ -198,25 +198,24 @@ impl Default for CompressorParams {
 }
 
 impl CompressorParams {
-    /// Build params directly from hardware knob readings (0.0–1.0 normalized).
+    /// Creates parameters from normalized 0–1 knob readings.
     ///
-    /// Convenience for embedded targets where ADC values map linearly to
-    /// parameter ranges. Arguments correspond to the eleven parameter indices
-    /// in order.
+    /// Curves (logarithmic for sidechain HPF frequency, linear for others) are
+    /// derived from [`ParamDescriptor`] — same mapping as GUI and plugin hosts.
     ///
-    /// | Argument | Parameter | Mapping |
-    /// |----------|-----------|---------|
-    /// | `thresh` | `threshold_db` | 0–1 → −60–0 dB |
-    /// | `ratio` | `ratio` | 0–1 → 1.0–20.0 |
-    /// | `attack` | `attack_ms` | 0–1 → 0.1–100.0 ms |
-    /// | `release` | `release_ms` | 0–1 → 10–1000 ms |
-    /// | `makeup` | `makeup_db` | 0–1 → 0–24 dB |
-    /// | `knee` | `knee_db` | 0–1 → 0–12 dB |
-    /// | `detect` | `detection` | 0–1 → 0 or 1 (Peak/RMS, snapped) |
-    /// | `sc_freq` | `sidechain_freq_hz` | 0–1 → 20–500 Hz |
-    /// | `auto_mu` | `auto_makeup` | 0–1 → 0 or 1 (Off/On, snapped) |
-    /// | `output` | `output_db` | 0–1 → −20–20 dB |
-    /// | `mix` | `mix_pct` | 0–1 → 0–100 % |
+    /// | Argument | Index | Parameter | Range |
+    /// |----------|-------|-----------|-------|
+    /// | `thresh` | 0 | `threshold_db` | −60–0 dB |
+    /// | `ratio` | 1 | `ratio` | 1.0–20.0 |
+    /// | `attack` | 2 | `attack_ms` | 0.1–100.0 ms |
+    /// | `release` | 3 | `release_ms` | 10–1000 ms |
+    /// | `makeup` | 4 | `makeup_db` | 0–24 dB |
+    /// | `knee` | 5 | `knee_db` | 0–12 dB |
+    /// | `detect` | 6 | `detection` | 0 or 1 (Peak/RMS) |
+    /// | `sc_freq` | 7 | `sidechain_freq_hz` | 20–500 Hz (log) |
+    /// | `auto_mu` | 8 | `auto_makeup` | 0 or 1 (Off/On) |
+    /// | `output` | 9 | `output_db` | −20–+6 dB |
+    /// | `mix` | 10 | `mix_pct` | 0–100 % |
     #[allow(clippy::too_many_arguments)]
     pub fn from_knobs(
         thresh: f32,
@@ -231,19 +230,9 @@ impl CompressorParams {
         output: f32,
         mix: f32,
     ) -> Self {
-        Self {
-            threshold_db: thresh * 60.0 - 60.0,        // 0–1 → −60–0 dB
-            ratio: ratio * 19.0 + 1.0,                 // 0–1 → 1.0–20.0
-            attack_ms: attack * 99.9 + 0.1,            // 0–1 → 0.1–100.0 ms
-            release_ms: release * 990.0 + 10.0,        // 0–1 → 10–1000 ms
-            makeup_db: makeup * 24.0,                  // 0–1 → 0–24 dB
-            knee_db: knee * 12.0,                      // 0–1 → 0–12 dB
-            detection: libm::floorf(detect * 1.99),    // 0 or 1
-            sidechain_freq_hz: sc_freq * 480.0 + 20.0, // 0–1 → 20–500 Hz
-            auto_makeup: libm::floorf(auto_mu * 1.99), // 0 or 1
-            output_db: output * 40.0 - 20.0,           // 0–1 → −20–20 dB
-            mix_pct: mix * 100.0,                      // 0–1 → 0–100 %
-        }
+        Self::from_normalized(&[
+            thresh, ratio, attack, release, makeup, knee, detect, sc_freq, auto_mu, output, mix,
+        ])
     }
 }
 
@@ -1062,9 +1051,9 @@ mod tests {
             0.5, // makeup → 12.0 dB
             0.5, // knee → 6.0 dB
             0.0, // detect → 0 (Peak)
-            0.5, // sc_freq → 260.0 Hz
+            0.5, // sc_freq → 100.0 Hz (log geometric mean of 20..500)
             0.0, // auto_makeup → 0 (Off)
-            0.5, // output → 0.0 dB
+            0.5, // output → -7.0 dB (-20 + 0.5 * 26)
             0.5, // mix → 50.0 %
         );
 
@@ -1092,13 +1081,13 @@ mod tests {
         assert!((p.knee_db - 6.0).abs() < 0.1, "knee_db: got {}", p.knee_db);
         assert_eq!(p.detection, 0.0, "detection should be 0.0 (Peak)");
         assert!(
-            (p.sidechain_freq_hz - 260.0).abs() < 1.0,
+            (p.sidechain_freq_hz - 100.0).abs() < 1.0,
             "sc_freq: got {}",
             p.sidechain_freq_hz
         );
         assert_eq!(p.auto_makeup, 0.0, "auto_makeup should be 0.0 (Off)");
         assert!(
-            (p.output_db - 0.0).abs() < 0.1,
+            (p.output_db - (-7.0)).abs() < 0.1,
             "output_db: got {}",
             p.output_db
         );
@@ -1127,7 +1116,7 @@ mod tests {
             hi.auto_makeup, 1.0,
             "auto_makeup should snap to 1.0 at full"
         );
-        assert!((hi.output_db - 20.0).abs() < 0.1);
+        assert!((hi.output_db - 6.0).abs() < 0.1);
         assert!((hi.mix_pct - 100.0).abs() < 0.1);
     }
 }

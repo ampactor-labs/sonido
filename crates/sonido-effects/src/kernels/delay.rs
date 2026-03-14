@@ -99,7 +99,7 @@ const DIFFUSION_AP2_S: f32 = 0.007;
 /// | 6 | `diffusion_pct` | % | 0–100 | 0.0 |
 /// | 7 | `sync` | index | 0–1 | 0 (Off) |
 /// | 8 | `division` | index | 0–11 | 2 (Quarter) |
-/// | 9 | `output_db` | dB | −20–20 | 0.0 |
+/// | 9 | `output_db` | dB | −20–6 | 0.0 |
 #[derive(Debug, Clone, Copy)]
 pub struct DelayParams {
     /// Delay time in milliseconds.
@@ -182,24 +182,23 @@ impl Default for DelayParams {
 }
 
 impl DelayParams {
-    /// Build params directly from hardware knob/switch readings (0.0–1.0 normalized).
+    /// Creates parameters from normalized 0–1 knob readings.
     ///
-    /// Convenience constructor for embedded targets where ADC values map
-    /// to parameter ranges. Stepped params (`ping_pong`, `sync`, `division`)
-    /// are treated as threshold or integer mappings.
+    /// Curves (logarithmic for frequency/time, linear for percentage) are
+    /// derived from [`ParamDescriptor`] — same mapping as GUI and plugin hosts.
     ///
     /// # Parameters
     ///
-    /// - `time`: Delay time knob → 1–2000 ms (logarithmic: `1.0 × 2000^knob`)
+    /// - `time`: Delay time knob → 1–2000 ms (logarithmic)
     /// - `feedback`: Feedback knob → 0–95 %
     /// - `mix`: Mix knob → 0–100 %
-    /// - `ping_pong`: Toggle switch → 0.0 = Off, 1.0 = On
+    /// - `ping_pong`: Toggle switch → 0.0 = Off, 1.0 = On (stepped)
     /// - `fb_lp`: LP cutoff knob → 200–20000 Hz (logarithmic)
     /// - `fb_hp`: HP cutoff knob → 20–2000 Hz (logarithmic)
     /// - `diffusion`: Diffusion knob → 0–100 %
-    /// - `sync`: Sync toggle → 0.0 = Off, 1.0 = On
-    /// - `division`: Division selector → 0.0–1.0 maps to index 0–11
-    /// - `output`: Output knob → −20–+20 dB
+    /// - `sync`: Sync toggle → 0.0 = Off, 1.0 = On (stepped)
+    /// - `division`: Division selector → index 0–11 (stepped)
+    /// - `output`: Output knob → −20–+6 dB
     #[allow(clippy::too_many_arguments)]
     pub fn from_knobs(
         time: f32,
@@ -213,18 +212,9 @@ impl DelayParams {
         division: f32,
         output: f32,
     ) -> Self {
-        Self {
-            time_ms: 1.0 * libm::powf(2000.0, time), // 1–2000 ms (log)
-            feedback_pct: feedback * 95.0,           // 0–95 %
-            mix_pct: mix * 100.0,                    // 0–100 %
-            ping_pong: if ping_pong >= 0.5 { 1.0 } else { 0.0 },
-            fb_lp_hz: 200.0 * libm::powf(100.0, fb_lp), // 200–20000 Hz (log)
-            fb_hp_hz: 20.0 * libm::powf(100.0, fb_hp),  // 20–2000 Hz (log)
-            diffusion_pct: diffusion * 100.0,           // 0–100 %
-            sync: if sync >= 0.5 { 1.0 } else { 0.0 },
-            division: libm::floorf(division * 11.99), // 0–11 (integer index)
-            output_db: output * 40.0 - 20.0,          // −20–+20 dB
-        }
+        Self::from_normalized(&[
+            time, feedback, mix, ping_pong, fb_lp, fb_hp, diffusion, sync, division, output,
+        ])
     }
 }
 
@@ -235,7 +225,8 @@ impl KernelParams for DelayParams {
         match index {
             0 => Some(
                 ParamDescriptor::time_ms("Delay Time", "Time", 1.0, 2000.0, 300.0)
-                    .with_id(ParamId(1100), "dly_time"),
+                    .with_id(ParamId(1100), "dly_time")
+                    .with_scale(ParamScale::Logarithmic),
             ),
             1 => Some(
                 ParamDescriptor {
@@ -923,8 +914,8 @@ mod tests {
             max.mix_pct
         );
         assert!(
-            (max.output_db - 20.0).abs() < 0.1,
-            "Output at 1.0 should be +20 dB, got {}",
+            (max.output_db - 6.0).abs() < 0.1,
+            "Output at 1.0 should be +6 dB, got {}",
             max.output_db
         );
         assert!(
@@ -969,8 +960,8 @@ mod tests {
             mid.mix_pct
         );
         assert!(
-            mid.output_db.abs() < 0.1,
-            "Output at 0.5 should be 0 dB, got {}",
+            (mid.output_db - (-7.0)).abs() < 0.1,
+            "Output at 0.5 should be -7 dB, got {}",
             mid.output_db
         );
     }

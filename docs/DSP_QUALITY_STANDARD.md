@@ -43,7 +43,7 @@ Every effect exposes a gain staging parameter as the **last**
 |-------|-------|
 | Name | "Output" |
 | Unit | dB |
-| Range | -20 to +20 dB |
+| Range | -20 to +6 dB |
 | Default | 0 dB (unity) |
 | Smoothing | `SmoothedParam::standard` (10 ms) |
 

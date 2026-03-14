@@ -66,7 +66,7 @@ use sonido_core::{
 /// | 4 | `tzf` | index | 0–1 | 0 (Off) |
 /// | 5 | `sync` | index | 0–1 | 0 (Off) |
 /// | 6 | `division` | index | 0–11 | 3 (Quarter) |
-/// | 7 | `output_db` | dB | −20–20 | 0.0 |
+/// | 7 | `output_db` | dB | −20–+6 | 0.0 |
 #[derive(Debug, Clone, Copy)]
 pub struct FlangerParams {
     /// LFO rate in Hz.
@@ -113,7 +113,7 @@ pub struct FlangerParams {
 
     /// Output level in decibels.
     ///
-    /// Range: −20.0 to +20.0 dB. Applied after the wet/dry mix. Default 0.0 dB.
+    /// Range: −20.0 to +6.0 dB. Applied after the wet/dry mix. Default 0.0 dB.
     pub output_db: f32,
 }
 
@@ -133,22 +133,22 @@ impl Default for FlangerParams {
 }
 
 impl FlangerParams {
-    /// Build params directly from hardware knob/switch readings.
+    /// Creates parameters from normalized 0–1 knob readings.
     ///
-    /// All inputs are normalized to 0.0–1.0 (ADC readings). `tzf` and `sync`
-    /// are treated as boolean thresholds (≥ 0.5 = On). `division` is mapped to
-    /// the nearest integer index 0–11.
+    /// Curves are derived from [`ParamDescriptor`] — same mapping as GUI and
+    /// plugin hosts. `tzf` and `sync` snap at 0.5 (stepped); `division` maps
+    /// to the nearest integer index 0–11.
     ///
-    /// # Parameters
-    ///
-    /// - `rate`: LFO rate knob → 0.05–5.0 Hz
-    /// - `depth`: Depth knob → 0–100 %
-    /// - `feedback`: Feedback knob → −95–+95 % (0.5 = center/0 %)
-    /// - `mix`: Mix knob → 0–100 %
-    /// - `tzf`: Toggle switch → 0.0 = Off, 1.0 = On
-    /// - `sync`: Sync toggle → 0.0 = Off, 1.0 = On
-    /// - `division`: Division selector → 0.0–1.0 maps to index 0–11
-    /// - `output`: Output knob → −20–+20 dB
+    /// | Argument | Index | Parameter | Range |
+    /// |----------|-------|-----------|-------|
+    /// | `rate` | 0 | `rate` | 0.05–5.0 Hz |
+    /// | `depth` | 1 | `depth_pct` | 0–100 % |
+    /// | `feedback` | 2 | `feedback_pct` | −95–+95 % |
+    /// | `mix` | 3 | `mix_pct` | 0–100 % |
+    /// | `tzf` | 4 | `tzf` | 0 or 1 |
+    /// | `sync` | 5 | `sync` | 0 or 1 |
+    /// | `division` | 6 | `division` | 0–11 |
+    /// | `output` | 7 | `output_db` | −20–+6 dB |
     #[allow(clippy::too_many_arguments)]
     pub fn from_knobs(
         rate: f32,
@@ -160,16 +160,7 @@ impl FlangerParams {
         division: f32,
         output: f32,
     ) -> Self {
-        Self {
-            rate: 0.05 + rate * (5.0 - 0.05),      // 0.05–5.0 Hz
-            depth_pct: depth * 100.0,              // 0–100 %
-            feedback_pct: feedback * 190.0 - 95.0, // −95–+95 %
-            mix_pct: mix * 100.0,                  // 0–100 %
-            tzf: if tzf >= 0.5 { 1.0 } else { 0.0 },
-            sync: if sync >= 0.5 { 1.0 } else { 0.0 },
-            division: libm::floorf(division * 11.99), // 0–11 (integer index)
-            output_db: output * 40.0 - 20.0,          // −20–+20 dB
-        }
+        Self::from_normalized(&[rate, depth, feedback, mix, tzf, sync, division, output])
     }
 }
 
@@ -872,8 +863,11 @@ mod tests {
         // mix: 0.5 → 50 %
         assert!((params.mix_pct - 50.0).abs() < 1.0, "mix mid-point");
 
-        // output: 0.5 → 0 dB (centre of −20–+20)
-        assert!(params.output_db.abs() < 1.0, "output centre at 0.5");
+        // output: 0.5 → -7.0 dB (centre of −20–+6)
+        assert!(
+            (params.output_db - (-7.0)).abs() < 1.0,
+            "output centre at 0.5"
+        );
 
         // tzf off
         assert!(params.tzf < 0.5, "tzf should be Off at 0.0");

@@ -107,17 +107,22 @@ impl RingModParams {
     /// - `output`: ADC reading → −20–20 dB
     ///
     /// All inputs are expected in [0.0, 1.0].
+    /// Creates parameters from normalized 0–1 knob readings.
+    ///
+    /// Curves (logarithmic for frequency/time, linear for percentage) are
+    /// derived from [`ParamDescriptor`] — same mapping as GUI and plugin hosts.
+    ///
+    /// # Parameters
+    ///
+    /// - `freq`: ADC reading → 20–2000 Hz (logarithmic)
+    /// - `depth`: ADC reading → 0–100 %
+    /// - `waveform`: ADC reading → 0, 1, or 2 (Sine / Triangle / Square, stepped)
+    /// - `mix`: ADC reading → 0–100 %
+    /// - `output`: ADC reading → −20–+6 dB
+    ///
+    /// All inputs are expected in [0.0, 1.0].
     pub fn from_knobs(freq: f32, depth: f32, waveform: f32, mix: f32, output: f32) -> Self {
-        Self {
-            // Linear mapping of normalized knob to 20–2000 Hz range.
-            // Embedded targets use hardware-filtered ADCs so a simple linear
-            // mapping is sufficient; log-frequency feel comes from the hardware.
-            freq_hz: 20.0 + freq * 1980.0,
-            depth_pct: depth * 100.0,
-            waveform: libm::floorf(waveform * 2.99), // 0, 1, 2
-            mix_pct: mix * 100.0,
-            output_db: output * 40.0 - 20.0, // −20–20 dB
-        }
+        Self::from_normalized(&[freq, depth, waveform, mix, output])
     }
 }
 
@@ -598,8 +603,8 @@ mod tests {
         // Mix should be 50%
         assert!((params.mix_pct - 50.0).abs() < 0.5);
 
-        // Output at 0.5 should be 0 dB
-        assert!((params.output_db - 0.0).abs() < 0.5);
+        // Output at 0.5 should be -7 dB (-20 + 0.5 * 26 = -7)
+        assert!((params.output_db - (-7.0)).abs() < 0.5);
     }
 
     /// Extremes of `from_knobs` (0.0 and 1.0) should stay within param bounds.
@@ -617,6 +622,6 @@ mod tests {
         assert!((high.depth_pct - 100.0).abs() < 0.5);
         assert_eq!(high.waveform, 2.0);
         assert!((high.mix_pct - 100.0).abs() < 0.5);
-        assert!((high.output_db - 20.0).abs() < 0.5);
+        assert!((high.output_db - 6.0).abs() < 0.5);
     }
 }

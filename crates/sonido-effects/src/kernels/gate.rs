@@ -96,7 +96,7 @@ enum GateState {
 /// | 4 | `range_db` | dB | −80–0 | −80.0 |
 /// | 5 | `hysteresis_db` | dB | 0–12 | 3.0 |
 /// | 6 | `sidechain_freq_hz` | Hz | 20–500 | 80.0 |
-/// | 7 | `output_db` | dB | −20–20 | 0.0 |
+/// | 7 | `output_db` | dB | −20–+6 | 0.0 |
 ///
 /// # Notes on ParamId assignment
 ///
@@ -156,7 +156,7 @@ pub struct GateParams {
 
     /// Output level in decibels.
     ///
-    /// Range: −20.0–20.0 dB (default 0.0). Applied after the gate gain.
+    /// Range: −20.0–+6.0 dB (default 0.0). Applied after the gate gain.
     pub output_db: f32,
 }
 
@@ -176,22 +176,21 @@ impl Default for GateParams {
 }
 
 impl GateParams {
-    /// Build params from hardware knob readings (0.0–1.0 normalized).
+    /// Creates parameters from normalized 0–1 knob readings.
     ///
-    /// Convenience for embedded targets where ADC values map linearly to
-    /// parameter ranges. All eight arguments correspond to the eight
-    /// parameters in index order.
+    /// Curves (logarithmic for frequency/time, linear for percentage) are
+    /// derived from [`ParamDescriptor`] — same mapping as GUI and plugin hosts.
     ///
-    /// | Argument | Parameter | Mapping |
-    /// |----------|-----------|---------|
-    /// | `thresh` | `threshold_db` | 0–1 → −80–0 dB |
-    /// | `atk` | `attack_ms` | 0–1 → 0.1–50 ms |
-    /// | `rls` | `release_ms` | 0–1 → 10–1000 ms |
-    /// | `hold` | `hold_ms` | 0–1 → 0–500 ms |
-    /// | `range` | `range_db` | 0–1 → −80–0 dB |
-    /// | `hyst` | `hysteresis_db` | 0–1 → 0–12 dB |
-    /// | `sc_hpf` | `sidechain_freq_hz` | 0–1 → 20–500 Hz |
-    /// | `out` | `output_db` | 0–1 → −20–20 dB |
+    /// | Argument | Index | Parameter | Range |
+    /// |----------|-------|-----------|-------|
+    /// | `thresh` | 0 | `threshold_db` | −80–0 dB |
+    /// | `atk` | 1 | `attack_ms` | 0.1–50 ms |
+    /// | `rls` | 2 | `release_ms` | 10–1000 ms |
+    /// | `hold` | 3 | `hold_ms` | 0–500 ms |
+    /// | `range` | 4 | `range_db` | −80–0 dB |
+    /// | `hyst` | 5 | `hysteresis_db` | 0–12 dB |
+    /// | `sc_hpf` | 6 | `sidechain_freq_hz` | 20–500 Hz (log) |
+    /// | `out` | 7 | `output_db` | −20–+6 dB |
     #[allow(clippy::too_many_arguments)]
     pub fn from_knobs(
         thresh: f32,
@@ -203,16 +202,7 @@ impl GateParams {
         sc_hpf: f32,
         out: f32,
     ) -> Self {
-        Self {
-            threshold_db: thresh * 80.0 - 80.0,       // 0–1 → −80–0 dB
-            attack_ms: atk * 49.9 + 0.1,              // 0–1 → 0.1–50 ms
-            release_ms: rls * 990.0 + 10.0,           // 0–1 → 10–1000 ms
-            hold_ms: hold * 500.0,                    // 0–1 → 0–500 ms
-            range_db: range * 80.0 - 80.0,            // 0–1 → −80–0 dB
-            hysteresis_db: hyst * 12.0,               // 0–1 → 0–12 dB
-            sidechain_freq_hz: sc_hpf * 480.0 + 20.0, // 0–1 → 20–500 Hz
-            output_db: out * 40.0 - 20.0,             // 0–1 → −20–20 dB
-        }
+        Self::from_normalized(&[thresh, atk, rls, hold, range, hyst, sc_hpf, out])
     }
 }
 

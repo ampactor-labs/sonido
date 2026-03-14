@@ -71,7 +71,7 @@ use sonido_core::{
 /// | 3 | `stereo_spread_pct` | % | 0–100 | 0.0 |
 /// | 4 | `sync` | index | 0–1 | 0 (Off) |
 /// | 5 | `division` | index | 0–11 | 3 (Eighth) |
-/// | 6 | `output_db` | dB | −20–20 | 0.0 |
+/// | 6 | `output_db` | dB | −20–+6 | 0.0 |
 #[derive(Debug, Clone, Copy)]
 pub struct TremoloParams {
     /// LFO rate in Hz (0.5–20.0 Hz).
@@ -86,7 +86,7 @@ pub struct TremoloParams {
     pub sync: f32,
     /// Note division index for tempo sync (0–11, see `DIVISION_LABELS`).
     pub division: f32,
-    /// Output level in decibels (−20–20 dB).
+    /// Output level in decibels (−20–+6 dB).
     pub output_db: f32,
 }
 
@@ -106,21 +106,21 @@ impl Default for TremoloParams {
 }
 
 impl TremoloParams {
-    /// Build params directly from hardware knob readings (0.0–1.0 normalized).
+    /// Creates parameters from normalized 0–1 knob readings.
     ///
-    /// Convenience for embedded targets where ADC values map linearly (or
-    /// near-linearly) to parameter ranges. Stepped parameters (`waveform`,
-    /// `sync`, `division`) are quantized to their nearest integer index.
+    /// Curves are derived from [`ParamDescriptor`] — same mapping as GUI and
+    /// plugin hosts. Stepped parameters (`waveform`, `sync`, `division`) snap
+    /// to their nearest integer index.
     ///
-    /// # Arguments
-    ///
-    /// - `rate` — 0.0→0.5 Hz, 1.0→20.0 Hz (linear)
-    /// - `depth` — 0.0→0%, 1.0→100%
-    /// - `waveform` — 0.0→Sine(0), 0.33→Triangle(1), 0.66→Square(2), 1.0→SampleHold(3)
-    /// - `stereo_spread` — 0.0→0%, 1.0→100%
-    /// - `sync` — below 0.5→Off(0), 0.5+→On(1)
-    /// - `division` — 0.0→index 0 (Whole), 1.0→index 11 (TripletSixteenth)
-    /// - `output` — 0.0→−20 dB, 0.5→0 dB, 1.0→+20 dB
+    /// | Argument | Index | Parameter | Range |
+    /// |----------|-------|-----------|-------|
+    /// | `rate` | 0 | `rate` | 0.5–20.0 Hz |
+    /// | `depth` | 1 | `depth_pct` | 0–100 % |
+    /// | `waveform` | 2 | `waveform` | 0–3 (Sine/Triangle/Square/S&H) |
+    /// | `stereo_spread` | 3 | `stereo_spread_pct` | 0–100 % |
+    /// | `sync` | 4 | `sync` | 0 or 1 |
+    /// | `division` | 5 | `division` | 0–11 |
+    /// | `output` | 6 | `output_db` | −20–+6 dB |
     pub fn from_knobs(
         rate: f32,
         depth: f32,
@@ -130,15 +130,7 @@ impl TremoloParams {
         division: f32,
         output: f32,
     ) -> Self {
-        Self {
-            rate: 0.5 + rate * 19.5,                   // 0.5–20.0 Hz
-            depth_pct: depth * 100.0,                  // 0–100%
-            waveform: libm::floorf(waveform * 3.99),   // 0, 1, 2, 3
-            stereo_spread_pct: stereo_spread * 100.0,  // 0–100%
-            sync: if sync >= 0.5 { 1.0 } else { 0.0 }, // 0 or 1
-            division: libm::floorf(division * 11.99),  // 0–11
-            output_db: output * 40.0 - 20.0,           // −20–20 dB
-        }
+        Self::from_normalized(&[rate, depth, waveform, stereo_spread, sync, division, output])
     }
 }
 
@@ -627,10 +619,11 @@ mod tests {
         // Mid-point of all knobs
         let params = TremoloParams::from_knobs(0.5, 0.5, 0.0, 0.5, 0.0, 0.0, 0.5);
 
-        // rate: 0.5 * 19.5 + 0.5 = 10.25 Hz
+        // rate: log geometric mean of 0.5..20.0 = sqrt(0.5 * 20.0) ≈ 3.162 Hz
+        let expected_rate = libm::sqrtf(0.5_f32 * 20.0_f32);
         assert!(
-            (params.rate - 10.25).abs() < 0.01,
-            "Mid rate should be ~10.25 Hz, got {}",
+            (params.rate - expected_rate).abs() < 0.01,
+            "Mid rate should be ~{expected_rate:.3} Hz (log mid of 0.5..20), got {}",
             params.rate
         );
 
@@ -654,10 +647,10 @@ mod tests {
         // sync: 0.0 < 0.5 → Off (0.0)
         assert_eq!(params.sync, 0.0, "Sync should be Off (0.0)");
 
-        // output: 0.5 * 40.0 - 20.0 = 0.0 dB
+        // output: -20 + 0.5 * 26 = -7.0 dB
         assert!(
-            (params.output_db - 0.0).abs() < 0.01,
-            "Mid output should be 0 dB, got {}",
+            (params.output_db - (-7.0)).abs() < 0.01,
+            "Mid output should be -7 dB, got {}",
             params.output_db
         );
 
@@ -677,8 +670,8 @@ mod tests {
             "Max depth should be 100%"
         );
         assert!(
-            (full.output_db - 20.0).abs() < 0.01,
-            "Max output should be +20 dB"
+            (full.output_db - 6.0).abs() < 0.01,
+            "Max output should be +6 dB"
         );
     }
 
