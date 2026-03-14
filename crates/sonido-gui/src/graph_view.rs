@@ -957,13 +957,70 @@ impl SnarlViewer<SonidoNode> for SonidoViewer<'_> {
     }
 
     fn connect(&mut self, from: &OutPin, to: &InPin, snarl: &mut Snarl<SonidoNode>) {
-        // For non-Merge input pins, disconnect existing wires first
-        // (single-input semantics for Effect, Output, Split nodes).
         let target_node = &snarl[to.id.node];
-        if !matches!(target_node, SonidoNode::Merge) {
-            snarl.drop_inputs(to.id);
+        if matches!(target_node, SonidoNode::Merge) {
+            // Merge nodes accept multiple inputs directly.
+            snarl.connect(from.id, to.id);
+        } else {
+            // Check if the target already has an incoming wire.
+            let existing_source: Option<OutPinId> = snarl
+                .wires()
+                .find(|&(_, inp)| inp.node == to.id.node)
+                .map(|(out, _)| out);
+
+            if let Some(old_source) = existing_source {
+                if matches!(snarl[old_source.node], SonidoNode::Merge) {
+                    // Existing source is already a Merge — add to it.
+                    let used = snarl
+                        .wires()
+                        .filter(|&(_, inp)| inp.node == old_source.node)
+                        .count();
+                    snarl.connect(
+                        from.id,
+                        InPinId {
+                            node: old_source.node,
+                            input: used,
+                        },
+                    );
+                } else {
+                    // Auto-insert a Merge node to combine both connections.
+                    let target_pos = snarl
+                        .get_node_info(to.id.node)
+                        .map_or(egui::pos2(0.0, 0.0), |n| n.pos);
+                    let merge_pos = target_pos - egui::vec2(80.0, 0.0);
+                    let merge_id = snarl.insert_node(merge_pos, SonidoNode::Merge);
+
+                    // Reroute: old source → Merge input 0
+                    snarl.disconnect(old_source, to.id);
+                    snarl.connect(
+                        old_source,
+                        InPinId {
+                            node: merge_id,
+                            input: 0,
+                        },
+                    );
+                    // New source → Merge input 1
+                    snarl.connect(
+                        from.id,
+                        InPinId {
+                            node: merge_id,
+                            input: 1,
+                        },
+                    );
+                    // Merge output → original target
+                    snarl.connect(
+                        OutPinId {
+                            node: merge_id,
+                            output: 0,
+                        },
+                        to.id,
+                    );
+                }
+            } else {
+                // No existing input — simple direct connection.
+                snarl.connect(from.id, to.id);
+            }
         }
-        snarl.connect(from.id, to.id);
         *self.topology_changed = true;
     }
 
