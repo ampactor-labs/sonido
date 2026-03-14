@@ -1,35 +1,30 @@
-//! Morph Pedal v2 — DAG-based effect processor with A/B morphing.
+//! Morph Pedal v3 — DAG-based effect processor with per-node A/B morphing.
 //!
-//! Boot to passthrough, incrementally build a 3-slot effect chain, capture
-//! Sound A and Sound B snapshots, then morph between them with dual-footswitch
-//! arrow control. Uses `ProcessingGraph` for DAG routing and `EmbeddedAdapter`
-//! for zero-smoothing direct kernel access.
+//! Three toggle switches control node focus, A/B/morph mode, and routing
+//! topology. Each of the 3 DAG slots has independent A/B parameter snapshots.
+//! Dual footswitches scroll effects (A/B modes) or ramp morph position (morph
+//! mode). Both footswitches held ≥1s = bypass toggle.
 //!
-//! # Three-Mode Architecture
+//! # Toggle Mapping
 //!
-//! | Toggle 3 | Mode    | What it does                                       |
-//! |----------|---------|----------------------------------------------------|
-//! | UP       | EXPLORE | Scroll effects into 3 slots, shape params          |
-//! | CENTER   | BUILD   | Capture A/B snapshots per-slot, preview with T1    |
-//! | DOWN     | MORPH   | Footswitch-controlled crossfade between A and B    |
-//!
-//! Toggle 2 selects routing topology in all modes:
-//! - UP: Serial (E0 → E1 → E2)
-//! - CENTER: Parallel (split → E0,E1,E2 → merge)
-//! - DOWN: Fan (E0 → split → E1,E2 → merge)
+//! | Toggle | UP (0)         | MID (1)        | DOWN (2)                    |
+//! |--------|----------------|----------------|-----------------------------|
+//! | **T1** | Node 1         | Node 2         | Node 3                      |
+//! | **T2** | A mode (edit)  | B mode (edit)  | Morph (FS1/FS2 ramp)        |
+//! | **T3** | Linear 1→2→3   | Parallel split | Fan 1→split→[2,3]→merge     |
 //!
 //! # Hardware (Hothouse DIY)
 //!
 //! | Control     | Pin(s)               | Function                    |
 //! |-------------|----------------------|-----------------------------|
 //! | Knobs 1–6   | PA3,PB1,PA7,PA6,PC1,PC4 | Per-effect curated params |
-//! | Toggle 1    | PB4/PB5              | Slot select / preview / speed |
-//! | Toggle 2    | PG10/PG11            | Routing topology            |
-//! | Toggle 3    | PD2/PC12             | Mode selector               |
-//! | Footswitch 1| PA0                  | Mode-specific               |
-//! | Footswitch 2| PD11                 | Mode-specific               |
+//! | Toggle 1    | PB4/PB5              | Node select (1/2/3)         |
+//! | Toggle 2    | PG10/PG11            | A / B / Morph               |
+//! | Toggle 3    | PD2/PC12             | Routing topology            |
+//! | Footswitch 1| PA0                  | Prev effect / morph→A       |
+//! | Footswitch 2| PD11                 | Next effect / morph→B       |
 //! | LED 1       | PA5                  | Active / bypassed           |
-//! | LED 2       | PA4                  | Mode-specific feedback      |
+//! | LED 2       | PA4                  | A/B/morph feedback          |
 //!
 //! # Build & Flash
 //!
@@ -97,9 +92,6 @@ const TAP_LIMIT: u16 = 30;
 /// Both-footswitch bypass hold threshold: 100 polls × ~10ms = 1s.
 const BYPASS_HOLD: u16 = 100;
 
-/// Maximum number of saveable presets (heap-resident, survives until power-off).
-const MAX_PRESETS: usize = 9;
-
 /// Number of effects in the curated list.
 const NUM_EFFECTS: usize = 14;
 
@@ -116,7 +108,7 @@ const NUM_EFFECTS: usize = 14;
 /// - K3: Color (damping, HF rolloff, stages, jitter, waveform)
 /// - K4: Character (mode/shape, often STEPPED)
 /// - K5: Mix (wet/dry blend)
-/// - K6: Level (output/makeup gain)
+/// - K6: Level (output/makeup gain) — **morph mode: morph speed**
 struct EffectEntry {
     /// Registry ID for logging.
     id: &'static str,
@@ -206,19 +198,25 @@ const EFFECT_LIST: [EffectEntry; NUM_EFFECTS] = [
 
 // ── Enums ───────────────────────────────────────────────────────────────────
 
-/// Pedal operating mode, selected by Toggle 3.
+/// A/B/Morph mode, selected by Toggle 2.
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Mode {
-    Explore,
-    Build,
+enum AbMode {
+    /// Hearing and editing the A-state parameters.
+    A,
+    /// Hearing and editing the B-state parameters.
+    B,
+    /// Footswitch-controlled crossfade between A and B.
     Morph,
 }
 
-/// Audio routing topology, selected by Toggle 2.
+/// Audio routing topology, selected by Toggle 3.
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Routing {
-    Serial,
+enum Topology {
+    /// Serial: 1 → 2 → 3
+    Linear,
+    /// Parallel: split → [1,2,3] → merge
     Parallel,
+    /// Fan: 1 → split → [2,3] → merge
     Fan,
 }
 
@@ -252,111 +250,90 @@ fn create_effect(idx: usize, sr: f32) -> Option<Box<dyn EffectWithParams + Send>
     }
 }
 
-// ── Sound Snapshot ──────────────────────────────────────────────────────────
+// ── Per-Slot Snapshot ───────────────────────────────────────────────────────
 
-/// Parameter snapshot for one sound (A or B) across all 3 slots.
+/// Parameter snapshot for one effect slot.
 ///
-/// Includes cached STEPPED flags per parameter for efficient morph
+/// Stores parameter values and cached STEPPED flags for efficient morph
 /// interpolation (STEPPED params snap at t=0.5, no fractional values).
 #[derive(Clone)]
-struct SoundSnapshot {
-    /// Parameter values per slot.
-    params: [[f32; MAX_PARAMS]; NUM_SLOTS],
+struct SlotSnapshot {
+    /// Parameter values.
+    values: [f32; MAX_PARAMS],
     /// Whether each param is STEPPED (cached at capture time).
-    stepped: [[bool; MAX_PARAMS]; NUM_SLOTS],
-    /// Number of parameters per slot.
-    param_counts: [usize; NUM_SLOTS],
+    stepped: [bool; MAX_PARAMS],
+    /// Number of valid parameters.
+    count: usize,
 }
 
-impl SoundSnapshot {
+impl SlotSnapshot {
     fn new() -> Self {
         Self {
-            params: [[0.0; MAX_PARAMS]; NUM_SLOTS],
-            stepped: [[false; MAX_PARAMS]; NUM_SLOTS],
-            param_counts: [0; NUM_SLOTS],
+            values: [0.0; MAX_PARAMS],
+            stepped: [false; MAX_PARAMS],
+            count: 0,
         }
     }
 
-    /// Capture one slot's parameters and STEPPED flags from the graph.
-    fn capture_slot(&mut self, slot: usize, graph: &ProcessingGraph, node_id: Option<NodeId>) {
-        if let Some(nid) = node_id {
-            if let Some(effect) = graph.effect_with_params_ref(nid) {
-                let count = effect.effect_param_count().min(MAX_PARAMS);
-                self.param_counts[slot] = count;
-                for p in 0..count {
-                    self.params[slot][p] = effect.effect_get_param(p);
-                    self.stepped[slot][p] = effect
-                        .effect_param_info(p)
-                        .is_some_and(|d| d.flags.contains(ParamFlags::STEPPED));
-                }
+    /// Capture parameters and STEPPED flags from a graph node.
+    fn capture_from(&mut self, graph: &ProcessingGraph, node_id: NodeId) {
+        if let Some(effect) = graph.effect_with_params_ref(node_id) {
+            let count = effect.effect_param_count().min(MAX_PARAMS);
+            self.count = count;
+            for p in 0..count {
+                self.values[p] = effect.effect_get_param(p);
+                self.stepped[p] = effect
+                    .effect_param_info(p)
+                    .is_some_and(|d| d.flags.contains(ParamFlags::STEPPED));
             }
-        } else {
-            self.param_counts[slot] = 0;
         }
     }
 
-    /// Capture all slots from the graph.
-    fn capture_all(&mut self, graph: &ProcessingGraph, node_ids: &[Option<NodeId>; NUM_SLOTS]) {
-        for slot in 0..NUM_SLOTS {
-            self.capture_slot(slot, graph, node_ids[slot]);
-        }
-    }
-
-    /// Apply snapshot values to all slots in the graph.
-    fn apply_to_graph(&self, graph: &mut ProcessingGraph, node_ids: &[Option<NodeId>; NUM_SLOTS]) {
-        for slot in 0..NUM_SLOTS {
-            if let Some(nid) = node_ids[slot]
-                && let Some(effect) = graph.effect_with_params_mut(nid)
-            {
-                for p in 0..self.param_counts[slot] {
-                    effect.effect_set_param(p, self.params[slot][p]);
-                }
+    /// Apply snapshot values to a graph node.
+    fn apply_to(&self, graph: &mut ProcessingGraph, node_id: NodeId) {
+        if let Some(effect) = graph.effect_with_params_mut(node_id) {
+            for p in 0..self.count {
+                effect.effect_set_param(p, self.values[p]);
             }
         }
     }
 }
 
-// ── Preset ──────────────────────────────────────────────────────────────────
+// ── Per-Node State ──────────────────────────────────────────────────────────
 
-/// Complete pedal state stored as a preset.
-#[derive(Clone)]
-struct Preset {
-    /// Effect indices (into EFFECT_LIST) for each slot. `None` = empty.
-    slot_effects: [Option<usize>; NUM_SLOTS],
-    /// Routing topology.
-    routing: Routing,
-    /// Sound A parameter snapshot.
-    sound_a: SoundSnapshot,
-    /// Sound B parameter snapshot.
-    sound_b: SoundSnapshot,
-    /// Morph speed in seconds.
-    morph_speed: f32,
-    /// Whether this preset slot has been written to.
-    occupied: bool,
+/// Per-node state — each of the 3 DAG slots has independent A/B snapshots.
+struct NodeState {
+    /// Index into `EFFECT_LIST`, or `None` if slot is empty (passthrough).
+    effect_index: Option<usize>,
+    /// A-state parameter snapshot. Always populated once an effect is selected.
+    params_a: SlotSnapshot,
+    /// B-state parameter snapshot. `None` until user first enters B mode for
+    /// this node. Initialized as clone of `params_a` on first B-mode entry.
+    params_b: Option<SlotSnapshot>,
+    /// Browse cursor for effect scrolling.
+    browse_cursor: usize,
 }
 
-impl Preset {
-    fn empty() -> Self {
+impl NodeState {
+    fn new() -> Self {
         Self {
-            slot_effects: [None; NUM_SLOTS],
-            routing: Routing::Serial,
-            sound_a: SoundSnapshot::new(),
-            sound_b: SoundSnapshot::new(),
-            morph_speed: 2.0,
-            occupied: false,
+            effect_index: None,
+            params_a: SlotSnapshot::new(),
+            params_b: None,
+            browse_cursor: 0,
         }
     }
 }
 
 // ── Graph construction ──────────────────────────────────────────────────────
 
-/// Build a `ProcessingGraph` from the current slot configuration.
+/// Build a `ProcessingGraph` from the current node configuration.
 ///
 /// Empty slots are skipped — adjacent populated nodes connect directly.
-/// Returns the compiled graph and node IDs for each slot (None for empty).
+/// Returns the compiled graph and node IDs for each slot (`None` for empty).
 fn build_graph(
-    effect_indices: &[Option<usize>; NUM_SLOTS],
-    routing: Routing,
+    nodes: &[NodeState; NUM_SLOTS],
+    topology: Topology,
     sr: f32,
     bs: usize,
 ) -> (ProcessingGraph, [Option<NodeId>; NUM_SLOTS]) {
@@ -368,9 +345,9 @@ fn build_graph(
     let mut populated: Vec<(usize, NodeId)> = Vec::new();
     let mut node_ids: [Option<NodeId>; NUM_SLOTS] = [None; NUM_SLOTS];
 
-    for (slot, idx) in effect_indices.iter().enumerate() {
-        if let Some(effect_idx) = idx
-            && let Some(effect) = create_effect(*effect_idx, sr)
+    for (slot, node) in nodes.iter().enumerate() {
+        if let Some(effect_idx) = node.effect_index
+            && let Some(effect) = create_effect(effect_idx, sr)
         {
             let nid = g.add_effect(effect);
             node_ids[slot] = Some(nid);
@@ -387,15 +364,15 @@ fn build_graph(
         g.connect(inp, nid).unwrap();
         g.connect(nid, out).unwrap();
     } else {
-        match routing {
-            Routing::Serial => {
+        match topology {
+            Topology::Linear => {
                 g.connect(inp, populated[0].1).unwrap();
                 for i in 1..populated.len() {
                     g.connect(populated[i - 1].1, populated[i].1).unwrap();
                 }
                 g.connect(populated[populated.len() - 1].1, out).unwrap();
             }
-            Routing::Parallel => {
+            Topology::Parallel => {
                 let s = g.add_split();
                 let m = g.add_merge();
                 g.connect(inp, s).unwrap();
@@ -405,7 +382,7 @@ fn build_graph(
                 }
                 g.connect(m, out).unwrap();
             }
-            Routing::Fan => {
+            Topology::Fan => {
                 // First populated → split → remaining → merge → output
                 let s = g.add_split();
                 let m = g.add_merge();
@@ -426,31 +403,31 @@ fn build_graph(
 
 // ── Morph interpolation ─────────────────────────────────────────────────────
 
-/// Apply interpolated parameters to the graph (same logic as `KernelParams::lerp`).
+/// Apply interpolated A/B parameters to all nodes in the graph.
 ///
 /// STEPPED params snap at `t=0.5`. Continuous params interpolate linearly.
-/// Called every control poll (~100Hz) during morph mode.
+/// Nodes without B snapshots stay at their A values (no change during morph).
 fn interpolate_and_apply(
     graph: &mut ProcessingGraph,
     node_ids: &[Option<NodeId>; NUM_SLOTS],
-    a: &SoundSnapshot,
-    b: &SoundSnapshot,
+    nodes: &[NodeState; NUM_SLOTS],
     t: f32,
 ) {
     for slot in 0..NUM_SLOTS {
         if let Some(nid) = node_ids[slot]
             && let Some(effect) = graph.effect_with_params_mut(nid)
         {
-            let count = a.param_counts[slot].min(b.param_counts[slot]);
+            let a = &nodes[slot].params_a;
+            let b = match &nodes[slot].params_b {
+                Some(b) => b,
+                None => a, // No B → stays at A
+            };
+            let count = a.count.min(b.count);
             for p in 0..count {
-                let val = if a.stepped[slot][p] {
-                    if t < 0.5 {
-                        a.params[slot][p]
-                    } else {
-                        b.params[slot][p]
-                    }
+                let val = if a.stepped[p] {
+                    if t < 0.5 { a.values[p] } else { b.values[p] }
                 } else {
-                    a.params[slot][p] + (b.params[slot][p] - a.params[slot][p]) * t
+                    a.values[p] + (b.values[p] - a.values[p]) * t
                 };
                 effect.effect_set_param(p, val);
             }
@@ -458,28 +435,39 @@ fn interpolate_and_apply(
     }
 }
 
-// ── Slot navigation ─────────────────────────────────────────────────────────
-
-/// Find the next populated slot (wrapping), or return `current` if none.
-fn next_populated(effect_indices: &[Option<usize>; NUM_SLOTS], current: usize) -> usize {
-    for i in 1..=NUM_SLOTS {
-        let idx = (current + i) % NUM_SLOTS;
-        if effect_indices[idx].is_some() {
-            return idx;
+/// Apply the A or B snapshot for a single node to the graph.
+fn apply_node_snapshot(
+    graph: &mut ProcessingGraph,
+    node_ids: &[Option<NodeId>; NUM_SLOTS],
+    nodes: &[NodeState; NUM_SLOTS],
+    slot: usize,
+    mode: AbMode,
+) {
+    if let Some(nid) = node_ids[slot] {
+        match mode {
+            AbMode::A => nodes[slot].params_a.apply_to(graph, nid),
+            AbMode::B => {
+                if let Some(ref b) = nodes[slot].params_b {
+                    b.apply_to(graph, nid);
+                } else {
+                    nodes[slot].params_a.apply_to(graph, nid);
+                }
+            }
+            AbMode::Morph => {} // Morph handled by interpolate_and_apply
         }
     }
-    current
 }
 
-/// Find the previous populated slot (wrapping), or return `current` if none.
-fn prev_populated(effect_indices: &[Option<usize>; NUM_SLOTS], current: usize) -> usize {
-    for i in 1..=NUM_SLOTS {
-        let idx = (current + NUM_SLOTS - i) % NUM_SLOTS;
-        if effect_indices[idx].is_some() {
-            return idx;
-        }
+/// Apply all node snapshots (A or B) to the graph.
+fn apply_all_snapshots(
+    graph: &mut ProcessingGraph,
+    node_ids: &[Option<NodeId>; NUM_SLOTS],
+    nodes: &[NodeState; NUM_SLOTS],
+    mode: AbMode,
+) {
+    for slot in 0..NUM_SLOTS {
+        apply_node_snapshot(graph, node_ids, nodes, slot, mode);
     }
-    current
 }
 
 // ── Init diagnostics ────────────────────────────────────────────────────────
@@ -533,7 +521,7 @@ async fn main(spawner: embassy_executor::Spawner) {
     let led = UserLed::new(p.PC7);
     spawner.spawn(heartbeat(led)).unwrap();
 
-    defmt::info!("morph_pedal v2: initializing...");
+    defmt::info!("morph_pedal v3: initializing...");
 
     // ── Extract control pins and spawn control task ──
     // Must happen BEFORE audio start_interface → start_callback.
@@ -545,76 +533,59 @@ async fn main(spawner: embassy_executor::Spawner) {
     // LED1 starts on (active indicator).
     CONTROLS.write_led(0, 1.0);
 
-    defmt::info!("morph_pedal v2: controls initialized");
+    defmt::info!("morph_pedal v3: controls initialized");
 
     // ── Initial state: all slots empty, passthrough ──
 
-    let mut effect_indices: [Option<usize>; NUM_SLOTS] = [None; NUM_SLOTS];
-    // Per-slot browse cursor (which effect in EFFECT_LIST to scroll to next).
-    // Starts at 0 so first FS2 tap creates filter (index 0).
-    let mut browse_cursor: [usize; NUM_SLOTS] = [0; NUM_SLOTS];
+    let mut nodes: [NodeState; NUM_SLOTS] = core::array::from_fn(|_| NodeState::new());
 
     // Read initial toggle positions from ControlBuffer.
     // Give the control task one cycle to populate.
     embassy_time::Timer::after_millis(30).await;
 
-    let t2_init = CONTROLS.read_toggle(1);
-    let mut routing = match t2_init {
-        0 => Routing::Serial,
-        2 => Routing::Fan,
-        _ => Routing::Parallel,
-    };
-    let t3_init = CONTROLS.read_toggle(2);
-    let mut mode = match t3_init {
-        0 => Mode::Explore,
-        2 => Mode::Morph,
-        _ => Mode::Build,
-    };
     let t1_init = CONTROLS.read_toggle(0);
-    let mut focused_slot: usize = match t1_init {
+    let mut focused_node: usize = match t1_init {
         0 => 0,
         2 => 2,
         _ => 1,
     };
+
+    let t2_init = CONTROLS.read_toggle(1);
+    let mut ab_mode = match t2_init {
+        0 => AbMode::A,
+        2 => AbMode::Morph,
+        _ => AbMode::B,
+    };
+
+    let t3_init = CONTROLS.read_toggle(2);
+    let mut topology = match t3_init {
+        0 => Topology::Linear,
+        2 => Topology::Fan,
+        _ => Topology::Parallel,
+    };
+
     defmt::info!(
-        "morph_pedal v2: toggles — slot={}, routing={}, mode={}",
-        focused_slot + 1,
+        "morph_pedal v3: toggles — node={}, ab={}, topo={}",
+        focused_node + 1,
         t2_init,
         t3_init
     );
 
     // Build initial graph (passthrough — no effects yet).
-    let (mut graph, mut node_ids) = build_graph(&effect_indices, routing, SAMPLE_RATE, BLOCK_SIZE);
+    let (mut graph, mut node_ids) = build_graph(&nodes, topology, SAMPLE_RATE, BLOCK_SIZE);
     defmt::info!("graph built: passthrough (no effects)");
 
-    // Sound snapshots (boxed — saves stack in closure captures).
-    let mut sound_a = Box::new(SoundSnapshot::new());
-    let mut sound_b = Box::new(SoundSnapshot::new());
-
-    // Build mode state
-    let mut build_slot: usize = 0;
-
     // Morph state
-    let mut morph_t: f32 = 0.0; // 0.0 = Sound A, 1.0 = Sound B
+    let mut morph_t: f32 = 0.0; // 0.0 = A, 1.0 = B
     let mut morph_speed: f32 = 2.0; // seconds for full morph
 
-    // Preset storage (boxed — saves ~4 KB in closure captures).
-    let mut presets: Box<[Preset; MAX_PRESETS]> =
-        Box::new(core::array::from_fn(|_| Preset::empty()));
-    let mut next_preset_slot: usize = 0;
-    let mut load_preset_cursor: usize = 0;
-
     // Footswitch state machine
-    let mut fs1_held: u16 = 0;
-    let mut fs2_held: u16 = 0;
+    let mut fs1_held: u32 = 0;
+    let mut fs2_held: u32 = 0;
     let mut both_held: u16 = 0;
     let mut both_held_peak: u16 = 0;
     let mut fs1_was_pressed = false;
     let mut fs2_was_pressed = false;
-
-    // LED2 feedback
-    let mut led2_counter: u16 = 0;
-    let mut led2_blink_pattern: u8 = 0; // 1/2/3 for Build slot indication
 
     let mut poll_counter: u16 = 0;
     let mut needs_rebuild = false;
@@ -687,182 +658,104 @@ async fn main(spawner: embassy_executor::Spawner) {
                 return;
             }
 
-            // ── Read toggles from ControlBuffer ──
+            // ── 1. Read toggles ──
             let t1 = CONTROLS.read_toggle(0);
             let t2 = CONTROLS.read_toggle(1);
             let t3 = CONTROLS.read_toggle(2);
 
-            // ── Mode from T3 ──
-            let new_mode = match t3 {
-                0 => Mode::Explore,
-                2 => Mode::Morph,
-                _ => Mode::Build,
+            // ── 2. Handle T3 change → topology ──
+            let new_topology = match t3 {
+                0 => Topology::Linear,
+                2 => Topology::Fan,
+                _ => Topology::Parallel,
             };
-            if new_mode != mode {
-                // ── Mode transition logic ──
-                match (mode, new_mode) {
-                    (Mode::Explore, Mode::Build) => {
-                        // Capture current graph as Sound A, copy to Sound B.
-                        sound_a.capture_all(&graph, &node_ids);
-                        *sound_b = (*sound_a).clone();
-                        // Set build_slot to first populated slot (or 0).
-                        build_slot = 0;
-                        for s in 0..NUM_SLOTS {
-                            if effect_indices[s].is_some() {
-                                build_slot = s;
-                                break;
-                            }
-                        }
-                        led2_blink_pattern = (build_slot + 1) as u8;
-                        defmt::info!("→ BUILD mode, slot {}", build_slot + 1);
-                    }
-                    (Mode::Build, Mode::Morph) => {
-                        // Sound B is already up-to-date from knob writes.
-                        // Apply Sound A to graph (morph starts at t=0.0).
-                        sound_a.apply_to_graph(&mut graph, &node_ids);
-                        morph_t = 0.0;
-                        defmt::info!("→ MORPH mode");
-                    }
-                    (Mode::Build, Mode::Explore) => {
-                        // Sound B already captured from knob writes.
-                        defmt::info!("→ EXPLORE mode");
-                    }
-                    (Mode::Morph, Mode::Explore) => {
-                        defmt::info!("→ EXPLORE mode (from morph)");
-                    }
-                    (Mode::Morph, Mode::Build) => {
-                        // Recapture A from graph (might be mid-morph), B stays.
-                        sound_a.capture_all(&graph, &node_ids);
-                        *sound_b = (*sound_a).clone();
-                        build_slot = 0;
-                        for s in 0..NUM_SLOTS {
-                            if effect_indices[s].is_some() {
-                                build_slot = s;
-                                break;
-                            }
-                        }
-                        led2_blink_pattern = (build_slot + 1) as u8;
-                        defmt::info!("→ BUILD mode (from morph), slot {}", build_slot + 1);
-                    }
-                    (Mode::Explore, Mode::Morph) => {
-                        // Capture A from current graph.
-                        sound_a.capture_all(&graph, &node_ids);
-                        *sound_b = (*sound_a).clone();
-                        morph_t = 0.0;
-                        defmt::info!("→ MORPH mode (from explore)");
-                    }
-                    _ => {} // same mode, shouldn't reach
-                }
-                mode = new_mode;
-            }
-
-            // ── Routing from T2 ──
-            let new_routing = match t2 {
-                0 => Routing::Serial,
-                2 => Routing::Fan,
-                _ => Routing::Parallel,
-            };
-            if new_routing != routing {
-                routing = new_routing;
+            if new_topology != topology {
+                topology = new_topology;
                 needs_rebuild = true;
             }
 
-            // ── T1 meaning depends on mode ──
-            match mode {
-                Mode::Explore => {
-                    focused_slot = match t1 {
-                        0 => 0,
-                        2 => 2,
-                        _ => 1,
-                    };
+            // ── 3. Handle T1 change → focused node ──
+            let new_focused: usize = match t1 {
+                0 => 0,
+                2 => 2,
+                _ => 1,
+            };
+            if new_focused != focused_node {
+                focused_node = new_focused;
+                // Apply current A/B snapshot for the new focused node.
+                if ab_mode != AbMode::Morph {
+                    apply_node_snapshot(
+                        &mut graph, &node_ids, &nodes, focused_node, ab_mode,
+                    );
                 }
-                Mode::Build => {
-                    // T1 = preview selector (applied after knob updates below)
-                    // 0=Sound A, 1=50% lerp, 2=Sound B
-                }
-                Mode::Morph => {
-                    morph_speed = match t1 {
-                        0 => 0.5,
-                        2 => 5.0,
-                        _ => 2.0,
-                    };
+                defmt::info!("node → {}", focused_node + 1);
+            }
+
+            // ── 4. Handle T2 change → A/B/Morph mode ──
+            let new_ab = match t2 {
+                0 => AbMode::A,
+                2 => AbMode::Morph,
+                _ => AbMode::B,
+            };
+            if new_ab != ab_mode {
+                let old_mode = ab_mode;
+                ab_mode = new_ab;
+
+                match (old_mode, ab_mode) {
+                    (AbMode::A, AbMode::B) => {
+                        // Initialize B from A if not yet created.
+                        for slot in 0..NUM_SLOTS {
+                            if nodes[slot].params_b.is_none() && nodes[slot].effect_index.is_some()
+                            {
+                                nodes[slot].params_b =
+                                    Some(nodes[slot].params_a.clone());
+                            }
+                        }
+                        apply_all_snapshots(&mut graph, &node_ids, &nodes, AbMode::B);
+                        defmt::info!("→ B mode");
+                    }
+                    (AbMode::B, AbMode::A) => {
+                        apply_all_snapshots(&mut graph, &node_ids, &nodes, AbMode::A);
+                        defmt::info!("→ A mode");
+                    }
+                    (_, AbMode::Morph) => {
+                        // Ensure all nodes have B snapshots.
+                        for slot in 0..NUM_SLOTS {
+                            if nodes[slot].params_b.is_none() && nodes[slot].effect_index.is_some()
+                            {
+                                nodes[slot].params_b =
+                                    Some(nodes[slot].params_a.clone());
+                            }
+                        }
+                        // Set morph_t based on which mode we came from.
+                        morph_t = match old_mode {
+                            AbMode::A => 0.0,
+                            AbMode::B => 1.0,
+                            AbMode::Morph => morph_t, // shouldn't happen
+                        };
+                        defmt::info!("→ MORPH mode (t={})", morph_t);
+                    }
+                    (AbMode::Morph, AbMode::A) => {
+                        apply_all_snapshots(&mut graph, &node_ids, &nodes, AbMode::A);
+                        defmt::info!("→ A mode (from morph)");
+                    }
+                    (AbMode::Morph, AbMode::B) => {
+                        // Ensure B exists before applying.
+                        for slot in 0..NUM_SLOTS {
+                            if nodes[slot].params_b.is_none() && nodes[slot].effect_index.is_some()
+                            {
+                                nodes[slot].params_b =
+                                    Some(nodes[slot].params_a.clone());
+                            }
+                        }
+                        apply_all_snapshots(&mut graph, &node_ids, &nodes, AbMode::B);
+                        defmt::info!("→ B mode (from morph)");
+                    }
+                    _ => {} // same mode
                 }
             }
 
-            // ── Read knobs from ControlBuffer ──
-            let norm_knobs: [f32; 6] = core::array::from_fn(|k| CONTROLS.read_knob(k));
-
-            // ── Apply knobs based on mode ──
-            match mode {
-                Mode::Explore => {
-                    // Knobs control focused slot's effect via curated mapping.
-                    if let Some(eff_idx) = effect_indices[focused_slot]
-                        && let Some(nid) = node_ids[focused_slot]
-                    {
-                        let entry = &EFFECT_LIST[eff_idx];
-                        if let Some(effect) = graph.effect_with_params_mut(nid) {
-                            for k in 0..6 {
-                                let param_idx = entry.knobs[k];
-                                if param_idx != NULL_KNOB
-                                    && let Some(desc) = effect.effect_param_info(param_idx as usize)
-                                {
-                                    let val = adc_to_param(&desc, norm_knobs[k]);
-                                    effect.effect_set_param(param_idx as usize, val);
-                                }
-                            }
-                        }
-                    }
-                }
-                Mode::Build => {
-                    // Knobs update Sound B for build_slot.
-                    if let Some(eff_idx) = effect_indices[build_slot]
-                        && let Some(nid) = node_ids[build_slot]
-                    {
-                        let entry = &EFFECT_LIST[eff_idx];
-                        // Get descriptors from graph to scale ADC properly.
-                        // Read descriptors first (immutable borrow).
-                        let mut param_vals: [(u8, f32); 6] = [(NULL_KNOB, 0.0); 6];
-                        if let Some(effect) = graph.effect_with_params_ref(nid) {
-                            for k in 0..6 {
-                                let param_idx = entry.knobs[k];
-                                if param_idx != NULL_KNOB
-                                    && let Some(desc) = effect.effect_param_info(param_idx as usize)
-                                {
-                                    param_vals[k] = (param_idx, adc_to_param(&desc, norm_knobs[k]));
-                                }
-                            }
-                        }
-                        // Write to sound_b snapshot.
-                        for &(pidx, val) in &param_vals {
-                            if pidx != NULL_KNOB {
-                                sound_b.params[build_slot][pidx as usize] = val;
-                            }
-                        }
-                    }
-
-                    // Apply T1 preview.
-                    match t1 {
-                        0 => {
-                            // Preview Sound A.
-                            sound_a.apply_to_graph(&mut graph, &node_ids);
-                        }
-                        2 => {
-                            // Preview Sound B (includes live knob values for build_slot).
-                            sound_b.apply_to_graph(&mut graph, &node_ids);
-                        }
-                        _ => {
-                            // 50% lerp preview.
-                            interpolate_and_apply(&mut graph, &node_ids, &sound_a, &sound_b, 0.5);
-                        }
-                    }
-                }
-                Mode::Morph => {
-                    // K6 = fine speed override (0.2–10.0s). K1-K5 inactive.
-                    morph_speed = 0.2 + norm_knobs[5] * 9.8;
-                }
-            }
-
-            // ── Footswitch state machine (read from ControlBuffer) ──
+            // ── 5. Footswitch state machine ──
             let fs1_pressed = CONTROLS.read_footswitch(0);
             let fs2_pressed = CONTROLS.read_footswitch(1);
             let both_pressed = fs1_pressed && fs2_pressed;
@@ -896,7 +789,7 @@ async fn main(spawner: embassy_executor::Spawner) {
             }
 
             // MORPH mode: continuous ramp while held.
-            if mode == Mode::Morph && !both_pressed {
+            if ab_mode == AbMode::Morph && !both_pressed {
                 let delta = 1.0 / (morph_speed * 100.0);
                 if fs1_pressed && !fs2_pressed {
                     morph_t = if morph_t > delta {
@@ -913,7 +806,7 @@ async fn main(spawner: embassy_executor::Spawner) {
                 }
             }
 
-            // Both-FS tap detection.
+            // Both-FS tap detection (consumed, no further action).
             let both_tapped = both_held_peak > 0
                 && both_held_peak < TAP_LIMIT
                 && !fs1_pressed
@@ -922,50 +815,6 @@ async fn main(spawner: embassy_executor::Spawner) {
                 && fs2_was_pressed;
 
             if both_tapped {
-                match mode {
-                    Mode::Build => {
-                        // Save preset to ring buffer.
-                        let slot = next_preset_slot;
-                        presets[slot] = Preset {
-                            slot_effects: effect_indices,
-                            routing,
-                            sound_a: (*sound_a).clone(),
-                            sound_b: (*sound_b).clone(),
-                            morph_speed,
-                            occupied: true,
-                        };
-                        next_preset_slot = (slot + 1) % MAX_PRESETS;
-                        defmt::info!("PRESET saved to slot {}", slot + 1);
-                        CONTROLS.write_led(1, 1.0);
-                        led2_counter = 20;
-                    }
-                    Mode::Explore => {
-                        // Load preset (cycle through occupied slots).
-                        let mut found = false;
-                        for i in 0..MAX_PRESETS {
-                            let idx = (load_preset_cursor + i) % MAX_PRESETS;
-                            if presets[idx].occupied {
-                                let preset = &presets[idx];
-                                effect_indices = preset.slot_effects;
-                                routing = preset.routing;
-                                *sound_a = preset.sound_a.clone();
-                                *sound_b = preset.sound_b.clone();
-                                morph_speed = preset.morph_speed;
-                                load_preset_cursor = (idx + 1) % MAX_PRESETS;
-                                needs_rebuild = true;
-                                defmt::info!("PRESET loaded from slot {}", idx + 1);
-                                CONTROLS.write_led(1, 1.0);
-                                led2_counter = 20;
-                                found = true;
-                                break;
-                            }
-                        }
-                        if !found {
-                            defmt::info!("No presets saved");
-                        }
-                    }
-                    Mode::Morph => {} // Both-FS tap = no-op in morph (only hold=bypass).
-                }
                 both_held_peak = 0;
             }
 
@@ -973,72 +822,55 @@ async fn main(spawner: embassy_executor::Spawner) {
                 both_held_peak = 0;
             }
 
-            // ── FS1 release actions ──
+            // ── A/B mode: FS1/FS2 release = scroll effects ──
             let was_both = both_held_peak > 0 || both_tapped;
-            if fs1_was_pressed
-                && !fs1_pressed
-                && !was_both
-                && both_held < BYPASS_HOLD
-                && fs1_held < TAP_LIMIT
-            {
-                match mode {
-                    Mode::Explore => {
-                        // Scroll LEFT in focused slot.
-                        let cursor = &mut browse_cursor[focused_slot];
-                        *cursor = if *cursor == 0 {
-                            NUM_EFFECTS - 1
-                        } else {
-                            *cursor - 1
-                        };
-                        effect_indices[focused_slot] = Some(*cursor);
-                        needs_rebuild = true;
-                        defmt::info!("slot {} ← {}", focused_slot + 1, EFFECT_LIST[*cursor].id);
-                        CONTROLS.write_led(1, 1.0);
-                        led2_counter = 10;
-                    }
-                    Mode::Build => {
-                        // Capture current build_slot's B, go to previous slot.
-                        // (sound_b already up-to-date from knob writes)
-                        let prev = prev_populated(&effect_indices, build_slot);
-                        if prev != build_slot {
-                            build_slot = prev;
-                            led2_blink_pattern = (build_slot + 1) as u8;
-                            defmt::info!("BUILD ← slot {}", build_slot + 1);
-                        }
-                    }
-                    Mode::Morph => {} // Morph uses held, not tap.
-                }
-            }
 
-            // ── FS2 release actions ──
-            if fs2_was_pressed
-                && !fs2_pressed
+            if (ab_mode == AbMode::A || ab_mode == AbMode::B)
                 && !was_both
                 && both_held < BYPASS_HOLD
-                && fs2_held < TAP_LIMIT
             {
-                match mode {
-                    Mode::Explore => {
-                        // Scroll RIGHT in focused slot.
-                        let cursor = &mut browse_cursor[focused_slot];
-                        *cursor = (*cursor + 1) % NUM_EFFECTS;
-                        effect_indices[focused_slot] = Some(*cursor);
-                        needs_rebuild = true;
-                        defmt::info!("slot {} → {}", focused_slot + 1, EFFECT_LIST[*cursor].id);
-                        CONTROLS.write_led(1, 1.0);
-                        led2_counter = 10;
-                    }
-                    Mode::Build => {
-                        // Capture current build_slot's B, go to next slot.
-                        // (sound_b already up-to-date from knob writes)
-                        let next = next_populated(&effect_indices, build_slot);
-                        if next != build_slot {
-                            build_slot = next;
-                            led2_blink_pattern = (build_slot + 1) as u8;
-                            defmt::info!("BUILD → slot {}", build_slot + 1);
-                        }
-                    }
-                    Mode::Morph => {} // Morph uses held, not tap.
+                // FS1 release = scroll previous effect.
+                if fs1_was_pressed
+                    && !fs1_pressed
+                    && fs1_held < TAP_LIMIT as u32
+                {
+                    let node = &mut nodes[focused_node];
+                    let cursor = if node.browse_cursor == 0 {
+                        NUM_EFFECTS - 1
+                    } else {
+                        node.browse_cursor - 1
+                    };
+                    node.browse_cursor = cursor;
+                    node.effect_index = Some(cursor);
+                    // Reset A/B — fresh start with new effect.
+                    node.params_a = SlotSnapshot::new();
+                    node.params_b = None;
+                    needs_rebuild = true;
+                    defmt::info!(
+                        "node {} ← {}",
+                        focused_node + 1,
+                        EFFECT_LIST[cursor].id
+                    );
+                }
+
+                // FS2 release = scroll next effect.
+                if fs2_was_pressed
+                    && !fs2_pressed
+                    && fs2_held < TAP_LIMIT as u32
+                {
+                    let node = &mut nodes[focused_node];
+                    let cursor = (node.browse_cursor + 1) % NUM_EFFECTS;
+                    node.browse_cursor = cursor;
+                    node.effect_index = Some(cursor);
+                    // Reset A/B — fresh start with new effect.
+                    node.params_a = SlotSnapshot::new();
+                    node.params_b = None;
+                    needs_rebuild = true;
+                    defmt::info!(
+                        "node {} → {}",
+                        focused_node + 1,
+                        EFFECT_LIST[cursor].id
+                    );
                 }
             }
 
@@ -1052,74 +884,116 @@ async fn main(spawner: embassy_executor::Spawner) {
             fs1_was_pressed = fs1_pressed;
             fs2_was_pressed = fs2_pressed;
 
-            // ── Graph rebuild ──
-            if needs_rebuild {
-                // Preserve snapshots across rebuild.
-                if mode == Mode::Build {
-                    // Sound B is managed by knob writes, no extra capture needed.
-                } else if mode == Mode::Explore {
-                    // Capture current params before destroying old graph.
-                    sound_a.capture_all(&graph, &node_ids);
-                }
+            // ── 6. Handle knobs (A/B modes only, not morph) ──
+            if ab_mode != AbMode::Morph {
+                if let Some(eff_idx) = nodes[focused_node].effect_index
+                    && let Some(nid) = node_ids[focused_node]
+                {
+                    let entry = &EFFECT_LIST[eff_idx];
+                    // Read knob values from ControlBuffer.
+                    let norm_knobs: [f32; 6] = core::array::from_fn(|k| CONTROLS.read_knob(k));
 
+                    // Compute param values using descriptors (immutable borrow first).
+                    let mut param_vals: [(u8, f32); 6] = [(NULL_KNOB, 0.0); 6];
+                    if let Some(effect) = graph.effect_with_params_ref(nid) {
+                        for k in 0..6 {
+                            let param_idx = entry.knobs[k];
+                            if param_idx != NULL_KNOB
+                                && let Some(desc) =
+                                    effect.effect_param_info(param_idx as usize)
+                            {
+                                param_vals[k] =
+                                    (param_idx, adc_to_param(&desc, norm_knobs[k]));
+                            }
+                        }
+                    }
+
+                    // Apply to graph and update snapshot.
+                    if let Some(effect) = graph.effect_with_params_mut(nid) {
+                        for &(pidx, val) in &param_vals {
+                            if pidx != NULL_KNOB {
+                                effect.effect_set_param(pidx as usize, val);
+                            }
+                        }
+                    }
+
+                    // Update the current snapshot (A or B).
+                    let node = &mut nodes[focused_node];
+                    match ab_mode {
+                        AbMode::A => {
+                            for &(pidx, val) in &param_vals {
+                                if pidx != NULL_KNOB {
+                                    node.params_a.values[pidx as usize] = val;
+                                }
+                            }
+                        }
+                        AbMode::B => {
+                            if let Some(ref mut b) = node.params_b {
+                                for &(pidx, val) in &param_vals {
+                                    if pidx != NULL_KNOB {
+                                        b.values[pidx as usize] = val;
+                                    }
+                                }
+                            }
+                        }
+                        AbMode::Morph => {} // unreachable — guarded above
+                    }
+                }
+            } else {
+                // Morph mode: K6 = morph speed (0.2–10.0s). K1-K5 disabled.
+                morph_speed = 0.2 + CONTROLS.read_knob(5) * 9.8;
+            }
+
+            // ── 7. Graph rebuild ──
+            if needs_rebuild {
                 let (new_graph, new_nodes) =
-                    build_graph(&effect_indices, routing, SAMPLE_RATE, BLOCK_SIZE);
+                    build_graph(&nodes, topology, SAMPLE_RATE, BLOCK_SIZE);
                 graph = new_graph;
                 node_ids = new_nodes;
 
-                // Restore params to new graph.
-                if mode == Mode::Build {
-                    // Apply based on current T1 preview.
-                    match t1 {
-                        0 => sound_a.apply_to_graph(&mut graph, &node_ids),
-                        2 => sound_b.apply_to_graph(&mut graph, &node_ids),
-                        _ => interpolate_and_apply(&mut graph, &node_ids, &sound_a, &sound_b, 0.5),
+                // Capture default params for newly created effects.
+                for slot in 0..NUM_SLOTS {
+                    if nodes[slot].effect_index.is_some()
+                        && nodes[slot].params_a.count == 0
+                    {
+                        if let Some(nid) = node_ids[slot] {
+                            nodes[slot].params_a.capture_from(&graph, nid);
+                        }
                     }
-                } else if mode == Mode::Explore {
-                    sound_a.apply_to_graph(&mut graph, &node_ids);
-                } else if mode == Mode::Morph {
-                    interpolate_and_apply(&mut graph, &node_ids, &sound_a, &sound_b, morph_t);
+                }
+
+                // Restore params to new graph based on mode.
+                match ab_mode {
+                    AbMode::A => apply_all_snapshots(&mut graph, &node_ids, &nodes, AbMode::A),
+                    AbMode::B => apply_all_snapshots(&mut graph, &node_ids, &nodes, AbMode::B),
+                    AbMode::Morph => {
+                        interpolate_and_apply(&mut graph, &node_ids, &nodes, morph_t);
+                    }
                 }
 
                 needs_rebuild = false;
                 defmt::info!("graph rebuilt");
             }
 
-            // ── Morph interpolation ──
-            if mode == Mode::Morph {
-                interpolate_and_apply(&mut graph, &node_ids, &sound_a, &sound_b, morph_t);
+            // ── 7b. Morph interpolation (every poll) ──
+            if ab_mode == AbMode::Morph {
+                interpolate_and_apply(&mut graph, &node_ids, &nodes, morph_t);
             }
 
-            // ── LED2 feedback via ControlBuffer ──
+            // ── 8. LED feedback ──
             if BYPASSED.load(Ordering::Relaxed) {
                 CONTROLS.write_led(1, 0.0);
-            } else if led2_counter > 0 {
-                led2_counter -= 1;
-                if led2_counter == 0 {
-                    CONTROLS.write_led(1, 0.0);
-                }
             } else {
-                match mode {
-                    Mode::Explore => CONTROLS.write_led(1, 0.0),
-                    Mode::Build => {
-                        // Blink pattern = slot number (1/2/3 rapid pulses, pause).
-                        // 100-tick cycle: pulses in first half, dark in second half.
-                        let phase = poll_counter % 100;
-                        let pulses = led2_blink_pattern as u16;
-                        // Each pulse: 5 ticks on, 5 ticks off = 10 ticks per pulse.
-                        let pulse_window = pulses * 10;
-                        if phase < pulse_window {
-                            let within = phase % 10;
-                            if within < 5 {
-                                CONTROLS.write_led(1, 1.0);
-                            } else {
-                                CONTROLS.write_led(1, 0.0);
-                            }
-                        } else {
-                            CONTROLS.write_led(1, 0.0);
-                        }
+                match ab_mode {
+                    AbMode::A => {
+                        // LED2 off in A mode.
+                        CONTROLS.write_led(1, 0.0);
                     }
-                    Mode::Morph => {
+                    AbMode::B => {
+                        // LED2 solid on in B mode.
+                        CONTROLS.write_led(1, 1.0);
+                    }
+                    AbMode::Morph => {
                         // PWM duty = morph_t (dark=A, bright=B).
                         let pwm_phase = poll_counter % 10;
                         let threshold = (morph_t * 10.0) as u16;
