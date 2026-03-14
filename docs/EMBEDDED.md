@@ -100,21 +100,21 @@ cargo check -p sonido-daisy \
 - **Audio**: `AudioPeripherals` + `start_callback()` — async loop, yields every DMA transfer (~0.667 ms at 48 kHz, 32-sample blocks).
 - **LED / UI**: Use `sonido_daisy::heartbeat` — the shared lub-dub blink task. Every binary spawns it: `spawner.spawn(heartbeat(UserLed::new(p.PC7))).unwrap();`.
 - **USB / Serial**: Same spawned-task pattern. See `hothouse_diag.rs`.
-- **Audio callback is real-time** — NEVER block in the audio callback. No ADC reads, no USB, no allocation. Only pure DSP math and lock-free ControlBuffer reads. Blocking ADC reads (~8 µs at CYCLES387_5) cause DMA overruns → hard faults.
+- **Audio callback is real-time** — NEVER block in the audio callback. No ADC reads, no USB, no allocation. Only pure DSP math and lock-free ControlBuffer reads.
 - **Task return type**: Use `async fn task(...) { }` (implicit `()` return), not `-> !`.
 
 Reference implementation: `crates/sonido-daisy/examples/single_effect.rs`
 
 ### Control / Audio Separation
 
-ADC and GPIO reads run in a separate Embassy task (`hothouse_control_task`) at 50 Hz, matching libDaisy's architecture where `seed.adc` runs via DMA independently of audio. Shared state flows through a lock-free `ControlBuffer` using `Relaxed` atomics.
+All 6 knobs use uniform `blocking_read()` polling in a 50 Hz Embassy task (`hothouse_control_task`). At ~8 µs per channel (CYCLES387_5 sample time), 6 reads cost ~48 µs per 20 ms cycle (0.24% CPU). This matches libDaisy's own `AnalogControl` polling approach — no DMA channel, DMA buffer, or D2 SRAM allocation needed for the control path. GPIO reads (toggles, footswitches) are instant register accesses. Shared state flows through a lock-free `ControlBuffer` using `Relaxed` atomics.
 
 ```
 ┌─────────────────────┐              ┌──────────────────────┐
 │ hothouse_control_task│  ControlBuffer  │   Audio Callback     │
 │ (50 Hz, async task) │───────────────→│ (1500 Hz, real-time) │
 │                     │  (lock-free)    │                      │
-│ • ADC knob reads    │              │ • read_knob()         │
+│ • ADC blocking_read │              │ • read_knob()         │
 │ • GPIO toggle reads │              │ • read_toggle()       │
 │ • GPIO footswitches │              │ • read_footswitch()   │
 │ • IIR smoothing     │  ←────────────│ • write_led()         │
@@ -127,7 +127,7 @@ ADC and GPIO reads run in a separate Embassy task (`hothouse_control_task`) at 5
 | Module | Purpose | Dependencies |
 |--------|---------|-------------|
 | `controls.rs` | `ControlBuffer<KNOBS,TOGGLES,FS,LEDS>` — lock-free shared state with IIR smoothing, change detection, LED bridge | `core` only |
-| `hothouse.rs` | `HothouseControls`, `hothouse_control_task`, `hothouse_pins!` macro, `decode_toggle` | `controls.rs` + Embassy |
+| `hothouse.rs` | `HothouseControls` (knobs array + GPIO), `hothouse_control_task` (uniform polling), `hothouse_pins!` macro, `decode_toggle` | `controls.rs` + Embassy |
 | `embedded_adapter.rs` | `EmbeddedAdapter<K>` — zero-smoothing `Effect + ParameterInfo` for `DspKernel` | `sonido-core` (feature `alloc`) |
 | `param_map.rs` | `adc_to_param()` — scale-aware ADC→parameter conversion with STEPPED rounding | `sonido-core` (feature `alloc`) |
 

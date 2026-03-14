@@ -28,17 +28,21 @@
 //! | KNOB_3          | D18       | PA7   | ADC1_INP7   |                     |
 //! | KNOB_4          | D19       | PA6   | ADC1_INP3   |                     |
 //! | KNOB_5          | D20       | PC1   | ADC1_INP11  |                     |
-//! | KNOB_6          | D21       | PC4   | ADC1_INP4   | Not ADC1 in embassy |
+//! | KNOB_6          | D21       | PC4   | ADC1_INP4   |                     |
 //!
 //! # Architecture
 //!
-//! ADC and GPIO reads run in their own Embassy task at 50 Hz — **never** inside
-//! the audio DMA callback. Blocking ADC reads in the DMA ISR cause hard faults
-//! and USB disconnects on the STM32H750. This matches libDaisy's design where
-//! `seed.adc` runs via DMA independently of audio.
+//! All 6 knobs use uniform `blocking_read()` polling — one ADC conversion per
+//! knob per 50 Hz cycle. At ~8 µs per channel (CYCLES387_5 sample time),
+//! 6 reads cost ~48 µs per 20 ms cycle (0.24% CPU). This matches libDaisy's
+//! own `AnalogControl` polling approach. No DMA channel, DMA buffer, or D2
+//! SRAM allocation is needed for the control path.
+//!
+//! GPIO reads (toggles, footswitches) and LED writes are instantaneous register
+//! accesses. All control I/O runs at 50 Hz in its own Embassy task, **never**
+//! inside the audio DMA callback.
 
-use embassy_stm32 as hal;
-use embassy_stm32::adc::{Adc, SampleTime};
+use embassy_stm32::adc::{Adc, AnyAdcChannel, SampleTime};
 use embassy_stm32::gpio::{Input, Output};
 use embassy_stm32::peripherals;
 
@@ -94,17 +98,10 @@ pub fn decode_toggle(up: &Input<'_>, dn: &Input<'_>) -> u8 {
 pub struct HothouseControls {
     /// ADC1 instance for knob readings.
     pub adc1: Adc<'static, peripherals::ADC1>,
-    /// Knob 1 pin (PA3 / ADC1_INP15).
-    pub k1: hal::Peri<'static, peripherals::PA3>,
-    /// Knob 2 pin (PB1 / ADC1_INP5).
-    pub k2: hal::Peri<'static, peripherals::PB1>,
-    /// Knob 3 pin (PA7 / ADC1_INP7).
-    pub k3: hal::Peri<'static, peripherals::PA7>,
-    /// Knob 4 pin (PA6 / ADC1_INP3).
-    pub k4: hal::Peri<'static, peripherals::PA6>,
-    /// Knob 5 pin (PC1 / ADC1_INP11).
-    pub k5: hal::Peri<'static, peripherals::PC1>,
-    // K6 (PC4) omitted — not an ADC1 channel in embassy-stm32. Needs ADC2 investigation.
+    /// Knobs 1–6, type-erased for uniform `blocking_read()` polling.
+    ///
+    /// Index order: K1 (PA3), K2 (PB1), K3 (PA7), K4 (PA6), K5 (PC1), K6 (PC4).
+    pub knobs: [AnyAdcChannel<'static, peripherals::ADC1>; 6],
     /// Toggle 1 up pin (PB4, pull-up, active-low).
     pub tog1_up: Input<'static>,
     /// Toggle 1 down pin (PB5, pull-up, active-low).
@@ -144,16 +141,19 @@ pub struct HothouseControls {
 #[macro_export]
 macro_rules! hothouse_pins {
     ($p:ident) => {{
-        use embassy_stm32::adc::Adc;
+        use embassy_stm32::adc::{Adc, AdcChannel};
         use embassy_stm32::gpio::{Input, Level, Output, Pull, Speed};
 
         $crate::hothouse::HothouseControls {
             adc1: Adc::new($p.ADC1),
-            k1: $p.PA3,
-            k2: $p.PB1,
-            k3: $p.PA7,
-            k4: $p.PA6,
-            k5: $p.PC1,
+            knobs: [
+                $p.PA3.degrade_adc(), // K1
+                $p.PB1.degrade_adc(), // K2
+                $p.PA7.degrade_adc(), // K3
+                $p.PA6.degrade_adc(), // K4
+                $p.PC1.degrade_adc(), // K5
+                $p.PC4.degrade_adc(), // K6
+            ],
             tog1_up: Input::new($p.PB4, Pull::Up),
             tog1_dn: Input::new($p.PB5, Pull::Up),
             tog2_up: Input::new($p.PG10, Pull::Up),
@@ -171,6 +171,9 @@ macro_rules! hothouse_pins {
 // ── Embassy control task ──────────────────────────────────────────────────
 
 /// Reads ADC knobs and GPIO at 50 Hz, writes smoothed values to a [`HothouseBuffer`].
+///
+/// All 6 knobs are read via uniform `blocking_read()` polling — ~48 µs total
+/// per 20 ms cycle (0.24% CPU). This matches libDaisy's `AnalogControl` approach.
 ///
 /// Drives LEDs from the buffer's LED values (written by the audio callback).
 ///
@@ -192,26 +195,15 @@ macro_rules! hothouse_pins {
 /// spawner.spawn(hothouse_control_task(ctrl, &CONTROLS)).unwrap();
 /// ```
 #[embassy_executor::task]
-pub async fn hothouse_control_task(
-    mut ctrl: HothouseControls,
-    buf: &'static HothouseBuffer,
-) {
+pub async fn hothouse_control_task(mut ctrl: HothouseControls, buf: &'static HothouseBuffer) {
     loop {
         embassy_time::Timer::after_millis(POLL_INTERVAL_MS).await;
 
-        // ── Read 5 knobs (K6/PC4 omitted — not ADC1) ──
-        let k1 = ctrl.adc1.blocking_read(&mut ctrl.k1, KNOB_SAMPLE_TIME);
-        let k2 = ctrl.adc1.blocking_read(&mut ctrl.k2, KNOB_SAMPLE_TIME);
-        let k3 = ctrl.adc1.blocking_read(&mut ctrl.k3, KNOB_SAMPLE_TIME);
-        let k4 = ctrl.adc1.blocking_read(&mut ctrl.k4, KNOB_SAMPLE_TIME);
-        let k5 = ctrl.adc1.blocking_read(&mut ctrl.k5, KNOB_SAMPLE_TIME);
-
-        buf.write_knob_raw(0, k1, KNOB_ALPHA);
-        buf.write_knob_raw(1, k2, KNOB_ALPHA);
-        buf.write_knob_raw(2, k3, KNOB_ALPHA);
-        buf.write_knob_raw(3, k4, KNOB_ALPHA);
-        buf.write_knob_raw(4, k5, KNOB_ALPHA);
-        // K6 slot stays at 0.0 (written with 0 at init)
+        // ── Read all 6 knobs via uniform blocking_read (~48 µs total) ──
+        for (i, knob) in ctrl.knobs.iter_mut().enumerate() {
+            let raw = ctrl.adc1.blocking_read(knob, KNOB_SAMPLE_TIME);
+            buf.write_knob_raw(i, raw, KNOB_ALPHA);
+        }
 
         // ── Read toggles ──
         buf.write_toggle(0, decode_toggle(&ctrl.tog1_up, &ctrl.tog1_dn));
@@ -223,14 +215,12 @@ pub async fn hothouse_control_task(
         buf.write_footswitch(1, ctrl.foot2.is_low());
 
         // ── Drive LEDs from buffer (audio callback writes, we drive GPIO) ──
-        let led1_val = buf.read_led(0);
-        if led1_val > 0.5 {
+        if buf.read_led(0) > 0.5 {
             ctrl.led1.set_high();
         } else {
             ctrl.led1.set_low();
         }
-        let led2_val = buf.read_led(1);
-        if led2_val > 0.5 {
+        if buf.read_led(1) > 0.5 {
             ctrl.led2.set_high();
         } else {
             ctrl.led2.set_low();
@@ -282,10 +272,7 @@ impl sonido_platform::PlatformController for HothousePlatform {
         }
     }
 
-    fn control_type(
-        &self,
-        id: sonido_platform::ControlId,
-    ) -> Option<sonido_platform::ControlType> {
+    fn control_type(&self, id: sonido_platform::ControlId) -> Option<sonido_platform::ControlType> {
         match id.index() {
             0..=5 => Some(sonido_platform::ControlType::Knob),
             6..=8 => Some(sonido_platform::ControlType::Toggle3Way),
