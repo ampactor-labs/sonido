@@ -605,13 +605,14 @@ cargo run --example <name> --release
 
 ---
 
-## Morph Pedal v2
+## Morph Pedal v3
 
 The morph pedal (`examples/morph_pedal.rs`) is the flagship firmware — a
 3-slot, DAG-routed, A/B morphing guitar pedal with 14 curated effects. It
 demonstrates all of sonido's embedded capabilities: `ProcessingGraph` for
-routing, `EmbeddedAdapter` for zero-smoothing kernel access, and scale-aware
-ADC parameter mapping.
+routing, `EmbeddedAdapter` for zero-smoothing kernel access, scale-aware
+ADC parameter mapping, and footswitch-controlled crossfade between two
+parameter snapshots.
 
 ### Architecture Overview
 
@@ -646,7 +647,7 @@ hardware-filtered and params change at ~100Hz. Smoothing is redundant overhead.
 
 ### EmbeddedAdapter Pattern
 
-`EmbeddedAdapter<K>` is defined locally in `morph_pedal.rs` (~55 lines):
+`EmbeddedAdapter<K>` is defined in `embedded_adapter.rs` (~55 lines):
 
 ```rust
 struct EmbeddedAdapter<K: DspKernel> {
@@ -676,58 +677,64 @@ Comparison with sonido's other DSP bridge patterns:
 | Pattern | Context | Smoothing | Trait impl |
 |---------|---------|-----------|------------|
 | `KernelAdapter<K>` | Desktop / Plugin | Yes (SmoothedParam per param) | Effect + ParameterInfo |
-| `EmbeddedAdapter<K>` | Morph pedal firmware | None (direct write) | Effect + ParameterInfo |
+| `EmbeddedAdapter<K>` | Embedded firmware (morph pedal) | None (direct write) | Effect + ParameterInfo |
 | Direct `DspKernel` | `single_effect.rs` | None (`from_knobs()`) | No trait — call `process_stereo()` directly |
 
 Use `EmbeddedAdapter` when you need `ProcessingGraph` compatibility (the graph
 requires `Effect + ParameterInfo` behind `EffectWithParams`). Use direct kernel
 access when you have a single fixed effect and don't need the graph.
 
-### Three-Mode Interaction
+### Toggle Mapping
 
-Toggle 3 selects the operating mode:
+Three toggles divide control across three orthogonal concerns:
 
-| T3 | Mode | Purpose |
-|----|------|---------|
-| UP | Explore | Scroll effects into 3 slots, shape params with knobs |
-| MID | Build | Capture Sound A/B snapshots per-slot, preview with T1 |
-| DN | Morph | Footswitch-controlled crossfade between Sound A and B |
+| Toggle | UP (0) | MID (1) | DOWN (2) |
+|--------|--------|---------|----------|
+| **T1** | Node 1 (effect slot 1) | Node 2 (effect slot 2) | Node 3 (effect slot 3) |
+| **T2** | **A mode**: hear/edit A state | **B mode**: hear/edit B state | **Morph mode**: FS1/FS2 control morph |
+| **T3** | **Linear**: 1 → 2 → 3 | **Parallel**: split → [1,2,3] → merge | **Fan**: 1 → split → [2,3] → merge |
 
-Toggle 2 selects routing topology (in all modes):
+T1 selects which of the 3 effect slots the knobs (K1–K5) control. T2 selects
+the editing/performance mode. T3 selects routing topology (triggers graph
+rebuild).
 
-| T2 | Routing | Topology |
-|----|---------|----------|
-| UP | Serial | Input → E0 → E1 → E2 → Output |
-| MID | Parallel | Input → Split → E0,E1,E2 → Merge → Output |
-| DN | Fan | Input → E0 → Split → E1,E2 → Merge → Output |
+### A/B Editing
 
-Toggle 1 has mode-dependent function:
+T2 selects between editing two independent parameter snapshots (A and B) and
+performing a morph between them:
 
-| Mode | T1 UP | T1 MID | T1 DN |
-|------|-------|--------|-------|
-| Explore | Focus slot 0 | Focus slot 1 | Focus slot 2 |
-| Build | Preview Sound A | Preview 50% lerp | Preview Sound B |
-| Morph | Speed 0.5s | Speed 2s | Speed 5s |
+**A mode** (T2=UP) — Boot state. Knobs write to A-state parameters for the
+slot selected by T1. Sound output reflects the A snapshot. Effect selection
+via footswitches: FS1 release = previous effect, FS2 release = next effect.
+Selecting a new effect resets both A and B states for that slot. Knobs set
+parameters via `adc_to_param()` with scale-aware mapping (log for frequencies,
+linear for dB). "Knob = truth" — the physical pot position is always the
+param value, no pickup logic.
 
-**Explore mode** — Boot state. All slots empty (Input→Output passthrough).
-FS2 creates the first effect by scrolling right through the effect list. FS1
-scrolls left. T1 selects which slot (0/1/2) the footswitches and knobs
-control. Knobs set parameters via `adc_to_param()` with scale-aware mapping
-(log for frequencies, linear for dB). "Knob = truth" — the physical pot
-position is always the param value, no pickup logic.
+**B mode** (T2=MID) — Knobs write to B-state parameters. On first entry, B is
+initialized as a copy of A. Sound output reflects the B snapshot. Same
+footswitch effect scrolling as A mode. Switching between A and B modes snaps
+the sound to the stored snapshot; moving a knob overrides that parameter.
 
-**Build mode** — On entry, captures current state as Sound A, copies to Sound
-B. `build_slot` starts at the first populated slot. Knobs always write to
-Sound B for the active `build_slot`. FS2 captures and advances to next
-populated slot. FS1 captures and goes back. T1 previews: UP = Sound A across
-all slots, MID = 50% lerp, DN = Sound B (live knobs for current slot, stored
-values for others). LED2 blinks slot number (1/2/3 pulses).
-
-**Morph mode** — FS1 held → morph_t ramps toward 0.0 (Sound A). FS2 held →
-toward 1.0 (Sound B). Neither → hold position. `interpolate_and_apply()`
+**Morph mode** (T2=DOWN) — Footswitch-controlled crossfade between A and B.
+FS1 held → `morph_t` ramps toward 0.0 (A). FS2 held → toward 1.0 (B).
+Neither held → latch (morph_t stays where it is). K6 controls morph speed
+(0.2–10.0s). K1–K5 are disabled in morph mode. `interpolate_and_apply()`
 writes lerped params to all slots every control poll (~100Hz). STEPPED params
-snap at t=0.5 (same as `KernelParams::lerp()`). K6 overrides morph speed
-(0.2–10.0s). LED2 brightness tracks morph_t via PWM.
+snap at t=0.5 (same as `KernelParams::lerp()`). Per-node optimization: if B
+was never edited for a slot (B=A), that node stays stable during morph.
+LED2 PWM duty tracks morph_t.
+
+### Bypass
+
+Both footswitches held for ≥1 second toggles global bypass (all modes).
+
+### LED Feedback
+
+| LED | Meaning |
+|-----|---------|
+| LED1 | Bypass status — on = active, off = bypassed |
+| LED2 | Mode indicator — off (A mode), solid on (B mode), PWM duty = morph_t (morph mode) |
 
 ### Curated Effect List and Knob Mapping
 
@@ -814,9 +821,8 @@ effect.effect_set_param(p, val);  // direct write via EmbeddedAdapter
 ### Presets
 
 9-slot in-memory ring buffer (`Vec<Preset>` on SDRAM heap). Presets survive
-until power-off. Save: both-FS tap in Build mode. Load: both-FS tap in
-Explore mode (cycles through occupied slots). Each `Preset` stores: effect
-indices, routing, Sound A, Sound B, morph speed.
+until power-off. Each `Preset` stores: effect indices, routing topology,
+A-state parameters, B-state parameters, morph speed.
 
 ### How to Add a New Effect to the Morph Pedal
 
@@ -855,11 +861,13 @@ Audio callback (runs every block, ~1500Hz):
 └── Every POLL_EVERY blocks (~100Hz):
     ├── Read 6 ADC knobs
     ├── Decode 3 toggles + 2 footswitches
-    ├── Mode-specific control logic (match on current Mode)
-    │   ├── Explore: scroll effects, map knobs to focused slot
-    │   ├── Build: capture snapshots, navigate slots, preview
-    │   └── Morph: ramp morph_t, interpolate_and_apply()
-    └── Global bypass detection (both-FS hold)
+    ├── T1: select active node (slot 0/1/2)
+    ├── T2: mode-specific control logic
+    │   ├── A mode: scroll effects (FS1/FS2), map K1–K5 to A-state
+    │   ├── B mode: scroll effects (FS1/FS2), map K1–K5 to B-state
+    │   └── Morph: ramp morph_t (FS1→A, FS2→B), interpolate_and_apply()
+    ├── T3: topology selection (linear/parallel/fan)
+    └── Global bypass detection (both-FS hold ≥1s)
 ```
 
 Key state variables (all local to the callback closure):
@@ -869,15 +877,14 @@ Key state variables (all local to the callback closure):
 | `effect_indices` | `[Option<usize>; 3]` | Which effect is in each slot |
 | `node_ids` | `[Option<NodeId>; 3]` | Graph node per slot (None = empty) |
 | `graph` | `ProcessingGraph` | Compiled DAG |
-| `mode` | `Mode` | Current operating mode |
-| `routing` | `Routing` | Current topology |
-| `focused_slot` | `usize` | Which slot knobs/FS control |
+| `mode` | `Mode` | Current operating mode (A / B / Morph) |
+| `routing` | `Routing` | Current topology (Linear / Parallel / Fan) |
+| `active_slot` | `usize` | Which slot knobs/FS control (T1) |
 | `sound_a` / `sound_b` | `SoundSnapshot` | A/B parameter snapshots |
-| `build_slot` | `usize` | Which slot is being sculpted in Build |
 | `morph_t` | `f32` | Current morph position (0.0=A, 1.0=B) |
 
 Graph rebuild (via `build_graph()`) happens only on topology changes: effect
-scroll, slot population change, or T2 toggle. Parameter changes never rebuild
+scroll, slot population change, or T3 toggle. Parameter changes never rebuild
 — they go through `graph.effect_with_params_mut(nid).effect_set_param()`.
 
 ---
