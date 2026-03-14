@@ -23,6 +23,10 @@ use crate::chain_manager::GraphCommand;
 /// Maximum number of fan-out/fan-in ports on Split/Merge nodes.
 const MAX_PORTS: usize = MAX_SPLIT_TARGETS;
 
+/// Horizontal offset (pixels) for auto-inserted Merge nodes relative to their
+/// downstream target.
+const AUTO_MERGE_OFFSET_PX: f32 = 80.0;
+
 /// A node in the visual graph editor.
 #[derive(Clone, Debug)]
 pub enum SonidoNode {
@@ -957,8 +961,7 @@ impl SnarlViewer<SonidoNode> for SonidoViewer<'_> {
     }
 
     fn connect(&mut self, from: &OutPin, to: &InPin, snarl: &mut Snarl<SonidoNode>) {
-        let target_node = &snarl[to.id.node];
-        if matches!(target_node, SonidoNode::Merge) {
+        if matches!(snarl[to.id.node], SonidoNode::Merge) {
             // Merge nodes accept multiple inputs directly.
             snarl.connect(from.id, to.id);
         } else {
@@ -968,57 +971,16 @@ impl SnarlViewer<SonidoNode> for SonidoViewer<'_> {
                 .find(|&(_, inp)| inp.node == to.id.node)
                 .map(|(out, _)| out);
 
-            if let Some(old_source) = existing_source {
-                if matches!(snarl[old_source.node], SonidoNode::Merge) {
-                    // Existing source is already a Merge — add to it.
-                    let used = snarl
-                        .wires()
-                        .filter(|&(_, inp)| inp.node == old_source.node)
-                        .count();
-                    snarl.connect(
-                        from.id,
-                        InPinId {
-                            node: old_source.node,
-                            input: used,
-                        },
-                    );
-                } else {
-                    // Auto-insert a Merge node to combine both connections.
-                    let target_pos = snarl
-                        .get_node_info(to.id.node)
-                        .map_or(egui::pos2(0.0, 0.0), |n| n.pos);
-                    let merge_pos = target_pos - egui::vec2(80.0, 0.0);
-                    let merge_id = snarl.insert_node(merge_pos, SonidoNode::Merge);
-
-                    // Reroute: old source → Merge input 0
-                    snarl.disconnect(old_source, to.id);
-                    snarl.connect(
-                        old_source,
-                        InPinId {
-                            node: merge_id,
-                            input: 0,
-                        },
-                    );
-                    // New source → Merge input 1
-                    snarl.connect(
-                        from.id,
-                        InPinId {
-                            node: merge_id,
-                            input: 1,
-                        },
-                    );
-                    // Merge output → original target
-                    snarl.connect(
-                        OutPinId {
-                            node: merge_id,
-                            output: 0,
-                        },
-                        to.id,
-                    );
+            match existing_source {
+                Some(old) if matches!(snarl[old.node], SonidoNode::Merge) => {
+                    add_to_existing_merge(from.id, old.node, snarl);
                 }
-            } else {
-                // No existing input — simple direct connection.
-                snarl.connect(from.id, to.id);
+                Some(old) => {
+                    insert_merge_between(from.id, old, to.id, snarl);
+                }
+                None => {
+                    snarl.connect(from.id, to.id);
+                }
             }
         }
         *self.topology_changed = true;
@@ -1038,6 +1000,69 @@ impl SnarlViewer<SonidoNode> for SonidoViewer<'_> {
         snarl.drop_inputs(pin.id);
         *self.topology_changed = true;
     }
+}
+
+/// Add a new connection to an existing Merge node.
+///
+/// Counts current inputs on the Merge and appends the new source to the next
+/// available input slot.
+fn add_to_existing_merge(from: OutPinId, merge_node: NodeId, snarl: &mut Snarl<SonidoNode>) {
+    let used = snarl
+        .wires()
+        .filter(|&(_, inp)| inp.node == merge_node)
+        .count();
+    snarl.connect(
+        from,
+        InPinId {
+            node: merge_node,
+            input: used,
+        },
+    );
+}
+
+/// Auto-insert a Merge node between a new source, an existing source, and
+/// their shared target.
+///
+/// Creates a Merge node offset [`AUTO_MERGE_OFFSET_PX`] pixels to the left of
+/// the target, rewires the existing connection through it, and adds the new
+/// connection.
+fn insert_merge_between(
+    from: OutPinId,
+    existing: OutPinId,
+    target: InPinId,
+    snarl: &mut Snarl<SonidoNode>,
+) {
+    let target_pos = snarl
+        .get_node_info(target.node)
+        .map_or(egui::pos2(0.0, 0.0), |n| n.pos);
+    let merge_pos = target_pos - egui::vec2(AUTO_MERGE_OFFSET_PX, 0.0);
+    let merge_id = snarl.insert_node(merge_pos, SonidoNode::Merge);
+
+    // Reroute: existing source → Merge input 0
+    snarl.disconnect(existing, target);
+    snarl.connect(
+        existing,
+        InPinId {
+            node: merge_id,
+            input: 0,
+        },
+    );
+    // New source → Merge input 1
+    snarl.connect(
+        from,
+        InPinId {
+            node: merge_id,
+            input: 1,
+        },
+    );
+    // Merge output → original target
+    snarl.connect(
+        OutPinId {
+            node: merge_id,
+            output: 0,
+        },
+        target,
+    );
 }
 
 /// Collect parameter descriptors for an effect by creating a temporary instance.
