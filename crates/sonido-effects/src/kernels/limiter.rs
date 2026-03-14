@@ -70,7 +70,7 @@ use std::collections::VecDeque;
 
 use libm::{expf, fabsf};
 use sonido_core::kernel::{DspKernel, KernelParams, SmoothingStyle};
-use sonido_core::{ParamDescriptor, ParamId, fast_db_to_linear, math::db_to_linear};
+use sonido_core::{ParamDescriptor, ParamId, ParamScale, fast_db_to_linear, math::db_to_linear};
 
 /// Maximum lookahead in milliseconds — sizes the fixed delay buffers at construction.
 ///
@@ -198,7 +198,8 @@ impl KernelParams for LimiterParams {
             ),
             2 => Some(
                 ParamDescriptor::time_ms("Release", "Rel", 10.0, 500.0, 100.0)
-                    .with_id(ParamId(1602), "lim_release"),
+                    .with_id(ParamId(1602), "lim_release")
+                    .with_scale(ParamScale::Power(2.0)),
             ),
             3 => Some(
                 ParamDescriptor::time_ms("Lookahead", "Look", 0.0, 10.0, 5.0)

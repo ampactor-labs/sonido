@@ -261,13 +261,15 @@ impl KernelParams for CompressorParams {
                 ParamDescriptor::custom("Attack", "Attack", 0.1, 100.0, 10.0)
                     .with_unit(ParamUnit::Milliseconds)
                     .with_step(0.1)
-                    .with_id(ParamId(302), "comp_attack"),
+                    .with_id(ParamId(302), "comp_attack")
+                    .with_scale(ParamScale::Power(2.0)),
             ),
             // ── [3] Release ──────────────────────────────────────────────────
             // ParamId(303), "comp_release" — matches classic compressor.rs [3]
             3 => Some(
                 ParamDescriptor::time_ms("Release", "Release", 10.0, 1000.0, 100.0)
-                    .with_id(ParamId(303), "comp_release"),
+                    .with_id(ParamId(303), "comp_release")
+                    .with_scale(ParamScale::Power(2.0)),
             ),
             // ── [4] Makeup Gain ──────────────────────────────────────────────
             // ParamId(304), "comp_makeup" — matches classic compressor.rs [4]
@@ -1046,8 +1048,8 @@ mod tests {
         let p = CompressorParams::from_knobs(
             0.5, // thresh → -30.0 dB
             0.5, // ratio → 10.5
-            0.5, // attack → 50.05 ms
-            0.5, // release → 505.0 ms
+            0.5, // attack → 25.075 ms (Power(2): 0.1 + 0.25 × 99.9)
+            0.5, // release → 257.5 ms (Power(2): 10 + 0.25 × 990)
             0.5, // makeup → 12.0 dB
             0.5, // knee → 6.0 dB
             0.0, // detect → 0 (Peak)
@@ -1064,12 +1066,12 @@ mod tests {
         );
         assert!((p.ratio - 10.5).abs() < 0.1, "ratio: got {}", p.ratio);
         assert!(
-            (p.attack_ms - 50.05).abs() < 0.5,
+            (p.attack_ms - 25.075).abs() < 0.5,
             "attack_ms: got {}",
             p.attack_ms
         );
         assert!(
-            (p.release_ms - 505.0).abs() < 1.0,
+            (p.release_ms - 257.5).abs() < 1.0,
             "release_ms: got {}",
             p.release_ms
         );
