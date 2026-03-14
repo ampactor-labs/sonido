@@ -8,7 +8,7 @@ publish = false
 
 [features]
 ## Enables `EmbeddedAdapter`, `adc_to_param`, and DSP-dependent library modules.
-## Required for DSP examples (single_effect, morph_pedal, hothouse_diag).
+## Required for DSP examples (single_effect, sonido_pedal, hothouse_diag).
 ## Not needed for simple examples (blinky, passthrough) that don't use alloc.
 alloc = []
 ## Enables `HothousePlatform` (`PlatformController` impl backed by `ControlBuffer`).
@@ -52,7 +52,7 @@ panic-probe = { version = "1.0", features = ["print-defmt"] }
 # ── Example feature requirements ─────────────────────────────────────
 
 [[example]]
-name = "morph_pedal"
+name = "sonido_pedal"
 required-features = ["alloc"]
 
 [[example]]

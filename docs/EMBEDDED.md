@@ -90,7 +90,7 @@ cargo check -p sonido-daisy \
 | 3 | `passthrough_blink.rs` | Audio passthrough + LED heartbeat task | Hothouse |
 | 3 | `hothouse_diag.rs` | All Hothouse hardware (knobs, toggles, FS, temp) | Hothouse |
 | 4 | `single_effect.rs` | Real-time DSP, ADC parameter mapping (distortion) | Hothouse |
-| 5 | `morph_pedal.rs` | EmbeddedAdapter + ProcessingGraph DAG + A/B morph | Hothouse |
+| 5 | `sonido_pedal.rs` | EmbeddedAdapter + ProcessingGraph DAG + A/B morph | Hothouse |
 
 ### Modern Rust on Daisy Seed
 
@@ -246,7 +246,7 @@ remain appropriate.
 | Feature | Enables | Required By |
 |---------|---------|-------------|
 | *(none)* | Core library: audio, controls, hothouse, LED, RCC | Simple examples (blinky, passthrough) |
-| `alloc` | `EmbeddedAdapter`, `adc_to_param`, DSP-dependent modules | morph_pedal, bench_kernels |
+| `alloc` | `EmbeddedAdapter`, `adc_to_param`, DSP-dependent modules | sonido_pedal, bench_kernels |
 | `platform` | `HothousePlatform` (`PlatformController` impl) + implies `alloc` | Future platform integration |
 
 ### Dependencies
@@ -607,7 +607,7 @@ cargo run --example <name> --release
 
 ## Morph Pedal v3
 
-The morph pedal (`examples/morph_pedal.rs`) is the flagship firmware — a
+The morph pedal (`examples/sonido_pedal.rs`) is the flagship firmware — a
 3-slot, DAG-routed, A/B morphing guitar pedal with 14 curated effects. It
 demonstrates all of sonido's embedded capabilities: `ProcessingGraph` for
 routing, `EmbeddedAdapter` for zero-smoothing kernel access, scale-aware
@@ -827,7 +827,7 @@ A-state parameters, B-state parameters, morph speed.
 ### How to Add a New Effect to the Morph Pedal
 
 1. **Add the kernel import** in the `use sonido_effects::{...}` block at the
-   top of `morph_pedal.rs`.
+   top of `sonido_pedal.rs`.
 
 2. **Add a new entry to `EFFECT_LIST`** at the desired position. Map the 6
    knobs to parameter indices by checking the kernel's `KernelParams`
@@ -845,7 +845,7 @@ A-state parameters, B-state parameters, morph speed.
 5. **Build and verify:**
    ```bash
    cd crates/sonido-daisy
-   cargo check --example morph_pedal --release
+   cargo check --example sonido_pedal --release
    ```
 
 ### How to Modify Modes or Add Features

@@ -30,8 +30,8 @@
 //!
 //! ```bash
 //! cd crates/sonido-daisy
-//! cargo objcopy --example morph_pedal --release -- -O binary -R .sram1_bss morph_pedal.bin
-//! dfu-util -a 0 -s 0x90040000:leave -D morph_pedal.bin
+//! cargo objcopy --example sonido_pedal --release -- -O binary -R .sram1_bss sonido_pedal.bin
+//! dfu-util -a 0 -s 0x90040000:leave -D sonido_pedal.bin
 //! ```
 
 #![no_std]
@@ -220,6 +220,35 @@ enum Topology {
     Fan,
 }
 
+// ── Toggle parsing ─────────────────────────────────────────────────────────
+
+/// Map toggle 1 position to focused node index (0, 1, or 2).
+fn toggle_to_node(val: u8) -> usize {
+    match val {
+        0 => 0,
+        2 => 2,
+        _ => 1,
+    }
+}
+
+/// Map toggle 2 position to A/B/Morph mode.
+fn toggle_to_ab_mode(val: u8) -> AbMode {
+    match val {
+        0 => AbMode::A,
+        2 => AbMode::Morph,
+        _ => AbMode::B,
+    }
+}
+
+/// Map toggle 3 position to routing topology.
+fn toggle_to_topology(val: u8) -> Topology {
+    match val {
+        0 => Topology::Linear,
+        2 => Topology::Fan,
+        _ => Topology::Parallel,
+    }
+}
+
 // ── Effect factory ──────────────────────────────────────────────────────────
 
 /// Node ID type re-exported for convenience.
@@ -323,6 +352,50 @@ impl NodeState {
             browse_cursor: 0,
         }
     }
+
+    /// Write knob parameter values into the current A or B snapshot.
+    fn update_snapshot(&mut self, mode: &AbMode, param_vals: &[(u8, f32); 6]) {
+        match mode {
+            AbMode::A => {
+                for &(pidx, val) in param_vals {
+                    if pidx != NULL_KNOB {
+                        self.params_a.values[pidx as usize] = val;
+                    }
+                }
+            }
+            AbMode::B => {
+                if let Some(ref mut b) = self.params_b {
+                    for &(pidx, val) in param_vals {
+                        if pidx != NULL_KNOB {
+                            b.values[pidx as usize] = val;
+                        }
+                    }
+                }
+            }
+            AbMode::Morph => {} // unreachable — caller guards
+        }
+    }
+}
+
+/// Ensure all populated nodes have B snapshots (cloned from A if missing).
+fn ensure_b_snapshots(nodes: &mut [NodeState; NUM_SLOTS]) {
+    for slot in 0..NUM_SLOTS {
+        if nodes[slot].params_b.is_none() && nodes[slot].effect_index.is_some() {
+            nodes[slot].params_b = Some(nodes[slot].params_a.clone());
+        }
+    }
+}
+
+/// Scroll the focused node's effect by `delta` (+1 = next, -1 = prev).
+///
+/// Resets A/B snapshots and sets `needs_rebuild = true`.
+fn scroll_effect(nodes: &mut [NodeState; NUM_SLOTS], node_idx: usize, delta: i32) {
+    let node = &mut nodes[node_idx];
+    let cursor = ((node.browse_cursor as i32 + delta).rem_euclid(NUM_EFFECTS as i32)) as usize;
+    node.browse_cursor = cursor;
+    node.effect_index = Some(cursor);
+    node.params_a = SlotSnapshot::new();
+    node.params_b = None;
 }
 
 // ── Graph construction ──────────────────────────────────────────────────────
@@ -521,7 +594,7 @@ async fn main(spawner: embassy_executor::Spawner) {
     let led = UserLed::new(p.PC7);
     spawner.spawn(heartbeat(led)).unwrap();
 
-    defmt::info!("morph_pedal v3: initializing...");
+    defmt::info!("sonido_pedal v3: initializing...");
 
     // ── Extract control pins and spawn control task ──
     // Must happen BEFORE audio start_interface → start_callback.
@@ -533,7 +606,7 @@ async fn main(spawner: embassy_executor::Spawner) {
     // LED1 starts on (active indicator).
     CONTROLS.write_led(0, 1.0);
 
-    defmt::info!("morph_pedal v3: controls initialized");
+    defmt::info!("sonido_pedal v3: controls initialized");
 
     // ── Initial state: all slots empty, passthrough ──
 
@@ -544,28 +617,16 @@ async fn main(spawner: embassy_executor::Spawner) {
     embassy_time::Timer::after_millis(30).await;
 
     let t1_init = CONTROLS.read_toggle(0);
-    let mut focused_node: usize = match t1_init {
-        0 => 0,
-        2 => 2,
-        _ => 1,
-    };
+    let mut focused_node = toggle_to_node(t1_init);
 
     let t2_init = CONTROLS.read_toggle(1);
-    let mut ab_mode = match t2_init {
-        0 => AbMode::A,
-        2 => AbMode::Morph,
-        _ => AbMode::B,
-    };
+    let mut ab_mode = toggle_to_ab_mode(t2_init);
 
     let t3_init = CONTROLS.read_toggle(2);
-    let mut topology = match t3_init {
-        0 => Topology::Linear,
-        2 => Topology::Fan,
-        _ => Topology::Parallel,
-    };
+    let mut topology = toggle_to_topology(t3_init);
 
     defmt::info!(
-        "morph_pedal v3: toggles — node={}, ab={}, topo={}",
+        "sonido_pedal v3: toggles — node={}, ab={}, topo={}",
         focused_node + 1,
         t2_init,
         t3_init
@@ -664,53 +725,32 @@ async fn main(spawner: embassy_executor::Spawner) {
             let t3 = CONTROLS.read_toggle(2);
 
             // ── 2. Handle T3 change → topology ──
-            let new_topology = match t3 {
-                0 => Topology::Linear,
-                2 => Topology::Fan,
-                _ => Topology::Parallel,
-            };
+            let new_topology = toggle_to_topology(t3);
             if new_topology != topology {
                 topology = new_topology;
                 needs_rebuild = true;
             }
 
             // ── 3. Handle T1 change → focused node ──
-            let new_focused: usize = match t1 {
-                0 => 0,
-                2 => 2,
-                _ => 1,
-            };
+            let new_focused = toggle_to_node(t1);
             if new_focused != focused_node {
                 focused_node = new_focused;
                 // Apply current A/B snapshot for the new focused node.
                 if ab_mode != AbMode::Morph {
-                    apply_node_snapshot(
-                        &mut graph, &node_ids, &nodes, focused_node, ab_mode,
-                    );
+                    apply_node_snapshot(&mut graph, &node_ids, &nodes, focused_node, ab_mode);
                 }
                 defmt::info!("node → {}", focused_node + 1);
             }
 
             // ── 4. Handle T2 change → A/B/Morph mode ──
-            let new_ab = match t2 {
-                0 => AbMode::A,
-                2 => AbMode::Morph,
-                _ => AbMode::B,
-            };
+            let new_ab = toggle_to_ab_mode(t2);
             if new_ab != ab_mode {
                 let old_mode = ab_mode;
                 ab_mode = new_ab;
 
                 match (old_mode, ab_mode) {
                     (AbMode::A, AbMode::B) => {
-                        // Initialize B from A if not yet created.
-                        for slot in 0..NUM_SLOTS {
-                            if nodes[slot].params_b.is_none() && nodes[slot].effect_index.is_some()
-                            {
-                                nodes[slot].params_b =
-                                    Some(nodes[slot].params_a.clone());
-                            }
-                        }
+                        ensure_b_snapshots(&mut nodes);
                         apply_all_snapshots(&mut graph, &node_ids, &nodes, AbMode::B);
                         defmt::info!("→ B mode");
                     }
@@ -719,14 +759,7 @@ async fn main(spawner: embassy_executor::Spawner) {
                         defmt::info!("→ A mode");
                     }
                     (_, AbMode::Morph) => {
-                        // Ensure all nodes have B snapshots.
-                        for slot in 0..NUM_SLOTS {
-                            if nodes[slot].params_b.is_none() && nodes[slot].effect_index.is_some()
-                            {
-                                nodes[slot].params_b =
-                                    Some(nodes[slot].params_a.clone());
-                            }
-                        }
+                        ensure_b_snapshots(&mut nodes);
                         // Set morph_t based on which mode we came from.
                         morph_t = match old_mode {
                             AbMode::A => 0.0,
@@ -740,14 +773,7 @@ async fn main(spawner: embassy_executor::Spawner) {
                         defmt::info!("→ A mode (from morph)");
                     }
                     (AbMode::Morph, AbMode::B) => {
-                        // Ensure B exists before applying.
-                        for slot in 0..NUM_SLOTS {
-                            if nodes[slot].params_b.is_none() && nodes[slot].effect_index.is_some()
-                            {
-                                nodes[slot].params_b =
-                                    Some(nodes[slot].params_a.clone());
-                            }
-                        }
+                        ensure_b_snapshots(&mut nodes);
                         apply_all_snapshots(&mut graph, &node_ids, &nodes, AbMode::B);
                         defmt::info!("→ B mode (from morph)");
                     }
@@ -830,46 +856,24 @@ async fn main(spawner: embassy_executor::Spawner) {
                 && both_held < BYPASS_HOLD
             {
                 // FS1 release = scroll previous effect.
-                if fs1_was_pressed
-                    && !fs1_pressed
-                    && fs1_held < TAP_LIMIT as u32
-                {
-                    let node = &mut nodes[focused_node];
-                    let cursor = if node.browse_cursor == 0 {
-                        NUM_EFFECTS - 1
-                    } else {
-                        node.browse_cursor - 1
-                    };
-                    node.browse_cursor = cursor;
-                    node.effect_index = Some(cursor);
-                    // Reset A/B — fresh start with new effect.
-                    node.params_a = SlotSnapshot::new();
-                    node.params_b = None;
+                if fs1_was_pressed && !fs1_pressed && fs1_held < TAP_LIMIT as u32 {
+                    scroll_effect(&mut nodes, focused_node, -1);
                     needs_rebuild = true;
                     defmt::info!(
                         "node {} ← {}",
                         focused_node + 1,
-                        EFFECT_LIST[cursor].id
+                        EFFECT_LIST[nodes[focused_node].browse_cursor].id
                     );
                 }
 
                 // FS2 release = scroll next effect.
-                if fs2_was_pressed
-                    && !fs2_pressed
-                    && fs2_held < TAP_LIMIT as u32
-                {
-                    let node = &mut nodes[focused_node];
-                    let cursor = (node.browse_cursor + 1) % NUM_EFFECTS;
-                    node.browse_cursor = cursor;
-                    node.effect_index = Some(cursor);
-                    // Reset A/B — fresh start with new effect.
-                    node.params_a = SlotSnapshot::new();
-                    node.params_b = None;
+                if fs2_was_pressed && !fs2_pressed && fs2_held < TAP_LIMIT as u32 {
+                    scroll_effect(&mut nodes, focused_node, 1);
                     needs_rebuild = true;
                     defmt::info!(
                         "node {} → {}",
                         focused_node + 1,
-                        EFFECT_LIST[cursor].id
+                        EFFECT_LIST[nodes[focused_node].browse_cursor].id
                     );
                 }
             }
@@ -899,11 +903,9 @@ async fn main(spawner: embassy_executor::Spawner) {
                         for k in 0..6 {
                             let param_idx = entry.knobs[k];
                             if param_idx != NULL_KNOB
-                                && let Some(desc) =
-                                    effect.effect_param_info(param_idx as usize)
+                                && let Some(desc) = effect.effect_param_info(param_idx as usize)
                             {
-                                param_vals[k] =
-                                    (param_idx, adc_to_param(&desc, norm_knobs[k]));
+                                param_vals[k] = (param_idx, adc_to_param(&desc, norm_knobs[k]));
                             }
                         }
                     }
@@ -918,26 +920,7 @@ async fn main(spawner: embassy_executor::Spawner) {
                     }
 
                     // Update the current snapshot (A or B).
-                    let node = &mut nodes[focused_node];
-                    match ab_mode {
-                        AbMode::A => {
-                            for &(pidx, val) in &param_vals {
-                                if pidx != NULL_KNOB {
-                                    node.params_a.values[pidx as usize] = val;
-                                }
-                            }
-                        }
-                        AbMode::B => {
-                            if let Some(ref mut b) = node.params_b {
-                                for &(pidx, val) in &param_vals {
-                                    if pidx != NULL_KNOB {
-                                        b.values[pidx as usize] = val;
-                                    }
-                                }
-                            }
-                        }
-                        AbMode::Morph => {} // unreachable — guarded above
-                    }
+                    nodes[focused_node].update_snapshot(&ab_mode, &param_vals);
                 }
             } else {
                 // Morph mode: K6 = morph speed (0.2–10.0s). K1-K5 disabled.
@@ -946,16 +929,13 @@ async fn main(spawner: embassy_executor::Spawner) {
 
             // ── 7. Graph rebuild ──
             if needs_rebuild {
-                let (new_graph, new_nodes) =
-                    build_graph(&nodes, topology, SAMPLE_RATE, BLOCK_SIZE);
+                let (new_graph, new_nodes) = build_graph(&nodes, topology, SAMPLE_RATE, BLOCK_SIZE);
                 graph = new_graph;
                 node_ids = new_nodes;
 
                 // Capture default params for newly created effects.
                 for slot in 0..NUM_SLOTS {
-                    if nodes[slot].effect_index.is_some()
-                        && nodes[slot].params_a.count == 0
-                    {
+                    if nodes[slot].effect_index.is_some() && nodes[slot].params_a.count == 0 {
                         if let Some(nid) = node_ids[slot] {
                             nodes[slot].params_a.capture_from(&graph, nid);
                         }
