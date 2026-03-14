@@ -65,6 +65,7 @@ static CONTROLS: HothouseBuffer = HothouseBuffer::new();
 async fn main(spawner: embassy_executor::Spawner) {
     // D2 SRAM clocks are disabled at reset — enable before heap init.
     sonido_daisy::enable_d2_sram();
+    sonido_daisy::enable_fpu_ftz();
 
     // Initialize heap at D2 SRAM (256 KB)
     unsafe {
@@ -134,17 +135,17 @@ async fn main(spawner: embassy_executor::Spawner) {
 
                 // Read knob values (0.0–1.0, IIR-smoothed by control task)
                 // HothouseControls order: 0=PA3, 1=PB1, 2=PA7, 3=PA6, 4=PC1
-                let drive = CONTROLS.read_knob(0);     // K1=PA3
-                let tone = CONTROLS.read_knob(1);      // K2=PB1
+                let drive = CONTROLS.read_knob(0); // K1=PA3
+                let tone = CONTROLS.read_knob(1); // K2=PB1
                 let out_level = CONTROLS.read_knob(3); // K4=PA6 (Output level)
-                let mix = CONTROLS.read_knob(4);       // K5=PC1 (Mix)
+                let mix = CONTROLS.read_knob(4); // K5=PC1 (Mix)
 
                 // Read toggle switch: 0=UP, 1=MID, 2=DN → mode 0/1/2
                 let toggle = CONTROLS.read_toggle(0);
                 let mode = match toggle {
-                    0 => 0.0 / 3.99,  // UP = Overdrive (SoftClip)
-                    2 => 2.0 / 3.99,  // DN = Fuzz (Foldback)
-                    _ => 1.0 / 3.99,  // MID = Distortion (HardClip)
+                    0 => 0.0 / 3.99, // UP = Overdrive (SoftClip)
+                    2 => 2.0 / 3.99, // DN = Fuzz (Foldback)
+                    _ => 1.0 / 3.99, // MID = Distortion (HardClip)
                 };
 
                 // from_knobs maps 0.0-1.0 to parameter ranges
@@ -156,9 +157,15 @@ async fn main(spawner: embassy_executor::Spawner) {
                     let right_in = u24_to_f32(input[i + 1]);
 
                     let (left_out, right_out) = kernel.process_stereo(left_in, right_in, &params);
+                    let left_out = if left_out.is_finite() { left_out } else { 0.0 };
+                    let right_out = if right_out.is_finite() {
+                        right_out
+                    } else {
+                        0.0
+                    };
 
-                    output[i] = f32_to_u24(left_out);
-                    output[i + 1] = f32_to_u24(right_out);
+                    output[i] = f32_to_u24(left_out.clamp(-1.0, 1.0));
+                    output[i + 1] = f32_to_u24(right_out.clamp(-1.0, 1.0));
                 }
             })
             .await

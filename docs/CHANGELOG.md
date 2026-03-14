@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **sonido-daisy: Blocking ADC in audio callback** — all Hothouse examples (`single_effect`, `morph_pedal`, `hothouse_diag`) now run ADC+GPIO reads in a separate 50 Hz Embassy task via `ControlBuffer`, matching libDaisy's architecture. Previously, blocking ADC reads in the audio DMA callback caused hard faults and board lockups on STM32H750.
 
 ### Changed
+- **sonido-daisy: Uniform ADC polling** — `hothouse_control_task` now reads all 6 knobs via uniform `blocking_read()` polling (~48 µs per 20 ms cycle, 0.24% CPU). Removes the DMA channel, DMA buffer, and D2 SRAM allocation from the control path. `HothouseControls` stores knobs in a `[AnyAdcChannel; 6]` array instead of individual fields. Matches libDaisy's own `AnalogControl` polling approach.
 - **Morph Pedal v2**: Complete firmware rewrite (`morph_pedal.rs`)
   - Boot to passthrough — no pre-populated effects, Input→Output only
   - `EmbeddedAdapter<K>` — zero-smoothing `Effect + ParameterInfo` bridge for `DspKernel`, replaces `KernelAdapter` and `EffectRegistry` on embedded

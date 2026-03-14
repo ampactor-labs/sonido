@@ -233,21 +233,56 @@ pub fn enable_cycle_counter(dcb: &mut cortex_m::peripheral::DCB, dwt: &mut DWT) 
     dwt.enable_cycle_counter();
 }
 
-/// Converts a u32 sample (24-bit signed, left-justified in 32 bits) to f32 [-1.0, 1.0].
+/// Converts a u32 SAI sample (24-bit signed, right-aligned) to f32 in [-1.0, 1.0].
 ///
-/// The PCM3060 codec outputs 24-bit signed samples packed into 32-bit words.
-/// The value is treated as a signed 32-bit integer and divided by 2^31.
+/// With `DataSize::Data24`, the STM32H7 SAI places 24-bit audio data in
+/// bits [23:0] of the 32-bit data register. The sign bit is bit 23, not
+/// bit 31. This function sign-extends from 24-bit to 32-bit, then scales
+/// by 2^23 — matching libDaisy's `s242f()`.
+///
+/// Reference: libDaisy `daisy_core.h` — `S242F_SCALE = 1/(2^23)`.
 #[inline]
 pub fn u24_to_f32(sample: u32) -> f32 {
-    (sample as i32) as f32 / 2_147_483_648.0
+    // Sign-extend 24-bit → 32-bit: shift left 8 to put sign in bit 31,
+    // then arithmetic shift right 8 to propagate sign.
+    let signed = ((sample as i32) << 8) >> 8;
+    signed as f32 / 8_388_608.0 // ÷ 2^23
 }
 
-/// Converts an f32 sample [-1.0, 1.0] to u32 (24-bit signed, left-justified in 32 bits).
+/// Converts an f32 sample in [-1.0, 1.0] to u32 (24-bit signed, right-aligned).
 ///
-/// Inverse of [`u24_to_f32`]. Output is suitable for the PCM3060 codec DAC input.
+/// Inverse of [`u24_to_f32`]. Clamps to [-1.0, 1.0] before conversion to
+/// prevent wrap-around distortion. Matches libDaisy's `f2s24()`.
+///
+/// Reference: libDaisy `daisy_core.h` — `F2S24_SCALE = 2^23`.
 #[inline]
 pub fn f32_to_u24(sample: f32) -> u32 {
-    (sample * 2_147_483_648.0) as i32 as u32
+    let clamped = sample.clamp(-1.0, 1.0);
+    (clamped * 8_388_608.0) as i32 as u32
+}
+
+/// Enables FPU flush-to-zero and default-NaN modes.
+///
+/// Best practice for real-time DSP on Cortex-M7 — prevents denormal
+/// slowdowns that cause timing jitter in the audio callback.
+///
+/// - **FZ** (bit 24): Flush denormals to zero on output
+/// - **DN** (bit 25): Default NaN mode — any NaN operation returns canonical NaN
+///
+/// Call once in `main()` before starting the audio interface.
+///
+/// # Safety
+///
+/// Modifies the FPSCR register via inline assembly. Safe on all Cortex-M4F/M7
+/// targets with hardware FPU.
+#[inline]
+pub fn enable_fpu_ftz() {
+    unsafe {
+        let mut fpscr: u32;
+        core::arch::asm!("vmrs {}, fpscr", out(reg) fpscr);
+        fpscr |= (1 << 24) | (1 << 25); // FZ + DN bits
+        core::arch::asm!("vmsr fpscr, {}", in(reg) fpscr);
+    }
 }
 
 /// Convenience macro to construct [`audio::CodecPins`] from Embassy peripherals.

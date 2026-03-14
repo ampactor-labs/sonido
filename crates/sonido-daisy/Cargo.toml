@@ -54,3 +54,17 @@ panic-probe = { version = "1.0", features = ["print-defmt"] }
 [[example]]
 name = "morph_pedal"
 required-features = ["alloc"]
+
+[[example]]
+name = "single_reverb"
+required-features = ["alloc"]
+
+[[example]]
+name = "single_delay"
+required-features = ["alloc"]
+
+[[example]]
+name = "convert_passthrough"
+
+[[example]]
+name = "simple_gain"
