@@ -28,6 +28,8 @@ clack-extensions = { git = "https://github.com/prokopyl/clack.git", rev = "57e89
     "params",
     "state",
     "gui",
+    "tail",
+    "track-info",
     "raw-window-handle_05",
 ] }
 

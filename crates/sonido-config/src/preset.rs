@@ -1,10 +1,19 @@
 //! Preset file format and operations.
+//!
+//! # State Versioning
+//!
+//! Presets carry a `version` field (default [`PRESET_VERSION`]) to support
+//! forward migration when the parameter schema changes across sonido releases.
+//! Use [`migrate_state`] to upgrade a JSON state blob between versions.
 
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
 use crate::effect_config::EffectConfig;
 use crate::error::ConfigError;
+
+/// Current preset format version.
+pub const PRESET_VERSION: &str = "1.0";
 
 /// Preset file format for effect chains.
 ///
@@ -17,6 +26,7 @@ use crate::error::ConfigError;
 /// ```toml
 /// name = "My Preset"
 /// description = "A warm, vintage tone"
+/// version = "1.0"
 /// sample_rate = 48000
 ///
 /// [[effects]]
@@ -41,6 +51,13 @@ pub struct Preset {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
 
+    /// Format version for forward migration.
+    ///
+    /// Defaults to [`PRESET_VERSION`]. Pass to [`migrate_state`] when
+    /// loading state written by an older sonido version.
+    #[serde(default = "default_version")]
+    pub version: String,
+
     /// Sample rate hint (defaults to 48000).
     /// This is used when creating effects but may be overridden at runtime.
     #[serde(default = "default_sample_rate")]
@@ -51,16 +68,21 @@ pub struct Preset {
     pub effects: Vec<EffectConfig>,
 }
 
+fn default_version() -> String {
+    PRESET_VERSION.to_string()
+}
+
 fn default_sample_rate() -> u32 {
     48000
 }
 
 impl Preset {
-    /// Create a new empty preset.
+    /// Create a new empty preset at the current format version.
     pub fn new(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
             description: None,
+            version: PRESET_VERSION.to_string(),
             sample_rate: 48000,
             effects: Vec::new(),
         }
@@ -169,6 +191,63 @@ impl Default for Preset {
     fn default() -> Self {
         Self::new("Untitled")
     }
+}
+
+// ---------------------------------------------------------------------------
+// State versioning
+// ---------------------------------------------------------------------------
+
+/// Migrate a plugin state JSON blob from `from` version to `to` version.
+///
+/// State is stored as a JSON object keyed by stable `ParamId` integers
+/// (e.g., `{"200": 12.0, "201": 0.5}`). Migration rules:
+///
+/// - **Renamed params** — remap old key to new key, preserve value.
+/// - **New params** — absent keys load with the plugin's built-in default;
+///   no action needed.
+/// - **Removed params** — silently ignored on load.
+///
+/// Currently a no-op for `"1.0"` → `"1.0"` (same version). Future versions
+/// extend the match arm ladder below.
+///
+/// # Example
+///
+/// ```rust
+/// use sonido_config::migrate_state;
+///
+/// let mut state = serde_json::json!({"200": 12.0, "201": 0.5});
+/// migrate_state(&mut state, "1.0", "1.0");
+/// // State is unchanged for same-version migration.
+/// assert_eq!(state["200"], 12.0);
+/// ```
+pub fn migrate_state(state: &mut serde_json::Value, from: &str, to: &str) {
+    if from == to {
+        return; // already at target version, nothing to do
+    }
+
+    let Some(obj) = state.as_object_mut() else {
+        return; // non-object state: nothing to migrate
+    };
+
+    // Migration ladder — add one arm per version hop:
+    //
+    //   ("1.0", "2.0") => {
+    //       // Rename ParamId 205 → 206 (hypothetical dynamics param split).
+    //       if let Some(val) = obj.remove("205") { obj.insert("206".to_string(), val); }
+    //       // New param 207 added with a default — absent keys auto-default, no action.
+    //   }
+    //
+    // Chain arms for multi-hop migrations (1.0 → 2.0 → 3.0).
+
+    // No schema changes in 1.0 family. Chain arms for multi-hop migrations.
+    // Unknown migration path — leave state unchanged.
+    #[allow(clippy::single_match)]
+    match (from, to) {
+        ("1.0", "1.0") => {}
+        _ => {}
+    }
+
+    let _ = obj; // silence unused-variable lint when no branch mutates obj
 }
 
 #[cfg(test)]
@@ -317,5 +396,60 @@ type = "distortion"
         assert!(preset.description.is_none());
         assert_eq!(preset.sample_rate, 48000); // default
         assert_eq!(preset.len(), 1);
+    }
+
+    // --- Version field ---
+
+    #[test]
+    fn test_preset_new_has_version() {
+        let preset = Preset::new("Versioned");
+        assert_eq!(preset.version, PRESET_VERSION);
+    }
+
+    #[test]
+    fn test_preset_version_roundtrip_toml() {
+        let preset = Preset::new("V");
+        let toml = preset.to_toml().unwrap();
+        let loaded = Preset::from_toml(&toml).unwrap();
+        assert_eq!(loaded.version, PRESET_VERSION);
+    }
+
+    #[test]
+    fn test_preset_missing_version_defaults() {
+        // Old presets without the version field should load with the default.
+        let toml = r#"
+name = "Legacy"
+
+[[effects]]
+type = "reverb"
+"#;
+        let preset = Preset::from_toml(toml).unwrap();
+        assert_eq!(preset.version, PRESET_VERSION);
+    }
+
+    // --- migrate_state ---
+
+    #[test]
+    fn test_migrate_state_same_version_noop() {
+        let mut state = serde_json::json!({"200": 12.0, "201": 0.5});
+        let original = state.clone();
+        migrate_state(&mut state, "1.0", "1.0");
+        assert_eq!(state, original);
+    }
+
+    #[test]
+    fn test_migrate_state_unknown_version_leaves_state_unchanged() {
+        let mut state = serde_json::json!({"200": 12.0});
+        let original = state.clone();
+        migrate_state(&mut state, "0.9", "1.0");
+        assert_eq!(state, original);
+    }
+
+    #[test]
+    fn test_migrate_state_non_object_is_noop() {
+        let mut state = serde_json::json!([1, 2, 3]);
+        let original = state.clone();
+        migrate_state(&mut state, "1.0", "1.0");
+        assert_eq!(state, original);
     }
 }

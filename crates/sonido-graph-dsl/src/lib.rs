@@ -10,6 +10,7 @@
 //! - **Builder** ([`builder`]): IR → `ProcessingGraph`
 //!   with effect manifest for `GraphEngine::new_dag()`
 //! - **Effects** ([`effects`]): effect factory with name/parameter alias resolution
+//! - **Serialize** ([`serialize`]): `GraphSpec` and `GraphSnapshot` ↔ DSL text
 //!
 //! # Usage
 //!
@@ -37,7 +38,7 @@ pub use parser::{
     DslParseError, GraphNode, GraphSpec, build_graph_slug, count_nodes, parse_graph_dsl,
     validate_spec,
 };
-pub use serialize::graph_to_dsl;
+pub use serialize::{graph_to_dsl, snapshot_from_dsl, snapshot_to_dsl};
 
 /// Unified error type for DSL operations.
 #[derive(Debug, thiserror::Error)]

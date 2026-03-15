@@ -6,6 +6,7 @@
 use crate::main_thread::SonidoMainThread;
 use crate::shared::{GESTURE_BEGIN, GESTURE_END, SonidoShared};
 use clack_extensions::params::PluginAudioProcessorParams;
+use clack_extensions::tail::{PluginTailImpl, TailLength};
 use clack_plugin::events::EventFlags;
 use clack_plugin::events::event_types::{
     ParamGestureBeginEvent, ParamGestureEndEvent, ParamValueEvent,
@@ -218,5 +219,25 @@ impl PluginAudioProcessorParams for SonidoAudioProcessor<'_> {
     fn flush(&mut self, input: &InputEvents, output: &mut OutputEvents) {
         self.handle_events(input);
         self.sync_gui_changes(output);
+    }
+}
+
+// ── Tail Extension ──────────────────────────────────────────────────────────
+
+/// Report the effect's tail length to the host.
+///
+/// The tail is the number of samples the effect continues to produce
+/// meaningful output after its input goes silent (e.g., reverb decay,
+/// delay repeats). We use the effect's reported `latency_samples` as a
+/// conservative lower bound; effects with significant tails (reverb, delay)
+/// will provide a non-zero value via this path.
+impl PluginTailImpl for SonidoAudioProcessor<'_> {
+    fn get(&self) -> TailLength {
+        let samples = self.shared.latency_samples();
+        if samples == 0 {
+            TailLength::Finite(0)
+        } else {
+            TailLength::Finite(samples)
+        }
     }
 }

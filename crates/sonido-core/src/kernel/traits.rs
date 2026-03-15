@@ -445,4 +445,31 @@ pub trait DspKernel: Send {
     ///
     /// Default: no-op (most kernels have no READ_ONLY params).
     fn update_diagnostics(&self, _params: &mut Self::Params) {}
+
+    /// Process a stereo sample pair with an external sidechain signal.
+    ///
+    /// Called by the graph engine when a sidechain edge is connected to this
+    /// node. The `sc_left` / `sc_right` values are the sidechain channel samples
+    /// for the current frame.
+    ///
+    /// Override in kernels that support external sidechain control (compressor,
+    /// gate, de-esser). The default delegates to the regular
+    /// [`process_stereo()`](Self::process_stereo), ignoring the sidechain input.
+    ///
+    /// # Parameters
+    /// - `left` / `right`: Main signal input samples.
+    /// - `sc_left` / `sc_right`: Sidechain signal input samples.
+    /// - `params`: Kernel parameters snapshot.
+    #[allow(unused_variables)]
+    fn process_stereo_with_sidechain(
+        &mut self,
+        left: f32,
+        right: f32,
+        sc_left: f32,
+        sc_right: f32,
+        params: &Self::Params,
+    ) -> (f32, f32) {
+        // Default: ignore sidechain, fall back to regular stereo processing.
+        self.process_stereo(left, right, params)
+    }
 }

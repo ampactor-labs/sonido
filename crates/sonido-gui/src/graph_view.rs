@@ -108,6 +108,9 @@ pub struct GraphView {
     /// Per-effect-slot activity level (0.0--1.0), updated each frame from
     /// audio-thread metering data. Drives the glow LED on each effect node.
     pub slot_activity: Vec<f32>,
+    /// Per-effect-slot L/R peak levels (0.0--1.0), updated each frame from
+    /// audio-thread metering data. Drives the inline L/R meter strips.
+    pub slot_peaks: Vec<(f32, f32)>,
 }
 
 impl GraphView {
@@ -141,6 +144,7 @@ impl GraphView {
             style,
             topology_changed: false,
             slot_activity: Vec::new(),
+            slot_peaks: Vec::new(),
         }
     }
 
@@ -210,6 +214,7 @@ impl GraphView {
             topology_changed: &mut self.topology_changed,
             theme,
             slot_activity: &self.slot_activity,
+            slot_peaks: &self.slot_peaks,
         };
         self.snarl
             .show(&mut viewer, &self.style, "sonido_graph", ui);
@@ -548,6 +553,21 @@ fn structural_color(theme: &SonidoTheme) -> Color32 {
     theme.colors.text_secondary
 }
 
+/// Color for inline node peak meters based on level thresholds.
+///
+/// - Green below -12 dBFS (linear ≈ 0.251)
+/// - Yellow -12 to -3 dBFS (linear ≈ 0.251 to 0.708)
+/// - Red above -3 dBFS (linear > 0.708)
+fn meter_color(level: f32, theme: &SonidoTheme) -> Color32 {
+    if level > 0.708 {
+        theme.colors.red
+    } else if level > 0.251 {
+        theme.colors.yellow
+    } else {
+        theme.colors.green
+    }
+}
+
 /// [`SnarlViewer`] implementation for [`SonidoNode`].
 ///
 /// Handles rendering, context menus, and connection logic for the
@@ -567,6 +587,8 @@ struct SonidoViewer<'a> {
     theme: SonidoTheme,
     /// Per-effect-slot activity level (0.0--1.0) for LED indicators.
     slot_activity: &'a [f32],
+    /// Per-effect-slot L/R peak levels (0.0--1.0) for inline mini meters.
+    slot_peaks: &'a [(f32, f32)],
 }
 
 impl SonidoViewer<'_> {
@@ -754,8 +776,8 @@ impl SnarlViewer<SonidoNode> for SonidoViewer<'_> {
         PinInfo::circle().with_fill(color).with_wire_color(color)
     }
 
-    fn has_body(&mut self, _node: &SonidoNode) -> bool {
-        false
+    fn has_body(&mut self, node: &SonidoNode) -> bool {
+        matches!(node, SonidoNode::Effect { .. })
     }
 
     fn show_body(
@@ -777,6 +799,17 @@ impl SnarlViewer<SonidoNode> for SonidoViewer<'_> {
             let is_selected = *self.selected_node == Some(node);
             let accent = category_color(*category, &self.theme);
 
+            // Resolve slot index for this effect node.
+            let mut slot_idx = 0usize;
+            for (id, n) in snarl.node_ids() {
+                if id == node {
+                    break;
+                }
+                if matches!(n, SonidoNode::Effect { .. }) {
+                    slot_idx += 1;
+                }
+            }
+
             // Plain label — selection is handled via final_node_rect()
             let body_text = format!("{} · {} params", category.name(), descriptors.len());
             let color = if is_selected { accent } else { dim };
@@ -785,6 +818,45 @@ impl SnarlViewer<SonidoNode> for SonidoViewer<'_> {
                     .font(FontId::monospace(9.0))
                     .color(color),
             );
+
+            // Inline L/R peak meters — thin colored strips at the bottom of the node.
+            let (peak_l, peak_r) = self.slot_peaks.get(slot_idx).copied().unwrap_or((0.0, 0.0));
+
+            // Allocate a thin horizontal rect for the two meter strips.
+            let meter_height = 4.0_f32;
+            let (meter_rect, _) = ui.allocate_exact_size(
+                egui::vec2(ui.available_width(), meter_height * 2.0 + 2.0),
+                egui::Sense::hover(),
+            );
+
+            if ui.is_rect_visible(meter_rect) {
+                let painter = ui.painter();
+                let w = meter_rect.width();
+
+                // L strip (top), R strip (bottom)
+                let l_rect = egui::Rect::from_min_size(meter_rect.min, egui::vec2(w, meter_height));
+                let r_rect = egui::Rect::from_min_size(
+                    egui::pos2(meter_rect.min.x, meter_rect.min.y + meter_height + 2.0),
+                    egui::vec2(w, meter_height),
+                );
+
+                painter.rect_filled(l_rect, 0.0, self.theme.colors.void);
+                painter.rect_filled(r_rect, 0.0, self.theme.colors.void);
+
+                if peak_l > 0.001 {
+                    let bar_w = (w * peak_l.min(1.0)).max(1.0);
+                    let bar =
+                        egui::Rect::from_min_size(l_rect.min, egui::vec2(bar_w, meter_height));
+                    painter.rect_filled(bar, 0.0, meter_color(peak_l, &self.theme));
+                }
+
+                if peak_r > 0.001 {
+                    let bar_w = (w * peak_r.min(1.0)).max(1.0);
+                    let bar =
+                        egui::Rect::from_min_size(r_rect.min, egui::vec2(bar_w, meter_height));
+                    painter.rect_filled(bar, 0.0, meter_color(peak_r, &self.theme));
+                }
+            }
         }
     }
 

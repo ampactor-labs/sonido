@@ -19,6 +19,7 @@ use clack_extensions::params::{
     ParamDisplayWriter, ParamInfo, ParamInfoFlags, ParamInfoWriter, PluginMainThreadParams,
 };
 use clack_extensions::state::PluginStateImpl;
+use clack_extensions::track_info::PluginTrackInfoImpl;
 use clack_plugin::prelude::*;
 use clack_plugin::stream::{InputStream, OutputStream};
 use clack_plugin::utils::Cookie;
@@ -340,5 +341,18 @@ impl PluginAudioPortsImpl for SonidoMainThread<'_> {
                 in_place_pair: None,
             });
         }
+    }
+}
+
+// ── Track Info Extension ────────────────────────────────────────────────────
+
+/// React to host track-info changes (track name, color, channel count).
+///
+/// Sonido plugins do not currently change behavior based on track metadata,
+/// so this is a no-op. It satisfies the CLAP contract and allows hosts that
+/// proactively push track info (e.g., Bitwig) to do so without errors.
+impl PluginTrackInfoImpl for SonidoMainThread<'_> {
+    fn changed(&self) {
+        // No track-dependent behavior — accept the notification silently.
     }
 }

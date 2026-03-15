@@ -752,6 +752,43 @@ impl DspKernel for GateKernel {
         )
     }
 
+    /// Process a stereo sample with an external sidechain signal.
+    ///
+    /// Uses the external `sc_left`/`sc_right` average as the detection signal
+    /// instead of the main input. The internal sidechain HPF is bypassed when
+    /// an external sidechain is connected — the external source is already
+    /// pre-routed by the caller.
+    fn process_stereo_with_sidechain(
+        &mut self,
+        left: f32,
+        right: f32,
+        sc_left: f32,
+        sc_right: f32,
+        params: &GateParams,
+    ) -> (f32, f32) {
+        self.update_caches(params);
+
+        let floor = self.cached_floor_linear;
+
+        // External sidechain: use average amplitude, bypass the internal HPF.
+        let sc_mid = (libm::fabsf(sc_left) + libm::fabsf(sc_right)) * 0.5;
+        let envelope = self.envelope_follower.process(sc_mid);
+
+        let hold_samples = ((params.hold_ms / 1000.0) * self.sample_rate) as u32;
+        self.advance_gate_state(envelope, hold_samples, floor);
+
+        self.gate_open_diagnostic = match self.state {
+            GateState::Open | GateState::Opening | GateState::Holding => 1.0,
+            GateState::Closed | GateState::Closing => 0.0,
+        };
+
+        let output_gain = fast_db_to_linear(params.output_db);
+        (
+            left * self.gain * output_gain,
+            right * self.gain * output_gain,
+        )
+    }
+
     fn reset(&mut self) {
         self.envelope_follower.reset();
         self.sidechain_hpf.clear();

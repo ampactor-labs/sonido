@@ -652,6 +652,100 @@ impl<const VOICES: usize> PolyphonicSynth<VOICES> {
     }
 }
 
+/// Synthesizer wrapped as an [`Effect`] node for use in a [`ProcessingGraph`].
+///
+/// `SynthNode` exposes a fixed 8-voice polyphonic synthesizer as a graph node.
+/// The incoming audio signal is **ignored** — the synth is a source, not a
+/// processor. Notes are triggered via [`note_on`](SynthNode::note_on) and
+/// [`note_off`](SynthNode::note_off) externally (e.g., from a MIDI parser).
+///
+/// ## Graph Placement
+///
+/// Place at the head of a linear chain or as a source node in a DAG:
+///
+/// ```rust,ignore
+/// let mut engine = GraphEngine::new_linear(48000.0, 256);
+/// let slot = engine.add_effect_named(Box::new(SynthNode::new(48000.0)), "synth");
+/// ```
+///
+/// ## True Stereo
+///
+/// `SynthNode` returns `true` from `is_true_stereo()` because the polyphonic
+/// synth spreads unison voices across the stereo field.
+#[derive(Debug)]
+pub struct SynthNode {
+    /// Internal polyphonic synthesizer (8 voices).
+    synth: PolyphonicSynth<8>,
+}
+
+impl SynthNode {
+    /// Create a new synthesizer graph node at the given sample rate.
+    pub fn new(sample_rate: f32) -> Self {
+        Self {
+            synth: PolyphonicSynth::new(sample_rate),
+        }
+    }
+
+    /// Get mutable access to the inner synthesizer for configuration.
+    pub fn synth_mut(&mut self) -> &mut PolyphonicSynth<8> {
+        &mut self.synth
+    }
+
+    /// Get read access to the inner synthesizer.
+    pub fn synth(&self) -> &PolyphonicSynth<8> {
+        &self.synth
+    }
+
+    /// Trigger a note on event.
+    ///
+    /// # Arguments
+    /// * `note` — MIDI note number (0-127)
+    /// * `velocity` — MIDI velocity (0-127)
+    pub fn note_on(&mut self, note: u8, velocity: u8) {
+        self.synth.note_on(note, velocity);
+    }
+
+    /// Trigger a note off event.
+    ///
+    /// # Arguments
+    /// * `note` — MIDI note number (0-127)
+    pub fn note_off(&mut self, note: u8) {
+        self.synth.note_off(note);
+    }
+
+    /// Stop all active notes immediately.
+    pub fn all_notes_off(&mut self) {
+        self.synth.all_notes_off();
+    }
+
+    /// Get number of active voices.
+    pub fn active_voice_count(&self) -> usize {
+        self.synth.active_voice_count()
+    }
+}
+
+impl Effect for SynthNode {
+    /// Ignore the input signal; return synthesized stereo output.
+    ///
+    /// The incoming `left`/`right` values are discarded. The synth generates
+    /// audio from its internal voice pool only.
+    fn process_stereo(&mut self, _left: f32, _right: f32) -> (f32, f32) {
+        self.synth.process_stereo()
+    }
+
+    fn is_true_stereo(&self) -> bool {
+        true
+    }
+
+    fn set_sample_rate(&mut self, sample_rate: f32) {
+        self.synth.set_sample_rate(sample_rate);
+    }
+
+    fn reset(&mut self) {
+        self.synth.reset();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -769,5 +863,97 @@ mod tests {
         synth.reset();
 
         assert_eq!(synth.active_voice_count(), 0);
+    }
+
+    // --- SynthNode tests ---
+
+    #[test]
+    fn test_synth_node_produces_output_when_playing() {
+        let mut node = SynthNode::new(48000.0);
+        node.note_on(60, 100);
+
+        // Effect::process_stereo: input is ignored; output is from synth
+        let mut sum = 0.0f32;
+        for _ in 0..1000 {
+            let (l, r) = node.process_stereo(0.0, 0.0);
+            sum += l.abs() + r.abs();
+        }
+        assert!(
+            sum > 0.0,
+            "SynthNode should produce output when a note is on"
+        );
+    }
+
+    #[test]
+    fn test_synth_node_ignores_input() {
+        let mut node_zero_in = SynthNode::new(48000.0);
+        let mut node_loud_in = SynthNode::new(48000.0);
+
+        node_zero_in.note_on(60, 100);
+        node_loud_in.note_on(60, 100);
+
+        // Feed silence vs. loud signal to both
+        let mut diff = 0.0f32;
+        for _ in 0..1000 {
+            let (l0, r0) = node_zero_in.process_stereo(0.0, 0.0);
+            let (l1, r1) = node_loud_in.process_stereo(1.0, 1.0);
+            diff += (l0 - l1).abs() + (r0 - r1).abs();
+        }
+        assert!(
+            diff < 1e-5,
+            "SynthNode output must not depend on input signal (diff={diff})"
+        );
+    }
+
+    #[test]
+    fn test_synth_node_silent_when_no_notes() {
+        let mut node = SynthNode::new(48000.0);
+        // No note on — output should be silent
+        let mut sum = 0.0f32;
+        for _ in 0..100 {
+            let (l, r) = node.process_stereo(0.5, 0.5);
+            sum += l.abs() + r.abs();
+        }
+        assert!(
+            sum < 1e-5,
+            "SynthNode with no notes should be silent (sum={sum})"
+        );
+    }
+
+    #[test]
+    fn test_synth_node_is_true_stereo() {
+        let node = SynthNode::new(48000.0);
+        assert!(node.is_true_stereo());
+    }
+
+    #[test]
+    fn test_synth_node_reset_stops_audio() {
+        let mut node = SynthNode::new(48000.0);
+        node.note_on(60, 100);
+        for _ in 0..100 {
+            node.process_stereo(0.0, 0.0);
+        }
+
+        node.reset();
+        assert_eq!(node.active_voice_count(), 0);
+
+        let (l, r) = node.process_stereo(0.0, 0.0);
+        assert!(
+            l.abs() < 1e-5 && r.abs() < 1e-5,
+            "After reset, output should be silent"
+        );
+    }
+
+    #[test]
+    fn test_synth_node_note_off() {
+        let mut node = SynthNode::new(48000.0);
+        node.note_on(60, 100);
+        assert_eq!(node.active_voice_count(), 1);
+
+        node.note_off(60);
+        // Voice is in release phase but still counts as active
+        // After all_notes_off it should be 0
+        node.all_notes_off();
+        assert_eq!(node.active_voice_count(), 0);
     }
 }

@@ -43,14 +43,33 @@
 
 use crate::{AudioDevice, Result};
 
+/// Selects the audio host when constructing a backend.
+///
+/// | Variant | Feature flag | Platform |
+/// |---------|-------------|----------|
+/// | `Default` | — | platform default (ALSA/CoreAudio/WASAPI) |
+/// | `Jack` | `jack` | Linux/macOS JACK2 |
+/// | `Asio` | `asio` | Windows ASIO |
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum BackendHost {
+    /// Use the platform's default audio API.
+    #[default]
+    Default,
+    /// JACK audio server (requires `jack` feature and JACK2 installed).
+    Jack,
+    /// ASIO low-latency driver on Windows (requires `asio` feature and ASIO SDK).
+    Asio,
+}
+
 /// Configuration for building an audio stream.
 ///
 /// ## Fields
 ///
 /// - `sample_rate`: Requested sample rate in Hz (default: 48000)
-/// - `buffer_size`: Preferred buffer size in frames (default: 256)
+/// - `buffer_size`: Preferred buffer size in frames (default: 512)
 /// - `channels`: Number of audio channels (default: 2, stereo)
 /// - `device_name`: Optional device name filter (uses default device if `None`)
+/// - `host`: Audio host selection (default: platform default)
 #[derive(Debug, Clone)]
 pub struct BackendStreamConfig {
     /// Requested sample rate in Hz.
@@ -61,6 +80,8 @@ pub struct BackendStreamConfig {
     pub channels: u16,
     /// Optional device name (uses system default if `None`).
     pub device_name: Option<String>,
+    /// Audio host selection. See [`BackendHost`].
+    pub host: BackendHost,
 }
 
 impl Default for BackendStreamConfig {
@@ -70,6 +91,7 @@ impl Default for BackendStreamConfig {
             buffer_size: 512,
             channels: 2,
             device_name: None,
+            host: BackendHost::Default,
         }
     }
 }
@@ -258,4 +280,21 @@ pub trait AudioBackend: Send {
     fn actual_sample_rate(&self, config: &BackendStreamConfig) -> u32 {
         config.sample_rate
     }
+}
+
+/// Create a [`CpalBackend`](crate::cpal_backend::CpalBackend) for the host
+/// specified in `config.host`.
+///
+/// - [`BackendHost::Default`]: platform default (ALSA/CoreAudio/WASAPI)
+/// - [`BackendHost::Jack`]: JACK host (requires `jack` feature)
+/// - [`BackendHost::Asio`]: ASIO host (requires `asio` feature, Windows only)
+///
+/// # Errors
+///
+/// Returns an error if the requested host is not available or the feature flag
+/// was not compiled in.
+pub fn create_backend(
+    config: &BackendStreamConfig,
+) -> crate::Result<crate::cpal_backend::CpalBackend> {
+    crate::cpal_backend::CpalBackend::with_host(&config.host)
 }

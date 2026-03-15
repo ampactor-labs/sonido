@@ -20,6 +20,9 @@
 //! - [`ddc`] - Digital down-conversion (NCO + FIR + decimation)
 //! - [`phase`] - Phase unwrapping (batch, quality-guided, streaming)
 //! - [`mod@resample`] - Rational resampling via polyphase filter (decimate, interpolate, P/Q)
+//! - [`loudness`] - ITU-R BS.1770-4 LUFS metering (momentary, short-term, integrated, true peak)
+//! - [`pitch`] - YIN pitch detection: `detect_pitch(buffer, sample_rate) -> Option<PitchResult>`
+//! - [`stereo`] - Stereo Pearson correlation meter with sliding window
 //!
 //! ## Target Use Case
 //!
@@ -82,10 +85,13 @@ pub mod filterbank;
 pub mod hilbert;
 pub mod ir;
 pub mod lms;
+pub mod loudness;
 pub mod phase;
+pub mod pitch;
 pub mod resample;
 pub mod spectrogram;
 pub mod spectrum;
+pub mod stereo;
 pub mod transfer_fn;
 pub mod xcorr;
 
@@ -108,6 +114,9 @@ pub use transfer_fn::{Resonance, TransferFunction};
 // DSP primitives
 pub use ddc::Ddc;
 pub use lms::{LmsFilter, NlmsFilter};
+pub use loudness::LufsMeter;
 pub use phase::{PhaseTracker, unwrap_phase, unwrap_phase_quality, unwrap_phase_tol};
+pub use pitch::{PitchResult, detect_pitch};
 pub use resample::{decimate, design_lowpass, interpolate, resample};
+pub use stereo::StereoCorrelation;
 pub use xcorr::{peak_lag, xcorr_direct, xcorr_fft, xcorr_normalized};

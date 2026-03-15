@@ -515,6 +515,15 @@ impl GraphEngine {
         &self.graph
     }
 
+    /// Returns the per-block peak output level `(left, right)` for a node.
+    ///
+    /// Peak is the maximum absolute sample observed in the output buffer during
+    /// the most recently processed block. Returns `None` if the node does not
+    /// exist. Wraps [`ProcessingGraph::node_peak`].
+    pub fn node_peak(&self, id: NodeId) -> Option<(f32, f32)> {
+        self.graph.node_peak(id)
+    }
+
     // --- Control ---
 
     /// Returns the sample rate.

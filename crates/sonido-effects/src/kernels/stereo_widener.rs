@@ -408,8 +408,8 @@ impl DspKernel for StereoWidenerKernel {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sonido_core::Effect;
     use sonido_core::kernel::KernelAdapter;
-    use sonido_core::{Effect, ParameterInfo};
 
     #[test]
     fn silence_in_silence_out() {

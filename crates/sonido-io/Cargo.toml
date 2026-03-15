@@ -6,6 +6,14 @@ edition.workspace = true
 license.workspace = true
 authors.workspace = true
 
+[features]
+## Enable JACK audio backend support via cpal's jack feature.
+## Requires the JACK development libraries installed on the system.
+jack = ["cpal/jack"]
+## Enable ASIO audio backend support on Windows via cpal's asio feature.
+## Requires the ASIO SDK to be installed. See cpal docs for setup instructions.
+asio = ["cpal/asio"]
+
 [dependencies]
 sonido-core = { workspace = true, features = ["std", "tracing"] }
 cpal.workspace = true

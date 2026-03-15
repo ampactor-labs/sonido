@@ -422,8 +422,6 @@ impl DspKernel for PitchShiftKernel {
 #[cfg(test)]
 mod tests {
     use super::*;
-    extern crate alloc;
-    use alloc::{vec, vec::Vec};
     use sonido_core::kernel::KernelAdapter;
     use sonido_core::{Effect, ParameterInfo};
 

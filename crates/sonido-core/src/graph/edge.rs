@@ -1,7 +1,7 @@
 //! Graph edge types for the DAG routing engine.
 //!
 //! An `Edge` connects two nodes, representing audio signal flow from a source
-//! node to a destination node. During schedule compilation, edges are mapped to
+//! node to a destination node.  During schedule compilation, edges are mapped to
 //! virtual buffer IDs via liveness analysis; the edge itself does not store
 //! buffer assignments.
 
@@ -25,4 +25,11 @@ pub(crate) struct Edge {
     pub from: super::node::NodeId,
     /// Destination node.
     pub to: super::node::NodeId,
+    /// Whether this edge is a feedback edge.
+    ///
+    /// Feedback edges are exempt from cycle detection.  During schedule
+    /// compilation a [`FeedbackDelay`](super::schedule::ProcessStep::FeedbackDelay)
+    /// step is inserted on the feedback buffer, making the loop causal.
+    /// Typical use: Karplus-Strong, analog filter resonance, tape echo.
+    pub is_feedback: bool,
 }

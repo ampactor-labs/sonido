@@ -75,7 +75,7 @@ pub mod stereo_samples;
 pub use buffer::{BufferPool, CompensationDelay, StereoBuffer};
 pub use edge::EdgeId;
 pub use engine::{GraphEngine, GraphSnapshot, SnapshotEntry};
-pub use node::{NodeId, NodeKind};
+pub use node::{NodeId, NodeKind, NodeRate};
 pub use processing::{GraphError, ProcessingGraph};
 pub use schedule::{CompiledSchedule, MAX_SPLIT_TARGETS, ProcessStep};
 pub use stereo_samples::StereoSamples;

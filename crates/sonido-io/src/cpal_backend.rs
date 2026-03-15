@@ -27,7 +27,8 @@
 //! ```
 
 use crate::backend::{
-    AudioBackend, BackendStreamConfig, ErrorCallback, InputCallback, OutputCallback, StreamHandle,
+    AudioBackend, BackendHost, BackendStreamConfig, ErrorCallback, InputCallback, OutputCallback,
+    StreamHandle,
 };
 use crate::stream::device_name;
 use crate::{AudioDevice, Error, Result};
@@ -58,6 +59,48 @@ impl CpalBackend {
         Self {
             host: cpal::default_host(),
         }
+    }
+
+    /// Create a backend for the given [`BackendHost`].
+    ///
+    /// Returns an error if the requested host is unavailable or the required
+    /// feature flag was not compiled in.
+    pub fn with_host(host: &BackendHost) -> Result<Self> {
+        let cpal_host = match host {
+            BackendHost::Default => cpal::default_host(),
+            BackendHost::Jack => {
+                #[cfg(feature = "jack")]
+                {
+                    cpal::host_from_id(cpal::HostId::Jack)
+                        .map_err(|e| Error::Stream(format!("JACK host unavailable: {e}")))?
+                }
+                #[cfg(not(feature = "jack"))]
+                {
+                    return Err(Error::Stream(
+                        "JACK backend requires the `jack` feature; \
+                         recompile with `--features jack`"
+                            .into(),
+                    ));
+                }
+            }
+            BackendHost::Asio => {
+                #[cfg(feature = "asio")]
+                {
+                    cpal::host_from_id(cpal::HostId::Asio)
+                        .map_err(|e| Error::Stream(format!("ASIO host unavailable: {e}")))?
+                }
+                #[cfg(not(feature = "asio"))]
+                {
+                    return Err(Error::Stream(
+                        "ASIO backend requires the `asio` feature; \
+                         recompile with `--features asio`"
+                            .into(),
+                    ));
+                }
+            }
+        };
+        tracing::info!(host = cpal_host.id().name(), "cpal backend initialized");
+        Ok(Self { host: cpal_host })
     }
 
     /// Find a cpal output device by name, or return the default.

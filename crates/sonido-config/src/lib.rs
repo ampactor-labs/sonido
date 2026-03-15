@@ -20,19 +20,15 @@
 //! let preset = Preset::load("my_preset.toml").unwrap();
 //!
 //! // Create a preset programmatically
-//! let preset = Preset {
-//!     name: "My Preset".to_string(),
-//!     description: Some("A custom effect chain".to_string()),
-//!     sample_rate: 48000,
-//!     effects: vec![
-//!         EffectConfig::new("distortion")
-//!             .with_param("drive", "0.6")
-//!             .with_param("tone", "0.5"),
-//!         EffectConfig::new("reverb")
-//!             .with_param("room_size", "0.8")
-//!             .with_param("damping", "0.3"),
-//!     ],
-//! };
+//! let mut preset = Preset::new("My Preset");
+//! preset.effects = vec![
+//!     EffectConfig::new("distortion")
+//!         .with_param("drive", "0.6")
+//!         .with_param("tone", "0.5"),
+//!     EffectConfig::new("reverb")
+//!         .with_param("room_size", "0.8")
+//!         .with_param("damping", "0.3"),
+//! ];
 //!
 //! // Save to user presets directory
 //! let path = user_presets_dir().join("my_preset.toml");
@@ -65,7 +61,7 @@ pub use paths::{
     list_system_presets, list_user_presets, preset_name_from_path, system_presets_dir,
     user_config_dir, user_presets_dir,
 };
-pub use preset::Preset;
+pub use preset::{PRESET_VERSION, Preset, migrate_state};
 pub use validation::{
     EffectValidator, ParamValidationInfo, ValidationError, ValidationResult, validate_effect,
     validate_effect_config, validate_effect_param, validate_preset,

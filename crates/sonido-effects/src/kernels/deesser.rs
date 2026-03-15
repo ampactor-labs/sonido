@@ -356,6 +356,32 @@ impl DspKernel for DeesserKernel {
         )
     }
 
+    /// Process a stereo sample with an external sidechain signal.
+    ///
+    /// Uses the external `sc_left`/`sc_right` average as the detection signal
+    /// instead of filtering the main input. The internal sidechain HPF is bypassed
+    /// when an external sidechain is connected.
+    fn process_stereo_with_sidechain(
+        &mut self,
+        left: f32,
+        right: f32,
+        sc_left: f32,
+        sc_right: f32,
+        params: &DeesserParams,
+    ) -> (f32, f32) {
+        // Use the external sidechain mono average directly as the detection signal.
+        // This allows feeding a dedicated HF microphone or a parallel HPF chain.
+        let sc_mid = (sc_left + sc_right) * 0.5;
+        let gr =
+            self.compute_gain_reduction(sc_mid, params.thresh_db, params.ratio, params.range_db);
+        let output_gain = fast_db_to_linear(params.output_db);
+
+        (
+            flush_denormal(left * gr) * output_gain,
+            flush_denormal(right * gr) * output_gain,
+        )
+    }
+
     fn reset(&mut self) {
         self.sidechain_hpf.clear();
         self.envelope.reset();
@@ -372,8 +398,8 @@ impl DspKernel for DeesserKernel {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sonido_core::ParameterInfo;
     use sonido_core::kernel::KernelAdapter;
-    use sonido_core::{Effect, ParameterInfo};
 
     /// All outputs must be finite — no NaN or Inf under any input.
     #[test]

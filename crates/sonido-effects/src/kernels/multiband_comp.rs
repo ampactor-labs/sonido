@@ -691,8 +691,8 @@ impl DspKernel for MultibandCompKernel {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sonido_core::ParameterInfo;
     use sonido_core::kernel::KernelAdapter;
-    use sonido_core::{Effect, ParameterInfo};
 
     /// All outputs must be finite — no NaN or Inf under any input.
     #[test]

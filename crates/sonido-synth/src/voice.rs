@@ -196,6 +196,17 @@ pub struct Voice {
     external_pitch_mod: f32,
     /// External filter cutoff modulation in Hz (additive with mod matrix).
     external_filter_mod: f32,
+
+    // MPE (MIDI Polyphonic Expression) per-note dimensions.
+    // Updated by set_mpe_* methods from the MIDI parser; consumed each sample.
+    /// MPE per-note pitch bend in semitones. Range: -96.0 to +96.0.
+    mpe_pitch_bend_semitones: f32,
+    /// MPE per-note pressure (polyphonic aftertouch). Range: 0.0 to 1.0.
+    mpe_pressure: f32,
+    /// MPE per-note slide (CC74 "brightness"). Range: 0.0 to 1.0.
+    mpe_slide: f32,
+    /// MIDI channel this voice is assigned to (1 = global, 2-16 = per-note).
+    mpe_channel: u8,
 }
 
 impl Default for Voice {
@@ -229,6 +240,10 @@ impl Voice {
             filter_cutoff: 1000.0,
             external_pitch_mod: 0.0,
             external_filter_mod: 0.0,
+            mpe_pitch_bend_semitones: 0.0,
+            mpe_pressure: 0.0,
+            mpe_slide: 0.0,
+            mpe_channel: 1,
         };
 
         voice.filter.set_cutoff(1000.0);
@@ -478,6 +493,62 @@ impl Voice {
         self.external_filter_mod = hz;
     }
 
+    // --- MPE per-note expression setters ---
+
+    /// Set per-note MPE pitch bend in semitones.
+    ///
+    /// Range: -96.0 to +96.0 semitones. Applied additively with global pitch
+    /// bend (if any) and the modulation matrix `Osc1Pitch` destination.
+    /// The standard MPE per-note range is ±48 semitones, but ±96 is accepted
+    /// to accommodate custom zone configurations.
+    pub fn set_mpe_pitch_bend(&mut self, semitones: f32) {
+        self.mpe_pitch_bend_semitones = semitones.clamp(-96.0, 96.0);
+    }
+
+    /// Get current MPE per-note pitch bend in semitones.
+    pub fn mpe_pitch_bend(&self) -> f32 {
+        self.mpe_pitch_bend_semitones
+    }
+
+    /// Set per-note MPE pressure (polyphonic aftertouch).
+    ///
+    /// Range: 0.0 to 1.0. Mapped to `ModSourceId::Aftertouch` in the
+    /// modulation matrix so users can route it to any destination.
+    pub fn set_mpe_pressure(&mut self, pressure: f32) {
+        self.mpe_pressure = pressure.clamp(0.0, 1.0);
+    }
+
+    /// Get current MPE pressure.
+    pub fn mpe_pressure(&self) -> f32 {
+        self.mpe_pressure
+    }
+
+    /// Set per-note MPE slide (CC74 "brightness").
+    ///
+    /// Range: 0.0 to 1.0. Mapped to `ModSourceId::Custom1` so users can
+    /// route it to filter cutoff, wavetable morph, FM mod index, etc.
+    pub fn set_mpe_slide(&mut self, slide: f32) {
+        self.mpe_slide = slide.clamp(0.0, 1.0);
+    }
+
+    /// Get current MPE slide.
+    pub fn mpe_slide(&self) -> f32 {
+        self.mpe_slide
+    }
+
+    /// Assign this voice to a MIDI channel (1 = global zone, 2-16 = per-note).
+    ///
+    /// Channel 1 is the MPE global zone. Channels 2-16 carry per-note
+    /// expression for individual notes.
+    pub fn set_mpe_channel(&mut self, channel: u8) {
+        self.mpe_channel = channel.clamp(1, 16);
+    }
+
+    /// Get the assigned MIDI channel.
+    pub fn mpe_channel(&self) -> u8 {
+        self.mpe_channel
+    }
+
     /// Recalculate sub-voice detune and pan from unison parameters.
     fn recalculate_unison_distribution(&mut self) {
         let count = self.unison_count;
@@ -532,9 +603,12 @@ impl Voice {
         let amp_env_val = self.amp_env.advance();
         let filter_env_val = self.filter_env.advance();
 
-        // Populate mod values from voice state
+        // Populate mod values from voice state and MPE per-note dimensions.
         self.mod_values.amp_env = amp_env_val;
         self.mod_values.filter_env = filter_env_val;
+        // MPE pressure → aftertouch source; MPE slide → custom1 source
+        self.mod_values.aftertouch = self.mpe_pressure;
+        self.mod_values.custom1 = self.mpe_slide;
 
         // Read modulation destinations from matrix
         let pitch_mod = self
@@ -547,8 +621,9 @@ impl Voice {
             .mod_matrix
             .get_modulation(ModDestination::Amplitude, &self.mod_values);
 
-        // Apply pitch modulation (in semitones) to sub-voice frequencies
-        let total_pitch_mod = pitch_mod + self.external_pitch_mod;
+        // Apply pitch modulation (in semitones) to sub-voice frequencies.
+        // MPE per-note pitch bend is additive with global LFO/mod-matrix pitch.
+        let total_pitch_mod = pitch_mod + self.external_pitch_mod + self.mpe_pitch_bend_semitones;
         if total_pitch_mod.abs() > 1e-6 {
             let pitch_ratio = cents_to_ratio(total_pitch_mod * 100.0);
             for sv in &mut self.sub_voices[..self.unison_count] {
@@ -1165,6 +1240,74 @@ mod tests {
         }
 
         assert!(sum > 0.0, "Manager should produce output");
+    }
+
+    #[test]
+    fn test_mpe_pitch_bend_shifts_pitch() {
+        let mut voice = Voice::new(48000.0);
+        voice.note_on(60, 100); // C4
+        voice.set_mpe_pitch_bend(12.0); // +1 octave
+
+        let mut sum = 0.0f32;
+        for _ in 0..1000 {
+            sum += voice.process().abs();
+        }
+        assert!(sum > 0.0, "Voice with MPE pitch bend should produce output");
+        assert!((voice.mpe_pitch_bend() - 12.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn test_mpe_pressure_routes_to_aftertouch() {
+        let mut voice = Voice::new(48000.0);
+        voice.note_on(60, 100);
+        voice.set_mpe_pressure(0.75);
+
+        // process() calls process_stereo() which updates mod_values
+        voice.process();
+        assert!(
+            (voice.mod_values().aftertouch - 0.75).abs() < 1e-5,
+            "MPE pressure should propagate to aftertouch mod value: {}",
+            voice.mod_values().aftertouch
+        );
+    }
+
+    #[test]
+    fn test_mpe_slide_routes_to_custom1() {
+        let mut voice = Voice::new(48000.0);
+        voice.note_on(60, 100);
+        voice.set_mpe_slide(0.5);
+
+        voice.process();
+        assert!(
+            (voice.mod_values().custom1 - 0.5).abs() < 1e-5,
+            "MPE slide should propagate to custom1 mod value: {}",
+            voice.mod_values().custom1
+        );
+    }
+
+    #[test]
+    fn test_mpe_channel_assignment() {
+        let mut voice = Voice::new(48000.0);
+        assert_eq!(voice.mpe_channel(), 1); // default = global zone
+
+        voice.set_mpe_channel(5);
+        assert_eq!(voice.mpe_channel(), 5);
+
+        voice.set_mpe_channel(0); // below min → clamped to 1
+        assert_eq!(voice.mpe_channel(), 1);
+
+        voice.set_mpe_channel(20); // above max → clamped to 16
+        assert_eq!(voice.mpe_channel(), 16);
+    }
+
+    #[test]
+    fn test_mpe_pitch_bend_clamping() {
+        let mut voice = Voice::new(48000.0);
+        voice.set_mpe_pitch_bend(200.0);
+        assert!((voice.mpe_pitch_bend() - 96.0).abs() < 1e-5);
+
+        voice.set_mpe_pitch_bend(-200.0);
+        assert!((voice.mpe_pitch_bend() - (-96.0)).abs() < 1e-5);
     }
 
     #[test]

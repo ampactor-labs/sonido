@@ -2,8 +2,8 @@
 //!
 //! Each node in the processing graph has a [`NodeId`] and a [`NodeKind`] that
 //! determines its role: audio input/output, effect processing, signal splitting,
-//! or signal merging. The `NodeData` struct bundles the kind with internal
-//! bookkeeping (adjacency lists, per-node bypass state).
+//! signal merging, or a nested sub-graph.  The `NodeData` struct bundles the kind
+//! with internal bookkeeping (adjacency lists, per-node bypass state, and rate).
 
 #[cfg(not(feature = "std"))]
 use alloc::boxed::Box;
@@ -36,6 +36,39 @@ impl NodeId {
     }
 }
 
+/// Processing rate for a graph node.
+///
+/// Controls how often the node's effect is evaluated within a block:
+///
+/// - [`Audio`](NodeRate::Audio) nodes process every sample (the default).
+/// - [`Control`](NodeRate::Control) nodes process exactly once per block and
+///   hold their output for all samples in that block.  This delivers ~480× CPU
+///   savings for modulation sources (LFOs, envelopes) at 48 kHz / 100 Hz.
+///
+/// # Sample-and-hold
+///
+/// The schedule compiler inserts a [`SampleAndHold`](super::schedule::ProcessStep::SampleAndHold)
+/// step after every control-rate `ProcessEffect` step.  This replicates the
+/// single control-rate output sample across the full block before any downstream
+/// audio-rate node reads it, so kernels require no special casing.
+///
+/// # Thread Safety
+///
+/// `NodeRate` is `Copy` and stored on the mutation thread; it is snapshotted into
+/// the compiled schedule as a flag on `ProcessEffect`.
+#[derive(Clone, Copy, Debug, PartialEq, Default)]
+pub enum NodeRate {
+    /// Process every sample in the block (default for all effects).
+    #[default]
+    Audio,
+    /// Process once per block; hold the single output sample for the entire block.
+    ///
+    /// `hz` documents the effective update rate (e.g., `100.0` for a 100 Hz
+    /// control signal).  Used only for introspection; the scheduler always
+    /// executes the node exactly once per block regardless of this value.
+    Control(f32),
+}
+
 /// The role of a node in the processing graph.
 pub enum NodeKind {
     /// Receives external audio input. Exactly one per graph.
@@ -48,6 +81,17 @@ pub enum NodeKind {
     Split,
     /// Fan-in: sums N inputs into one output.
     Merge,
+    /// A nested sub-graph processed as a single opaque block.
+    ///
+    /// The inner [`ProcessingGraph`] is compiled independently.  During outer
+    /// schedule execution, its Input and Output nodes are wired to the outer
+    /// buffer slots, making the sub-graph look like a single effect node from
+    /// the outer schedule's perspective.
+    ///
+    /// Sub-graphs enable **reusable effect racks**: define a topology once
+    /// (e.g., a parallel distortion + chorus wet path), then embed it anywhere
+    /// in larger graphs without duplicating wiring.
+    SubGraph(Box<super::processing::ProcessingGraph>),
 }
 
 /// Internal bookkeeping for a node in the graph.
@@ -78,6 +122,22 @@ pub(crate) struct NodeData {
     pub tapped: bool,
     /// Persistent buffer for tap output. Only allocated when `tapped` is `true`.
     pub tap_buf: StereoBuffer,
+    /// External sidechain source node, if a sidechain connection has been made.
+    ///
+    /// When `Some(id)`, the schedule compiler routes that node's output buffer
+    /// to this effect as a sidechain input. Only meaningful for `Effect` nodes.
+    pub sidechain_source: Option<NodeId>,
+    /// Processing rate for this node.
+    ///
+    /// `Audio` (default) — executed every sample in the block.
+    /// `Control(hz)` — executed once per block; output replicated for all samples.
+    pub node_rate: NodeRate,
+    /// Cached single-sample control output, updated each block for control-rate nodes.
+    ///
+    /// The sample-and-hold step reads `control_output` and replicates it across
+    /// the entire output buffer after each control-rate `ProcessEffect` step.
+    #[allow(dead_code)]
+    pub control_output: (f32, f32),
 }
 
 impl NodeData {
@@ -97,6 +157,9 @@ impl NodeData {
             peak_out: (0.0, 0.0),
             tapped: false,
             tap_buf: StereoBuffer::new(0),
+            sidechain_source: None,
+            node_rate: NodeRate::Audio,
+            control_output: (0.0, 0.0),
         }
     }
 }

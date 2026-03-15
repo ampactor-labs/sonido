@@ -16,6 +16,7 @@ std = ["sonido-registry/std", "dep:dirs"]
 sonido-core = { workspace = true }
 sonido-registry = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
 toml = { workspace = true }
 thiserror = { workspace = true }
 libm = { workspace = true }

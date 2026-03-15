@@ -403,8 +403,8 @@ mod tests {
     use super::*;
     extern crate alloc;
     use alloc::{vec, vec::Vec};
+    use sonido_core::Effect;
     use sonido_core::kernel::KernelAdapter;
-    use sonido_core::{Effect, ParameterInfo};
 
     /// Generate a sine wave at the given frequency.
     fn sine_wave(freq_hz: f32, sample_rate: f32, n_samples: usize) -> Vec<f32> {

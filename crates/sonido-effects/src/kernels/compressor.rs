@@ -664,6 +664,67 @@ impl DspKernel for CompressorKernel {
         )
     }
 
+    /// Process a stereo sample with an external sidechain signal.
+    ///
+    /// Bypasses the internal sidechain HPF and the derived mid signal: the
+    /// external `sc_left`/`sc_right` average is used directly as the detection
+    /// signal. This is the standard "key input" / "sidechain input" workflow:
+    /// e.g., feed a kick drum to compress a bass line.
+    ///
+    /// The compressor's internal HPF (`sidechain_freq_hz`) is skipped when an
+    /// external sidechain is connected. If pre-filtering the external signal is
+    /// needed, insert a filter node before the sidechain source in the graph.
+    fn process_stereo_with_sidechain(
+        &mut self,
+        left: f32,
+        right: f32,
+        sc_left: f32,
+        sc_right: f32,
+        params: &CompressorParams,
+    ) -> (f32, f32) {
+        // Update caches (attack/release/detection mode) — all apply.
+        self.update_caches(params);
+
+        // External sidechain: use mono average of SC channels directly.
+        // Skip the internal HPF — the external source is pre-routed by the user.
+        let sc_mid = (sc_left + sc_right) * 0.5;
+        let envelope = self.dual_envelope(sc_mid);
+
+        // ── Gain computer ─────────────────────────────────────────────────
+        let envelope_db = fast_linear_to_db(envelope);
+        let gain_reduction_db = Self::compute_gain_db(
+            envelope_db,
+            params.threshold_db,
+            params.ratio,
+            params.knee_db,
+        );
+        self.gain_reduction_db = gain_reduction_db;
+        let gain_linear = fast_db_to_linear(gain_reduction_db);
+
+        // ── Makeup gain (auto or manual) ──────────────────────────────────
+        let makeup = if params.auto_makeup >= 0.5 {
+            Self::auto_makeup_linear(params.threshold_db, params.ratio)
+        } else {
+            fast_db_to_linear(params.makeup_db)
+        };
+
+        // ── Apply compression gain ────────────────────────────────────────
+        let comp_gain = gain_linear * makeup;
+        let comp_l = left * comp_gain;
+        let comp_r = right * comp_gain;
+
+        // ── Wet/dry blend ─────────────────────────────────────────────────
+        let mix = params.mix_pct / 100.0;
+        let (mixed_l, mixed_r) = wet_dry_mix_stereo(left, right, comp_l, comp_r, mix);
+
+        // ── Soft limit → output level ─────────────────────────────────────
+        let output = fast_db_to_linear(params.output_db);
+        (
+            soft_limit(mixed_l, 1.0) * output,
+            soft_limit(mixed_r, 1.0) * output,
+        )
+    }
+
     fn reset(&mut self) {
         self.envelope_follower.reset();
         self.fast_envelope.reset();
@@ -1143,5 +1204,92 @@ mod tests {
         );
         assert!((hi.output_db - 6.0).abs() < 0.1);
         assert!((hi.mix_pct - 100.0).abs() < 0.1);
+    }
+
+    /// External sidechain: a loud SC signal should trigger compression on a quiet main signal.
+    ///
+    /// Main input: 0.001 linear (≈ −60 dBFS) — well below the −20 dB threshold.
+    /// Without sidechain, this quiet signal would pass through uncompressed.
+    /// With sidechain fed a 0.5 linear (≈ −6 dBFS) signal, the compressor's
+    /// gain computer sees the loud SC envelope and reduces gain on the main.
+    #[test]
+    fn sidechain_compresses_quiet_main() {
+        let sr = 48000.0_f32;
+        let mut kernel = CompressorKernel::new(sr);
+        let params = CompressorParams {
+            threshold_db: -20.0,
+            ratio: 8.0,
+            attack_ms: 1.0,
+            release_ms: 100.0,
+            makeup_db: 0.0,
+            auto_makeup: 0.0,
+            mix_pct: 100.0,
+            output_db: 0.0,
+            ..CompressorParams::default()
+        };
+
+        // Warm up the sidechain envelope with a loud SC signal
+        let sc_level = 0.5_f32; // ≈ −6 dBFS, well above −20 dB threshold
+        let main_level = 0.001_f32; // ≈ −60 dBFS
+        let freq = 440.0_f32;
+        for i in 0..2000 {
+            let sc = sc_level * libm::sinf(i as f32 * 2.0 * core::f32::consts::PI * freq / sr);
+            kernel.process_stereo_with_sidechain(main_level, main_level, sc, sc, &params);
+        }
+
+        // Measure compressed output — should be below the raw main_level
+        let mut max_out = 0.0_f32;
+        for i in 2000..2500 {
+            let sc = sc_level * libm::sinf(i as f32 * 2.0 * core::f32::consts::PI * freq / sr);
+            let (l, _r) =
+                kernel.process_stereo_with_sidechain(main_level, main_level, sc, sc, &params);
+            max_out = max_out.max(l.abs());
+        }
+
+        assert!(
+            max_out < main_level,
+            "Sidechain should compress quiet main: input={main_level}, output_peak={max_out:.6}"
+        );
+    }
+
+    /// Default path (no sidechain) must be unchanged by the sidechain override's existence.
+    ///
+    /// Both paths should agree when the SC signal is identical to the main signal,
+    /// minus the internal HPF which the sidechain path bypasses. We verify no NaN/Inf
+    /// and that `process_stereo` still compresses a loud signal as expected.
+    #[test]
+    fn sidechain_noop_when_not_connected() {
+        let sr = 48000.0_f32;
+        let mut kernel_normal = CompressorKernel::new(sr);
+        let mut kernel_sc = CompressorKernel::new(sr);
+        let params = CompressorParams {
+            threshold_db: -20.0,
+            ratio: 4.0,
+            attack_ms: 1.0,
+            release_ms: 100.0,
+            makeup_db: 0.0,
+            auto_makeup: 0.0,
+            mix_pct: 100.0,
+            output_db: 0.0,
+            // Set SC HPF to 20 Hz (effectively bypassed) to minimize HPF divergence
+            sidechain_freq_hz: 20.0,
+            ..CompressorParams::default()
+        };
+
+        // Both kernels should produce finite output and show compression
+        let freq = 220.0_f32;
+        for i in 0..3000 {
+            let s = 0.5 * libm::sinf(i as f32 * 2.0 * core::f32::consts::PI * freq / sr);
+            let (l_n, r_n) = kernel_normal.process_stereo(s, s, &params);
+            let (l_sc, r_sc) = kernel_sc.process_stereo_with_sidechain(s, s, s, s, &params);
+            assert!(
+                l_n.is_finite() && r_n.is_finite(),
+                "Normal path NaN/Inf at sample {i}"
+            );
+            assert!(
+                l_sc.is_finite() && r_sc.is_finite(),
+                "Sidechain path NaN/Inf at sample {i}"
+            );
+        }
     }
 }

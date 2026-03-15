@@ -9,19 +9,23 @@
 //!
 //! - [`param_bridge`] — Parameter bridge trait with gesture protocol for GUI↔audio communication
 //! - [`theme`] — Visual styling constants and egui theme application
-//! - [`widgets`] — Audio-specific widgets (knobs, meters, toggles)
+//! - [`widgets`] — Audio-specific widgets (knobs, meters, toggles, spectrum, waveform)
 //! - [`effects_ui`] — Per-effect UI panels (one per effect type)
+//! - [`undo`] — Undo/redo history with gesture grouping for parameter mutations
 
 pub mod effects_ui;
 pub mod param_bridge;
 pub mod theme;
+pub mod undo;
 pub mod widgets;
 
 pub use effects_ui::{EffectPanel, create_panel};
 pub use param_bridge::{ChainMutator, ParamBridge, ParamIndex, SlotIndex};
 pub use theme::{SonidoTheme, Theme};
+pub use undo::{Mutation, UndoHistory};
 pub use widgets::{
     BypassToggle, Fader, FootswitchToggle, GainReductionMeter, Knob, LedDisplay, LevelMeter,
-    MorphBarResponse, bridged_combo, bridged_fader, bridged_knob, bridged_knob_fmt,
-    bridged_knob_with_morph, gesture_wrap, morph_bar,
+    MorphBarResponse, SpectrumState, SpectrumWidget, WaveformState, WaveformWidget, bridged_combo,
+    bridged_fader, bridged_knob, bridged_knob_fmt, bridged_knob_with_morph, gesture_wrap,
+    morph_bar,
 };

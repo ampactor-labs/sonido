@@ -97,6 +97,7 @@ pub mod allpass;
 pub mod biquad;
 pub mod cached;
 pub mod comb;
+pub mod compose;
 pub mod dc_blocker;
 pub mod delay;
 pub mod dsp;
@@ -109,6 +110,7 @@ pub mod graph;
 pub mod kernel;
 pub mod lfo;
 pub mod loop_buffer;
+pub mod macro_map;
 pub mod math;
 pub mod modulation;
 pub mod one_pole;
@@ -127,6 +129,7 @@ pub use biquad::{
 };
 pub use cached::Cached;
 pub use comb::{CombFilter, ModulatedComb};
+pub use compose::{EffectNode, GraphBuilder, feedback, par, seq};
 pub use dc_blocker::DcBlocker;
 pub use delay::{FixedDelayLine, InterpolatedDelay, Interpolation};
 pub use dsp::{GainStage, ToneStack};
@@ -138,12 +141,13 @@ pub use fast_math::{
 };
 pub use graph::{
     BufferPool, CompensationDelay, CompiledSchedule, EdgeId, GraphEngine, GraphError,
-    GraphSnapshot, NodeId, NodeKind, ProcessStep, ProcessingGraph, SnapshotEntry, StereoBuffer,
-    StereoSamples,
+    GraphSnapshot, NodeId, NodeKind, NodeRate, ProcessStep, ProcessingGraph, SnapshotEntry,
+    StereoBuffer, StereoSamples,
 };
 pub use kernel::{DspKernel, KernelAdapter, KernelParams, MorphCurve, MorphSpace, SmoothingStyle};
 pub use lfo::{Lfo, LfoWaveform};
 pub use loop_buffer::LoopBuffer;
+pub use macro_map::{MacroMap, MacroMapping};
 pub use math::{
     asymmetric_clip, asymmetric_clip_ad, db_to_linear, fast_tanh, flush_denormal, foldback,
     foldback_ad, hard_clip, hard_clip_ad, linear_to_db, mono_sum, soft_clip, soft_clip_ad,

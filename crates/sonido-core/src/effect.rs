@@ -274,6 +274,56 @@ pub trait Effect {
         }
     }
 
+    /// Process a block of stereo samples with an external sidechain input.
+    ///
+    /// The `sc_left` / `sc_right` buffers carry the sidechain signal for
+    /// effects that support it (e.g., sidechain compressor, ducking gate).
+    /// The default implementation ignores the sidechain signal and delegates
+    /// to [`process_block_stereo`](Self::process_block_stereo).
+    ///
+    /// # Arguments
+    /// * `left_in`  - Main-chain left input
+    /// * `right_in` - Main-chain right input
+    /// * `left_out` - Left output
+    /// * `right_out` - Right output
+    /// * `sc_left`  - Sidechain left input (may be ignored)
+    /// * `sc_right` - Sidechain right input (may be ignored)
+    #[allow(unused_variables)]
+    fn process_block_stereo_with_sidechain(
+        &mut self,
+        left_in: &[f32],
+        right_in: &[f32],
+        left_out: &mut [f32],
+        right_out: &mut [f32],
+        sc_left: &[f32],
+        sc_right: &[f32],
+    ) {
+        self.process_block_stereo(left_in, right_in, left_out, right_out);
+    }
+
+    /// Process a block of stereo samples in-place with an external sidechain input.
+    ///
+    /// Same as [`process_block_stereo_with_sidechain`](Self::process_block_stereo_with_sidechain)
+    /// but operates in-place on `left`/`right`. The default implementation
+    /// ignores the sidechain signal and delegates to
+    /// [`process_block_stereo_inplace`](Self::process_block_stereo_inplace).
+    ///
+    /// # Arguments
+    /// * `left`    - Main-chain left buffer (in-place)
+    /// * `right`   - Main-chain right buffer (in-place)
+    /// * `sc_left`  - Sidechain left input (may be ignored)
+    /// * `sc_right` - Sidechain right input (may be ignored)
+    #[allow(unused_variables)]
+    fn process_block_stereo_inplace_with_sidechain(
+        &mut self,
+        left: &mut [f32],
+        right: &mut [f32],
+        sc_left: &[f32],
+        sc_right: &[f32],
+    ) {
+        self.process_block_stereo_inplace(left, right);
+    }
+
     /// Returns whether this effect is a true stereo effect.
     ///
     /// True stereo effects have cross-channel interaction (e.g., ping-pong

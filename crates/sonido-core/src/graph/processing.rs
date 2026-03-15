@@ -22,7 +22,7 @@ use crate::tempo::TempoContext;
 
 use super::buffer::{BufferPool, CompensationDelay};
 use super::edge::{Edge, EdgeId};
-use super::node::{NodeData, NodeId, NodeKind};
+use super::node::{NodeData, NodeId, NodeKind, NodeRate};
 use super::schedule::{CompiledSchedule, MAX_SPLIT_TARGETS, ProcessStep};
 
 #[cfg(all(debug_assertions, feature = "debug-alloc"))]
@@ -56,8 +56,16 @@ fn format_step(step: &ProcessStep) -> String {
             node_idx,
             input_buf,
             output_buf,
+            sidechain_buf,
+            ..
         } => {
-            format!("ProcessEffect node[{node_idx}] buf[{input_buf}] → buf[{output_buf}]")
+            if let Some(sc) = sidechain_buf {
+                format!(
+                    "ProcessEffect node[{node_idx}] buf[{input_buf}] → buf[{output_buf}] SC=buf[{sc}]"
+                )
+            } else {
+                format!("ProcessEffect node[{node_idx}] buf[{input_buf}] → buf[{output_buf}]")
+            }
         }
         ProcessStep::SplitCopy {
             source_buf,
@@ -88,6 +96,25 @@ fn format_step(step: &ProcessStep) -> String {
         }
         ProcessStep::ReadOutput { buffer_idx } => {
             format!("ReadOutput ← buf[{buffer_idx}]")
+        }
+        ProcessStep::FeedbackDelay {
+            buffer_idx,
+            delay_line_idx,
+        } => {
+            format!("FeedbackDelay buf[{buffer_idx}] delay_line[{delay_line_idx}]")
+        }
+        ProcessStep::SampleAndHold {
+            buffer_idx,
+            block_len,
+        } => {
+            format!("SampleAndHold buf[{buffer_idx}] len={block_len}")
+        }
+        ProcessStep::ProcessSubGraph {
+            node_idx,
+            input_buf,
+            output_buf,
+        } => {
+            format!("ProcessSubGraph node[{node_idx}] buf[{input_buf}] → buf[{output_buf}]")
         }
     }
 }
@@ -175,10 +202,18 @@ pub struct ProcessingGraph {
     /// Cache the last output before a schedule swap; blended toward new output.
     crossfade_left: Vec<f32>,
     crossfade_right: Vec<f32>,
+    /// Pre-allocated sidechain copy buffers (RT-safe, zero allocation per block).
+    ///
+    /// When a `ProcessEffect` step has a `sidechain_buf`, the executor copies the
+    /// SC content here before processing so that aliasing across pool slots is safe.
+    sc_tmp_left: Vec<f32>,
+    sc_tmp_right: Vec<f32>,
     /// Pre-allocated audio buffer pool. Sized at compile(), reused every block.
     audio_pool: BufferPool,
     /// Persistent compensation delay lines. Rebuilt at compile(), state persists across blocks.
     audio_delay_lines: Vec<CompensationDelay>,
+    /// Persistent feedback delay lines (1-block each). Rebuilt at compile().
+    feedback_delay_lines: Vec<CompensationDelay>,
     /// Active spillover tails from removed effects.
     spillover_tails: Vec<SpilloverTail>,
     /// Whether spillover is enabled (default: true).
@@ -207,8 +242,11 @@ impl ProcessingGraph {
             prev_compiled: None,
             crossfade_left: vec![0.0; block_size],
             crossfade_right: vec![0.0; block_size],
+            sc_tmp_left: vec![0.0; block_size],
+            sc_tmp_right: vec![0.0; block_size],
             audio_pool: BufferPool::new(0, block_size),
             audio_delay_lines: Vec::new(),
+            feedback_delay_lines: Vec::new(),
             spillover_tails: Vec::new(),
             spillover_enabled: true,
         }
@@ -345,7 +383,11 @@ impl ProcessingGraph {
         let edge_id = EdgeId(self.next_edge_slot);
         self.next_edge_slot += 1;
 
-        let edge = Edge { from, to };
+        let edge = Edge {
+            from,
+            to,
+            is_feedback: false,
+        };
 
         let edge_idx = edge_id.0 as usize;
         if edge_idx >= self.edges.len() {
@@ -386,6 +428,158 @@ impl ProcessingGraph {
         #[cfg(feature = "tracing")]
         tracing::debug!("graph_disconnect: edge {id}");
         Ok(())
+    }
+
+    /// Connects a sidechain source node to a sidechain-capable effect node.
+    ///
+    /// The sidechain source node's output buffer will be routed to `to` as an
+    /// external detection signal on the next compiled schedule. The `from` node
+    /// must have a regular audio path through the graph (i.e., it must be an
+    /// ancestor of `to` in the topological order) so that its output is available
+    /// when `to` is processed.
+    ///
+    /// Effects that support sidechain detection (compressor, gate, de-esser)
+    /// override [`DspKernel::process_stereo_with_sidechain`] to use the external
+    /// signal. All other effects ignore it silently.
+    ///
+    /// After calling this method, recompile the graph with [`compile()`](Self::compile).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GraphError::NodeNotFound`] if either node does not exist.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// // Route a kick-drum channel (split_kick) as sidechain to the bass compressor.
+    /// graph.connect_sidechain(split_kick, compressor_node)?;
+    /// graph.compile()?;
+    /// ```
+    pub fn connect_sidechain(&mut self, from: NodeId, to: NodeId) -> Result<(), GraphError> {
+        self.get_node(from)?;
+        self.get_node(to)?;
+        if let Some(Some(node)) = self.nodes.get_mut(to.0 as usize) {
+            node.sidechain_source = Some(from);
+        }
+        #[cfg(feature = "tracing")]
+        tracing::debug!("graph_sidechain: {from} ─SC─► {to}");
+        Ok(())
+    }
+
+    /// Removes the sidechain connection from a node, if any.
+    ///
+    /// After calling this method, recompile the graph with [`compile()`](Self::compile).
+    ///
+    /// Returns `true` if a sidechain connection existed and was removed.
+    pub fn disconnect_sidechain(&mut self, id: NodeId) -> bool {
+        if let Some(Some(node)) = self.nodes.get_mut(id.0 as usize)
+            && node.sidechain_source.is_some()
+        {
+            node.sidechain_source = None;
+            #[cfg(feature = "tracing")]
+            tracing::debug!("graph_sidechain_remove: node {id}");
+            return true;
+        }
+        false
+    }
+
+    /// Connects two nodes with a feedback edge (exempt from cycle detection).
+    ///
+    /// A feedback edge models the previous block's output feeding back as input,
+    /// making cycles causal.  The schedule compiler inserts a 1-block
+    /// [`FeedbackDelay`](super::schedule::ProcessStep::FeedbackDelay) step on the
+    /// feedback buffer automatically, so no manual delay is needed.
+    ///
+    /// Typical uses: Karplus-Strong synthesis, analog filter resonance, tape echo.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GraphError::NodeNotFound`] if either node doesn't exist, or
+    /// [`GraphError::DuplicateEdge`] if an edge already exists between the nodes.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// // Feedback loop: split → gain → merge (1-block delay inserted automatically)
+    /// graph.connect_feedback(gain_node, merge_node)?;
+    /// ```
+    pub fn connect_feedback(&mut self, from: NodeId, to: NodeId) -> Result<EdgeId, GraphError> {
+        self.get_node(from)?;
+        self.get_node(to)?;
+
+        if self.has_edge(from, to) {
+            return Err(GraphError::DuplicateEdge(from, to));
+        }
+
+        let edge_id = EdgeId(self.next_edge_slot);
+        self.next_edge_slot += 1;
+
+        let edge = Edge {
+            from,
+            to,
+            is_feedback: true,
+        };
+
+        let edge_idx = edge_id.0 as usize;
+        if edge_idx >= self.edges.len() {
+            self.edges.resize_with(edge_idx + 1, || None);
+        }
+        self.edges[edge_idx] = Some(edge);
+
+        self.nodes[from.0 as usize]
+            .as_mut()
+            .unwrap()
+            .outgoing
+            .push(edge_id);
+        self.nodes[to.0 as usize]
+            .as_mut()
+            .unwrap()
+            .incoming
+            .push(edge_id);
+
+        #[cfg(feature = "tracing")]
+        tracing::debug!("graph_feedback: {from} ──FB──► {to}");
+        Ok(edge_id)
+    }
+
+    /// Sets the processing rate for a node.
+    ///
+    /// - [`NodeRate::Audio`] (default): processes every sample in the block.
+    /// - [`NodeRate::Control`]: processes once per block; the single output sample
+    ///   is held (replicated) across the whole block via a
+    ///   [`SampleAndHold`](super::schedule::ProcessStep::SampleAndHold) step.
+    ///
+    /// Only meaningful for `Effect` nodes.  Has no observable effect on Input,
+    /// Output, Split, Merge, or SubGraph nodes.
+    ///
+    /// After calling this method, recompile the graph with [`compile()`](Self::compile).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GraphError::NodeNotFound`] if the node does not exist.
+    pub fn set_node_rate(&mut self, id: NodeId, rate: NodeRate) -> Result<(), GraphError> {
+        let node = self
+            .nodes
+            .get_mut(id.0 as usize)
+            .and_then(|n| n.as_mut())
+            .ok_or(GraphError::NodeNotFound(id))?;
+        node.node_rate = rate;
+        Ok(())
+    }
+
+    /// Adds a sub-graph node wrapping the given [`ProcessingGraph`].
+    ///
+    /// The sub-graph is processed as a single opaque step in the outer schedule:
+    /// its internal Input and Output nodes are wired to the outer buffer slots,
+    /// and its own compiled schedule runs in full.
+    ///
+    /// The sub-graph must be compiled (via [`ProcessingGraph::compile`]) before the
+    /// outer graph is compiled, otherwise `process_block` will panic.
+    pub fn add_sub_graph(&mut self, inner: ProcessingGraph) -> NodeId {
+        let id = self.add_node(NodeKind::SubGraph(Box::new(inner)));
+        #[cfg(feature = "tracing")]
+        tracing::debug!("graph_add: sub-graph node {id}");
+        id
     }
 
     /// Returns a mutable reference to the effect inside a node (as `dyn Effect`).
@@ -596,8 +790,13 @@ impl ProcessingGraph {
         let node_latency = self.compute_node_latencies(&sorted);
 
         // Emit raw schedule steps (with inline delay compensation).
-        let (raw_steps, edge_first_write, edge_last_read, delay_sample_counts) =
-            self.emit_raw_schedule(&sorted, input_node_idx, output_node_idx, &node_latency);
+        let (
+            raw_steps,
+            edge_first_write,
+            edge_last_read,
+            delay_sample_counts,
+            _emit_feedback_count,
+        ) = self.emit_raw_schedule(&sorted, input_node_idx, output_node_idx, &node_latency);
 
         // Buffer liveness analysis: assign buffer slots.
         let (final_steps, buffer_count) =
@@ -634,12 +833,20 @@ impl ProcessingGraph {
             tracing::debug!("  step[{i}]: {}", format_step(step));
         }
 
+        // Count FeedbackDelay steps to size the feedback delay line array.
+        let feedback_delay_count = final_steps
+            .iter()
+            .filter(|s| matches!(s, ProcessStep::FeedbackDelay { .. }))
+            .count();
+
         // Build the compiled schedule (lightweight — no pool or delay lines).
         let schedule = Arc::new(CompiledSchedule {
             steps: final_steps,
             buffer_count,
             delay_sample_counts: delay_sample_counts.clone(),
             total_latency,
+            block_size: self.block_size,
+            feedback_delay_count,
         });
 
         // Pre-allocate audio pool for RT-safe execution.
@@ -649,10 +856,15 @@ impl ProcessingGraph {
             self.audio_pool.resize_all(self.block_size);
         }
 
-        // Build persistent delay lines (state persists across blocks).
+        // Build persistent compensation delay lines (state persists across blocks).
         self.audio_delay_lines = delay_sample_counts
             .into_iter()
             .map(CompensationDelay::new)
+            .collect();
+
+        // Build persistent feedback delay lines (1 block each, state persists).
+        self.feedback_delay_lines = (0..feedback_delay_count)
+            .map(|_| CompensationDelay::new(self.block_size))
             .collect();
 
         // Ensure crossfade buffers match current block size.
@@ -683,11 +895,16 @@ impl ProcessingGraph {
         let mut active_count = 0usize;
 
         // Compute in-degrees for active nodes.
+        // Feedback edges are excluded: they model the previous block's output
+        // feeding back as input, so they don't participate in the topological
+        // ordering of the current block's processing.
         for (i, node_opt) in self.nodes.iter().enumerate() {
             if node_opt.is_some() {
                 active_count += 1;
                 for edge_id in &node_opt.as_ref().unwrap().incoming {
-                    if self.edges[edge_id.0 as usize].is_some() {
+                    if let Some(edge) = self.edges[edge_id.0 as usize].as_ref()
+                        && !edge.is_feedback
+                    {
                         in_degree[i] += 1;
                     }
                 }
@@ -710,6 +927,10 @@ impl ProcessingGraph {
             let node = self.nodes[idx].as_ref().unwrap();
             for edge_id in &node.outgoing {
                 if let Some(edge) = &self.edges[edge_id.0 as usize] {
+                    // Feedback edges are excluded from ordering (they are causal).
+                    if edge.is_feedback {
+                        continue;
+                    }
                     let to_idx = edge.to.0 as usize;
                     in_degree[to_idx] -= 1;
                     if in_degree[to_idx] == 0 {
@@ -731,9 +952,10 @@ impl ProcessingGraph {
     /// Emits raw `ProcessStep`s from the topological order.
     ///
     /// Returns the steps, per-edge first-write/last-read step indices for liveness
-    /// analysis, and delay sample counts for latency compensation. Delay insertion
-    /// happens here (in virtual-buffer space) to avoid aliasing bugs that would
-    /// occur if inserted after physical buffer assignment.
+    /// analysis, delay sample counts for latency compensation, and a count of
+    /// feedback delay lines needed. Delay insertion happens here (in virtual-buffer
+    /// space) to avoid aliasing bugs that would occur if inserted after physical
+    /// buffer assignment.
     #[allow(clippy::type_complexity)]
     fn emit_raw_schedule(
         &self,
@@ -746,12 +968,14 @@ impl ProcessingGraph {
         Vec<(usize, usize)>,
         Vec<(usize, usize)>,
         Vec<usize>,
+        usize, // feedback_delay_count
     ) {
         // Map each edge to a temporary "virtual buffer" ID (1:1 with edge index for now).
         // Liveness analysis will collapse these into physical buffer slots.
 
         let mut steps = Vec::new();
         let mut delay_sample_counts: Vec<usize> = Vec::new();
+        let mut feedback_delay_count = 0usize;
 
         // Build edge → virtual buffer mapping.
         let mut edge_to_vbuf: Vec<Option<usize>> = vec![None; self.edges.len()];
@@ -768,6 +992,9 @@ impl ProcessingGraph {
         let mut vbuf_first_write = vec![usize::MAX; vbuf_count];
         let mut vbuf_last_read = vec![0usize; vbuf_count];
 
+        // Track each node's primary output vbuf for sidechain consumers to look up.
+        let mut node_output_vbuf: Vec<Option<usize>> = vec![None; self.nodes.len()];
+
         for &node_idx in sorted {
             let node = self.nodes[node_idx].as_ref().unwrap();
             let _step_idx = steps.len();
@@ -780,6 +1007,10 @@ impl ProcessingGraph {
                             steps.push(RawStep::WriteInput { vbuf });
                             if vbuf_first_write[vbuf] == usize::MAX {
                                 vbuf_first_write[vbuf] = steps.len() - 1;
+                            }
+                            // Record first output vbuf for potential sidechain references.
+                            if node_output_vbuf[node_idx].is_none() {
+                                node_output_vbuf[node_idx] = Some(vbuf);
                             }
                         }
                     }
@@ -796,26 +1027,80 @@ impl ProcessingGraph {
                 }
 
                 NodeKind::Effect(_) => {
-                    // Input: first incoming edge. Output: first outgoing edge.
+                    // Input: first non-feedback incoming edge. Output: first outgoing edge.
                     let in_vbuf = node
                         .incoming
-                        .first()
+                        .iter()
+                        .find(|eid| {
+                            self.edges[eid.0 as usize]
+                                .as_ref()
+                                .is_some_and(|e| !e.is_feedback)
+                        })
                         .and_then(|eid| edge_to_vbuf[eid.0 as usize]);
                     let out_vbuf = node
                         .outgoing
                         .first()
                         .and_then(|eid| edge_to_vbuf[eid.0 as usize]);
 
+                    // Process feedback incoming edges: emit FeedbackDelay steps.
+                    for eid in &node.incoming {
+                        if let Some(edge) = self.edges[eid.0 as usize].as_ref()
+                            && edge.is_feedback
+                            && let Some(fv) = edge_to_vbuf[eid.0 as usize]
+                        {
+                            let delay_line_idx = feedback_delay_count;
+                            feedback_delay_count += 1;
+                            steps.push(RawStep::FeedbackDelay {
+                                vbuf: fv,
+                                delay_line_idx,
+                            });
+                            let s = steps.len() - 1;
+                            if vbuf_first_write[fv] == usize::MAX {
+                                vbuf_first_write[fv] = s;
+                            }
+                            vbuf_last_read[fv] = vbuf_last_read[fv].max(s);
+                        }
+                    }
+
+                    // Sidechain: look up the output vbuf of the sidechain source node.
+                    let sc_vbuf = node.sidechain_source.and_then(|sc_id| {
+                        node_output_vbuf.get(sc_id.0 as usize).copied().flatten()
+                    });
+
+                    let is_control_rate = matches!(node.node_rate, NodeRate::Control(_));
+
                     if let (Some(iv), Some(ov)) = (in_vbuf, out_vbuf) {
                         steps.push(RawStep::ProcessEffect {
                             node_idx,
                             input_vbuf: iv,
                             output_vbuf: ov,
+                            sidechain_vbuf: sc_vbuf,
+                            is_control_rate,
                         });
                         let s = steps.len() - 1;
                         vbuf_last_read[iv] = vbuf_last_read[iv].max(s);
                         if vbuf_first_write[ov] == usize::MAX {
                             vbuf_first_write[ov] = s;
+                        }
+                        // Extend liveness of the sidechain buffer to this step.
+                        if let Some(sv) = sc_vbuf
+                            && sv < vbuf_last_read.len()
+                        {
+                            vbuf_last_read[sv] = vbuf_last_read[sv].max(s);
+                        }
+                        // Record output vbuf for downstream sidechain consumers.
+                        node_output_vbuf[node_idx] = Some(ov);
+
+                        // Control-rate nodes: replicate their single output sample
+                        // across the entire block so downstream audio-rate nodes
+                        // see a full-length buffer.
+                        if is_control_rate {
+                            steps.push(RawStep::SampleAndHold {
+                                vbuf: ov,
+                                block_len: self.block_size,
+                            });
+                            let s2 = steps.len() - 1;
+                            vbuf_last_read[ov] = vbuf_last_read[ov].max(s2);
                         }
                     }
                 }
@@ -861,27 +1146,47 @@ impl ProcessingGraph {
                         .outgoing
                         .first()
                         .and_then(|eid| edge_to_vbuf[eid.0 as usize]);
-                    // Collect (from_node_idx, vbuf) pairs for latency lookup.
-                    let incoming_with_nodes: Vec<(usize, usize)> = node
+                    // Collect (from_node_idx, vbuf, is_feedback) tuples.
+                    let incoming_with_nodes: Vec<(usize, usize, bool)> = node
                         .incoming
                         .iter()
                         .filter_map(|eid| {
                             let edge = self.edges[eid.0 as usize].as_ref()?;
                             let vbuf = edge_to_vbuf[eid.0 as usize]?;
-                            Some((edge.from.0 as usize, vbuf))
+                            Some((edge.from.0 as usize, vbuf, edge.is_feedback))
                         })
                         .collect();
 
                     if let Some(ov) = out_vbuf {
+                        // First, emit FeedbackDelay for any feedback inputs so the
+                        // ring buffer swap happens before the samples are accumulated.
+                        for &(_, iv, is_fb) in &incoming_with_nodes {
+                            if is_fb {
+                                let delay_line_idx = feedback_delay_count;
+                                feedback_delay_count += 1;
+                                steps.push(RawStep::FeedbackDelay {
+                                    vbuf: iv,
+                                    delay_line_idx,
+                                });
+                                let s = steps.len() - 1;
+                                if vbuf_first_write[iv] == usize::MAX {
+                                    vbuf_first_write[iv] = s;
+                                }
+                                vbuf_last_read[iv] = vbuf_last_read[iv].max(s);
+                            }
+                        }
+
                         steps.push(RawStep::ClearBuffer { vbuf: ov });
                         let s = steps.len() - 1;
                         if vbuf_first_write[ov] == usize::MAX {
                             vbuf_first_write[ov] = s;
                         }
 
+                        // Only non-feedback paths participate in latency computation.
                         let max_lat = incoming_with_nodes
                             .iter()
-                            .map(|&(from_idx, _)| node_latency[from_idx])
+                            .filter(|&&(_, _, is_fb)| !is_fb)
+                            .map(|&(from_idx, _, _)| node_latency[from_idx])
                             .max()
                             .unwrap_or(0);
 
@@ -890,8 +1195,13 @@ impl ProcessingGraph {
                         #[cfg(feature = "tracing")]
                         tracing::debug!("  merge_gain: {path_count} paths, gain={gain:.3}");
 
-                        for &(from_idx, iv) in &incoming_with_nodes {
-                            let delay = max_lat.saturating_sub(node_latency[from_idx]);
+                        for &(from_idx, iv, is_fb) in &incoming_with_nodes {
+                            // Feedback paths already have their delay from FeedbackDelay above.
+                            let delay = if is_fb {
+                                0
+                            } else {
+                                max_lat.saturating_sub(node_latency[from_idx])
+                            };
                             if delay > 0 {
                                 let delay_line_idx = delay_sample_counts.len();
                                 delay_sample_counts.push(delay);
@@ -916,6 +1226,32 @@ impl ProcessingGraph {
                         }
                     }
                 }
+
+                NodeKind::SubGraph(_) => {
+                    // Sub-graph: route like a single Effect node — one input vbuf, one output vbuf.
+                    let in_vbuf = node
+                        .incoming
+                        .first()
+                        .and_then(|eid| edge_to_vbuf[eid.0 as usize]);
+                    let out_vbuf = node
+                        .outgoing
+                        .first()
+                        .and_then(|eid| edge_to_vbuf[eid.0 as usize]);
+
+                    if let (Some(iv), Some(ov)) = (in_vbuf, out_vbuf) {
+                        steps.push(RawStep::ProcessSubGraph {
+                            node_idx,
+                            input_vbuf: iv,
+                            output_vbuf: ov,
+                        });
+                        let s = steps.len() - 1;
+                        vbuf_last_read[iv] = vbuf_last_read[iv].max(s);
+                        if vbuf_first_write[ov] == usize::MAX {
+                            vbuf_first_write[ov] = s;
+                        }
+                        node_output_vbuf[node_idx] = Some(ov);
+                    }
+                }
             }
         }
 
@@ -924,7 +1260,13 @@ impl ProcessingGraph {
             vbuf_first_write.into_iter().enumerate().collect();
         let edge_last_read: Vec<(usize, usize)> = vbuf_last_read.into_iter().enumerate().collect();
 
-        (steps, edge_first_write, edge_last_read, delay_sample_counts)
+        (
+            steps,
+            edge_first_write,
+            edge_last_read,
+            delay_sample_counts,
+            feedback_delay_count,
+        )
     }
 
     // --- Buffer liveness analysis ---
@@ -1001,10 +1343,15 @@ impl ProcessingGraph {
                     node_idx,
                     input_vbuf,
                     output_vbuf,
+                    sidechain_vbuf,
+                    is_control_rate,
                 } => ProcessStep::ProcessEffect {
                     node_idx,
                     input_buf: vbuf_to_phys[input_vbuf].unwrap_or(0),
                     output_buf: vbuf_to_phys[output_vbuf].unwrap_or(0),
+                    sidechain_buf: sidechain_vbuf
+                        .and_then(|sv| vbuf_to_phys.get(sv).copied().flatten()),
+                    is_control_rate,
                 },
                 RawStep::SplitCopy {
                     source_vbuf,
@@ -1042,6 +1389,26 @@ impl ProcessingGraph {
                 } => ProcessStep::DelayCompensate {
                     buffer_idx: vbuf_to_phys[vbuf].unwrap_or(0),
                     delay_line_idx,
+                },
+                RawStep::ProcessSubGraph {
+                    node_idx,
+                    input_vbuf,
+                    output_vbuf,
+                } => ProcessStep::ProcessSubGraph {
+                    node_idx,
+                    input_buf: vbuf_to_phys[input_vbuf].unwrap_or(0),
+                    output_buf: vbuf_to_phys[output_vbuf].unwrap_or(0),
+                },
+                RawStep::FeedbackDelay {
+                    vbuf,
+                    delay_line_idx,
+                } => ProcessStep::FeedbackDelay {
+                    buffer_idx: vbuf_to_phys[vbuf].unwrap_or(0),
+                    delay_line_idx,
+                },
+                RawStep::SampleAndHold { vbuf, block_len } => ProcessStep::SampleAndHold {
+                    buffer_idx: vbuf_to_phys[vbuf].unwrap_or(0),
+                    block_len,
                 },
             })
             .collect();
@@ -1120,6 +1487,9 @@ impl ProcessingGraph {
             &schedule,
             &mut self.audio_pool,
             &mut self.audio_delay_lines,
+            &mut self.feedback_delay_lines,
+            &mut self.sc_tmp_left,
+            &mut self.sc_tmp_right,
             left_in,
             right_in,
             left_out,
@@ -1188,6 +1558,9 @@ impl ProcessingGraph {
         schedule: &CompiledSchedule,
         pool: &mut BufferPool,
         delay_lines: &mut [CompensationDelay],
+        feedback_delay_lines: &mut [CompensationDelay],
+        sc_tmp_left: &mut [f32],
+        sc_tmp_right: &mut [f32],
         left_in: &[f32],
         right_in: &[f32],
         left_out: &mut [f32],
@@ -1196,173 +1569,280 @@ impl ProcessingGraph {
         let len = left_in.len();
         pool.clear_all();
 
-        let mut execute = |nodes: &mut [Option<NodeData>],
-                           pool: &mut BufferPool,
-                           delay_lines: &mut [CompensationDelay]| {
-            for step in &schedule.steps {
-                match step {
-                    ProcessStep::WriteInput { buffer_idx } => {
-                        let buf = pool.get_mut(*buffer_idx);
-                        buf.left[..len].copy_from_slice(&left_in[..len]);
-                        buf.right[..len].copy_from_slice(&right_in[..len]);
-                    }
+        let mut execute =
+            |nodes: &mut [Option<NodeData>],
+             pool: &mut BufferPool,
+             delay_lines: &mut [CompensationDelay],
+             feedback_delay_lines: &mut [CompensationDelay]| {
+                for step in &schedule.steps {
+                    match step {
+                        ProcessStep::WriteInput { buffer_idx } => {
+                            let buf = pool.get_mut(*buffer_idx);
+                            buf.left[..len].copy_from_slice(&left_in[..len]);
+                            buf.right[..len].copy_from_slice(&right_in[..len]);
+                        }
 
-                    ProcessStep::ProcessEffect {
-                        node_idx,
-                        input_buf,
-                        output_buf,
-                    } => {
-                        if let Some(Some(node)) = nodes.get_mut(*node_idx) {
-                            // Peak input: max abs over the input buffer before processing.
-                            {
-                                let inp = pool.get(*input_buf);
-                                let peak_l = inp.left[..len]
-                                    .iter()
-                                    .fold(0.0f32, |acc, &s| acc.max(s.abs()));
-                                let peak_r = inp.right[..len]
-                                    .iter()
-                                    .fold(0.0f32, |acc, &s| acc.max(s.abs()));
-                                node.peak_in = (peak_l, peak_r);
-                            }
-
-                            let bypass_settled = node.bypassed && node.bypass_fade.is_settled();
-                            let bypass_fading = !bypass_settled
-                                && (node.bypassed || !node.bypass_fade.is_settled());
-
-                            if bypass_settled {
-                                // Fully bypassed and fade complete — copy input to output,
-                                // skip effect processing entirely (massive CPU savings).
-                                if *input_buf != *output_buf {
-                                    let (inp, out) = pool.get_ref_and_mut(*input_buf, *output_buf);
-                                    out.left[..len].copy_from_slice(&inp.left[..len]);
-                                    out.right[..len].copy_from_slice(&inp.right[..len]);
-                                }
-                                // If input_buf == output_buf, data is already in place.
-                            } else {
-                                // Phase 1: Save dry signal before effect processing.
-                                if bypass_fading {
-                                    let src = pool.get(*input_buf);
-                                    node.bypass_buf.left[..len].copy_from_slice(&src.left[..len]);
-                                    node.bypass_buf.right[..len].copy_from_slice(&src.right[..len]);
+                        ProcessStep::ProcessEffect {
+                            node_idx,
+                            input_buf,
+                            output_buf,
+                            sidechain_buf,
+                            is_control_rate,
+                        } => {
+                            if let Some(Some(node)) = nodes.get_mut(*node_idx) {
+                                // Control-rate nodes: process only 1 sample (sample-and-hold
+                                // is a separate step inserted by the compiler).
+                                let proc_len = if *is_control_rate { 1 } else { len };
+                                // Peak input: max abs over the input buffer before processing.
+                                {
+                                    let inp = pool.get(*input_buf);
+                                    let peak_l = inp.left[..len]
+                                        .iter()
+                                        .fold(0.0f32, |acc, &s| acc.max(s.abs()));
+                                    let peak_r = inp.right[..len]
+                                        .iter()
+                                        .fold(0.0f32, |acc, &s| acc.max(s.abs()));
+                                    node.peak_in = (peak_l, peak_r);
                                 }
 
-                                // Phase 2: Process through effect.
-                                if let NodeKind::Effect(ref mut effect) = node.kind {
-                                    if *input_buf == *output_buf {
-                                        let buf = pool.get_mut(*input_buf);
-                                        effect.process_block_stereo_inplace(
-                                            &mut buf.left[..len],
-                                            &mut buf.right[..len],
-                                        );
-                                    } else {
+                                let bypass_settled = node.bypassed && node.bypass_fade.is_settled();
+                                let bypass_fading = !bypass_settled
+                                    && (node.bypassed || !node.bypass_fade.is_settled());
+
+                                if bypass_settled {
+                                    // Fully bypassed and fade complete — copy input to output,
+                                    // skip effect processing entirely (massive CPU savings).
+                                    if *input_buf != *output_buf {
                                         let (inp, out) =
                                             pool.get_ref_and_mut(*input_buf, *output_buf);
-                                        effect.process_block_stereo(
-                                            &inp.left[..len],
-                                            &inp.right[..len],
-                                            &mut out.left[..len],
-                                            &mut out.right[..len],
-                                        );
+                                        out.left[..len].copy_from_slice(&inp.left[..len]);
+                                        out.right[..len].copy_from_slice(&inp.right[..len]);
+                                    }
+                                    // If input_buf == output_buf, data is already in place.
+                                } else {
+                                    // Phase 1: Save dry signal before effect processing.
+                                    if bypass_fading {
+                                        let src = pool.get(*input_buf);
+                                        node.bypass_buf.left[..len]
+                                            .copy_from_slice(&src.left[..len]);
+                                        node.bypass_buf.right[..len]
+                                            .copy_from_slice(&src.right[..len]);
+                                    }
+
+                                    // Phase 2: Process through effect.
+                                    if let NodeKind::Effect(ref mut effect) = node.kind {
+                                        if let Some(sc_buf) = sidechain_buf {
+                                            // Copy SC data before borrowing input/output buffers.
+                                            // RT-safe: sc_tmp_* are pre-allocated at compile time.
+                                            {
+                                                let sc = pool.get(*sc_buf);
+                                                sc_tmp_left[..proc_len]
+                                                    .copy_from_slice(&sc.left[..proc_len]);
+                                                sc_tmp_right[..proc_len]
+                                                    .copy_from_slice(&sc.right[..proc_len]);
+                                            }
+                                            let sc_l = &sc_tmp_left[..proc_len];
+                                            let sc_r = &sc_tmp_right[..proc_len];
+
+                                            if *input_buf == *output_buf {
+                                                let buf = pool.get_mut(*input_buf);
+                                                effect.process_block_stereo_inplace_with_sidechain(
+                                                    &mut buf.left[..proc_len],
+                                                    &mut buf.right[..proc_len],
+                                                    sc_l,
+                                                    sc_r,
+                                                );
+                                            } else {
+                                                let (inp, out) =
+                                                    pool.get_ref_and_mut(*input_buf, *output_buf);
+                                                effect.process_block_stereo_with_sidechain(
+                                                    &inp.left[..proc_len],
+                                                    &inp.right[..proc_len],
+                                                    &mut out.left[..proc_len],
+                                                    &mut out.right[..proc_len],
+                                                    sc_l,
+                                                    sc_r,
+                                                );
+                                            }
+                                        } else if *input_buf == *output_buf {
+                                            let buf = pool.get_mut(*input_buf);
+                                            effect.process_block_stereo_inplace(
+                                                &mut buf.left[..proc_len],
+                                                &mut buf.right[..proc_len],
+                                            );
+                                        } else {
+                                            let (inp, out) =
+                                                pool.get_ref_and_mut(*input_buf, *output_buf);
+                                            effect.process_block_stereo(
+                                                &inp.left[..proc_len],
+                                                &inp.right[..proc_len],
+                                                &mut out.left[..proc_len],
+                                                &mut out.right[..proc_len],
+                                            );
+                                        }
+                                    }
+
+                                    // Phase 3: Crossfade between dry and wet during fade.
+                                    if bypass_fading {
+                                        let out = pool.get_mut(*output_buf);
+                                        for i in 0..len {
+                                            let fade = node.bypass_fade.advance();
+                                            out.left[i] = wet_dry_mix(
+                                                node.bypass_buf.left[i],
+                                                out.left[i],
+                                                fade,
+                                            );
+                                            out.right[i] = wet_dry_mix(
+                                                node.bypass_buf.right[i],
+                                                out.right[i],
+                                                fade,
+                                            );
+                                        }
                                     }
                                 }
 
-                                // Phase 3: Crossfade between dry and wet during fade.
-                                if bypass_fading {
-                                    let out = pool.get_mut(*output_buf);
-                                    for i in 0..len {
-                                        let fade = node.bypass_fade.advance();
-                                        out.left[i] =
-                                            wet_dry_mix(node.bypass_buf.left[i], out.left[i], fade);
-                                        out.right[i] = wet_dry_mix(
-                                            node.bypass_buf.right[i],
-                                            out.right[i],
-                                            fade,
-                                        );
-                                    }
+                                // Peak output: max abs over the output buffer after processing.
+                                {
+                                    let out = pool.get(*output_buf);
+                                    let peak_l = out.left[..len]
+                                        .iter()
+                                        .fold(0.0f32, |acc, &s| acc.max(s.abs()));
+                                    let peak_r = out.right[..len]
+                                        .iter()
+                                        .fold(0.0f32, |acc, &s| acc.max(s.abs()));
+                                    node.peak_out = (peak_l, peak_r);
+                                }
+
+                                // Tap: copy output buffer to tap_buf if tapping is enabled.
+                                if node.tapped && !node.tap_buf.is_empty() {
+                                    let out = pool.get(*output_buf);
+                                    node.tap_buf.left[..len].copy_from_slice(&out.left[..len]);
+                                    node.tap_buf.right[..len].copy_from_slice(&out.right[..len]);
                                 }
                             }
+                        }
 
-                            // Peak output: max abs over the output buffer after processing.
-                            {
-                                let out = pool.get(*output_buf);
-                                let peak_l = out.left[..len]
-                                    .iter()
-                                    .fold(0.0f32, |acc, &s| acc.max(s.abs()));
-                                let peak_r = out.right[..len]
-                                    .iter()
-                                    .fold(0.0f32, |acc, &s| acc.max(s.abs()));
-                                node.peak_out = (peak_l, peak_r);
-                            }
-
-                            // Tap: copy output buffer to tap_buf if tapping is enabled.
-                            if node.tapped && !node.tap_buf.is_empty() {
-                                let out = pool.get(*output_buf);
-                                node.tap_buf.left[..len].copy_from_slice(&out.left[..len]);
-                                node.tap_buf.right[..len].copy_from_slice(&out.right[..len]);
+                        ProcessStep::SplitCopy {
+                            source_buf,
+                            dest_bufs,
+                            dest_count,
+                        } => {
+                            for &dest in &dest_bufs[..*dest_count] {
+                                if dest != *source_buf {
+                                    let (src, dst) = pool.get_ref_and_mut(*source_buf, dest);
+                                    dst.left[..len].copy_from_slice(&src.left[..len]);
+                                    dst.right[..len].copy_from_slice(&src.right[..len]);
+                                }
                             }
                         }
-                    }
 
-                    ProcessStep::SplitCopy {
-                        source_buf,
-                        dest_bufs,
-                        dest_count,
-                    } => {
-                        for &dest in &dest_bufs[..*dest_count] {
-                            if dest != *source_buf {
-                                let (src, dst) = pool.get_ref_and_mut(*source_buf, dest);
-                                dst.left[..len].copy_from_slice(&src.left[..len]);
-                                dst.right[..len].copy_from_slice(&src.right[..len]);
+                        ProcessStep::ClearBuffer { buffer_idx } => {
+                            pool.get_mut(*buffer_idx).clear();
+                        }
+
+                        ProcessStep::AccumulateBuffer {
+                            source_buf,
+                            dest_buf,
+                            gain,
+                        } => {
+                            if source_buf != dest_buf {
+                                let (src, dst) = pool.get_ref_and_mut(*source_buf, *dest_buf);
+                                // Use f64 intermediates to avoid precision loss when summing
+                                // multiple paths (merge nodes with many inputs).
+                                let gain64 = *gain as f64;
+                                for i in 0..len {
+                                    dst.left[i] =
+                                        (dst.left[i] as f64 + src.left[i] as f64 * gain64) as f32;
+                                    dst.right[i] =
+                                        (dst.right[i] as f64 + src.right[i] as f64 * gain64) as f32;
+                                }
                             }
                         }
-                    }
 
-                    ProcessStep::ClearBuffer { buffer_idx } => {
-                        pool.get_mut(*buffer_idx).clear();
-                    }
-
-                    ProcessStep::AccumulateBuffer {
-                        source_buf,
-                        dest_buf,
-                        gain,
-                    } => {
-                        if source_buf != dest_buf {
-                            let (src, dst) = pool.get_ref_and_mut(*source_buf, *dest_buf);
-                            // Use f64 intermediates to avoid precision loss when summing
-                            // multiple paths (merge nodes with many inputs).
-                            let gain64 = *gain as f64;
-                            for i in 0..len {
-                                dst.left[i] =
-                                    (dst.left[i] as f64 + src.left[i] as f64 * gain64) as f32;
-                                dst.right[i] =
-                                    (dst.right[i] as f64 + src.right[i] as f64 * gain64) as f32;
+                        ProcessStep::DelayCompensate {
+                            buffer_idx,
+                            delay_line_idx,
+                        } => {
+                            if let Some(dl) = delay_lines.get_mut(*delay_line_idx) {
+                                let buf = pool.get_mut(*buffer_idx);
+                                dl.process_block_inplace(
+                                    &mut buf.left[..len],
+                                    &mut buf.right[..len],
+                                );
                             }
                         }
-                    }
 
-                    ProcessStep::DelayCompensate {
-                        buffer_idx,
-                        delay_line_idx,
-                    } => {
-                        if let Some(dl) = delay_lines.get_mut(*delay_line_idx) {
+                        ProcessStep::ReadOutput { buffer_idx } => {
+                            let buf = pool.get(*buffer_idx);
+                            left_out[..len].copy_from_slice(&buf.left[..len]);
+                            right_out[..len].copy_from_slice(&buf.right[..len]);
+                        }
+
+                        ProcessStep::FeedbackDelay {
+                            buffer_idx,
+                            delay_line_idx,
+                        } => {
+                            // The feedback delay ring-buffers the previous block's samples.
+                            // `process_block_inplace` outputs the stored samples and then
+                            // stores the incoming samples for the next block — exactly a
+                            // 1-block delay, making the feedback loop causal.
+                            if let Some(dl) = feedback_delay_lines.get_mut(*delay_line_idx) {
+                                let buf = pool.get_mut(*buffer_idx);
+                                dl.process_block_inplace(
+                                    &mut buf.left[..len],
+                                    &mut buf.right[..len],
+                                );
+                            }
+                        }
+
+                        ProcessStep::SampleAndHold {
+                            buffer_idx,
+                            block_len: _,
+                        } => {
+                            // Replicate the first sample across the whole block.
+                            // Control-rate nodes write exactly 1 sample; this fills the rest
+                            // so audio-rate downstream nodes see a full-length buffer.
                             let buf = pool.get_mut(*buffer_idx);
-                            dl.process_block_inplace(&mut buf.left[..len], &mut buf.right[..len]);
+                            let l0 = buf.left[0];
+                            let r0 = buf.right[0];
+                            buf.left[1..len].fill(l0);
+                            buf.right[1..len].fill(r0);
                         }
-                    }
 
-                    ProcessStep::ReadOutput { buffer_idx } => {
-                        let buf = pool.get(*buffer_idx);
-                        left_out[..len].copy_from_slice(&buf.left[..len]);
-                        right_out[..len].copy_from_slice(&buf.right[..len]);
+                        ProcessStep::ProcessSubGraph {
+                            node_idx,
+                            input_buf,
+                            output_buf,
+                        } => {
+                            // Run the inner graph as an opaque block.
+                            // We need to copy from the pool into the inner graph's input,
+                            // run it, and copy back out.  Sub-graphs own their own BufferPool,
+                            // so we use a temporary slice approach.
+                            if let Some(Some(node)) = nodes.get_mut(*node_idx)
+                                && let NodeKind::SubGraph(ref mut inner) = node.kind
+                            {
+                                let inp = pool.get(*input_buf);
+                                // Borrow checker: copy input data to avoid aliasing.
+                                let left_in_sg: Vec<f32> = inp.left[..len].to_vec();
+                                let right_in_sg: Vec<f32> = inp.right[..len].to_vec();
+
+                                let out = pool.get_mut(*output_buf);
+                                inner.process_block(
+                                    &left_in_sg,
+                                    &right_in_sg,
+                                    &mut out.left[..len],
+                                    &mut out.right[..len],
+                                );
+                            }
+                        }
                     }
                 }
-            }
-        };
+            };
 
         #[cfg(all(debug_assertions, feature = "debug-alloc"))]
-        assert_no_alloc(|| execute(nodes, pool, delay_lines));
+        assert_no_alloc(|| execute(nodes, pool, delay_lines, feedback_delay_lines));
         #[cfg(not(all(debug_assertions, feature = "debug-alloc")))]
-        execute(nodes, pool, delay_lines);
+        execute(nodes, pool, delay_lines, feedback_delay_lines);
     }
 
     // --- Control methods ---
@@ -1650,6 +2130,10 @@ enum RawStep {
         node_idx: usize,
         input_vbuf: usize,
         output_vbuf: usize,
+        /// Virtual buffer for the external sidechain signal, if connected.
+        sidechain_vbuf: Option<usize>,
+        /// Whether this node runs at control rate (once per block).
+        is_control_rate: bool,
     },
     SplitCopy {
         source_vbuf: usize,
@@ -1669,6 +2153,19 @@ enum RawStep {
     DelayCompensate {
         vbuf: usize,
         delay_line_idx: usize,
+    },
+    FeedbackDelay {
+        vbuf: usize,
+        delay_line_idx: usize,
+    },
+    SampleAndHold {
+        vbuf: usize,
+        block_len: usize,
+    },
+    ProcessSubGraph {
+        node_idx: usize,
+        input_vbuf: usize,
+        output_vbuf: usize,
     },
 }
 
@@ -2842,5 +3339,149 @@ mod tests {
             0,
             "spillover disabled: effect should be dropped immediately"
         );
+    }
+
+    // --- Sidechain tests ---
+
+    /// An effect that counts sidechain processing invocations via a shared atomic.
+    ///
+    /// When `process_block_stereo_with_sidechain` is called, increments `sc_calls`.
+    /// The standard `process_block_stereo` path leaves the counter unchanged.
+    struct SidechainProbe {
+        pub sc_calls: &'static AtomicUsize,
+    }
+
+    impl Effect for SidechainProbe {
+        fn process(&mut self, input: f32) -> f32 {
+            input
+        }
+        fn process_block_stereo_with_sidechain(
+            &mut self,
+            left_in: &[f32],
+            right_in: &[f32],
+            left_out: &mut [f32],
+            right_out: &mut [f32],
+            _sc_left: &[f32],
+            _sc_right: &[f32],
+        ) {
+            self.sc_calls.fetch_add(1, Ordering::SeqCst);
+            left_out[..left_in.len()].copy_from_slice(left_in);
+            right_out[..right_in.len()].copy_from_slice(right_in);
+        }
+        fn set_sample_rate(&mut self, _: f32) {}
+        fn reset(&mut self) {}
+    }
+
+    impl ParameterInfo for SidechainProbe {
+        fn param_count(&self) -> usize {
+            0
+        }
+        fn param_info(&self, _: usize) -> Option<ParamDescriptor> {
+            None
+        }
+        fn get_param(&self, _: usize) -> f32 {
+            0.0
+        }
+        fn set_param(&mut self, _: usize, _: f32) {}
+    }
+
+    /// `connect_sidechain` must succeed when both nodes exist and must be
+    /// reflected in the compiled schedule without error.
+    #[test]
+    fn connect_sidechain_compiles() {
+        static SC_CALLS: AtomicUsize = AtomicUsize::new(0);
+        let mut graph = ProcessingGraph::new(48000.0, 4);
+        let input = graph.add_input();
+        let effect = graph.add_effect(Box::new(SidechainProbe {
+            sc_calls: &SC_CALLS,
+        }));
+        let output = graph.add_output();
+
+        graph.connect(input, effect).unwrap();
+        graph.connect(effect, output).unwrap();
+        // Use the input node itself as sidechain source — valid for compilation.
+        graph.connect_sidechain(input, effect).unwrap();
+
+        let schedule = graph.compile().unwrap();
+        assert!(schedule.step_count() >= 2);
+    }
+
+    /// The sidechain routing must invoke the sidechain processing path on the effect.
+    ///
+    /// The `SidechainProbe` increments a shared atomic counter in its sidechain
+    /// override. After `process_block`, the counter must have advanced.
+    #[test]
+    fn sidechain_audio_reaches_effect() {
+        static SC_CALLS: AtomicUsize = AtomicUsize::new(0);
+
+        let block_size = 4;
+        let mut graph = ProcessingGraph::new(48000.0, block_size);
+
+        let input = graph.add_input();
+        let probe_id = graph.add_effect(Box::new(SidechainProbe {
+            sc_calls: &SC_CALLS,
+        }));
+        let output = graph.add_output();
+
+        graph.connect(input, probe_id).unwrap();
+        graph.connect(probe_id, output).unwrap();
+        graph.connect_sidechain(input, probe_id).unwrap();
+        graph.compile().unwrap();
+
+        let in_buf = [0.5_f32; 4];
+        let mut left_out = [0.0_f32; 4];
+        let mut right_out = [0.0_f32; 4];
+
+        let before = SC_CALLS.load(Ordering::SeqCst);
+        graph.process_block(&in_buf, &in_buf, &mut left_out, &mut right_out);
+        let after = SC_CALLS.load(Ordering::SeqCst);
+
+        assert!(
+            after > before,
+            "Sidechain path was never invoked: counter before={before}, after={after}"
+        );
+    }
+
+    /// `connect_sidechain` with a nonexistent node must return `NodeNotFound`.
+    #[test]
+    fn connect_sidechain_bad_node_errors() {
+        let mut graph = ProcessingGraph::new(48000.0, 4);
+        let input = graph.add_input();
+        let effect = graph.add_effect(Box::new(Gain { factor: 1.0 }));
+
+        let result = graph.connect_sidechain(NodeId(999), effect);
+        assert!(
+            matches!(result, Err(GraphError::NodeNotFound(_))),
+            "Expected NodeNotFound, got {result:?}"
+        );
+
+        let result2 = graph.connect_sidechain(input, NodeId(999));
+        assert!(
+            matches!(result2, Err(GraphError::NodeNotFound(_))),
+            "Expected NodeNotFound for target, got {result2:?}"
+        );
+    }
+
+    /// `disconnect_sidechain` must clear the sidechain source on the node.
+    #[test]
+    fn disconnect_sidechain_clears() {
+        let mut graph = ProcessingGraph::new(48000.0, 4);
+        // Single input serves both as main audio and (temporarily) sidechain source.
+        let input = graph.add_input();
+        let effect = graph.add_effect(Box::new(Gain { factor: 1.0 }));
+        let output = graph.add_output();
+
+        graph.connect(input, effect).unwrap();
+        graph.connect(effect, output).unwrap();
+        graph.connect_sidechain(input, effect).unwrap();
+
+        let removed = graph.disconnect_sidechain(effect);
+        assert!(
+            removed,
+            "disconnect_sidechain should return true when connection existed"
+        );
+
+        // After disconnecting, compile should still succeed (no sidechain)
+        let _schedule = graph.compile().unwrap();
     }
 }
