@@ -890,6 +890,16 @@ impl DspKernel for ReverbKernel {
     fn latency_samples(&self) -> usize {
         0
     }
+
+    /// Estimated reverb tail duration in samples.
+    ///
+    /// Based on the T60 approximation: `decay × 3.0 × sample_rate`.
+    /// At `decay = 1.0` (maximum) this is 3 seconds — enough to cover the
+    /// longest practical reverb tail. Spillover (Phase 4) uses this to keep
+    /// the old graph alive while the tail rings out.
+    fn tail_samples(&self) -> usize {
+        (self.cached_decay * 3.0 * self.sample_rate) as usize
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

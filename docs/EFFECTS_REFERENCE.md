@@ -4,7 +4,7 @@ Complete parameter reference for all Sonido effects.
 
 ## Kernel Architecture
 
-All 19 effects have kernel-architecture implementations in `crates/sonido-effects/src/kernels/`. Each effect defines `XxxKernel` (`DspKernel` impl) and `XxxParams` (`KernelParams` impl). The registry creates `KernelAdapter<XxxKernel>` — all consumers (GUI, CLI, plugin) use kernel-backed effects transparently.
+All 20 effects have kernel-architecture implementations in `crates/sonido-effects/src/kernels/`. Each effect defines `XxxKernel` (`DspKernel` impl) and `XxxParams` (`KernelParams` impl). The registry creates `KernelAdapter<XxxKernel>` — all consumers (GUI, CLI, plugin) use kernel-backed effects transparently.
 
 Classic `Effect` implementations have been removed as of v0.2. All effects are kernel-only.
 
@@ -840,6 +840,50 @@ altering frequency content. Named after Helmut Haas (1951).
 ```bash
 sonido process in.wav --effect stage \
     --param gain=3 --param width=150 --param bass_mono=1 --param bass_freq=120
+```
+
+---
+
+## looper
+
+Stereo looper with record, play, and overdub modes.
+
+**Signal flow** (`crates/sonido-effects/src/kernels/looper.rs`):
+
+```text
+Input → [mode switch] → Record: write to LoopBuffer, pass dry
+                       → Play: read from LoopBuffer, wet/dry mix
+                       → Overdub: read + write (feedback blend), wet/dry mix
+                       → Stop: pass dry
+```
+
+Uses `LoopBuffer` (`crates/sonido-core/src/loop_buffer.rs`) for 60s stereo recording at 48kHz. Mode transitions are detected per-sample via `params.mode` vs cached state.
+
+**Parameters:**
+
+| # | Name | Range | Default | Unit | Scale | Smoothing |
+|---|------|-------|---------|------|-------|-----------|
+| 0 | Mode | 0–3 | 0 (Stop) | — | Stepped | None |
+| 1 | Feedback | 0–100 | 80.0 | % | Linear | Standard |
+| 2 | Half Speed | 0–1 | 0 | — | Stepped | None |
+| 3 | Reverse | 0–1 | 0 | — | Stepped | None |
+| 4 | Mix | 0–100 | 100.0 | % | Linear | Standard |
+| 5 | Output | −20–6 | 0.0 | dB | Linear | Standard |
+
+Mode values: 0=Stop, 1=Record, 2=Play, 3=Overdub.
+
+**State transitions:**
+- Stop → Record: clear buffer, start writing
+- Record → Play: freeze loop_end, start reading
+- Record → Overdub: freeze loop_end, read+write simultaneously
+- Play → Overdub: continue reading, also write (input + existing × feedback)
+- Overdub → Play: stop writing, continue reading
+- Any → Stop: halt, loop content preserved
+
+**CLI:**
+
+```bash
+sonido process in.wav --effect looper --param mode=1 --param feedback=80 --param mix=100
 ```
 
 ---

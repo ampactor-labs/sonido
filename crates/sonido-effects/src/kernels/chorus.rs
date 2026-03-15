@@ -100,6 +100,7 @@ const VOICE4_RATE_RATIO: f32 = 1.17;
 /// | 6 | `sync` | index (0=Off, 1=On) | 0–1 | 0 |
 /// | 7 | `division` | index (0–11) | 0–11 | 3 |
 /// | 8 | `output_db` | dB | −20–+6 | 0.0 |
+/// | 9 | `lfo_phase` | 0–1 | READ_ONLY diagnostic | 0.0 |
 #[derive(Debug, Clone, Copy)]
 pub struct ChorusParams {
     /// LFO rate in Hz. Voices 1–2 use this directly; voice 3 uses rate × 0.73,
@@ -150,6 +151,10 @@ pub struct ChorusParams {
 
     /// Output level in decibels (−20 to +6 dB).
     pub output_db: f32,
+
+    /// Current LFO phase (0.0–1.0). READ_ONLY diagnostic — written by the
+    /// kernel each sample; never read back for DSP.
+    pub lfo_phase: f32,
 }
 
 impl Default for ChorusParams {
@@ -164,6 +169,7 @@ impl Default for ChorusParams {
             sync: 0.0,
             division: 3.0,
             output_db: 0.0,
+            lfo_phase: 0.0,
         }
     }
 }
@@ -205,7 +211,7 @@ impl ChorusParams {
 }
 
 impl KernelParams for ChorusParams {
-    const COUNT: usize = 9;
+    const COUNT: usize = 10;
 
     fn descriptor(index: usize) -> Option<ParamDescriptor> {
         match index {
@@ -248,6 +254,11 @@ impl KernelParams for ChorusParams {
             8 => Some(
                 sonido_core::gain::output_param_descriptor().with_id(ParamId(703), "chor_output"),
             ),
+            9 => Some(
+                ParamDescriptor::custom("LFO Phase", "Phase", 0.0, 1.0, 0.0)
+                    .with_id(ParamId(709), "chor_lfo_phase")
+                    .with_flags(ParamFlags::READ_ONLY.union(ParamFlags::HIDDEN)),
+            ),
             _ => None,
         }
     }
@@ -263,6 +274,7 @@ impl KernelParams for ChorusParams {
             6 => SmoothingStyle::None,     // sync — discrete toggle
             7 => SmoothingStyle::None,     // division — discrete
             8 => SmoothingStyle::Standard, // output_db — 10ms
+            9 => SmoothingStyle::None,     // lfo_phase — READ_ONLY diagnostic, no smoothing
             _ => SmoothingStyle::Standard,
         }
     }
@@ -278,6 +290,7 @@ impl KernelParams for ChorusParams {
             6 => self.sync,
             7 => self.division,
             8 => self.output_db,
+            9 => self.lfo_phase,
             _ => 0.0,
         }
     }
@@ -293,6 +306,7 @@ impl KernelParams for ChorusParams {
             6 => self.sync = value,
             7 => self.division = value,
             8 => self.output_db = value,
+            9 => self.lfo_phase = value,
             _ => {}
         }
     }
@@ -357,6 +371,9 @@ pub struct ChorusKernel {
 
     /// Current sample rate in Hz.
     sample_rate: f32,
+
+    /// Current LFO 1 phase (0.0–1.0) written each sample for the READ_ONLY diagnostic.
+    lfo_phase_diagnostic: f32,
 }
 
 impl ChorusKernel {
@@ -400,6 +417,7 @@ impl ChorusKernel {
             max_mod_samples,
             tempo: TempoManager::new(sample_rate, 120.0),
             sample_rate,
+            lfo_phase_diagnostic: 0.0,
         }
     }
 
@@ -508,6 +526,9 @@ impl DspKernel for ChorusKernel {
         // ── Voice processing with feedback ──
         let (wet_l, wet_r) = self.process_voices_stereo(left, right, depth, feedback, voices);
 
+        // ── LFO phase diagnostic (after advance) ──
+        self.lfo_phase_diagnostic = self.lfo1.phase();
+
         // ── Wet/Dry mix → Soft Limit → Output Level ──
         let (out_l, out_r) = wet_dry_mix_stereo(left, right, wet_l, wet_r, mix);
         (
@@ -552,6 +573,10 @@ impl DspKernel for ChorusKernel {
         // Store updated BPM in the tempo manager. The LFO rate is applied
         // next time process_stereo() runs and detects sync = On.
         self.tempo.set_bpm(ctx.bpm);
+    }
+
+    fn update_diagnostics(&self, params: &mut ChorusParams) {
+        params.lfo_phase = self.lfo_phase_diagnostic;
     }
 }
 
@@ -605,7 +630,7 @@ mod tests {
     /// Descriptor count must match `COUNT` and all indices must be populated.
     #[test]
     fn params_descriptor_count() {
-        assert_eq!(ChorusParams::COUNT, 9, "Expected 9 parameters");
+        assert_eq!(ChorusParams::COUNT, 10, "Expected 10 parameters");
 
         for i in 0..ChorusParams::COUNT {
             assert!(
@@ -765,6 +790,7 @@ mod tests {
         assert_eq!(adapter.param_info(6).unwrap().id, ParamId(707)); // sync
         assert_eq!(adapter.param_info(7).unwrap().id, ParamId(708)); // division
         assert_eq!(adapter.param_info(8).unwrap().id, ParamId(703)); // output
+        assert_eq!(adapter.param_info(9).unwrap().id, ParamId(709)); // lfo_phase diagnostic
     }
 
     // ── Morphing / preset ────────────────────────────────────────────────────

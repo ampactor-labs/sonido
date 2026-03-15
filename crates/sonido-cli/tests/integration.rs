@@ -364,8 +364,8 @@ fn registry_creates_all_19_effects() {
 
     let registry = EffectRegistry::new();
 
-    // The registry should have 19 effects
-    assert_eq!(registry.len(), 19, "registry should have 19 effects");
+    // The registry should have 20 effects
+    assert_eq!(registry.len(), 20, "registry should have 20 effects");
 
     // Verify we can create each one
     let effect_names = [
@@ -388,6 +388,7 @@ fn registry_creates_all_19_effects() {
         "bitcrusher",
         "ringmod",
         "stage",
+        "looper",
     ];
 
     for name in &effect_names {

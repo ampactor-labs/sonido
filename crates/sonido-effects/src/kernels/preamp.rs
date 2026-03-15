@@ -67,7 +67,7 @@ use libm::tanhf;
 use sonido_core::kernel::{DspKernel, KernelParams, SmoothingStyle};
 use sonido_core::math::soft_limit;
 use sonido_core::{
-    Biquad, ParamDescriptor, ParamId, ParamUnit, fast_db_to_linear, peaking_eq_coefficients,
+    Biquad, Cached, ParamDescriptor, ParamId, ParamUnit, fast_db_to_linear, peaking_eq_coefficients,
 };
 
 // ── Constants ──
@@ -220,12 +220,11 @@ pub struct PreampKernel {
     /// Tone peaking EQ biquad for the right channel.
     tone_filter_r: Biquad,
 
-    /// Last `tone_db` value used to compute biquad coefficients.
+    /// Cached tone biquad coefficients `[b0, b1, b2, a0, a1, a2]`.
     ///
-    /// Coefficients are only recalculated when this differs from the
-    /// current `params.tone_db` by more than 0.001 dB, avoiding
-    /// unnecessary per-sample coefficient recomputation.
-    last_tone_db: f32,
+    /// Recomputed only when `tone_db` changes by more than 1e-4 dB,
+    /// avoiding unnecessary per-sample trigonometric computation.
+    tone_cache: Cached<[f32; 6]>,
 }
 
 impl PreampKernel {
@@ -236,29 +235,26 @@ impl PreampKernel {
     /// # Parameters
     /// - `sample_rate`: Audio sample rate in Hz (e.g. 44100.0, 48000.0, 96000.0).
     pub fn new(sample_rate: f32) -> Self {
-        let mut kernel = Self {
-            sample_rate,
-            tone_filter_l: Biquad::new(),
-            tone_filter_r: Biquad::new(),
-            last_tone_db: f32::NAN, // Force initial coefficient computation
-        };
-        kernel.update_tone_coefficients(0.0);
-        kernel
-    }
-
-    /// Recalculate biquad coefficients for the tone peaking EQ.
-    ///
-    /// Uses the Audio EQ Cookbook peaking EQ formula centered at
-    /// `TONE_CENTER_HZ` with bandwidth `TONE_Q`.
-    ///
-    /// This is called only when `tone_db` changes by more than 0.001 dB,
-    /// preventing unnecessary trigonometric computation per sample.
-    fn update_tone_coefficients(&mut self, tone_db: f32) {
         let (b0, b1, b2, a0, a1, a2) =
-            peaking_eq_coefficients(TONE_CENTER_HZ, TONE_Q, tone_db, self.sample_rate);
-        self.tone_filter_l.set_coefficients(b0, b1, b2, a0, a1, a2);
-        self.tone_filter_r.set_coefficients(b0, b1, b2, a0, a1, a2);
-        self.last_tone_db = tone_db;
+            peaking_eq_coefficients(TONE_CENTER_HZ, TONE_Q, 0.0, sample_rate);
+        let initial_coeffs = [b0, b1, b2, a0, a1, a2];
+        let mut tone_filter_l = Biquad::new();
+        let mut tone_filter_r = Biquad::new();
+        tone_filter_l.set_coefficients(b0, b1, b2, a0, a1, a2);
+        tone_filter_r.set_coefficients(b0, b1, b2, a0, a1, a2);
+        let mut tone_cache = Cached::new(initial_coeffs, 1);
+        // Prime cache so first process() call matches the already-set coefficients.
+        tone_cache.update(&[0.0], 1e-4, |inputs| {
+            let (b0, b1, b2, a0, a1, a2) =
+                peaking_eq_coefficients(TONE_CENTER_HZ, TONE_Q, inputs[0], sample_rate);
+            [b0, b1, b2, a0, a1, a2]
+        });
+        Self {
+            sample_rate,
+            tone_filter_l,
+            tone_filter_r,
+            tone_cache,
+        }
     }
 
     /// Apply the preamp's soft-clip transfer function to a single sample.
@@ -300,10 +296,18 @@ impl DspKernel for PreampKernel {
     /// 7. Output level scaling
     #[inline]
     fn process_stereo(&mut self, left: f32, right: f32, params: &PreampParams) -> (f32, f32) {
-        // ── Coefficient update (only when tone changes) ──
-        if (params.tone_db - self.last_tone_db).abs() > 0.001 {
-            self.update_tone_coefficients(params.tone_db);
-        }
+        // ── Coefficient update (only when tone_db changes beyond epsilon) ──
+        let coeffs = *self.tone_cache.update(&[params.tone_db], 1e-4, |inputs| {
+            let (b0, b1, b2, a0, a1, a2) =
+                peaking_eq_coefficients(TONE_CENTER_HZ, TONE_Q, inputs[0], self.sample_rate);
+            [b0, b1, b2, a0, a1, a2]
+        });
+        self.tone_filter_l.set_coefficients(
+            coeffs[0], coeffs[1], coeffs[2], coeffs[3], coeffs[4], coeffs[5],
+        );
+        self.tone_filter_r.set_coefficients(
+            coeffs[0], coeffs[1], coeffs[2], coeffs[3], coeffs[4], coeffs[5],
+        );
 
         // ── Unit conversion (user-facing → internal) ──
         let gain = fast_db_to_linear(params.gain_db);
@@ -331,18 +335,14 @@ impl DspKernel for PreampKernel {
     fn reset(&mut self) {
         self.tone_filter_l.clear();
         self.tone_filter_r.clear();
+        // Invalidate coefficient cache so it recomputes on the next process() call.
+        self.tone_cache.invalidate();
     }
 
     fn set_sample_rate(&mut self, sample_rate: f32) {
         self.sample_rate = sample_rate;
-        // Recompute tone filter for new sample rate using cached tone_db.
-        // If last_tone_db is NaN (initial state), fall back to flat 0 dB.
-        let tone_db = if self.last_tone_db.is_nan() {
-            0.0
-        } else {
-            self.last_tone_db
-        };
-        self.update_tone_coefficients(tone_db);
+        // Invalidate so coefficients recompute at new sample rate on next process().
+        self.tone_cache.invalidate();
     }
 
     fn latency_samples(&self) -> usize {
@@ -366,7 +366,10 @@ impl DspKernel for PreampKernel {
 mod tests {
     use super::*;
     use sonido_core::kernel::KernelAdapter;
-    use sonido_core::{Effect, ParameterInfo};
+    use sonido_core::{Effect, KernelParams, ParameterInfo};
+
+    // Zero-config kernel invariant tests (finite output, reset, morph, descriptors, extreme inputs)
+    crate::test_kernel!(PreampKernel, PreampParams);
 
     // ── Kernel unit tests ──
 

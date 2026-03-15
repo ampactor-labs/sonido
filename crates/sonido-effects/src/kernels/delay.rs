@@ -47,7 +47,7 @@
 //! let (left, right) = kernel.process_stereo(input_l, input_r, &params);
 //! ```
 
-use libm::ceilf;
+use libm::{ceilf, logf};
 use sonido_core::kernel::{DspKernel, KernelParams, SmoothingStyle};
 use sonido_core::{
     AllpassFilter, Biquad, DIVISION_LABELS, InterpolatedDelay, NoteDivision, OnePole,
@@ -431,6 +431,16 @@ pub struct DelayKernel {
     /// Updated each sample from `params.ping_pong` so the method always
     /// reflects the most recent processed frame.
     cached_ping_pong: bool,
+
+    /// Cached delay time in samples from the last `process_stereo()` call.
+    ///
+    /// Used by `tail_samples()` to estimate ring-out duration.
+    cached_delay_samples: f32,
+
+    /// Cached feedback fraction (0–0.95) from the last `process_stereo()` call.
+    ///
+    /// Used by `tail_samples()` to estimate the number of audible repeats.
+    cached_feedback: f32,
 }
 
 impl DelayKernel {
@@ -474,6 +484,8 @@ impl DelayKernel {
             cached_hp_freq: 20.0,
             cached_diffusion: 0.0,
             cached_ping_pong: false,
+            cached_delay_samples: 300.0 / 1000.0 * sample_rate, // default 300 ms
+            cached_feedback: 0.4,                               // default 40 %
         }
     }
 
@@ -585,8 +597,10 @@ impl DspKernel for DelayKernel {
         let output_gain = fast_db_to_linear(params.output_db);
         let delay_samples = self.effective_delay_samples(params);
 
-        // Track ping-pong for is_true_stereo()
+        // Track ping-pong for is_true_stereo(), and delay/feedback for tail_samples()
         self.cached_ping_pong = params.ping_pong > 0.5;
+        self.cached_delay_samples = delay_samples;
+        self.cached_feedback = feedback;
 
         // ── Read delayed signals ──
         let delayed_l = self.delay_line_l.read(delay_samples);
@@ -706,6 +720,23 @@ impl DspKernel for DelayKernel {
     /// `effective_delay_samples()`, so no per-call recomputation is needed.
     fn set_tempo_context(&mut self, ctx: &TempoContext) {
         self.tempo.set_bpm(ctx.bpm);
+    }
+
+    /// Estimated delay tail duration in samples.
+    ///
+    /// Computes the number of repeats until the feedback falls below −60 dB
+    /// (`gain < 0.001`), then returns `delay_time × repeats`. Capped at 10
+    /// seconds to prevent unbounded values at near-unity feedback.
+    fn tail_samples(&self) -> usize {
+        let feedback = self.cached_feedback;
+        if feedback < 0.001 {
+            return 0;
+        }
+        // Number of repeats to decay 60 dB: N = log(0.001) / log(feedback)
+        let repeats = (logf(0.001) / logf(feedback)).ceil() as usize;
+        let tail = self.cached_delay_samples as usize * repeats;
+        // Cap at 10 seconds.
+        tail.min((10.0 * self.sample_rate) as usize)
     }
 }
 

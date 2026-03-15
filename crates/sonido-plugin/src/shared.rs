@@ -234,7 +234,7 @@ mod tests {
     fn shared_new_creates_all_params() {
         let shared = SonidoShared::new("distortion", None);
         assert_eq!(shared.effect_id(), "distortion");
-        assert_eq!(shared.param_count(), 5);
+        assert_eq!(shared.param_count(), 6);
         assert!(shared.param_count() > 0);
     }
 

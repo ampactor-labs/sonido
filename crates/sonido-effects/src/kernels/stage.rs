@@ -74,7 +74,7 @@ use sonido_core::biquad::{highpass_coefficients, lowpass_coefficients};
 use sonido_core::kernel::{DspKernel, KernelParams, SmoothingStyle};
 use sonido_core::math::ms_to_samples;
 use sonido_core::{
-    Biquad, DcBlocker, InterpolatedDelay, ParamDescriptor, ParamFlags, ParamId, ParamScale,
+    Biquad, Cached, DcBlocker, InterpolatedDelay, ParamDescriptor, ParamFlags, ParamId, ParamScale,
     ParamUnit, fast_db_to_linear,
 };
 
@@ -431,12 +431,13 @@ pub struct StageKernel {
     /// Current sample rate in Hz.
     sample_rate: f32,
 
-    /// Last bass crossover frequency seen by the kernel.
+    /// Change-detector for bass crossover coefficients.
     ///
-    /// Coefficients are recomputed only when `params.bass_freq_hz` deviates
-    /// from this value by more than 0.01 Hz, keeping the hot path coefficient-free
-    /// during steady-state operation.
-    last_bass_freq: f32,
+    /// Keyed on `[bass_freq_hz]`. Stores `[[lp_coeffs; 6], [hp_coeffs; 6]]`
+    /// as a flat 12-element array. Avoids `lowpass_coefficients()` +
+    /// `highpass_coefficients()` (each involves `sinf`/`cosf`) when the
+    /// crossover frequency is stable.
+    bass_cache: Cached<[[f32; 6]; 2]>,
 }
 
 impl StageKernel {
@@ -445,40 +446,60 @@ impl StageKernel {
     /// Allocates the Haas delay line and pre-computes bass crossover
     /// coefficients at the default frequency (120 Hz).
     pub fn new(sample_rate: f32) -> Self {
-        let mut kernel = Self {
-            dc_blocker_l: DcBlocker::new(sample_rate),
-            dc_blocker_r: DcBlocker::new(sample_rate),
-            bass_lp: core::array::from_fn(|_| core::array::from_fn(|_| Biquad::new())),
-            bass_hp: core::array::from_fn(|_| core::array::from_fn(|_| Biquad::new())),
-            haas_delay_line: InterpolatedDelay::from_time(sample_rate, MAX_HAAS_SECONDS),
-            sample_rate,
-            last_bass_freq: f32::NAN, // Force initial coefficient computation
-        };
         let defaults = StageParams::default();
-        kernel.update_bass_crossover(defaults.bass_freq_hz);
-        kernel
-    }
+        let sr = sample_rate;
 
-    /// Recalculate all 8 LR4 crossover biquad coefficients for the given frequency.
-    ///
-    /// The Linkwitz-Riley 4th-order design uses two cascaded 2nd-order Butterworth
-    /// stages at Q = 1/√2. Both the lowpass and highpass coefficients are updated
-    /// for both channels simultaneously.
-    fn update_bass_crossover(&mut self, freq_hz: f32) {
-        let freq = freq_hz.clamp(20.0, 500.0_f32.min(self.sample_rate * 0.45));
+        let compute_crossover = |freq_hz: f32| -> [[f32; 6]; 2] {
+            let freq = freq_hz.clamp(20.0, 500.0_f32.min(sr * 0.45));
+            let (lb0, lb1, lb2, la0, la1, la2) = lowpass_coefficients(freq, BUTTERWORTH_Q, sr);
+            let (hb0, hb1, hb2, ha0, ha1, ha2) = highpass_coefficients(freq, BUTTERWORTH_Q, sr);
+            [
+                [lb0, lb1, lb2, la0, la1, la2],
+                [hb0, hb1, hb2, ha0, ha1, ha2],
+            ]
+        };
 
-        let (lb0, lb1, lb2, la0, la1, la2) =
-            lowpass_coefficients(freq, BUTTERWORTH_Q, self.sample_rate);
-        let (hb0, hb1, hb2, ha0, ha1, ha2) =
-            highpass_coefficients(freq, BUTTERWORTH_Q, self.sample_rate);
+        let initial_coeffs = compute_crossover(defaults.bass_freq_hz);
 
+        let mut bass_lp: [[Biquad; 2]; 2] =
+            core::array::from_fn(|_| core::array::from_fn(|_| Biquad::new()));
+        let mut bass_hp: [[Biquad; 2]; 2] =
+            core::array::from_fn(|_| core::array::from_fn(|_| Biquad::new()));
+        let lp = initial_coeffs[0];
+        let hp = initial_coeffs[1];
         for ch in 0..2 {
             for stage in 0..2 {
-                self.bass_lp[ch][stage].set_coefficients(lb0, lb1, lb2, la0, la1, la2);
-                self.bass_hp[ch][stage].set_coefficients(hb0, hb1, hb2, ha0, ha1, ha2);
+                bass_lp[ch][stage].set_coefficients(lp[0], lp[1], lp[2], lp[3], lp[4], lp[5]);
+                bass_hp[ch][stage].set_coefficients(hp[0], hp[1], hp[2], hp[3], hp[4], hp[5]);
             }
         }
-        self.last_bass_freq = freq;
+
+        let mut bass_cache = Cached::new(initial_coeffs, 1);
+        bass_cache.update(&[defaults.bass_freq_hz], 0.01, |inputs| {
+            compute_crossover(inputs[0])
+        });
+
+        Self {
+            dc_blocker_l: DcBlocker::new(sample_rate),
+            dc_blocker_r: DcBlocker::new(sample_rate),
+            bass_lp,
+            bass_hp,
+            haas_delay_line: InterpolatedDelay::from_time(sample_rate, MAX_HAAS_SECONDS),
+            sample_rate,
+            bass_cache,
+        }
+    }
+
+    /// Apply cached crossover coefficients to all 8 LR4 biquad filters.
+    fn apply_bass_crossover(&mut self, coeffs: [[f32; 6]; 2]) {
+        let lp = coeffs[0];
+        let hp = coeffs[1];
+        for ch in 0..2 {
+            for stage in 0..2 {
+                self.bass_lp[ch][stage].set_coefficients(lp[0], lp[1], lp[2], lp[3], lp[4], lp[5]);
+                self.bass_hp[ch][stage].set_coefficients(hp[0], hp[1], hp[2], hp[3], hp[4], hp[5]);
+            }
+        }
     }
 
     /// Process a signal through two cascaded biquad stages (one LR4 half-filter).
@@ -548,9 +569,21 @@ impl DspKernel for StageKernel {
         // ── 7. Bass mono (LR4 crossover) ──
         if params.bass_mono >= 0.5 {
             // Recompute crossover coefficients only when frequency changes.
-            if (params.bass_freq_hz - self.last_bass_freq).abs() > 0.01 {
-                self.update_bass_crossover(params.bass_freq_hz);
-            }
+            let sr = self.sample_rate;
+            let coeffs = *self
+                .bass_cache
+                .update(&[params.bass_freq_hz], 0.01, |inputs| {
+                    let freq = inputs[0].clamp(20.0, 500.0_f32.min(sr * 0.45));
+                    let (lb0, lb1, lb2, la0, la1, la2) =
+                        lowpass_coefficients(freq, BUTTERWORTH_Q, sr);
+                    let (hb0, hb1, hb2, ha0, ha1, ha2) =
+                        highpass_coefficients(freq, BUTTERWORTH_Q, sr);
+                    [
+                        [lb0, lb1, lb2, la0, la1, la2],
+                        [hb0, hb1, hb2, ha0, ha1, ha2],
+                    ]
+                });
+            self.apply_bass_crossover(coeffs);
 
             let low_l = Self::process_lr4(&mut self.bass_lp[0], l);
             let low_r = Self::process_lr4(&mut self.bass_lp[1], r);
@@ -600,8 +633,8 @@ impl DspKernel for StageKernel {
                 self.bass_hp[ch][stage].clear();
             }
         }
-        // Retain last_bass_freq so coefficients are not recomputed unnecessarily
-        // on the next call if bass_freq has not changed.
+        // bass_cache is NOT invalidated on reset — coefficients remain valid
+        // (they depend only on frequency, not audio signal state).
     }
 
     fn set_sample_rate(&mut self, sample_rate: f32) {
@@ -610,14 +643,8 @@ impl DspKernel for StageKernel {
         self.dc_blocker_r.set_sample_rate(sample_rate);
         // Reallocate delay line for the new sample rate.
         self.haas_delay_line = InterpolatedDelay::from_time(sample_rate, MAX_HAAS_SECONDS);
-        // Force crossover recomputation with the new sample rate.
-        let freq = if self.last_bass_freq.is_nan() {
-            StageParams::default().bass_freq_hz
-        } else {
-            self.last_bass_freq
-        };
-        self.last_bass_freq = f32::NAN; // trigger recompute
-        self.update_bass_crossover(freq);
+        // Invalidate crossover cache — coefficients are sample-rate dependent.
+        self.bass_cache.invalidate();
     }
 
     fn is_true_stereo(&self) -> bool {

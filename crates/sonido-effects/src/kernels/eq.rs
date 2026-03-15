@@ -66,7 +66,7 @@
 use sonido_core::kernel::{DspKernel, KernelParams, SmoothingStyle};
 use sonido_core::math::soft_limit;
 use sonido_core::{
-    Biquad, ParamDescriptor, ParamId, ParamScale, ParamUnit, fast_db_to_linear,
+    Biquad, Cached, ParamDescriptor, ParamId, ParamScale, ParamUnit, fast_db_to_linear,
     peaking_eq_coefficients,
 };
 
@@ -411,28 +411,17 @@ pub struct EqKernel {
     /// High band biquad filter — right channel.
     high_r: Biquad,
 
-    // ── Coefficient caches — each tracks the last value used to compute biquad
-    //    coefficients. A NaN sentinel forces recalculation on the first call.
-    /// Cached low band center frequency (Hz) from the last coefficient update.
-    last_low_freq_hz: f32,
-    /// Cached low band gain (dB) from the last coefficient update.
-    last_low_gain: f32,
-    /// Cached low band Q from the last coefficient update.
-    last_low_q: f32,
+    /// Change-detector for low band biquad coefficients.
+    ///
+    /// Keyed on `[freq_hz, gain_db, q]`. Avoids `peaking_eq_coefficients()` (involves
+    /// `sinf`/`cosf`) when the low band params are stable.
+    low_cache: Cached<[f32; 6]>,
 
-    /// Cached mid band center frequency (Hz) from the last coefficient update.
-    last_mid_freq_hz: f32,
-    /// Cached mid band gain (dB) from the last coefficient update.
-    last_mid_gain: f32,
-    /// Cached mid band Q from the last coefficient update.
-    last_mid_q: f32,
+    /// Change-detector for mid band biquad coefficients.
+    mid_cache: Cached<[f32; 6]>,
 
-    /// Cached high band center frequency (Hz) from the last coefficient update.
-    last_high_freq_hz: f32,
-    /// Cached high band gain (dB) from the last coefficient update.
-    last_high_gain: f32,
-    /// Cached high band Q from the last coefficient update.
-    last_high_q: f32,
+    /// Change-detector for high band biquad coefficients.
+    high_cache: Cached<[f32; 6]>,
 
     /// Down-counter for block-rate coefficient decimation.
     ///
@@ -447,120 +436,136 @@ impl EqKernel {
     /// All six biquad filters are initialised with default parameters
     /// (flat response: 100/1000/5000 Hz, 0 dB gain, Q=1.0).
     pub fn new(sample_rate: f32) -> Self {
-        let mut kernel = Self {
-            sample_rate,
+        let defaults = EqParams::default();
 
-            low_l: Biquad::new(),
-            low_r: Biquad::new(),
-            mid_l: Biquad::new(),
-            mid_r: Biquad::new(),
-            high_l: Biquad::new(),
-            high_r: Biquad::new(),
-
-            // NaN sentinels force coefficient computation on the first call.
-            last_low_freq_hz: f32::NAN,
-            last_low_gain: f32::NAN,
-            last_low_q: f32::NAN,
-            last_mid_freq_hz: f32::NAN,
-            last_mid_gain: f32::NAN,
-            last_mid_q: f32::NAN,
-            last_high_freq_hz: f32::NAN,
-            last_high_gain: f32::NAN,
-            last_high_q: f32::NAN,
-
-            coeff_update_counter: 1,
+        // Helper closure: compute biquad coefficients for one EQ band
+        let compute = |freq: f32, gain_db: f32, q: f32, sr: f32| -> [f32; 6] {
+            let freq_clamped = (freq).clamp(20.0, sr * 0.475);
+            let (b0, b1, b2, a0, a1, a2) = peaking_eq_coefficients(freq_clamped, q, gain_db, sr);
+            [b0, b1, b2, a0, a1, a2]
         };
 
-        // Initialise with default params to set real coefficients immediately.
-        let defaults = EqParams::default();
-        kernel.update_low_coefficients(defaults.low_freq_hz, defaults.low_gain_db, defaults.low_q);
-        kernel.update_mid_coefficients(defaults.mid_freq_hz, defaults.mid_gain_db, defaults.mid_q);
-        kernel.update_high_coefficients(
+        let initial_low = compute(
+            defaults.low_freq_hz,
+            defaults.low_gain_db,
+            defaults.low_q,
+            sample_rate,
+        );
+        let initial_mid = compute(
+            defaults.mid_freq_hz,
+            defaults.mid_gain_db,
+            defaults.mid_q,
+            sample_rate,
+        );
+        let initial_high = compute(
             defaults.high_freq_hz,
             defaults.high_gain_db,
             defaults.high_q,
+            sample_rate,
         );
-        kernel
+
+        let mut low_l = Biquad::new();
+        let mut low_r = Biquad::new();
+        low_l.set_coefficients(
+            initial_low[0],
+            initial_low[1],
+            initial_low[2],
+            initial_low[3],
+            initial_low[4],
+            initial_low[5],
+        );
+        low_r.set_coefficients(
+            initial_low[0],
+            initial_low[1],
+            initial_low[2],
+            initial_low[3],
+            initial_low[4],
+            initial_low[5],
+        );
+
+        let mut mid_l = Biquad::new();
+        let mut mid_r = Biquad::new();
+        mid_l.set_coefficients(
+            initial_mid[0],
+            initial_mid[1],
+            initial_mid[2],
+            initial_mid[3],
+            initial_mid[4],
+            initial_mid[5],
+        );
+        mid_r.set_coefficients(
+            initial_mid[0],
+            initial_mid[1],
+            initial_mid[2],
+            initial_mid[3],
+            initial_mid[4],
+            initial_mid[5],
+        );
+
+        let mut high_l = Biquad::new();
+        let mut high_r = Biquad::new();
+        high_l.set_coefficients(
+            initial_high[0],
+            initial_high[1],
+            initial_high[2],
+            initial_high[3],
+            initial_high[4],
+            initial_high[5],
+        );
+        high_r.set_coefficients(
+            initial_high[0],
+            initial_high[1],
+            initial_high[2],
+            initial_high[3],
+            initial_high[4],
+            initial_high[5],
+        );
+
+        let mut low_cache = Cached::new(initial_low, 3);
+        low_cache.update(
+            &[defaults.low_freq_hz, defaults.low_gain_db, defaults.low_q],
+            CHANGE_EPSILON,
+            |inputs| compute(inputs[0], inputs[1], inputs[2], sample_rate),
+        );
+
+        let mut mid_cache = Cached::new(initial_mid, 3);
+        mid_cache.update(
+            &[defaults.mid_freq_hz, defaults.mid_gain_db, defaults.mid_q],
+            CHANGE_EPSILON,
+            |inputs| compute(inputs[0], inputs[1], inputs[2], sample_rate),
+        );
+
+        let mut high_cache = Cached::new(initial_high, 3);
+        high_cache.update(
+            &[
+                defaults.high_freq_hz,
+                defaults.high_gain_db,
+                defaults.high_q,
+            ],
+            CHANGE_EPSILON,
+            |inputs| compute(inputs[0], inputs[1], inputs[2], sample_rate),
+        );
+
+        Self {
+            sample_rate,
+            low_l,
+            low_r,
+            mid_l,
+            mid_r,
+            high_l,
+            high_r,
+            low_cache,
+            mid_cache,
+            high_cache,
+            coeff_update_counter: 1,
+        }
     }
 
-    /// Clamp a frequency to 95 % of Nyquist to prevent biquad instability.
-    ///
-    /// Biquad coefficients become numerically unstable as the pole frequency
-    /// approaches Nyquist. Clamping to 95 % (`sample_rate × 0.475`) provides
-    /// sufficient headroom at all standard sample rates.
+    /// Apply coefficient array to a pair of biquad filters.
     #[inline]
-    fn clamp_to_nyquist(&self, freq: f32) -> f32 {
-        let max_freq = self.sample_rate * 0.475;
-        if freq > max_freq { max_freq } else { freq }
-    }
-
-    /// Recompute biquad coefficients for the low band and apply to both filters.
-    ///
-    /// Uses the RBJ peaking EQ formula. Both the left and right channel filters
-    /// receive identical coefficients (dual-mono topology).
-    fn update_low_coefficients(&mut self, freq: f32, gain_db: f32, q: f32) {
-        let freq = self.clamp_to_nyquist(freq);
-        let (b0, b1, b2, a0, a1, a2) = peaking_eq_coefficients(freq, q, gain_db, self.sample_rate);
-        self.low_l.set_coefficients(b0, b1, b2, a0, a1, a2);
-        self.low_r.set_coefficients(b0, b1, b2, a0, a1, a2);
-        self.last_low_freq_hz = freq;
-        self.last_low_gain = gain_db;
-        self.last_low_q = q;
-    }
-
-    /// Recompute biquad coefficients for the mid band and apply to both filters.
-    ///
-    /// Uses the RBJ peaking EQ formula. Both the left and right channel filters
-    /// receive identical coefficients (dual-mono topology).
-    fn update_mid_coefficients(&mut self, freq: f32, gain_db: f32, q: f32) {
-        let freq = self.clamp_to_nyquist(freq);
-        let (b0, b1, b2, a0, a1, a2) = peaking_eq_coefficients(freq, q, gain_db, self.sample_rate);
-        self.mid_l.set_coefficients(b0, b1, b2, a0, a1, a2);
-        self.mid_r.set_coefficients(b0, b1, b2, a0, a1, a2);
-        self.last_mid_freq_hz = freq;
-        self.last_mid_gain = gain_db;
-        self.last_mid_q = q;
-    }
-
-    /// Recompute biquad coefficients for the high band and apply to both filters.
-    ///
-    /// Uses the RBJ peaking EQ formula. Both the left and right channel filters
-    /// receive identical coefficients (dual-mono topology).
-    fn update_high_coefficients(&mut self, freq: f32, gain_db: f32, q: f32) {
-        let freq = self.clamp_to_nyquist(freq);
-        let (b0, b1, b2, a0, a1, a2) = peaking_eq_coefficients(freq, q, gain_db, self.sample_rate);
-        self.high_l.set_coefficients(b0, b1, b2, a0, a1, a2);
-        self.high_r.set_coefficients(b0, b1, b2, a0, a1, a2);
-        self.last_high_freq_hz = freq;
-        self.last_high_gain = gain_db;
-        self.last_high_q = q;
-    }
-
-    /// Returns `true` if the low band parameters have drifted beyond the update
-    /// threshold, indicating that coefficient recalculation is needed.
-    #[inline]
-    fn low_needs_update(&self, params: &EqParams) -> bool {
-        (params.low_freq_hz - self.last_low_freq_hz).abs() > CHANGE_EPSILON
-            || (params.low_gain_db - self.last_low_gain).abs() > CHANGE_EPSILON
-            || (params.low_q - self.last_low_q).abs() > CHANGE_EPSILON
-    }
-
-    /// Returns `true` if the mid band parameters have drifted beyond the update
-    /// threshold, indicating that coefficient recalculation is needed.
-    #[inline]
-    fn mid_needs_update(&self, params: &EqParams) -> bool {
-        (params.mid_freq_hz - self.last_mid_freq_hz).abs() > CHANGE_EPSILON
-            || (params.mid_gain_db - self.last_mid_gain).abs() > CHANGE_EPSILON
-            || (params.mid_q - self.last_mid_q).abs() > CHANGE_EPSILON
-    }
-
-    /// Returns `true` if the high band parameters have drifted beyond the update
-    /// threshold, indicating that coefficient recalculation is needed.
-    #[inline]
-    fn high_needs_update(&self, params: &EqParams) -> bool {
-        (params.high_freq_hz - self.last_high_freq_hz).abs() > CHANGE_EPSILON
-            || (params.high_gain_db - self.last_high_gain).abs() > CHANGE_EPSILON
-            || (params.high_q - self.last_high_q).abs() > CHANGE_EPSILON
+    fn apply_coefficients(filter_l: &mut Biquad, filter_r: &mut Biquad, c: [f32; 6]) {
+        filter_l.set_coefficients(c[0], c[1], c[2], c[3], c[4], c[5]);
+        filter_r.set_coefficients(c[0], c[1], c[2], c[3], c[4], c[5]);
     }
 }
 
@@ -576,19 +581,42 @@ impl DspKernel for EqKernel {
         if self.coeff_update_counter == 0 {
             self.coeff_update_counter = COEFF_UPDATE_INTERVAL;
 
-            if self.low_needs_update(params) {
-                self.update_low_coefficients(params.low_freq_hz, params.low_gain_db, params.low_q);
-            }
-            if self.mid_needs_update(params) {
-                self.update_mid_coefficients(params.mid_freq_hz, params.mid_gain_db, params.mid_q);
-            }
-            if self.high_needs_update(params) {
-                self.update_high_coefficients(
-                    params.high_freq_hz,
-                    params.high_gain_db,
-                    params.high_q,
-                );
-            }
+            let sr = self.sample_rate;
+            let low_c = *self.low_cache.update(
+                &[params.low_freq_hz, params.low_gain_db, params.low_q],
+                CHANGE_EPSILON,
+                |inputs| {
+                    let freq = inputs[0].clamp(20.0, sr * 0.475);
+                    let (b0, b1, b2, a0, a1, a2) =
+                        peaking_eq_coefficients(freq, inputs[2], inputs[1], sr);
+                    [b0, b1, b2, a0, a1, a2]
+                },
+            );
+            Self::apply_coefficients(&mut self.low_l, &mut self.low_r, low_c);
+
+            let mid_c = *self.mid_cache.update(
+                &[params.mid_freq_hz, params.mid_gain_db, params.mid_q],
+                CHANGE_EPSILON,
+                |inputs| {
+                    let freq = inputs[0].clamp(20.0, sr * 0.475);
+                    let (b0, b1, b2, a0, a1, a2) =
+                        peaking_eq_coefficients(freq, inputs[2], inputs[1], sr);
+                    [b0, b1, b2, a0, a1, a2]
+                },
+            );
+            Self::apply_coefficients(&mut self.mid_l, &mut self.mid_r, mid_c);
+
+            let high_c = *self.high_cache.update(
+                &[params.high_freq_hz, params.high_gain_db, params.high_q],
+                CHANGE_EPSILON,
+                |inputs| {
+                    let freq = inputs[0].clamp(20.0, sr * 0.475);
+                    let (b0, b1, b2, a0, a1, a2) =
+                        peaking_eq_coefficients(freq, inputs[2], inputs[1], sr);
+                    [b0, b1, b2, a0, a1, a2]
+                },
+            );
+            Self::apply_coefficients(&mut self.high_l, &mut self.high_r, high_c);
         }
 
         // ── Unit conversion ───────────────────────────────────────────────────
@@ -617,16 +645,10 @@ impl DspKernel for EqKernel {
         self.high_r.clear();
 
         // Invalidate all caches — forces coefficient recomputation on the next
-        // processing call so filters are correctly initialised after reset.
-        self.last_low_freq_hz = f32::NAN;
-        self.last_low_gain = f32::NAN;
-        self.last_low_q = f32::NAN;
-        self.last_mid_freq_hz = f32::NAN;
-        self.last_mid_gain = f32::NAN;
-        self.last_mid_q = f32::NAN;
-        self.last_high_freq_hz = f32::NAN;
-        self.last_high_gain = f32::NAN;
-        self.last_high_q = f32::NAN;
+        // processing call so filters are correctly re-initialised after reset.
+        self.low_cache.invalidate();
+        self.mid_cache.invalidate();
+        self.high_cache.invalidate();
 
         self.coeff_update_counter = 1;
     }
@@ -634,17 +656,10 @@ impl DspKernel for EqKernel {
     fn set_sample_rate(&mut self, sample_rate: f32) {
         self.sample_rate = sample_rate;
         // Invalidate all caches — rate change invalidates all cached coefficients
-        // since they are sample-rate dependent. The next call to process_stereo
-        // will trigger a full recomputation via the NaN sentinels.
-        self.last_low_freq_hz = f32::NAN;
-        self.last_low_gain = f32::NAN;
-        self.last_low_q = f32::NAN;
-        self.last_mid_freq_hz = f32::NAN;
-        self.last_mid_gain = f32::NAN;
-        self.last_mid_q = f32::NAN;
-        self.last_high_freq_hz = f32::NAN;
-        self.last_high_gain = f32::NAN;
-        self.last_high_q = f32::NAN;
+        // since they are sample-rate dependent.
+        self.low_cache.invalidate();
+        self.mid_cache.invalidate();
+        self.high_cache.invalidate();
 
         self.coeff_update_counter = 1;
     }

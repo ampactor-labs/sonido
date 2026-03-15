@@ -160,6 +160,7 @@ impl FirstOrderAllpass {
 /// | 7 | `sync` | index | 0–1 (Off/On) | 0.0 |
 /// | 8 | `division` | index | 0–11 (note division) | 3.0 |
 /// | 9 | `output_db` | dB | −20–+6 | 0.0 |
+/// | 10 | `lfo_phase` | 0–1 | READ_ONLY diagnostic | 0.0 |
 #[derive(Debug, Clone, Copy)]
 pub struct PhaserParams {
     /// LFO rate in Hz.
@@ -205,6 +206,10 @@ pub struct PhaserParams {
     ///
     /// Range: −20 to +6 dB. Applied after wet/dry mix.
     pub output_db: f32,
+
+    /// Current LFO phase (0.0–1.0). READ_ONLY diagnostic — written by the
+    /// kernel each sample; never read back for DSP.
+    pub lfo_phase: f32,
 }
 
 impl Default for PhaserParams {
@@ -220,6 +225,7 @@ impl Default for PhaserParams {
             sync: 0.0,
             division: 3.0,
             output_db: 0.0,
+            lfo_phase: 0.0,
         }
     }
 }
@@ -256,7 +262,7 @@ impl PhaserParams {
 }
 
 impl KernelParams for PhaserParams {
-    const COUNT: usize = 10;
+    const COUNT: usize = 11;
 
     fn descriptor(index: usize) -> Option<ParamDescriptor> {
         match index {
@@ -317,6 +323,12 @@ impl KernelParams for PhaserParams {
             9 => Some(
                 sonido_core::gain::output_param_descriptor().with_id(ParamId(905), "phsr_output"),
             ),
+            // Index 10: LFO phase diagnostic — READ_ONLY
+            10 => Some(
+                ParamDescriptor::custom("LFO Phase", "Phase", 0.0, 1.0, 0.0)
+                    .with_id(ParamId(910), "phsr_lfo_phase")
+                    .with_flags(ParamFlags::READ_ONLY.union(ParamFlags::HIDDEN)),
+            ),
             _ => None,
         }
     }
@@ -333,6 +345,7 @@ impl KernelParams for PhaserParams {
             7 => SmoothingStyle::None,     // sync — on/off toggle, snap
             8 => SmoothingStyle::None,     // division — stepped, snap
             9 => SmoothingStyle::Standard, // output level
+            10 => SmoothingStyle::None,    // lfo_phase — READ_ONLY diagnostic, no smoothing
             _ => SmoothingStyle::Standard,
         }
     }
@@ -349,6 +362,7 @@ impl KernelParams for PhaserParams {
             7 => self.sync,
             8 => self.division,
             9 => self.output_db,
+            10 => self.lfo_phase,
             _ => 0.0,
         }
     }
@@ -365,6 +379,7 @@ impl KernelParams for PhaserParams {
             7 => self.sync = value,
             8 => self.division = value,
             9 => self.output_db = value,
+            10 => self.lfo_phase = value,
             _ => {}
         }
     }
@@ -408,6 +423,9 @@ pub struct PhaserKernel {
     tempo: TempoManager,
     /// Audio sample rate in Hz.
     sample_rate: f32,
+
+    /// Current LFO phase (0.0–1.0) written each sample for the READ_ONLY diagnostic.
+    lfo_phase_diagnostic: f32,
 }
 
 impl PhaserKernel {
@@ -434,6 +452,7 @@ impl PhaserKernel {
             coeff_update_counter: 1, // triggers immediate coefficient update on first sample
             tempo: TempoManager::new(sample_rate, 120.0),
             sample_rate,
+            lfo_phase_diagnostic: 0.0,
         }
     }
 }
@@ -478,6 +497,7 @@ impl DspKernel for PhaserKernel {
         self.lfo_r.set_frequency(rate);
         let lfo_l = self.lfo.advance_unipolar();
         let lfo_r = self.lfo_r.advance_unipolar();
+        self.lfo_phase_diagnostic = self.lfo.phase();
 
         // ── Allpass coefficient update (decimated) ──
         self.coeff_update_counter = self.coeff_update_counter.wrapping_sub(1);
@@ -571,6 +591,10 @@ impl DspKernel for PhaserKernel {
     fn set_tempo_context(&mut self, ctx: &TempoContext) {
         self.tempo.set_bpm(ctx.bpm);
     }
+
+    fn update_diagnostics(&self, params: &mut PhaserParams) {
+        params.lfo_phase = self.lfo_phase_diagnostic;
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -616,12 +640,12 @@ mod tests {
         }
     }
 
-    /// `COUNT` must be 10 and every index 0–9 must have a descriptor.
+    /// `COUNT` must be 11 and every index 0–10 must have a descriptor.
     #[test]
     fn params_descriptor_count() {
-        assert_eq!(PhaserParams::COUNT, 10);
+        assert_eq!(PhaserParams::COUNT, 11);
 
-        for i in 0..10 {
+        for i in 0..11 {
             assert!(
                 PhaserParams::descriptor(i).is_some(),
                 "descriptor({i}) should return Some, got None"
@@ -630,8 +654,8 @@ mod tests {
 
         // Index beyond COUNT must return None.
         assert!(
-            PhaserParams::descriptor(10).is_none(),
-            "descriptor(10) should be None"
+            PhaserParams::descriptor(11).is_none(),
+            "descriptor(11) should be None"
         );
     }
 
@@ -757,7 +781,7 @@ mod tests {
         let kernel = PhaserKernel::new(48000.0);
         let adapter = KernelAdapter::new(kernel, 48000.0);
 
-        assert_eq!(adapter.param_count(), 10, "Should expose exactly 10 params");
+        assert_eq!(adapter.param_count(), 11, "Should expose exactly 11 params");
 
         // Rate (index 0)
         let rate_desc = adapter.param_info(0).unwrap();
@@ -815,8 +839,12 @@ mod tests {
         let out_desc = adapter.param_info(9).unwrap();
         assert_eq!(out_desc.id, ParamId(905));
 
+        // lfo_phase (index 10) — READ_ONLY diagnostic
+        let lfo_desc = adapter.param_info(10).unwrap();
+        assert_eq!(lfo_desc.id, ParamId(910));
+
         // Beyond COUNT
-        assert!(adapter.param_info(10).is_none());
+        assert!(adapter.param_info(11).is_none());
     }
 
     // ── Behavioral / DSP correctness tests ───────────────────────────────
@@ -840,6 +868,7 @@ mod tests {
             sync: 0.0,
             division: 0.0,
             output_db: -20.0,
+            lfo_phase: 0.0,
         };
         let b = PhaserParams {
             rate: 5.0,
@@ -852,6 +881,7 @@ mod tests {
             sync: 0.0, // keep sync Off to avoid bpm dependency in test
             division: 11.0,
             output_db: 20.0,
+            lfo_phase: 0.0,
         };
 
         for i in 0..=20 {

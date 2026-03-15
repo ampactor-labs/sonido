@@ -141,7 +141,18 @@ fn rule2_bypass_parity() {
 // Most effects place it as the last param. Documented exceptions (distortion,
 // compressor) place it at a non-final index with a domain-appropriate name.
 
-const RULE3_NON_LAST_EXCEPTIONS: &[&str] = &["distortion", "compressor", "filter"];
+// Effects with READ_ONLY diagnostic params appended after the output param
+// also fall into the exception bucket — they have a dB output param, just not last.
+const RULE3_NON_LAST_EXCEPTIONS: &[&str] = &[
+    "distortion",
+    "compressor",
+    "filter",
+    "chorus",
+    "flanger",
+    "phaser",
+    "tremolo",
+    "gate",
+];
 
 #[test]
 fn rule3_output_parameter() {

@@ -54,8 +54,9 @@
 use sonido_core::kernel::{DspKernel, KernelParams, SmoothingStyle};
 use sonido_core::math::soft_limit;
 use sonido_core::{
-    Biquad, ParamDescriptor, ParamFlags, ParamId, ParamScale, ParamUnit, bandpass_coefficients,
-    fast_db_to_linear, highpass_coefficients, lowpass_coefficients, notch_coefficients,
+    Biquad, Cached, ParamDescriptor, ParamFlags, ParamId, ParamScale, ParamUnit,
+    bandpass_coefficients, fast_db_to_linear, highpass_coefficients, lowpass_coefficients,
+    notch_coefficients,
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -213,12 +214,11 @@ pub struct FilterKernel {
     /// Right-channel biquad filter.
     biquad_r: Biquad,
 
-    /// Cached cutoff Hz — recompute coefficients only when this changes.
-    last_cutoff_hz: f32,
-    /// Cached Q — recompute coefficients only when this changes.
-    last_resonance: f32,
-    /// Cached filter type — recompute coefficients when this changes.
-    last_filter_type: f32,
+    /// Change-detector for biquad coefficients.
+    ///
+    /// Keyed on `[cutoff_hz, resonance, filter_type]`. Avoids coefficient
+    /// function calls (involves `sinf`/`cosf`) when the filter params are stable.
+    coeff_cache: Cached<[f32; 6]>,
 }
 
 impl FilterKernel {
@@ -226,40 +226,58 @@ impl FilterKernel {
     ///
     /// Initialises both biquad filters with default parameters (1000 Hz, Q=0.707, LPF).
     pub fn new(sample_rate: f32) -> Self {
-        let mut kernel = Self {
-            sample_rate,
-            biquad_l: Biquad::new(),
-            biquad_r: Biquad::new(),
-            last_cutoff_hz: f32::NAN, // Force initial coefficient computation
-            last_resonance: f32::NAN,
-            last_filter_type: f32::NAN,
-        };
         let defaults = FilterParams::default();
-        kernel.update_coefficients(defaults.cutoff_hz, defaults.resonance, defaults.filter_type);
-        kernel
-    }
+        let sr = sample_rate;
 
-    /// Recalculate biquad coefficients for the given cutoff, resonance, and filter type.
-    ///
-    /// Uses the Audio EQ Cookbook formulas. Coefficients are applied to both left and
-    /// right biquad filters simultaneously (dual-mono topology, not true stereo).
-    fn update_coefficients(&mut self, cutoff_hz: f32, resonance: f32, filter_type: f32) {
-        // Clamp cutoff to valid range to avoid coefficient instability.
-        let cutoff = cutoff_hz.clamp(20.0, self.sample_rate * 0.49);
-        let q = resonance.clamp(0.1, 20.0);
-
-        let (b0, b1, b2, a0, a1, a2) = match filter_type as u8 {
-            1 => highpass_coefficients(cutoff, q, self.sample_rate),
-            2 => bandpass_coefficients(cutoff, q, self.sample_rate),
-            3 => notch_coefficients(cutoff, q, self.sample_rate),
-            _ => lowpass_coefficients(cutoff, q, self.sample_rate),
+        let initial_coeffs = {
+            let cutoff = defaults.cutoff_hz.clamp(20.0, sr * 0.49);
+            let q = defaults.resonance.clamp(0.1, 20.0);
+            let (b0, b1, b2, a0, a1, a2) = lowpass_coefficients(cutoff, q, sr);
+            [b0, b1, b2, a0, a1, a2]
         };
-        self.biquad_l.set_coefficients(b0, b1, b2, a0, a1, a2);
-        self.biquad_r.set_coefficients(b0, b1, b2, a0, a1, a2);
 
-        self.last_cutoff_hz = cutoff;
-        self.last_resonance = q;
-        self.last_filter_type = filter_type;
+        let mut biquad_l = Biquad::new();
+        let mut biquad_r = Biquad::new();
+        biquad_l.set_coefficients(
+            initial_coeffs[0],
+            initial_coeffs[1],
+            initial_coeffs[2],
+            initial_coeffs[3],
+            initial_coeffs[4],
+            initial_coeffs[5],
+        );
+        biquad_r.set_coefficients(
+            initial_coeffs[0],
+            initial_coeffs[1],
+            initial_coeffs[2],
+            initial_coeffs[3],
+            initial_coeffs[4],
+            initial_coeffs[5],
+        );
+
+        let mut coeff_cache = Cached::new(initial_coeffs, 3);
+        coeff_cache.update(
+            &[defaults.cutoff_hz, defaults.resonance, defaults.filter_type],
+            0.001,
+            |inputs| {
+                let cutoff = inputs[0].clamp(20.0, sr * 0.49);
+                let q = inputs[1].clamp(0.1, 20.0);
+                let (b0, b1, b2, a0, a1, a2) = match inputs[2] as u8 {
+                    1 => highpass_coefficients(cutoff, q, sr),
+                    2 => bandpass_coefficients(cutoff, q, sr),
+                    3 => notch_coefficients(cutoff, q, sr),
+                    _ => lowpass_coefficients(cutoff, q, sr),
+                };
+                [b0, b1, b2, a0, a1, a2]
+            },
+        );
+
+        Self {
+            sample_rate,
+            biquad_l,
+            biquad_r,
+            coeff_cache,
+        }
     }
 }
 
@@ -268,13 +286,26 @@ impl DspKernel for FilterKernel {
 
     fn process_stereo(&mut self, left: f32, right: f32, params: &FilterParams) -> (f32, f32) {
         // ── Coefficient update (only when cutoff, resonance, or filter type changes) ──
-        // Comparison threshold accounts for smoothing granularity.
-        if (params.cutoff_hz - self.last_cutoff_hz).abs() > 0.1
-            || (params.resonance - self.last_resonance).abs() > 0.0001
-            || (params.filter_type - self.last_filter_type).abs() > 0.5
-        {
-            self.update_coefficients(params.cutoff_hz, params.resonance, params.filter_type);
-        }
+        let sr = self.sample_rate;
+        let c = *self.coeff_cache.update(
+            &[params.cutoff_hz, params.resonance, params.filter_type],
+            0.001,
+            |inputs| {
+                let cutoff = inputs[0].clamp(20.0, sr * 0.49);
+                let q = inputs[1].clamp(0.1, 20.0);
+                let (b0, b1, b2, a0, a1, a2) = match inputs[2] as u8 {
+                    1 => highpass_coefficients(cutoff, q, sr),
+                    2 => bandpass_coefficients(cutoff, q, sr),
+                    3 => notch_coefficients(cutoff, q, sr),
+                    _ => lowpass_coefficients(cutoff, q, sr),
+                };
+                [b0, b1, b2, a0, a1, a2]
+            },
+        );
+        self.biquad_l
+            .set_coefficients(c[0], c[1], c[2], c[3], c[4], c[5]);
+        self.biquad_r
+            .set_coefficients(c[0], c[1], c[2], c[3], c[4], c[5]);
 
         // ── Unit conversion (user-facing → internal) ──
         let output_gain = fast_db_to_linear(params.output_db);
@@ -289,32 +320,12 @@ impl DspKernel for FilterKernel {
     fn reset(&mut self) {
         self.biquad_l.clear();
         self.biquad_r.clear();
-        // Reset cached values so coefficients are recomputed on the next process call.
-        self.last_cutoff_hz = f32::NAN;
-        self.last_resonance = f32::NAN;
-        self.last_filter_type = f32::NAN;
+        self.coeff_cache.invalidate();
     }
 
     fn set_sample_rate(&mut self, sample_rate: f32) {
         self.sample_rate = sample_rate;
-        // Recompute with the same cached cutoff/resonance/type at the new rate.
-        // Guard against NaN from a fresh reset state.
-        let cutoff = if self.last_cutoff_hz.is_nan() {
-            FilterParams::default().cutoff_hz
-        } else {
-            self.last_cutoff_hz
-        };
-        let resonance = if self.last_resonance.is_nan() {
-            FilterParams::default().resonance
-        } else {
-            self.last_resonance
-        };
-        let filter_type = if self.last_filter_type.is_nan() {
-            FilterParams::default().filter_type
-        } else {
-            self.last_filter_type
-        };
-        self.update_coefficients(cutoff, resonance, filter_type);
+        self.coeff_cache.invalidate();
     }
 }
 

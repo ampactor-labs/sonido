@@ -67,6 +67,7 @@ use sonido_core::{
 /// | 5 | `sync` | index | 0–1 | 0 (Off) |
 /// | 6 | `division` | index | 0–11 | 3 (Quarter) |
 /// | 7 | `output_db` | dB | −20–+6 | 0.0 |
+/// | 8 | `lfo_phase` | 0–1 | READ_ONLY diagnostic | 0.0 |
 #[derive(Debug, Clone, Copy)]
 pub struct FlangerParams {
     /// LFO rate in Hz.
@@ -115,6 +116,10 @@ pub struct FlangerParams {
     ///
     /// Range: −20.0 to +6.0 dB. Applied after the wet/dry mix. Default 0.0 dB.
     pub output_db: f32,
+
+    /// Current LFO phase (0.0–1.0). READ_ONLY diagnostic — written by the
+    /// kernel each sample; never read back for DSP.
+    pub lfo_phase: f32,
 }
 
 impl Default for FlangerParams {
@@ -128,6 +133,7 @@ impl Default for FlangerParams {
             sync: 0.0,
             division: 3.0,
             output_db: 0.0,
+            lfo_phase: 0.0,
         }
     }
 }
@@ -165,7 +171,7 @@ impl FlangerParams {
 }
 
 impl KernelParams for FlangerParams {
-    const COUNT: usize = 8;
+    const COUNT: usize = 9;
 
     fn descriptor(index: usize) -> Option<ParamDescriptor> {
         match index {
@@ -208,6 +214,11 @@ impl KernelParams for FlangerParams {
             7 => Some(
                 sonido_core::gain::output_param_descriptor().with_id(ParamId(804), "flgr_output"),
             ),
+            8 => Some(
+                ParamDescriptor::custom("LFO Phase", "Phase", 0.0, 1.0, 0.0)
+                    .with_id(ParamId(809), "flgr_lfo_phase")
+                    .with_flags(ParamFlags::READ_ONLY.union(ParamFlags::HIDDEN)),
+            ),
             _ => None,
         }
     }
@@ -222,6 +233,7 @@ impl KernelParams for FlangerParams {
             5 => SmoothingStyle::None,     // sync — discrete toggle, snap
             6 => SmoothingStyle::None,     // division — stepped enum, snap
             7 => SmoothingStyle::Standard, // output level
+            8 => SmoothingStyle::None,     // lfo_phase — READ_ONLY diagnostic, no smoothing
             _ => SmoothingStyle::Standard,
         }
     }
@@ -236,6 +248,7 @@ impl KernelParams for FlangerParams {
             5 => self.sync,
             6 => self.division,
             7 => self.output_db,
+            8 => self.lfo_phase,
             _ => 0.0,
         }
     }
@@ -250,6 +263,7 @@ impl KernelParams for FlangerParams {
             5 => self.sync = value,
             6 => self.division = value,
             7 => self.output_db = value,
+            8 => self.lfo_phase = value,
             _ => {}
         }
     }
@@ -297,6 +311,9 @@ pub struct FlangerKernel {
     tempo: TempoManager,
     /// Current sample rate (Hz).
     sample_rate: f32,
+
+    /// Current LFO phase (0.0–1.0) written each sample for the READ_ONLY diagnostic.
+    lfo_phase_diagnostic: f32,
 }
 
 /// Base delay time in milliseconds (also the TZF sweep midpoint).
@@ -340,6 +357,7 @@ impl FlangerKernel {
             stereo_spread: 0.25,
             tempo: TempoManager::new(sample_rate, 120.0),
             sample_rate,
+            lfo_phase_diagnostic: 0.0,
         }
     }
 
@@ -393,6 +411,7 @@ impl DspKernel for FlangerKernel {
 
         let lfo_l = self.lfo.advance_unipolar(); // [0, 1]
         let lfo_r = self.lfo_r.advance_unipolar(); // [0, 1]
+        self.lfo_phase_diagnostic = self.lfo.phase();
 
         // ── Per-channel delay times ──
         // The bipolar LFO value sweeps ±max_mod around base_delay.
@@ -511,6 +530,10 @@ impl DspKernel for FlangerKernel {
         self.feedback_sample = 0.0;
         self.feedback_sample_r = 0.0;
     }
+
+    fn update_diagnostics(&self, params: &mut FlangerParams) {
+        params.lfo_phase = self.lfo_phase_diagnostic;
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -559,7 +582,7 @@ mod tests {
     /// `FlangerParams::COUNT` is 8 and every index 0..COUNT has a descriptor.
     #[test]
     fn params_descriptor_count() {
-        assert_eq!(FlangerParams::COUNT, 8, "Expected 8 parameters");
+        assert_eq!(FlangerParams::COUNT, 9, "Expected 9 parameters");
 
         for i in 0..FlangerParams::COUNT {
             assert!(
@@ -759,6 +782,11 @@ mod tests {
             adapter.param_info(7).unwrap().id,
             ParamId(804),
             "output ParamId"
+        );
+        assert_eq!(
+            adapter.param_info(8).unwrap().id,
+            ParamId(809),
+            "lfo_phase diagnostic ParamId"
         );
 
         // Range sanity checks.

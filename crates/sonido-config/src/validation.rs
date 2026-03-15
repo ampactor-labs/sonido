@@ -1003,6 +1003,51 @@ fn get_effect_params(effect_id: &str) -> Vec<ParamValidationInfo> {
                 default: 0.0,
             },
         ],
+        // Looper: 6 params
+        "looper" => vec![
+            ParamValidationInfo {
+                name: "mode".into(),
+                index: 0,
+                min: 0.0,
+                max: 3.0,
+                default: 0.0,
+            },
+            ParamValidationInfo {
+                name: "feedback".into(),
+                index: 1,
+                min: 0.0,
+                max: 100.0,
+                default: 80.0,
+            },
+            ParamValidationInfo {
+                name: "half_speed".into(),
+                index: 2,
+                min: 0.0,
+                max: 1.0,
+                default: 0.0,
+            },
+            ParamValidationInfo {
+                name: "reverse".into(),
+                index: 3,
+                min: 0.0,
+                max: 1.0,
+                default: 0.0,
+            },
+            ParamValidationInfo {
+                name: "mix".into(),
+                index: 4,
+                min: 0.0,
+                max: 100.0,
+                default: 100.0,
+            },
+            ParamValidationInfo {
+                name: "output".into(),
+                index: 5,
+                min: -20.0,
+                max: 6.0,
+                default: 0.0,
+            },
+        ],
         _ => vec![],
     }
 }
@@ -1262,7 +1307,7 @@ mod tests {
         assert!(ids.contains(&"distortion"));
         assert!(ids.contains(&"reverb"));
         assert!(ids.contains(&"compressor"));
-        assert_eq!(ids.len(), 19); // 19 effects registered
+        assert_eq!(ids.len(), 20); // 20 effects registered
     }
 
     #[test]

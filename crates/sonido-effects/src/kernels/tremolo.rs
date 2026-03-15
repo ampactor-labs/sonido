@@ -72,6 +72,7 @@ use sonido_core::{
 /// | 4 | `sync` | index | 0–1 | 0 (Off) |
 /// | 5 | `division` | index | 0–11 | 3 (Eighth) |
 /// | 6 | `output_db` | dB | −20–+6 | 0.0 |
+/// | 7 | `lfo_phase` | 0–1 | READ_ONLY diagnostic | 0.0 |
 #[derive(Debug, Clone, Copy)]
 pub struct TremoloParams {
     /// LFO rate in Hz (0.5–20.0 Hz).
@@ -88,6 +89,10 @@ pub struct TremoloParams {
     pub division: f32,
     /// Output level in decibels (−20–+6 dB).
     pub output_db: f32,
+
+    /// Current LFO phase (0.0–1.0). READ_ONLY diagnostic — written by the
+    /// kernel each sample; never read back for DSP.
+    pub lfo_phase: f32,
 }
 
 impl Default for TremoloParams {
@@ -101,6 +106,7 @@ impl Default for TremoloParams {
             sync: 0.0,
             division: 3.0,
             output_db: 0.0,
+            lfo_phase: 0.0,
         }
     }
 }
@@ -135,7 +141,7 @@ impl TremoloParams {
 }
 
 impl KernelParams for TremoloParams {
-    const COUNT: usize = 7;
+    const COUNT: usize = 8;
 
     fn descriptor(index: usize) -> Option<ParamDescriptor> {
         match index {
@@ -171,6 +177,11 @@ impl KernelParams for TremoloParams {
             6 => Some(
                 sonido_core::gain::output_param_descriptor().with_id(ParamId(1003), "trem_output"),
             ),
+            7 => Some(
+                ParamDescriptor::custom("LFO Phase", "Phase", 0.0, 1.0, 0.0)
+                    .with_id(ParamId(1007), "trem_lfo_phase")
+                    .with_flags(ParamFlags::READ_ONLY.union(ParamFlags::HIDDEN)),
+            ),
             _ => None,
         }
     }
@@ -184,6 +195,7 @@ impl KernelParams for TremoloParams {
             4 => SmoothingStyle::None,     // sync — discrete on/off, snap
             5 => SmoothingStyle::None,     // division — discrete, snap
             6 => SmoothingStyle::Standard, // output level — 10ms
+            7 => SmoothingStyle::None,     // lfo_phase — READ_ONLY diagnostic, no smoothing
             _ => SmoothingStyle::Standard,
         }
     }
@@ -197,6 +209,7 @@ impl KernelParams for TremoloParams {
             4 => self.sync,
             5 => self.division,
             6 => self.output_db,
+            7 => self.lfo_phase,
             _ => 0.0,
         }
     }
@@ -210,6 +223,7 @@ impl KernelParams for TremoloParams {
             4 => self.sync = value,
             5 => self.division = value,
             6 => self.output_db = value,
+            7 => self.lfo_phase = value,
             _ => {}
         }
     }
@@ -248,6 +262,9 @@ pub struct TremoloKernel {
     tempo: TempoManager,
     /// Current sample rate in Hz.
     sample_rate: f32,
+
+    /// Current LFO phase (0.0–1.0) written each sample for the READ_ONLY diagnostic.
+    lfo_phase_diagnostic: f32,
 }
 
 impl TremoloKernel {
@@ -269,6 +286,7 @@ impl TremoloKernel {
             lfo_r,
             tempo: TempoManager::new(sample_rate, 120.0),
             sample_rate,
+            lfo_phase_diagnostic: 0.0,
         }
     }
 
@@ -331,6 +349,7 @@ impl DspKernel for TremoloKernel {
         // ── Advance LFOs ──
         let lfo_l_uni = self.lfo_l.advance_unipolar();
         let lfo_r_uni = self.lfo_r.advance_unipolar();
+        self.lfo_phase_diagnostic = self.lfo_l.phase();
 
         // ── Amplitude modulation ──
         // gain = 1.0 - (depth * (1.0 - lfo_unipolar))
@@ -368,6 +387,10 @@ impl DspKernel for TremoloKernel {
         self.lfo_r.set_sample_rate(sample_rate);
         self.tempo.set_sample_rate(sample_rate);
     }
+
+    fn update_diagnostics(&self, params: &mut TremoloParams) {
+        params.lfo_phase = self.lfo_phase_diagnostic;
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -404,7 +427,7 @@ mod tests {
 
     #[test]
     fn params_descriptor_count() {
-        assert_eq!(TremoloParams::COUNT, 7);
+        assert_eq!(TremoloParams::COUNT, 8);
         for i in 0..TremoloParams::COUNT {
             assert!(
                 TremoloParams::descriptor(i).is_some(),
@@ -537,7 +560,7 @@ mod tests {
         let kernel = TremoloKernel::new(48000.0);
         let adapter = KernelAdapter::new(kernel, 48000.0);
 
-        assert_eq!(adapter.param_count(), 7, "Must expose exactly 7 parameters");
+        assert_eq!(adapter.param_count(), 8, "Must expose exactly 8 parameters");
 
         // Verify ParamIds match the classic effect exactly (plugin API contract)
         assert_eq!(

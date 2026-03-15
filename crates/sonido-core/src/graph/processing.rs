@@ -25,6 +25,9 @@ use super::edge::{Edge, EdgeId};
 use super::node::{NodeData, NodeId, NodeKind};
 use super::schedule::{CompiledSchedule, MAX_SPLIT_TARGETS, ProcessStep};
 
+#[cfg(all(debug_assertions, feature = "debug-alloc"))]
+use assert_no_alloc::assert_no_alloc;
+
 /// Formats a compiled `ProcessStep` into a human-readable description.
 #[cfg(feature = "tracing")]
 fn format_step(step: &ProcessStep) -> String {
@@ -430,6 +433,54 @@ impl ProcessingGraph {
             .get(id.0 as usize)
             .and_then(|n| n.as_ref())
             .is_some_and(|n| n.bypassed)
+    }
+
+    /// Enables or disables output tapping for an effect node.
+    ///
+    /// When enabled, the node's post-processing output buffer is copied to
+    /// `tap_buf` each block and can be read with [`read_tap()`](Self::read_tap).
+    /// When disabled, `tap_buf` is freed to release memory.
+    ///
+    /// Has no effect on non-Effect nodes.
+    ///
+    /// # Arguments
+    ///
+    /// * `id` — target node
+    /// * `enabled` — `true` to start tapping, `false` to stop
+    pub fn set_tap(&mut self, id: NodeId, enabled: bool) {
+        if let Some(Some(node)) = self.nodes.get_mut(id.0 as usize) {
+            node.tapped = enabled;
+            if enabled {
+                node.tap_buf.resize(self.block_size);
+            } else {
+                node.tap_buf.resize(0);
+            }
+        }
+    }
+
+    /// Returns the tapped output for a node, if tapping is active.
+    ///
+    /// The slices are valid for the most recently processed block. Returns
+    /// `None` if the node is not tapped, does not exist, or has no data yet
+    /// (i.e. `tap_buf` is zero-length).
+    ///
+    /// Returns `(left_channel, right_channel)`.
+    pub fn read_tap(&self, id: NodeId) -> Option<(&[f32], &[f32])> {
+        let node = self.nodes.get(id.0 as usize)?.as_ref()?;
+        if !node.tapped || node.tap_buf.is_empty() {
+            return None;
+        }
+        Some((&node.tap_buf.left, &node.tap_buf.right))
+    }
+
+    /// Returns the per-block peak output level `(left, right)` for an effect node.
+    ///
+    /// Peak is the maximum absolute sample value observed in the output buffer
+    /// during the most recently processed block. Returns `None` if the node
+    /// does not exist.
+    pub fn node_peak(&self, id: NodeId) -> Option<(f32, f32)> {
+        let node = self.nodes.get(id.0 as usize)?.as_ref()?;
+        Some(node.peak_out)
     }
 
     /// Returns the number of active (non-removed) nodes.
@@ -1075,124 +1126,173 @@ impl ProcessingGraph {
         let len = left_in.len();
         pool.clear_all();
 
-        for step in &schedule.steps {
-            match step {
-                ProcessStep::WriteInput { buffer_idx } => {
-                    let buf = pool.get_mut(*buffer_idx);
-                    buf.left[..len].copy_from_slice(&left_in[..len]);
-                    buf.right[..len].copy_from_slice(&right_in[..len]);
-                }
-
-                ProcessStep::ProcessEffect {
-                    node_idx,
-                    input_buf,
-                    output_buf,
-                } => {
-                    if let Some(Some(node)) = nodes.get_mut(*node_idx) {
-                        let bypass_settled = node.bypassed && node.bypass_fade.is_settled();
-                        let bypass_fading =
-                            !bypass_settled && (node.bypassed || !node.bypass_fade.is_settled());
-
-                        if bypass_settled {
-                            // Fully bypassed and fade complete — copy input to output,
-                            // skip effect processing entirely (massive CPU savings).
-                            if *input_buf != *output_buf {
-                                let (inp, out) = pool.get_ref_and_mut(*input_buf, *output_buf);
-                                out.left[..len].copy_from_slice(&inp.left[..len]);
-                                out.right[..len].copy_from_slice(&inp.right[..len]);
-                            }
-                            // If input_buf == output_buf, data is already in place.
-                        } else {
-                            // Phase 1: Save dry signal before effect processing.
-                            if bypass_fading {
-                                let src = pool.get(*input_buf);
-                                node.bypass_buf.left[..len].copy_from_slice(&src.left[..len]);
-                                node.bypass_buf.right[..len].copy_from_slice(&src.right[..len]);
-                            }
-
-                            // Phase 2: Process through effect.
-                            if let NodeKind::Effect(ref mut effect) = node.kind {
-                                if *input_buf == *output_buf {
-                                    let buf = pool.get_mut(*input_buf);
-                                    effect.process_block_stereo_inplace(
-                                        &mut buf.left[..len],
-                                        &mut buf.right[..len],
-                                    );
-                                } else {
-                                    let (inp, out) = pool.get_ref_and_mut(*input_buf, *output_buf);
-                                    effect.process_block_stereo(
-                                        &inp.left[..len],
-                                        &inp.right[..len],
-                                        &mut out.left[..len],
-                                        &mut out.right[..len],
-                                    );
-                                }
-                            }
-
-                            // Phase 3: Crossfade between dry and wet during fade.
-                            if bypass_fading {
-                                let out = pool.get_mut(*output_buf);
-                                for i in 0..len {
-                                    let fade = node.bypass_fade.advance();
-                                    out.left[i] =
-                                        wet_dry_mix(node.bypass_buf.left[i], out.left[i], fade);
-                                    out.right[i] =
-                                        wet_dry_mix(node.bypass_buf.right[i], out.right[i], fade);
-                                }
-                            }
-                        }
-                    }
-                }
-
-                ProcessStep::SplitCopy {
-                    source_buf,
-                    dest_bufs,
-                    dest_count,
-                } => {
-                    for &dest in &dest_bufs[..*dest_count] {
-                        if dest != *source_buf {
-                            let (src, dst) = pool.get_ref_and_mut(*source_buf, dest);
-                            dst.left[..len].copy_from_slice(&src.left[..len]);
-                            dst.right[..len].copy_from_slice(&src.right[..len]);
-                        }
-                    }
-                }
-
-                ProcessStep::ClearBuffer { buffer_idx } => {
-                    pool.get_mut(*buffer_idx).clear();
-                }
-
-                ProcessStep::AccumulateBuffer {
-                    source_buf,
-                    dest_buf,
-                    gain,
-                } => {
-                    if source_buf != dest_buf {
-                        let (src, dst) = pool.get_ref_and_mut(*source_buf, *dest_buf);
-                        for i in 0..len {
-                            dst.left[i] += src.left[i] * gain;
-                            dst.right[i] += src.right[i] * gain;
-                        }
-                    }
-                }
-
-                ProcessStep::DelayCompensate {
-                    buffer_idx,
-                    delay_line_idx,
-                } => {
-                    if let Some(dl) = delay_lines.get_mut(*delay_line_idx) {
+        let mut execute = |nodes: &mut [Option<NodeData>],
+                           pool: &mut BufferPool,
+                           delay_lines: &mut [CompensationDelay]| {
+            for step in &schedule.steps {
+                match step {
+                    ProcessStep::WriteInput { buffer_idx } => {
                         let buf = pool.get_mut(*buffer_idx);
-                        dl.process_block_inplace(&mut buf.left[..len], &mut buf.right[..len]);
+                        buf.left[..len].copy_from_slice(&left_in[..len]);
+                        buf.right[..len].copy_from_slice(&right_in[..len]);
                     }
-                }
 
-                ProcessStep::ReadOutput { buffer_idx } => {
-                    let buf = pool.get(*buffer_idx);
-                    left_out[..len].copy_from_slice(&buf.left[..len]);
-                    right_out[..len].copy_from_slice(&buf.right[..len]);
+                    ProcessStep::ProcessEffect {
+                        node_idx,
+                        input_buf,
+                        output_buf,
+                    } => {
+                        if let Some(Some(node)) = nodes.get_mut(*node_idx) {
+                            // Peak input: max abs over the input buffer before processing.
+                            {
+                                let inp = pool.get(*input_buf);
+                                let peak_l = inp.left[..len]
+                                    .iter()
+                                    .fold(0.0f32, |acc, &s| acc.max(s.abs()));
+                                let peak_r = inp.right[..len]
+                                    .iter()
+                                    .fold(0.0f32, |acc, &s| acc.max(s.abs()));
+                                node.peak_in = (peak_l, peak_r);
+                            }
+
+                            let bypass_settled = node.bypassed && node.bypass_fade.is_settled();
+                            let bypass_fading = !bypass_settled
+                                && (node.bypassed || !node.bypass_fade.is_settled());
+
+                            if bypass_settled {
+                                // Fully bypassed and fade complete — copy input to output,
+                                // skip effect processing entirely (massive CPU savings).
+                                if *input_buf != *output_buf {
+                                    let (inp, out) = pool.get_ref_and_mut(*input_buf, *output_buf);
+                                    out.left[..len].copy_from_slice(&inp.left[..len]);
+                                    out.right[..len].copy_from_slice(&inp.right[..len]);
+                                }
+                                // If input_buf == output_buf, data is already in place.
+                            } else {
+                                // Phase 1: Save dry signal before effect processing.
+                                if bypass_fading {
+                                    let src = pool.get(*input_buf);
+                                    node.bypass_buf.left[..len].copy_from_slice(&src.left[..len]);
+                                    node.bypass_buf.right[..len].copy_from_slice(&src.right[..len]);
+                                }
+
+                                // Phase 2: Process through effect.
+                                if let NodeKind::Effect(ref mut effect) = node.kind {
+                                    if *input_buf == *output_buf {
+                                        let buf = pool.get_mut(*input_buf);
+                                        effect.process_block_stereo_inplace(
+                                            &mut buf.left[..len],
+                                            &mut buf.right[..len],
+                                        );
+                                    } else {
+                                        let (inp, out) =
+                                            pool.get_ref_and_mut(*input_buf, *output_buf);
+                                        effect.process_block_stereo(
+                                            &inp.left[..len],
+                                            &inp.right[..len],
+                                            &mut out.left[..len],
+                                            &mut out.right[..len],
+                                        );
+                                    }
+                                }
+
+                                // Phase 3: Crossfade between dry and wet during fade.
+                                if bypass_fading {
+                                    let out = pool.get_mut(*output_buf);
+                                    for i in 0..len {
+                                        let fade = node.bypass_fade.advance();
+                                        out.left[i] =
+                                            wet_dry_mix(node.bypass_buf.left[i], out.left[i], fade);
+                                        out.right[i] = wet_dry_mix(
+                                            node.bypass_buf.right[i],
+                                            out.right[i],
+                                            fade,
+                                        );
+                                    }
+                                }
+                            }
+
+                            // Peak output: max abs over the output buffer after processing.
+                            {
+                                let out = pool.get(*output_buf);
+                                let peak_l = out.left[..len]
+                                    .iter()
+                                    .fold(0.0f32, |acc, &s| acc.max(s.abs()));
+                                let peak_r = out.right[..len]
+                                    .iter()
+                                    .fold(0.0f32, |acc, &s| acc.max(s.abs()));
+                                node.peak_out = (peak_l, peak_r);
+                            }
+
+                            // Tap: copy output buffer to tap_buf if tapping is enabled.
+                            if node.tapped && !node.tap_buf.is_empty() {
+                                let out = pool.get(*output_buf);
+                                node.tap_buf.left[..len].copy_from_slice(&out.left[..len]);
+                                node.tap_buf.right[..len].copy_from_slice(&out.right[..len]);
+                            }
+                        }
+                    }
+
+                    ProcessStep::SplitCopy {
+                        source_buf,
+                        dest_bufs,
+                        dest_count,
+                    } => {
+                        for &dest in &dest_bufs[..*dest_count] {
+                            if dest != *source_buf {
+                                let (src, dst) = pool.get_ref_and_mut(*source_buf, dest);
+                                dst.left[..len].copy_from_slice(&src.left[..len]);
+                                dst.right[..len].copy_from_slice(&src.right[..len]);
+                            }
+                        }
+                    }
+
+                    ProcessStep::ClearBuffer { buffer_idx } => {
+                        pool.get_mut(*buffer_idx).clear();
+                    }
+
+                    ProcessStep::AccumulateBuffer {
+                        source_buf,
+                        dest_buf,
+                        gain,
+                    } => {
+                        if source_buf != dest_buf {
+                            let (src, dst) = pool.get_ref_and_mut(*source_buf, *dest_buf);
+                            // Use f64 intermediates to avoid precision loss when summing
+                            // multiple paths (merge nodes with many inputs).
+                            let gain64 = *gain as f64;
+                            for i in 0..len {
+                                dst.left[i] =
+                                    (dst.left[i] as f64 + src.left[i] as f64 * gain64) as f32;
+                                dst.right[i] =
+                                    (dst.right[i] as f64 + src.right[i] as f64 * gain64) as f32;
+                            }
+                        }
+                    }
+
+                    ProcessStep::DelayCompensate {
+                        buffer_idx,
+                        delay_line_idx,
+                    } => {
+                        if let Some(dl) = delay_lines.get_mut(*delay_line_idx) {
+                            let buf = pool.get_mut(*buffer_idx);
+                            dl.process_block_inplace(&mut buf.left[..len], &mut buf.right[..len]);
+                        }
+                    }
+
+                    ProcessStep::ReadOutput { buffer_idx } => {
+                        let buf = pool.get(*buffer_idx);
+                        left_out[..len].copy_from_slice(&buf.left[..len]);
+                        right_out[..len].copy_from_slice(&buf.right[..len]);
+                    }
                 }
             }
-        }
+        };
+
+        #[cfg(all(debug_assertions, feature = "debug-alloc"))]
+        assert_no_alloc(|| execute(nodes, pool, delay_lines));
+        #[cfg(not(all(debug_assertions, feature = "debug-alloc")))]
+        execute(nodes, pool, delay_lines);
     }
 
     // --- Control methods ---
@@ -2390,5 +2490,116 @@ mod tests {
             sum.abs() > 0.01,
             "expected non-zero output after buffer-reuse topology, got sum={sum}"
         );
+    }
+
+    // --- Phase 2 (observability): Tap, peak, and f64 accumulation tests ---
+
+    #[test]
+    fn tap_preserves_node_output() {
+        // Build Input → Gain(2.0) → Output. Tap the effect node.
+        let effects: Vec<Box<dyn EffectWithParams + Send>> = vec![Box::new(Gain { factor: 2.0 })];
+        let mut graph = ProcessingGraph::linear(effects, 48000.0, 4).unwrap();
+
+        // The effect node is NodeId(1) in a linear graph (input=0, effect=1, output=2).
+        let effect_id = NodeId(1);
+        graph.set_tap(effect_id, true);
+
+        let left_in = [0.5, 0.5, 0.5, 0.5];
+        let right_in = [0.25, 0.25, 0.25, 0.25];
+        let mut left_out = [0.0; 4];
+        let mut right_out = [0.0; 4];
+
+        graph.process_block(&left_in, &right_in, &mut left_out, &mut right_out);
+
+        let (tap_l, tap_r) = graph.read_tap(effect_id).expect("tap should be active");
+
+        // Effect multiplies by 2.0 — tap should capture the wet output.
+        for (i, &s) in tap_l.iter().enumerate() {
+            assert!(
+                (s - 1.0).abs() < 1e-6,
+                "tap left[{i}]: expected 1.0 (0.5 * 2.0), got {s}"
+            );
+        }
+        for (i, &s) in tap_r.iter().enumerate() {
+            assert!(
+                (s - 0.5).abs() < 1e-6,
+                "tap right[{i}]: expected 0.5 (0.25 * 2.0), got {s}"
+            );
+        }
+
+        // Disabling tap should return None.
+        graph.set_tap(effect_id, false);
+        assert!(graph.read_tap(effect_id).is_none());
+    }
+
+    #[test]
+    fn peak_tracking_reports_correct_levels() {
+        // Gain(1.0) with a known DC signal — peak_out should equal that value.
+        let effects: Vec<Box<dyn EffectWithParams + Send>> = vec![Box::new(Gain { factor: 1.0 })];
+        let mut graph = ProcessingGraph::linear(effects, 48000.0, 4).unwrap();
+
+        let effect_id = NodeId(1);
+
+        let amplitude = 0.75_f32;
+        let left_in = [amplitude; 4];
+        let right_in = [amplitude * 0.5; 4];
+        let mut left_out = [0.0; 4];
+        let mut right_out = [0.0; 4];
+
+        graph.process_block(&left_in, &right_in, &mut left_out, &mut right_out);
+
+        let (peak_l, peak_r) = graph.node_peak(effect_id).expect("node should exist");
+
+        assert!(
+            (peak_l - amplitude).abs() < 1e-6,
+            "peak left: expected {amplitude}, got {peak_l}"
+        );
+        assert!(
+            (peak_r - amplitude * 0.5).abs() < 1e-6,
+            "peak right: expected {}, got {peak_r}",
+            amplitude * 0.5
+        );
+
+        // Non-existent node returns None.
+        assert!(graph.node_peak(NodeId(999)).is_none());
+    }
+
+    #[test]
+    fn f64_accumulate_preserves_precision() {
+        // Diamond with 4 equal gain paths into one merge.
+        // f32 accumulation would suffer from precision loss after repeated
+        // addition; f64 intermediates keep the result accurate.
+        let mut graph = ProcessingGraph::new(48000.0, 4);
+        let input = graph.add_input();
+        let split = graph.add_split();
+        let merge = graph.add_merge();
+        let output = graph.add_output();
+
+        // 4 parallel unity-gain paths.
+        for _ in 0..4 {
+            let e = graph.add_effect(Box::new(Gain { factor: 1.0 }));
+            graph.connect(split, e).unwrap();
+            graph.connect(e, merge).unwrap();
+        }
+        graph.connect(input, split).unwrap();
+        graph.connect(merge, output).unwrap();
+        graph.compile().unwrap();
+
+        // Use a value that is not exactly representable in f32 to stress precision.
+        let val = 1.0_f32 / 3.0_f32;
+        let left_in = [val; 4];
+        let right_in = [val; 4];
+        let mut left_out = [0.0; 4];
+        let mut right_out = [0.0; 4];
+
+        graph.process_block(&left_in, &right_in, &mut left_out, &mut right_out);
+
+        // Merge normalizes by 4 paths: 4 * val * (1/4) = val.
+        for (i, &s) in left_out.iter().enumerate() {
+            assert!(
+                (s - val).abs() < 1e-6,
+                "f64 accumulate left[{i}]: expected {val}, got {s}"
+            );
+        }
     }
 }

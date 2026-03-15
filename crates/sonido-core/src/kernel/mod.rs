@@ -11,10 +11,11 @@
 //!    parameters exist, their ranges, units, and smoothing preferences. One
 //!    definition serves GUIs, plugin hosts, hardware controllers, and presets.
 //!
-//! 3. **[`KernelAdapter`]** — Platform bridge. Wraps a kernel and its params into
+//! 3. **[`Adapter<K, S>`]** — Platform bridge. Wraps a kernel and its params into
 //!    the existing [`Effect`](crate::Effect) + [`ParameterInfo`](crate::ParameterInfo)
-//!    interface. Owns parameter smoothing. Enables kernels to work in the DAG
-//!    graph, CLAP plugins, CLI, and GUI without modification.
+//!    interface. The smoothing policy `S` controls how parameter changes are applied:
+//!    [`SmoothedPolicy`] (desktop/plugin) or [`DirectPolicy`] (embedded).
+//!    [`KernelAdapter<K>`] is the type alias for `Adapter<K, SmoothedPolicy>`.
 //!
 //! # Why This Exists
 //!
@@ -75,5 +76,5 @@
 mod adapter;
 mod traits;
 
-pub use adapter::KernelAdapter;
+pub use adapter::{Adapter, DirectPolicy, KernelAdapter, SmoothedPolicy, SmoothingPolicy};
 pub use traits::{DspKernel, KernelParams, SmoothingStyle};

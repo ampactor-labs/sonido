@@ -3,7 +3,7 @@
 //! Three toggle switches control node focus, A/B/morph mode, and routing
 //! topology. Each of the 3 DAG slots has independent A/B parameter snapshots.
 //! Dual footswitches scroll effects (A/B modes) or ramp morph position (morph
-//! mode). Both footswitches held ≥1s = bypass toggle.
+//! mode). Both footswitches = bypass toggle. FS1 hold in A mode = factory preset.
 //!
 //! # Toggle Mapping
 //!
@@ -59,8 +59,8 @@ use sonido_daisy::{
 };
 use sonido_effects::{
     BitcrusherKernel, ChorusKernel, CompressorKernel, DelayKernel, DistortionKernel, FilterKernel,
-    FlangerKernel, PhaserKernel, ReverbKernel, RingModKernel, TapeKernel, TremoloKernel,
-    VibratoKernel, WahKernel,
+    FlangerKernel, LooperKernel, PhaserKernel, ReverbKernel, RingModKernel, TapeKernel,
+    TremoloKernel, VibratoKernel, WahKernel,
 };
 
 // ── Heap ────────────────────────────────────────────────────────────────────
@@ -89,11 +89,8 @@ const POLL_EVERY: u16 = 15;
 /// Footswitch tap threshold: 30 polls × ~10ms = 300ms.
 const TAP_LIMIT: u16 = 30;
 
-/// Both-footswitch bypass hold threshold: 100 polls × ~10ms = 1s.
-const BYPASS_HOLD: u16 = 100;
-
 /// Number of effects in the curated list.
-const NUM_EFFECTS: usize = 14;
+const NUM_EFFECTS: usize = 15;
 
 // ── Curated Effect List ─────────────────────────────────────────────────────
 
@@ -137,6 +134,7 @@ struct EffectEntry {
 /// |11 | distortion | 0:Drive     | 1:Tone       | 3:Shape(S)   | 5:Dyn         | 4:Mix| 2:Out   |
 /// |12 | bitcrusher | 0:Bits(S)   | 1:Down(S)    | 2:Jitter     | --            | 3:Mix| 4:Out   |
 /// |13 | ringmod    | 0:Freq      | 1:Depth      | 2:Wave(S)    | --            | 3:Mix| 4:Out   |
+/// |14 | looper     | 0:Mode(S)   | 1:Feedback   | 2:HalfSpd(S) | 3:Reverse(S)  | 4:Mix| 5:Out   |
 const EFFECT_LIST: [EffectEntry; NUM_EFFECTS] = [
     EffectEntry {
         id: "filter",
@@ -193,6 +191,10 @@ const EFFECT_LIST: [EffectEntry; NUM_EFFECTS] = [
     EffectEntry {
         id: "ringmod",
         knobs: [0, 1, 2, NULL_KNOB, 3, 4],
+    },
+    EffectEntry {
+        id: "looper",
+        knobs: [0, 1, 2, 3, 4, 5],
     },
 ];
 
@@ -261,20 +263,21 @@ use sonido_core::graph::NodeId;
 /// effects at compile time.
 fn create_effect(idx: usize, sr: f32) -> Option<Box<dyn EffectWithParams + Send>> {
     match idx {
-        0 => Some(Box::new(EmbeddedAdapter::new(FilterKernel::new(sr)))),
-        1 => Some(Box::new(EmbeddedAdapter::new(TremoloKernel::new(sr)))),
-        2 => Some(Box::new(EmbeddedAdapter::new(VibratoKernel::new(sr)))),
-        3 => Some(Box::new(EmbeddedAdapter::new(ChorusKernel::new(sr)))),
-        4 => Some(Box::new(EmbeddedAdapter::new(PhaserKernel::new(sr)))),
-        5 => Some(Box::new(EmbeddedAdapter::new(FlangerKernel::new(sr)))),
-        6 => Some(Box::new(EmbeddedAdapter::new(DelayKernel::new(sr)))),
-        7 => Some(Box::new(EmbeddedAdapter::new(ReverbKernel::new(sr)))),
-        8 => Some(Box::new(EmbeddedAdapter::new(TapeKernel::new(sr)))),
-        9 => Some(Box::new(EmbeddedAdapter::new(CompressorKernel::new(sr)))),
-        10 => Some(Box::new(EmbeddedAdapter::new(WahKernel::new(sr)))),
-        11 => Some(Box::new(EmbeddedAdapter::new(DistortionKernel::new(sr)))),
-        12 => Some(Box::new(EmbeddedAdapter::new(BitcrusherKernel::new(sr)))),
-        13 => Some(Box::new(EmbeddedAdapter::new(RingModKernel::new(sr)))),
+        0 => Some(Box::new(EmbeddedAdapter::new_direct(FilterKernel::new(sr)))),
+        1 => Some(Box::new(EmbeddedAdapter::new_direct(TremoloKernel::new(sr)))),
+        2 => Some(Box::new(EmbeddedAdapter::new_direct(VibratoKernel::new(sr)))),
+        3 => Some(Box::new(EmbeddedAdapter::new_direct(ChorusKernel::new(sr)))),
+        4 => Some(Box::new(EmbeddedAdapter::new_direct(PhaserKernel::new(sr)))),
+        5 => Some(Box::new(EmbeddedAdapter::new_direct(FlangerKernel::new(sr)))),
+        6 => Some(Box::new(EmbeddedAdapter::new_direct(DelayKernel::new(sr)))),
+        7 => Some(Box::new(EmbeddedAdapter::new_direct(ReverbKernel::new(sr)))),
+        8 => Some(Box::new(EmbeddedAdapter::new_direct(TapeKernel::new(sr)))),
+        9 => Some(Box::new(EmbeddedAdapter::new_direct(CompressorKernel::new(sr)))),
+        10 => Some(Box::new(EmbeddedAdapter::new_direct(WahKernel::new(sr)))),
+        11 => Some(Box::new(EmbeddedAdapter::new_direct(DistortionKernel::new(sr)))),
+        12 => Some(Box::new(EmbeddedAdapter::new_direct(BitcrusherKernel::new(sr)))),
+        13 => Some(Box::new(EmbeddedAdapter::new_direct(RingModKernel::new(sr)))),
+        14 => Some(Box::new(EmbeddedAdapter::new_direct(LooperKernel::new(sr)))),
         _ => None,
     }
 }
@@ -396,6 +399,138 @@ fn scroll_effect(nodes: &mut [NodeState; NUM_SLOTS], node_idx: usize, delta: i32
     node.effect_index = Some(cursor);
     node.params_a = SlotSnapshot::new();
     node.params_b = None;
+}
+
+// ── Factory Presets ──────────────────────────────────────────────────────────
+
+/// One slot in a factory preset — defines the effect and A/B parameter values.
+struct FactorySlot {
+    /// Index into `EFFECT_LIST`, or `None` for passthrough.
+    effect_idx: Option<usize>,
+    /// A-state parameter values in descriptor units.
+    params_a: [f32; MAX_PARAMS],
+    /// B-state parameter values in descriptor units.
+    params_b: [f32; MAX_PARAMS],
+    /// Cached STEPPED flags per parameter.
+    stepped: [bool; MAX_PARAMS],
+    /// Number of active parameters.
+    count: usize,
+}
+
+impl FactorySlot {
+    const EMPTY: Self = Self {
+        effect_idx: None,
+        params_a: [0.0; MAX_PARAMS],
+        params_b: [0.0; MAX_PARAMS],
+        stepped: [false; MAX_PARAMS],
+        count: 0,
+    };
+}
+
+/// A complete factory preset — all 3 DAG node slots.
+struct FactoryPreset {
+    slots: [FactorySlot; NUM_SLOTS],
+}
+
+/// Three factory presets for first-time demo and on-stage recovery.
+///
+/// Loaded via FS1 hold in A mode. Parameter values are in descriptor units
+/// (the same units shown in GUIs and stored in presets).
+const FACTORY_PRESETS: [FactoryPreset; 3] = [
+    // Preset 1: "Room → Shimmer" — Reverb on node 1
+    // Morph story: intimate bright room → infinite dark shimmer
+    FactoryPreset {
+        slots: [
+            FactorySlot {
+                effect_idx: Some(7), // reverb
+                //                room  decay damp  pre   mix   width er    out
+                params_a: [30.0, 40.0, 60.0, 5.0, 40.0, 80.0, 50.0, 0.0,
+                           0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                params_b: [90.0, 88.0, 10.0, 30.0, 80.0, 100.0, 30.0, 0.0,
+                           0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                stepped: [false; MAX_PARAMS],
+                count: 8,
+            },
+            FactorySlot::EMPTY,
+            FactorySlot::EMPTY,
+        ],
+    },
+    // Preset 2: "Slap → Self-Osc" — Delay on node 1
+    // Morph story: tight slapback → darkening delay wall approaching self-oscillation
+    FactoryPreset {
+        slots: [
+            FactorySlot {
+                effect_idx: Some(6), // delay
+                //                time  fb    mix   ping  fblp     fbhp  diff  sync  div   out
+                params_a: [80.0, 15.0, 25.0, 0.0, 20000.0, 20.0, 0.0, 0.0,
+                           2.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                params_b: [400.0, 93.0, 70.0, 0.0, 3000.0, 100.0, 30.0, 0.0,
+                           2.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                stepped: [false, false, false, true, false, false, false, true,
+                          true, false, false, false, false, false, false, false],
+                count: 10,
+            },
+            FactorySlot::EMPTY,
+            FactorySlot::EMPTY,
+        ],
+    },
+    // Preset 3: "Clean → Saturated" — Distortion + Reverb on nodes 1-2
+    // Morph story: clean guitar + tight room → saturated drive + lush verb
+    FactoryPreset {
+        slots: [
+            FactorySlot {
+                effect_idx: Some(11), // distortion
+                //                drive tone  out   shape mix   dyn
+                params_a: [0.0, 0.0, 0.0, 0.0, 100.0, 0.0,
+                           0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                params_b: [32.0, -3.0, -6.0, 3.0, 100.0, 60.0,
+                           0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                stepped: [false, false, false, true, false, false,
+                          false, false, false, false, false, false, false, false, false, false],
+                count: 6,
+            },
+            FactorySlot {
+                effect_idx: Some(7), // reverb
+                //                room  decay damp  pre   mix   width er    out
+                params_a: [20.0, 30.0, 50.0, 5.0, 20.0, 60.0, 40.0, 0.0,
+                           0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                params_b: [60.0, 65.0, 30.0, 15.0, 45.0, 100.0, 50.0, 0.0,
+                           0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                stepped: [false; MAX_PARAMS],
+                count: 8,
+            },
+            FactorySlot::EMPTY,
+        ],
+    },
+];
+
+/// Load a factory preset into the node state arrays.
+///
+/// Sets effect indices, browse cursors, and A/B snapshots for all 3 slots.
+/// Caller must set `needs_rebuild = true` to trigger graph reconstruction.
+fn load_factory_preset(nodes: &mut [NodeState; NUM_SLOTS], cursor: usize) {
+    let preset = &FACTORY_PRESETS[cursor];
+    for i in 0..NUM_SLOTS {
+        let slot = &preset.slots[i];
+        if let Some(idx) = slot.effect_idx {
+            nodes[i].effect_index = Some(idx);
+            nodes[i].browse_cursor = idx;
+            nodes[i].params_a = SlotSnapshot {
+                values: slot.params_a,
+                stepped: slot.stepped,
+                count: slot.count,
+            };
+            nodes[i].params_b = Some(SlotSnapshot {
+                values: slot.params_b,
+                stepped: slot.stepped,
+                count: slot.count,
+            });
+        } else {
+            nodes[i].effect_index = None;
+            nodes[i].params_a = SlotSnapshot::new();
+            nodes[i].params_b = None;
+        }
+    }
 }
 
 // ── Graph construction ──────────────────────────────────────────────────────
@@ -583,6 +718,9 @@ async fn main(spawner: embassy_executor::Spawner) {
     // D2 SRAM clocks — needed for DMA buffers (.sram1_bss at 0x30000000).
     sonido_daisy::enable_d2_sram();
 
+    // FPU flush-to-zero — hardware flushes denormals, saving ~5-10% DSP CPU.
+    sonido_daisy::enable_fpu_ftz();
+
     // SDRAM heap — 64 MB via FMC. All DSP allocations go here.
     let mut cp = unsafe { cortex_m::Peripherals::steal() };
     let sdram_ptr = sonido_daisy::init_sdram!(p, &mut cp.MPU, &mut cp.SCB);
@@ -632,13 +770,28 @@ async fn main(spawner: embassy_executor::Spawner) {
         t3_init
     );
 
-    // Build initial graph (passthrough — no effects yet).
+    // Auto-load factory preset 1 for first-time experience.
+    load_factory_preset(&mut nodes, 0);
     let (mut graph, mut node_ids) = build_graph(&nodes, topology, SAMPLE_RATE, BLOCK_SIZE);
-    defmt::info!("graph built: passthrough (no effects)");
+    apply_all_snapshots(&mut graph, &node_ids, &nodes, AbMode::A);
+    defmt::info!("factory preset 1 loaded: Room → Shimmer");
 
     // Morph state
     let mut morph_t: f32 = 0.0; // 0.0 = A, 1.0 = B
     let mut morph_speed: f32 = 2.0; // seconds for full morph
+
+    // Factory preset state
+    let mut factory_cursor: usize = 0;
+    let mut led_blink_remaining: u8 = 0;
+    let mut led_blink_timer: u16 = 0;
+
+    // Effect-aware LED state
+    let mut led_phase: f32 = 0.0; // LFO phase for modulation effects
+    let mut led_envelope: f32 = 0.0; // one-pole follower for envelope effects
+    let mut led_tap_counter: u32 = 0; // delay tap flash counter
+
+    // Looper footswitch override: true when FS has set mode, K1 skipped
+    let mut looper_fs_override: bool = false;
 
     // Footswitch state machine
     let mut fs1_held: u32 = 0;
@@ -802,18 +955,6 @@ async fn main(spawner: embassy_executor::Spawner) {
                 fs2_held += 1;
             }
 
-            // Both-FS bypass toggle (all modes).
-            if both_held == BYPASS_HOLD {
-                let was_bypassed = BYPASSED.load(Ordering::Relaxed);
-                BYPASSED.store(!was_bypassed, Ordering::Relaxed);
-                if was_bypassed {
-                    CONTROLS.write_led(0, 1.0);
-                } else {
-                    CONTROLS.write_led(0, 0.0);
-                    CONTROLS.write_led(1, 0.0);
-                }
-            }
-
             // MORPH mode: continuous ramp while held.
             if ab_mode == AbMode::Morph && !both_pressed {
                 let delta = 1.0 / (morph_speed * 100.0);
@@ -832,33 +973,67 @@ async fn main(spawner: embassy_executor::Spawner) {
                 }
             }
 
-            // Both-FS tap detection (consumed, no further action).
-            let both_tapped = both_held_peak > 0
-                && both_held_peak < TAP_LIMIT
-                && !fs1_pressed
-                && !fs2_pressed
-                && fs1_was_pressed
-                && fs2_was_pressed;
-
-            if both_tapped {
-                both_held_peak = 0;
+            // Both-FS release = bypass toggle (any duration, any mode).
+            let was_both = both_held_peak > 0;
+            if was_both && !fs1_pressed && !fs2_pressed {
+                let was_bypassed = BYPASSED.load(Ordering::Relaxed);
+                BYPASSED.store(!was_bypassed, Ordering::Relaxed);
+                if was_bypassed {
+                    CONTROLS.write_led(0, 1.0);
+                } else {
+                    CONTROLS.write_led(0, 0.0);
+                    CONTROLS.write_led(1, 0.0);
+                }
             }
 
             if !fs1_pressed && !fs2_pressed {
                 both_held_peak = 0;
             }
 
-            // ── A/B mode: FS1/FS2 release = scroll effects ──
-            let was_both = both_held_peak > 0 || both_tapped;
-
-            if (ab_mode == AbMode::A || ab_mode == AbMode::B)
+            // ── A/B mode: looper FS control or normal scroll ──
+            // Check if focused node is a looper in active (non-Stop) mode.
+            let looper_active = (ab_mode == AbMode::A || ab_mode == AbMode::B)
                 && !was_both
-                && both_held < BYPASS_HOLD
-            {
-                // FS1 release = scroll previous effect.
+                && nodes[focused_node].effect_index == Some(14)
+                && node_ids[focused_node]
+                    .and_then(|nid| graph.effect_with_params_ref(nid))
+                    .map_or(false, |e| e.effect_get_param(0) >= 0.5);
+
+            if looper_active {
+                // Looper FS: FS1 tap = toggle Record↔Play.
+                if fs1_was_pressed && !fs1_pressed && fs1_held < TAP_LIMIT as u32 {
+                    if let Some(nid) = node_ids[focused_node] {
+                        let cur = graph
+                            .effect_with_params_ref(nid)
+                            .map_or(0.0, |e| e.effect_get_param(0));
+                        // Record(1)↔Play(2), Overdub(3)→Play(2)
+                        let new_mode = if (cur as u8) == 2 || (cur as u8) == 3 {
+                            1.0
+                        } else {
+                            2.0
+                        };
+                        if let Some(e) = graph.effect_with_params_mut(nid) {
+                            e.effect_set_param(0, new_mode);
+                        }
+                        looper_fs_override = true;
+                    }
+                }
+                // Looper FS: FS2 tap = Stop.
+                if fs2_was_pressed && !fs2_pressed && fs2_held < TAP_LIMIT as u32 {
+                    if let Some(nid) = node_ids[focused_node] {
+                        if let Some(e) = graph.effect_with_params_mut(nid) {
+                            e.effect_set_param(0, 0.0);
+                        }
+                    }
+                    looper_fs_override = false;
+                }
+            } else if (ab_mode == AbMode::A || ab_mode == AbMode::B) && !was_both {
+                // Normal scroll + factory preset.
+                // FS1 tap = scroll previous effect.
                 if fs1_was_pressed && !fs1_pressed && fs1_held < TAP_LIMIT as u32 {
                     scroll_effect(&mut nodes, focused_node, -1);
                     needs_rebuild = true;
+                    looper_fs_override = false;
                     defmt::info!(
                         "node {} ← {}",
                         focused_node + 1,
@@ -866,10 +1041,26 @@ async fn main(spawner: embassy_executor::Spawner) {
                     );
                 }
 
-                // FS2 release = scroll next effect.
+                // FS1 hold in A mode = cycle factory preset.
+                if ab_mode == AbMode::A
+                    && fs1_was_pressed
+                    && !fs1_pressed
+                    && fs1_held >= TAP_LIMIT as u32
+                {
+                    factory_cursor = (factory_cursor + 1) % FACTORY_PRESETS.len();
+                    load_factory_preset(&mut nodes, factory_cursor);
+                    needs_rebuild = true;
+                    looper_fs_override = false;
+                    led_blink_remaining = (factory_cursor as u8 + 1) * 2;
+                    led_blink_timer = 0;
+                    defmt::info!("factory preset {}", factory_cursor + 1);
+                }
+
+                // FS2 tap = scroll next effect.
                 if fs2_was_pressed && !fs2_pressed && fs2_held < TAP_LIMIT as u32 {
                     scroll_effect(&mut nodes, focused_node, 1);
                     needs_rebuild = true;
+                    looper_fs_override = false;
                     defmt::info!(
                         "node {} → {}",
                         focused_node + 1,
@@ -905,7 +1096,17 @@ async fn main(spawner: embassy_executor::Spawner) {
                             if param_idx != NULL_KNOB
                                 && let Some(desc) = effect.effect_param_info(param_idx as usize)
                             {
-                                param_vals[k] = (param_idx, adc_to_param(&desc, norm_knobs[k]));
+                                let val = adc_to_param(&desc, norm_knobs[k]);
+                                // Skip K1 (mode) for looper when FS override is active,
+                                // unless the user turned K1 to Stop (clears override).
+                                if looper_fs_override && eff_idx == 14 && param_idx == 0 {
+                                    if val < 0.5 {
+                                        looper_fs_override = false;
+                                    } else {
+                                        continue;
+                                    }
+                                }
+                                param_vals[k] = (param_idx, val);
                             }
                         }
                     }
@@ -961,29 +1162,165 @@ async fn main(spawner: embassy_executor::Spawner) {
             }
 
             // ── 8. LED feedback ──
+            // LED1: bypass + looper state.
+            let looper_mode_raw = if nodes[focused_node].effect_index == Some(14) {
+                node_ids[focused_node]
+                    .and_then(|nid| graph.effect_with_params_ref(nid))
+                    .map_or(-1.0, |e| e.effect_get_param(0))
+            } else {
+                -1.0
+            };
+
+            if BYPASSED.load(Ordering::Relaxed) {
+                CONTROLS.write_led(0, 0.0);
+            } else {
+                let looper_mode = looper_mode_raw as u8;
+                if looper_mode_raw >= 0.5 && looper_mode == 1 {
+                    // Recording: fast blink 5 Hz (10 polls on, 10 off).
+                    CONTROLS.write_led(
+                        0,
+                        if (poll_counter / 10) % 2 == 0 { 1.0 } else { 0.0 },
+                    );
+                } else if looper_mode_raw >= 1.5 && looper_mode == 2 {
+                    // Playing: slow pulse 1 Hz.
+                    let phase = (poll_counter % 100) as f32 / 100.0;
+                    let bright =
+                        0.5 + 0.5 * libm::sinf(2.0 * core::f32::consts::PI * phase);
+                    let pwm = poll_counter % 10;
+                    CONTROLS.write_led(
+                        0,
+                        if pwm < (bright * 10.0) as u16 { 1.0 } else { 0.0 },
+                    );
+                } else if looper_mode_raw >= 2.5 {
+                    // Overdubbing: double-blink (50 poll cycle = 500ms).
+                    let cycle = (poll_counter % 50) as u16;
+                    let on = cycle < 5 || (cycle >= 10 && cycle < 15);
+                    CONTROLS.write_led(0, if on { 1.0 } else { 0.0 });
+                } else {
+                    CONTROLS.write_led(0, 1.0);
+                }
+            }
+
+            // LED2: effect-specific feedback.
             if BYPASSED.load(Ordering::Relaxed) {
                 CONTROLS.write_led(1, 0.0);
+            } else if led_blink_remaining > 0 {
+                // Transient overlay: factory preset blink (N blinks for preset N).
+                led_blink_timer += 1;
+                if led_blink_timer >= 10 {
+                    led_blink_timer = 0;
+                    led_blink_remaining -= 1;
+                }
+                CONTROLS.write_led(
+                    1,
+                    if led_blink_remaining % 2 == 0 { 1.0 } else { 0.0 },
+                );
+            } else if ab_mode == AbMode::Morph {
+                // PWM duty = morph_t (dark=A, bright=B).
+                let pwm_phase = poll_counter % 10;
+                let threshold = (morph_t * 10.0) as u16;
+                CONTROLS.write_led(1, if pwm_phase < threshold { 1.0 } else { 0.0 });
             } else {
-                match ab_mode {
-                    AbMode::A => {
-                        // LED2 off in A mode.
-                        CONTROLS.write_led(1, 0.0);
-                    }
-                    AbMode::B => {
-                        // LED2 solid on in B mode.
-                        CONTROLS.write_led(1, 1.0);
-                    }
-                    AbMode::Morph => {
-                        // PWM duty = morph_t (dark=A, bright=B).
-                        let pwm_phase = poll_counter % 10;
-                        let threshold = (morph_t * 10.0) as u16;
-                        if pwm_phase < threshold {
-                            CONTROLS.write_led(1, 1.0);
-                        } else {
-                            CONTROLS.write_led(1, 0.0);
-                        }
+                // A/B modes: effect-specific LED2 feedback.
+                let mut output_peak = 0.0f32;
+                for &s in left_out.iter().chain(right_out.iter()) {
+                    let a = if s < 0.0 { -s } else { s };
+                    if a > output_peak {
+                        output_peak = a;
                     }
                 }
+                let mut input_peak = 0.0f32;
+                for &s in left_in.iter().chain(right_in.iter()) {
+                    let a = if s < 0.0 { -s } else { s };
+                    if a > input_peak {
+                        input_peak = a;
+                    }
+                }
+
+                let effect_id = nodes[focused_node]
+                    .effect_index
+                    .map_or("", |idx| EFFECT_LIST[idx].id);
+                let effect_ref = node_ids[focused_node]
+                    .and_then(|nid| graph.effect_with_params_ref(nid));
+
+                let brightness = match effect_id {
+                    "chorus" | "flanger" | "phaser" | "tremolo" => {
+                        // LED pulses at LFO rate.
+                        let rate = effect_ref.map_or(1.0, |e| e.effect_get_param(0));
+                        let dt = POLL_EVERY as f32 * BLOCK_SIZE as f32 / SAMPLE_RATE;
+                        led_phase += rate * dt;
+                        if led_phase >= 1.0 {
+                            led_phase -= 1.0;
+                        }
+                        0.5 + 0.5 * libm::sinf(
+                            2.0 * core::f32::consts::PI * led_phase,
+                        )
+                    }
+                    "delay" => {
+                        // Brief flash every delay period.
+                        let time_ms =
+                            effect_ref.map_or(300.0, |e| e.effect_get_param(0));
+                        let dt_ms = POLL_EVERY as f32 * BLOCK_SIZE as f32
+                            / SAMPLE_RATE
+                            * 1000.0;
+                        let period = (time_ms / dt_ms) as u32;
+                        let period = if period < 1 { 1 } else { period };
+                        led_tap_counter += 1;
+                        if led_tap_counter >= period {
+                            led_tap_counter = 0;
+                        }
+                        if led_tap_counter < 3 { 1.0 } else { 0.0 }
+                    }
+                    "compressor" | "limiter" => {
+                        // Dims when compressing (gain reduction = output/input).
+                        if input_peak > 0.001 {
+                            let ratio = output_peak / input_peak;
+                            if ratio > 1.0 { 1.0 } else { ratio }
+                        } else {
+                            1.0
+                        }
+                    }
+                    "gate" => {
+                        // Bright when open, dark when closed.
+                        if output_peak > 0.01 { 1.0 } else { 0.0 }
+                    }
+                    "distortion" | "tape" | "preamp" | "vibrato"
+                    | "bitcrusher" | "ringmod" | "wah" => {
+                        // Output envelope follower (~30ms at 100 Hz poll rate).
+                        led_envelope +=
+                            0.3 * (output_peak - led_envelope);
+                        let v = led_envelope * 3.0;
+                        if v > 1.0 { 1.0 } else { v }
+                    }
+                    "filter" => {
+                        // Brightness = log-scaled cutoff position.
+                        let cutoff =
+                            effect_ref.map_or(1000.0, |e| e.effect_get_param(0));
+                        let norm = libm::log2f(cutoff / 20.0)
+                            / libm::log2f(1000.0);
+                        let clamped = if norm < 0.0 {
+                            0.0
+                        } else if norm > 1.0 {
+                            1.0
+                        } else {
+                            norm
+                        };
+                        0.1 + 0.9 * clamped
+                    }
+                    "reverb" => {
+                        // Brightness = decay amount (param 1, 0-100%).
+                        effect_ref.map_or(0.5, |e| e.effect_get_param(1) / 100.0)
+                    }
+                    _ => 0.0,
+                };
+
+                // Software PWM: 10 brightness levels at ~100 Hz.
+                let pwm_phase = poll_counter % 10;
+                let threshold = (brightness * 10.0) as u16;
+                CONTROLS.write_led(
+                    1,
+                    if pwm_phase < threshold { 1.0 } else { 0.0 },
+                );
             }
         })
         .await

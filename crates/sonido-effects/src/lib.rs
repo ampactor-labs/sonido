@@ -100,12 +100,16 @@ extern crate alloc;
 
 pub mod kernels;
 
+#[cfg(test)]
+pub mod test_utils;
+
 // Re-export all kernel types at crate root
 pub use kernels::{
     BitcrusherKernel, BitcrusherParams, ChorusKernel, ChorusParams, CompressorKernel,
     CompressorParams, DelayKernel, DelayParams, DistortionKernel, DistortionParams, EqKernel,
     EqParams, FilterKernel, FilterParams, FlangerKernel, FlangerParams, GateKernel, GateParams,
-    LimiterKernel, LimiterParams, PhaserKernel, PhaserParams, PreampKernel, PreampParams,
-    ReverbKernel, ReverbParams, RingModKernel, RingModParams, StageKernel, StageParams, TapeKernel,
-    TapeParams, TremoloKernel, TremoloParams, VibratoKernel, VibratoParams, WahKernel, WahParams,
+    LimiterKernel, LimiterParams, LooperKernel, LooperParams, PhaserKernel, PhaserParams,
+    PreampKernel, PreampParams, ReverbKernel, ReverbParams, RingModKernel, RingModParams,
+    StageKernel, StageParams, TapeKernel, TapeParams, TremoloKernel, TremoloParams, VibratoKernel,
+    VibratoParams, WahKernel, WahParams,
 };

@@ -69,6 +69,15 @@ pub(crate) struct NodeData {
     /// Used during bypass crossfade so the dry signal is available even when
     /// `input_buf == output_buf` (in-place processing).
     pub bypass_buf: StereoBuffer,
+    /// Per-block peak input level (left, right). Updated during `run_schedule`.
+    pub peak_in: (f32, f32),
+    /// Per-block peak output level (left, right). Updated during `run_schedule`.
+    pub peak_out: (f32, f32),
+    /// Whether this node's output should be preserved for tap reading.
+    /// When `true`, the output buffer is copied to `tap_buf` after processing.
+    pub tapped: bool,
+    /// Persistent buffer for tap output. Only allocated when `tapped` is `true`.
+    pub tap_buf: StereoBuffer,
 }
 
 impl NodeData {
@@ -84,6 +93,10 @@ impl NodeData {
             bypassed: false,
             bypass_fade,
             bypass_buf: StereoBuffer::new(0),
+            peak_in: (0.0, 0.0),
+            peak_out: (0.0, 0.0),
+            tapped: false,
+            tap_buf: StereoBuffer::new(0),
         }
     }
 }

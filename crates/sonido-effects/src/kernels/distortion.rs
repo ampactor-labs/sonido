@@ -29,7 +29,7 @@
 use sonido_core::kernel::{DspKernel, KernelParams, SmoothingStyle};
 use sonido_core::math::soft_limit;
 use sonido_core::{
-    Adaa1, Biquad, EnvelopeFollower, ParamDescriptor, ParamFlags, ParamId, ParamUnit,
+    Adaa1, Biquad, Cached, EnvelopeFollower, ParamDescriptor, ParamFlags, ParamId, ParamUnit,
     asymmetric_clip, asymmetric_clip_ad, fast_db_to_linear, foldback, foldback_ad, hard_clip,
     hard_clip_ad, peaking_eq_coefficients, soft_clip, soft_clip_ad, wet_dry_mix_stereo,
 };
@@ -241,8 +241,10 @@ pub struct DistortionKernel {
     // Envelope follower for dynamic drive modulation
     envelope: EnvelopeFollower,
 
-    // Coefficient cache — recompute biquad only when tone_db changes
-    last_tone_db: f32,
+    /// Cached tone biquad coefficients `[b0, b1, b2, a0, a1, a2]`.
+    ///
+    /// Recomputed only when `tone_db` changes by more than 1e-4 dB.
+    tone_cache: Cached<[f32; 6]>,
 }
 
 impl DistortionKernel {
@@ -252,10 +254,24 @@ impl DistortionKernel {
         envelope.set_attack_ms(5.0);
         envelope.set_release_ms(50.0);
 
-        let mut kernel = Self {
+        let (b0, b1, b2, a0, a1, a2) =
+            peaking_eq_coefficients(TONE_CENTER_HZ, TONE_Q, 0.0, sample_rate);
+        let initial_coeffs = [b0, b1, b2, a0, a1, a2];
+        let mut tone_filter = Biquad::new();
+        let mut tone_filter_r = Biquad::new();
+        tone_filter.set_coefficients(b0, b1, b2, a0, a1, a2);
+        tone_filter_r.set_coefficients(b0, b1, b2, a0, a1, a2);
+        let mut tone_cache = Cached::new(initial_coeffs, 1);
+        tone_cache.update(&[0.0], 1e-4, |inputs| {
+            let (b0, b1, b2, a0, a1, a2) =
+                peaking_eq_coefficients(TONE_CENTER_HZ, TONE_Q, inputs[0], sample_rate);
+            [b0, b1, b2, a0, a1, a2]
+        });
+
+        Self {
             sample_rate,
-            tone_filter: Biquad::new(),
-            tone_filter_r: Biquad::new(),
+            tone_filter,
+            tone_filter_r,
             adaa_soft_l: Adaa1::new(soft_clip as fn(f32) -> f32, soft_clip_ad as fn(f32) -> f32),
             adaa_soft_r: Adaa1::new(soft_clip as fn(f32) -> f32, soft_clip_ad as fn(f32) -> f32),
             adaa_hard_l: Adaa1::new(
@@ -283,20 +299,8 @@ impl DistortionKernel {
                 asymmetric_clip_ad as fn(f32) -> f32,
             ),
             envelope,
-            last_tone_db: f32::NAN, // Force initial coefficient computation
-        };
-        // Initialize tone filter with default params
-        kernel.update_tone_coefficients(0.0);
-        kernel
-    }
-
-    /// Recalculate biquad coefficients for the tone EQ.
-    fn update_tone_coefficients(&mut self, tone_db: f32) {
-        let (b0, b1, b2, a0, a1, a2) =
-            peaking_eq_coefficients(TONE_CENTER_HZ, TONE_Q, tone_db, self.sample_rate);
-        self.tone_filter.set_coefficients(b0, b1, b2, a0, a1, a2);
-        self.tone_filter_r.set_coefficients(b0, b1, b2, a0, a1, a2);
-        self.last_tone_db = tone_db;
+            tone_cache,
+        }
     }
 }
 
@@ -304,11 +308,18 @@ impl DspKernel for DistortionKernel {
     type Params = DistortionParams;
 
     fn process_stereo(&mut self, left: f32, right: f32, params: &DistortionParams) -> (f32, f32) {
-        // ── Coefficient update (only when tone changes) ──
-        // Comparison threshold accounts for smoothing granularity.
-        if (params.tone_db - self.last_tone_db).abs() > 0.001 {
-            self.update_tone_coefficients(params.tone_db);
-        }
+        // ── Coefficient update (only when tone_db changes beyond epsilon) ──
+        let coeffs = *self.tone_cache.update(&[params.tone_db], 1e-4, |inputs| {
+            let (b0, b1, b2, a0, a1, a2) =
+                peaking_eq_coefficients(TONE_CENTER_HZ, TONE_Q, inputs[0], self.sample_rate);
+            [b0, b1, b2, a0, a1, a2]
+        });
+        self.tone_filter.set_coefficients(
+            coeffs[0], coeffs[1], coeffs[2], coeffs[3], coeffs[4], coeffs[5],
+        );
+        self.tone_filter_r.set_coefficients(
+            coeffs[0], coeffs[1], coeffs[2], coeffs[3], coeffs[4], coeffs[5],
+        );
 
         // ── Unit conversion (user-facing → internal) ──
         let drive = fast_db_to_linear(params.drive_db);
@@ -374,12 +385,14 @@ impl DspKernel for DistortionKernel {
         self.adaa_asym_l.reset();
         self.adaa_asym_r.reset();
         self.envelope.reset();
+        self.tone_cache.invalidate();
     }
 
     fn set_sample_rate(&mut self, sample_rate: f32) {
         self.sample_rate = sample_rate;
         self.envelope.set_sample_rate(sample_rate);
-        self.update_tone_coefficients(self.last_tone_db);
+        // Invalidate so tone filter recomputes at new sample rate on next process().
+        self.tone_cache.invalidate();
     }
 }
 

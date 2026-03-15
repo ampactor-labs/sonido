@@ -57,9 +57,9 @@
 
 use sonido_core::kernel::{DspKernel, KernelParams, SmoothingStyle};
 use sonido_core::{
-    Biquad, DetectionMode, EnvelopeFollower, ParamDescriptor, ParamFlags, ParamId, ParamScale,
-    ParamUnit, fast_db_to_linear, fast_linear_to_db, highpass_coefficients, math::soft_limit,
-    wet_dry_mix_stereo,
+    Biquad, Cached, DetectionMode, EnvelopeFollower, ParamDescriptor, ParamFlags, ParamId,
+    ParamScale, ParamUnit, fast_db_to_linear, fast_linear_to_db, highpass_coefficients,
+    math::soft_limit, wet_dry_mix_stereo,
 };
 
 // ── Constants ────────────────────────────────────────────────────────────────
@@ -177,6 +177,13 @@ pub struct CompressorParams {
     /// (no compression). At 100% the signal is fully compressed. Intermediate
     /// values blend compressed and dry ("New York" parallel compression).
     pub mix_pct: f32,
+
+    /// READ_ONLY diagnostic: current gain reduction in dB (always ≤ 0.0).
+    ///
+    /// Written by the kernel each sample; not user-settable. Exposed at
+    /// `KernelParams` index 11 with `ParamFlags::READ_ONLY | ParamFlags::HIDDEN`.
+    /// Actual value is updated by `CompressorKernel::gain_reduction_db` field.
+    pub gain_reduction_db: f32,
 }
 
 impl Default for CompressorParams {
@@ -193,6 +200,7 @@ impl Default for CompressorParams {
             auto_makeup: 0.0,
             output_db: 0.0,
             mix_pct: 100.0,
+            gain_reduction_db: 0.0,
         }
     }
 }
@@ -237,7 +245,7 @@ impl CompressorParams {
 }
 
 impl KernelParams for CompressorParams {
-    const COUNT: usize = 11;
+    const COUNT: usize = 12;
 
     fn descriptor(index: usize) -> Option<ParamDescriptor> {
         match index {
@@ -324,6 +332,14 @@ impl KernelParams for CompressorParams {
                 }
                 .with_id(ParamId(310), "comp_mix"),
             ),
+            // ── [11] Gain Reduction (READ_ONLY diagnostic) ───────────────────
+            // ParamId(311), "comp_gain_reduction" — current GR in dB (always ≤ 0).
+            // Written by CompressorKernel each sample; not user-settable.
+            11 => Some(
+                ParamDescriptor::gain_db("Gain Reduction", "GR", -60.0, 0.0, 0.0)
+                    .with_id(ParamId(311), "comp_gain_reduction")
+                    .with_flags(ParamFlags::READ_ONLY.union(ParamFlags::HIDDEN)),
+            ),
             _ => None,
         }
     }
@@ -341,6 +357,7 @@ impl KernelParams for CompressorParams {
             8 => SmoothingStyle::None,     // auto_makeup — stepped/discrete, snap immediately
             9 => SmoothingStyle::Standard, // output level — level fader
             10 => SmoothingStyle::Standard, // mix — wet/dry blend
+            11 => SmoothingStyle::None,    // gain_reduction_db — READ_ONLY diagnostic
             _ => SmoothingStyle::Standard,
         }
     }
@@ -358,6 +375,7 @@ impl KernelParams for CompressorParams {
             8 => self.auto_makeup,
             9 => self.output_db,
             10 => self.mix_pct,
+            11 => self.gain_reduction_db,
             _ => 0.0,
         }
     }
@@ -375,6 +393,7 @@ impl KernelParams for CompressorParams {
             8 => self.auto_makeup = value,
             9 => self.output_db = value,
             10 => self.mix_pct = value,
+            11 => self.gain_reduction_db = value, // READ_ONLY: kernel writes this
             _ => {}
         }
     }
@@ -424,20 +443,14 @@ pub struct CompressorKernel {
 
     /// Last computed gain reduction in dB (always ≤ 0.0).
     ///
-    /// Exposed via the adapter as a metering value.
-    last_gain_reduction_db: f32,
+    /// Exposed as READ_ONLY param at index 11 via `CompressorParams::gain_reduction_db`.
+    gain_reduction_db: f32,
 
-    /// Cached `sidechain_freq_hz` — invalidates HPF coefficients when changed.
-    last_sidechain_freq_hz: f32,
-
-    /// Cached `attack_ms` — invalidates envelope attack coefficients when changed.
-    last_attack_ms: f32,
-
-    /// Cached `release_ms` — invalidates slow envelope release coefficient when changed.
-    last_release_ms: f32,
-
-    /// Cached `detection` index — invalidates detection mode when changed.
-    last_detection: f32,
+    /// Change-detector for sidechain HPF coefficients.
+    ///
+    /// Avoids re-running `highpass_coefficients()` (involves `sinf`/`cosf`)
+    /// every sample when `sidechain_freq_hz` is stable.
+    sc_hpf_cache: Cached<[f32; 6]>,
 }
 
 impl CompressorKernel {
@@ -465,16 +478,25 @@ impl CompressorKernel {
         fast_envelope.set_attack_ms(defaults.attack_ms);
         fast_envelope.set_release_ms(FAST_RELEASE_MS);
 
+        let initial_sc_hpf_coeffs = {
+            let (b0, b1, b2, a0, a1, a2) =
+                highpass_coefficients(defaults.sidechain_freq_hz, SC_HPF_Q, sample_rate);
+            [b0, b1, b2, a0, a1, a2]
+        };
+        let mut sc_hpf_cache = Cached::new(initial_sc_hpf_coeffs, 1);
+        sc_hpf_cache.update(&[defaults.sidechain_freq_hz], 0.5, |inputs| {
+            let (b0, b1, b2, a0, a1, a2) =
+                highpass_coefficients(inputs[0].clamp(20.0, 500.0), SC_HPF_Q, sample_rate);
+            [b0, b1, b2, a0, a1, a2]
+        });
+
         Self {
             sample_rate,
             envelope_follower,
             fast_envelope,
             sidechain_hpf,
-            last_gain_reduction_db: 0.0,
-            last_sidechain_freq_hz: defaults.sidechain_freq_hz,
-            last_attack_ms: defaults.attack_ms,
-            last_release_ms: defaults.release_ms,
-            last_detection: defaults.detection,
+            gain_reduction_db: 0.0,
+            sc_hpf_cache,
         }
     }
 
@@ -488,34 +510,39 @@ impl CompressorKernel {
     /// - Detection mode on both followers when `detection` changes.
     #[inline]
     fn update_caches(&mut self, params: &CompressorParams) {
-        if (params.sidechain_freq_hz - self.last_sidechain_freq_hz).abs() > 0.5 {
-            let freq = params.sidechain_freq_hz.clamp(20.0, 500.0);
-            let (b0, b1, b2, a0, a1, a2) = highpass_coefficients(freq, SC_HPF_Q, self.sample_rate);
-            self.sidechain_hpf.set_coefficients(b0, b1, b2, a0, a1, a2);
-            self.last_sidechain_freq_hz = params.sidechain_freq_hz;
-        }
-        if (params.attack_ms - self.last_attack_ms).abs() > 0.001 {
-            let attack = params.attack_ms.clamp(0.1, 100.0);
-            self.envelope_follower.set_attack_ms(attack);
-            self.fast_envelope.set_attack_ms(attack);
-            self.last_attack_ms = params.attack_ms;
-        }
-        if (params.release_ms - self.last_release_ms).abs() > 0.01 {
-            let release = params.release_ms.clamp(10.0, 1000.0);
-            self.envelope_follower.set_release_ms(release);
-            // fast_envelope keeps its fixed FAST_RELEASE_MS
-            self.last_release_ms = params.release_ms;
-        }
-        if (params.detection - self.last_detection).abs() > 0.5 {
-            let mode = if params.detection < 0.5 {
-                DetectionMode::Peak
-            } else {
-                DetectionMode::Rms
-            };
-            self.envelope_follower.set_detection_mode(mode);
-            self.fast_envelope.set_detection_mode(mode);
-            self.last_detection = params.detection;
-        }
+        let sc_coeffs = *self
+            .sc_hpf_cache
+            .update(&[params.sidechain_freq_hz], 0.5, |inputs| {
+                let (b0, b1, b2, a0, a1, a2) =
+                    highpass_coefficients(inputs[0].clamp(20.0, 500.0), SC_HPF_Q, self.sample_rate);
+                [b0, b1, b2, a0, a1, a2]
+            });
+        self.sidechain_hpf.set_coefficients(
+            sc_coeffs[0],
+            sc_coeffs[1],
+            sc_coeffs[2],
+            sc_coeffs[3],
+            sc_coeffs[4],
+            sc_coeffs[5],
+        );
+
+        // attack_ms / release_ms / detection: EnvelopeFollower::set_*() is cheap
+        // (stores a float + recomputes a single expf). Always update — no Cached needed.
+        self.envelope_follower
+            .set_attack_ms(params.attack_ms.clamp(0.1, 100.0));
+        self.fast_envelope
+            .set_attack_ms(params.attack_ms.clamp(0.1, 100.0));
+        self.envelope_follower
+            .set_release_ms(params.release_ms.clamp(10.0, 1000.0));
+        // fast_envelope keeps its fixed FAST_RELEASE_MS — not updated here
+
+        let mode = if params.detection < 0.5 {
+            DetectionMode::Peak
+        } else {
+            DetectionMode::Rms
+        };
+        self.envelope_follower.set_detection_mode(mode);
+        self.fast_envelope.set_detection_mode(mode);
     }
 
     /// Run dual-envelope detection on a mono detection signal.
@@ -610,7 +637,7 @@ impl DspKernel for CompressorKernel {
             params.ratio,
             params.knee_db,
         );
-        self.last_gain_reduction_db = gain_reduction_db;
+        self.gain_reduction_db = gain_reduction_db;
         let gain_linear = fast_db_to_linear(gain_reduction_db);
 
         // ── Makeup gain (auto or manual) ──────────────────────────────────
@@ -641,28 +668,24 @@ impl DspKernel for CompressorKernel {
         self.envelope_follower.reset();
         self.fast_envelope.reset();
         self.sidechain_hpf.clear();
-        self.last_gain_reduction_db = 0.0;
-        // Invalidate all caches — force recomputation on next process() call.
-        // NaN comparisons always fail (NaN != NaN), so every cache will recompute.
-        self.last_sidechain_freq_hz = f32::NAN;
-        self.last_attack_ms = f32::NAN;
-        self.last_release_ms = f32::NAN;
-        self.last_detection = f32::NAN;
+        self.gain_reduction_db = 0.0;
+        self.sc_hpf_cache.invalidate();
     }
 
     fn set_sample_rate(&mut self, sample_rate: f32) {
         self.sample_rate = sample_rate;
         self.envelope_follower.set_sample_rate(sample_rate);
         self.fast_envelope.set_sample_rate(sample_rate);
-        // Invalidate time-dependent caches so they recompute at next process()
-        self.last_sidechain_freq_hz = f32::NAN;
-        self.last_attack_ms = f32::NAN;
-        self.last_release_ms = f32::NAN;
+        self.sc_hpf_cache.invalidate();
     }
 
     /// Compressor uses linked-stereo detection (cross-channel mid signal).
     fn is_true_stereo(&self) -> bool {
         true
+    }
+
+    fn update_diagnostics(&self, params: &mut CompressorParams) {
+        params.gain_reduction_db = self.gain_reduction_db;
     }
 }
 
@@ -707,7 +730,7 @@ mod tests {
     /// Descriptor count must equal `CompressorParams::COUNT` and all must be present.
     #[test]
     fn params_descriptor_count() {
-        assert_eq!(CompressorParams::COUNT, 11);
+        assert_eq!(CompressorParams::COUNT, 12);
         for i in 0..CompressorParams::COUNT {
             assert!(
                 CompressorParams::descriptor(i).is_some(),
@@ -715,8 +738,8 @@ mod tests {
             );
         }
         assert!(
-            CompressorParams::descriptor(11).is_none(),
-            "Index 11 should return None"
+            CompressorParams::descriptor(12).is_none(),
+            "Index 12 should return None"
         );
     }
 
@@ -954,17 +977,17 @@ mod tests {
         let kernel = CompressorKernel::new(48000.0);
         let adapter = KernelAdapter::new(kernel, 48000.0);
 
-        // Count
-        assert_eq!(adapter.param_count(), 11);
+        // Count (12 = 11 user params + 1 READ_ONLY diagnostic)
+        assert_eq!(adapter.param_count(), 12);
 
         // All present, none past end
-        for i in 0..11 {
+        for i in 0..12 {
             assert!(
                 adapter.param_info(i).is_some(),
                 "Missing param_info for index {i}"
             );
         }
-        assert!(adapter.param_info(11).is_none());
+        assert!(adapter.param_info(12).is_none());
 
         // Names match classic compressor.rs
         let expected_names = [

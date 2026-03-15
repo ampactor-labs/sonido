@@ -327,6 +327,37 @@ pub trait Effect {
     fn set_tempo_context(&mut self, _ctx: &crate::tempo::TempoContext) {}
 }
 
+/// Extension trait for effects that report their tail/ring-out duration.
+///
+/// Separate from [`Effect`] to keep the base trait clean forever (Pattern P5:
+/// Extension Traits). New capabilities are added via independent traits, not
+/// by growing the base trait.
+///
+/// Effects with tails (reverb, delay, looper) implement this to report how
+/// long audio continues after input stops. Used by:
+/// - Spillover architecture (Phase 4) to determine crossfade duration
+/// - Plugin hosts via `clap_plugin_tail`
+/// - Graph engine for intelligent buffer management
+///
+/// Query via trait object downcast or via [`DspKernel::tail_samples()`](crate::DspKernel::tail_samples).
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use sonido_core::TailReporting;
+///
+/// if let Some(tail) = effect_ref.downcast_ref::<dyn TailReporting>() {
+///     println!("Tail: {} samples", tail.tail_samples());
+/// }
+/// ```
+pub trait TailReporting {
+    /// Duration of the effect's ring-out tail in samples.
+    ///
+    /// Returns 0 for effects with no tail (distortion, EQ, compressor, etc.).
+    /// Returns the ring-out duration for reverb, delay, looper.
+    fn tail_samples(&self) -> usize;
+}
+
 /// Extension trait for chaining effects.
 ///
 /// Provides a fluent interface for building effect chains with static dispatch.

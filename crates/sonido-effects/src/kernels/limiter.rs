@@ -569,7 +569,10 @@ impl DspKernel for LimiterKernel {
 mod tests {
     use super::*;
     use sonido_core::kernel::KernelAdapter;
-    use sonido_core::{Effect, ParameterInfo};
+    use sonido_core::{Effect, KernelParams, ParameterInfo};
+
+    // Zero-config kernel invariant tests (finite output, reset, morph, descriptors, extreme inputs)
+    crate::test_kernel!(LimiterKernel, LimiterParams);
 
     // ── Kernel unit tests ──
 

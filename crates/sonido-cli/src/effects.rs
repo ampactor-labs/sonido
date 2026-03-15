@@ -103,7 +103,7 @@ mod tests {
 
     #[test]
     fn available_effects_count() {
-        assert_eq!(available_effects().len(), 19);
+        assert_eq!(available_effects().len(), 20);
     }
 
     #[test]

@@ -414,4 +414,35 @@ pub trait DspKernel: Send {
     ///
     /// Default: no-op. Override for delay, tremolo, and other tempo-aware kernels.
     fn set_tempo_context(&mut self, _ctx: &TempoContext) {}
+
+    /// Report the effect's ring-out tail duration in samples.
+    ///
+    /// Used by [`KernelAdapter`](super::KernelAdapter) to implement
+    /// [`TailReporting`](crate::TailReporting). Override for effects that
+    /// produce output after input stops (reverb decay, delay feedback,
+    /// looper playback).
+    ///
+    /// Default: 0 (no tail — most effects).
+    fn tail_samples(&self) -> usize {
+        0
+    }
+
+    /// Write READ_ONLY diagnostic values into the params snapshot.
+    ///
+    /// Called by [`KernelAdapter`](super::KernelAdapter) after each
+    /// `process_stereo()` call. Override in kernels that have `ParamFlags::READ_ONLY`
+    /// diagnostic parameters (gain reduction, gate state, LFO phase, etc.).
+    ///
+    /// The adapter then exposes these values through `ParameterInfo::get_param()`.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// fn update_diagnostics(&self, params: &mut CompressorParams) {
+    ///     params.gain_reduction_db = self.gain_reduction_db;
+    /// }
+    /// ```
+    ///
+    /// Default: no-op (most kernels have no READ_ONLY params).
+    fn update_diagnostics(&self, _params: &mut Self::Params) {}
 }

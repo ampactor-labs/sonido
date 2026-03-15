@@ -72,9 +72,9 @@
 use sonido_core::kernel::{DspKernel, KernelParams, SmoothingStyle};
 use sonido_core::math::soft_limit;
 use sonido_core::{
-    Adaa1, Biquad, EnvelopeFollower, InterpolatedDelay, Lfo, LfoWaveform, OnePole, ParamDescriptor,
-    ParamId, ParamScale, ParamUnit, db_to_linear, lowpass_coefficients, peaking_eq_coefficients,
-    tape_sat_ad,
+    Adaa1, Biquad, Cached, EnvelopeFollower, InterpolatedDelay, Lfo, LfoWaveform, OnePole,
+    ParamDescriptor, ParamId, ParamScale, ParamUnit, db_to_linear, lowpass_coefficients,
+    peaking_eq_coefficients, tape_sat_ad,
 };
 
 /// ADAA processor type alias for function-pointer waveshapers.
@@ -516,16 +516,21 @@ pub struct TapeKernel {
     /// Static one-pole lowpass for tape bandwidth limit, right channel.
     hf_static_r: OnePole,
 
-    /// Last head_bump value used to compute bump EQ coefficients. NaN forces init.
-    last_head_bump: f32,
-    /// Last bump_freq_hz value used to compute bump EQ coefficients. NaN forces init.
-    last_bump_freq: f32,
-    /// Last hf_rolloff_hz value used to update the static HF filter. NaN forces init.
-    last_hf_freq: f32,
-    /// Cached cutoff for level-dependent HF filter (left). NaN = needs init.
-    last_hf_cutoff_l: f32,
-    /// Cached cutoff for level-dependent HF filter (right). NaN = needs init.
-    last_hf_cutoff_r: f32,
+    /// Change-detector for head bump peaking EQ coefficients.
+    ///
+    /// Keyed on `[head_bump, bump_freq_hz]`.
+    bump_cache: Cached<[f32; 6]>,
+
+    /// Change-detector for static HF one-pole cutoff frequency.
+    ///
+    /// Keyed on `[hf_rolloff_hz]`. Stores the last-applied frequency.
+    hf_static_cache: Cached<f32>,
+
+    /// Change-detector for level-dependent HF biquad coefficients (left channel).
+    hf_cutoff_cache_l: Cached<[f32; 6]>,
+
+    /// Change-detector for level-dependent HF biquad coefficients (right channel).
+    hf_cutoff_cache_r: Cached<[f32; 6]>,
 }
 
 impl TapeKernel {
@@ -589,6 +594,46 @@ impl TapeKernel {
             hf_coeffs.5,
         );
 
+        let defaults = TapeParams::default();
+
+        // Primed bump cache — 2 inputs: [head_bump, bump_freq_hz]
+        let initial_bump_coeffs = {
+            let gain_db = defaults.head_bump * 6.0;
+            let c = peaking_eq_coefficients(defaults.bump_freq_hz, 1.5, gain_db, sample_rate);
+            [c.0, c.1, c.2, c.3, c.4, c.5]
+        };
+        let mut bump_cache = Cached::new(initial_bump_coeffs, 2);
+        bump_cache.update(
+            &[defaults.head_bump, defaults.bump_freq_hz],
+            0.001,
+            |inputs| {
+                let gain_db = inputs[0] * 6.0;
+                let c = peaking_eq_coefficients(inputs[1], 1.5, gain_db, sample_rate);
+                [c.0, c.1, c.2, c.3, c.4, c.5]
+            },
+        );
+
+        // Primed hf_static cache — 1 input: [hf_rolloff_hz]
+        let mut hf_static_cache = Cached::new(defaults.hf_rolloff_hz, 1);
+        hf_static_cache.update(&[defaults.hf_rolloff_hz], 10.0, |inputs| inputs[0]);
+
+        // Level-dependent HF caches — 1 input: [cutoff_hz]
+        let safe_hf_max = HF_MAX.min(sample_rate * 0.45);
+        let initial_hf_coeffs = {
+            let c = lowpass_coefficients(safe_hf_max, 0.707, sample_rate);
+            [c.0, c.1, c.2, c.3, c.4, c.5]
+        };
+        let mut hf_cutoff_cache_l = Cached::new(initial_hf_coeffs, 1);
+        hf_cutoff_cache_l.update(&[safe_hf_max], 1.0, |inputs| {
+            let c = lowpass_coefficients(inputs[0], 0.707, sample_rate);
+            [c.0, c.1, c.2, c.3, c.4, c.5]
+        });
+        let mut hf_cutoff_cache_r = Cached::new(initial_hf_coeffs, 1);
+        hf_cutoff_cache_r.update(&[safe_hf_max], 1.0, |inputs| {
+            let c = lowpass_coefficients(inputs[0], 0.707, sample_rate);
+            [c.0, c.1, c.2, c.3, c.4, c.5]
+        });
+
         Self {
             sample_rate,
             adaa_l: Adaa1::new(
@@ -613,11 +658,10 @@ impl TapeKernel {
             env_r: EnvelopeFollower::with_times(sample_rate, 1.0, 50.0),
             hf_static_l: OnePole::new(sample_rate, 12000.0),
             hf_static_r: OnePole::new(sample_rate, 12000.0),
-            last_head_bump: f32::NAN,
-            last_bump_freq: f32::NAN,
-            last_hf_freq: f32::NAN,
-            last_hf_cutoff_l: f32::NAN,
-            last_hf_cutoff_r: f32::NAN,
+            bump_cache,
+            hf_static_cache,
+            hf_cutoff_cache_l,
+            hf_cutoff_cache_r,
         }
     }
 
@@ -652,30 +696,6 @@ impl TapeKernel {
         total.clamp(1.0, max)
     }
 
-    /// Recompute head bump peaking EQ coefficients.
-    ///
-    /// `head_bump` is mapped to gain_db = head_bump * 6.0 dB (0 to +6 dB).
-    /// Q is fixed at 1.5 for a moderately peaked resonance.
-    #[inline]
-    fn update_bump_coefficients(&mut self, head_bump: f32, bump_freq_hz: f32) {
-        let gain_db = head_bump * 6.0;
-        let coeffs = peaking_eq_coefficients(bump_freq_hz, 1.5, gain_db, self.sample_rate);
-        self.bump_filter_l
-            .set_coefficients(coeffs.0, coeffs.1, coeffs.2, coeffs.3, coeffs.4, coeffs.5);
-        self.bump_filter_r
-            .set_coefficients(coeffs.0, coeffs.1, coeffs.2, coeffs.3, coeffs.4, coeffs.5);
-        self.last_head_bump = head_bump;
-        self.last_bump_freq = bump_freq_hz;
-    }
-
-    /// Update the static HF one-pole filter cutoff frequency.
-    #[inline]
-    fn update_static_hf(&mut self, hf_rolloff_hz: f32) {
-        self.hf_static_l.set_frequency(hf_rolloff_hz);
-        self.hf_static_r.set_frequency(hf_rolloff_hz);
-        self.last_hf_freq = hf_rolloff_hz;
-    }
-
     /// Apply level-dependent HF lowpass to the left channel.
     ///
     /// The cutoff frequency is computed as:
@@ -695,12 +715,13 @@ impl TapeKernel {
         let drive_norm = ((drive - 1.0) / 14.85).clamp(0.0, 1.0);
         let level = self.env_l.process(libm::fabsf(input));
         let cutoff = (hf_max - (hf_max - hf_min) * level * drive_norm).clamp(hf_min, hf_max);
-        if (cutoff - self.last_hf_cutoff_l).abs() > 1.0 || self.last_hf_cutoff_l.is_nan() {
-            let coeffs = lowpass_coefficients(cutoff, 0.707, self.sample_rate);
-            self.hf_filter_l
-                .set_coefficients(coeffs.0, coeffs.1, coeffs.2, coeffs.3, coeffs.4, coeffs.5);
-            self.last_hf_cutoff_l = cutoff;
-        }
+        let sr = self.sample_rate;
+        let c = *self.hf_cutoff_cache_l.update(&[cutoff], 1.0, |inputs| {
+            let coeffs = lowpass_coefficients(inputs[0], 0.707, sr);
+            [coeffs.0, coeffs.1, coeffs.2, coeffs.3, coeffs.4, coeffs.5]
+        });
+        self.hf_filter_l
+            .set_coefficients(c[0], c[1], c[2], c[3], c[4], c[5]);
         self.hf_filter_l.process(signal)
     }
 
@@ -717,12 +738,13 @@ impl TapeKernel {
         let drive_norm = ((drive - 1.0) / 14.85).clamp(0.0, 1.0);
         let level = self.env_r.process(libm::fabsf(input));
         let cutoff = (hf_max - (hf_max - hf_min) * level * drive_norm).clamp(hf_min, hf_max);
-        if (cutoff - self.last_hf_cutoff_r).abs() > 1.0 || self.last_hf_cutoff_r.is_nan() {
-            let coeffs = lowpass_coefficients(cutoff, 0.707, self.sample_rate);
-            self.hf_filter_r
-                .set_coefficients(coeffs.0, coeffs.1, coeffs.2, coeffs.3, coeffs.4, coeffs.5);
-            self.last_hf_cutoff_r = cutoff;
-        }
+        let sr = self.sample_rate;
+        let c = *self.hf_cutoff_cache_r.update(&[cutoff], 1.0, |inputs| {
+            let coeffs = lowpass_coefficients(inputs[0], 0.707, sr);
+            [coeffs.0, coeffs.1, coeffs.2, coeffs.3, coeffs.4, coeffs.5]
+        });
+        self.hf_filter_r
+            .set_coefficients(c[0], c[1], c[2], c[3], c[4], c[5]);
         self.hf_filter_r.process(signal)
     }
 }
@@ -749,17 +771,28 @@ impl DspKernel for TapeKernel {
         let saturation = params.saturation_pct / 100.0;
         let output = db_to_linear(params.output_db);
 
-        // Lazy coefficient updates — NaN sentinel triggers forced init on first call
-        if self.last_head_bump.is_nan()
-            || self.last_bump_freq.is_nan()
-            || (params.head_bump - self.last_head_bump).abs() > 0.001
-            || (params.bump_freq_hz - self.last_bump_freq).abs() > 0.5
-        {
-            self.update_bump_coefficients(params.head_bump, params.bump_freq_hz);
-        }
-        if self.last_hf_freq.is_nan() || (params.hf_rolloff_hz - self.last_hf_freq).abs() > 10.0 {
-            self.update_static_hf(params.hf_rolloff_hz);
-        }
+        // Lazy coefficient updates via Cached change-detection
+        let sr = self.sample_rate;
+        let bump_c =
+            *self
+                .bump_cache
+                .update(&[params.head_bump, params.bump_freq_hz], 0.001, |inputs| {
+                    let gain_db = inputs[0] * 6.0;
+                    let c = peaking_eq_coefficients(inputs[1], 1.5, gain_db, sr);
+                    [c.0, c.1, c.2, c.3, c.4, c.5]
+                });
+        self.bump_filter_l.set_coefficients(
+            bump_c[0], bump_c[1], bump_c[2], bump_c[3], bump_c[4], bump_c[5],
+        );
+        self.bump_filter_r.set_coefficients(
+            bump_c[0], bump_c[1], bump_c[2], bump_c[3], bump_c[4], bump_c[5],
+        );
+
+        let hf_freq = *self
+            .hf_static_cache
+            .update(&[params.hf_rolloff_hz], 10.0, |inputs| inputs[0]);
+        self.hf_static_l.set_frequency(hf_freq);
+        self.hf_static_r.set_frequency(hf_freq);
 
         // Wow / flutter delay
         let (wow_l, wow_r) = if params.wow > 0.0 || params.flutter > 0.0 {
@@ -837,8 +870,9 @@ impl DspKernel for TapeKernel {
         self.hf_static_l.reset();
         self.hf_static_r.reset();
 
-        self.last_hf_cutoff_l = f32::NAN;
-        self.last_hf_cutoff_r = f32::NAN;
+        // Invalidate level-dependent HF caches — filter state cleared, recompute on next call
+        self.hf_cutoff_cache_l.invalidate();
+        self.hf_cutoff_cache_r.invalidate();
     }
 
     fn set_sample_rate(&mut self, sample_rate: f32) {
@@ -858,9 +892,10 @@ impl DspKernel for TapeKernel {
         self.hf_static_r.set_sample_rate(sample_rate);
 
         // Force coefficient recomputation at the new sample rate
-        self.last_head_bump = f32::NAN;
-        self.last_bump_freq = f32::NAN;
-        self.last_hf_freq = f32::NAN;
+        self.bump_cache.invalidate();
+        self.hf_static_cache.invalidate();
+        self.hf_cutoff_cache_l.invalidate();
+        self.hf_cutoff_cache_r.invalidate();
     }
 
     fn is_true_stereo(&self) -> bool {

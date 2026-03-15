@@ -51,8 +51,8 @@
 
 use sonido_core::kernel::{DspKernel, KernelParams, SmoothingStyle};
 use sonido_core::{
-    Biquad, EnvelopeFollower, ParamDescriptor, ParamId, ParamScale, ParamUnit, fast_db_to_linear,
-    highpass_coefficients, math::db_to_linear,
+    Biquad, Cached, EnvelopeFollower, ParamDescriptor, ParamFlags, ParamId, ParamScale, ParamUnit,
+    fast_db_to_linear, highpass_coefficients, math::db_to_linear,
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -158,6 +158,13 @@ pub struct GateParams {
     ///
     /// Range: −20.0–+6.0 dB (default 0.0). Applied after the gate gain.
     pub output_db: f32,
+
+    /// READ_ONLY diagnostic: 1.0 when gate is open/opening, 0.0 when closed.
+    ///
+    /// Written by the kernel each sample; not user-settable. Exposed at
+    /// `KernelParams` index 8 with `ParamFlags::READ_ONLY | ParamFlags::HIDDEN`.
+    /// Actual value is provided by `GateKernel::gate_open_diagnostic` field.
+    pub gate_open: f32,
 }
 
 impl Default for GateParams {
@@ -171,6 +178,7 @@ impl Default for GateParams {
             hysteresis_db: 3.0,
             sidechain_freq_hz: 80.0,
             output_db: 0.0,
+            gate_open: 0.0,
         }
     }
 }
@@ -207,7 +215,7 @@ impl GateParams {
 }
 
 impl KernelParams for GateParams {
-    const COUNT: usize = 8;
+    const COUNT: usize = 9;
 
     fn descriptor(index: usize) -> Option<ParamDescriptor> {
         match index {
@@ -304,6 +312,14 @@ impl KernelParams for GateParams {
             7 => Some(
                 sonido_core::gain::output_param_descriptor().with_id(ParamId(404), "gate_output"),
             ),
+            // ── [8] Gate Open (READ_ONLY diagnostic) ────────────────────────
+            // ParamId(408), "gate_open" — 1.0 = gate open, 0.0 = gate closed.
+            // Written by GateKernel each sample; not user-settable.
+            8 => Some(
+                ParamDescriptor::custom("Gate Open", "Open", 0.0, 1.0, 0.0)
+                    .with_id(ParamId(408), "gate_open")
+                    .with_flags(ParamFlags::READ_ONLY.union(ParamFlags::HIDDEN)),
+            ),
             _ => None,
         }
     }
@@ -318,6 +334,7 @@ impl KernelParams for GateParams {
             5 => SmoothingStyle::Standard, // hysteresis — threshold offset
             6 => SmoothingStyle::Slow,     // sidechain HPF — filter coefficient, avoid zipper
             7 => SmoothingStyle::Standard, // output level
+            8 => SmoothingStyle::None,     // gate_open — READ_ONLY diagnostic, no smoothing
             _ => SmoothingStyle::Standard,
         }
     }
@@ -332,6 +349,9 @@ impl KernelParams for GateParams {
             5 => self.hysteresis_db,
             6 => self.sidechain_freq_hz,
             7 => self.output_db,
+            // Index 8 (gate_open): actual value stored on GateKernel, not GateParams.
+            // Returns 0.0 placeholder here; consumers read gate_open_diagnostic directly.
+            8 => self.gate_open,
             _ => 0.0,
         }
     }
@@ -346,6 +366,7 @@ impl KernelParams for GateParams {
             5 => self.hysteresis_db = value,
             6 => self.sidechain_freq_hz = value,
             7 => self.output_db = value,
+            8 => self.gate_open = value, // READ_ONLY: kernel writes this, not user
             _ => {}
         }
     }
@@ -416,26 +437,38 @@ pub struct GateKernel {
     /// Cached `fast_db_to_linear(threshold_db)`. Recomputed when threshold changes.
     cached_threshold_linear: f32,
 
+    /// Cached `threshold_db` value (for close-threshold computation).
+    cached_threshold_db: f32,
+
     /// Cached `db_to_linear(range_db)`. Recomputed when range changes.
     cached_floor_linear: f32,
 
-    /// Last seen `threshold_db` — for cache invalidation.
-    last_threshold_db: f32,
+    /// Cached hysteresis_db for close-threshold computation.
+    cached_hysteresis_db: f32,
 
-    /// Last seen `range_db` — for cache invalidation.
-    last_range_db: f32,
+    /// Change-detector for threshold_db → threshold_linear.
+    threshold_cache: Cached<f32>,
 
-    /// Last seen `attack_ms` — for coefficient cache invalidation.
-    last_attack_ms: f32,
+    /// Change-detector for range_db → floor_linear.
+    range_cache: Cached<f32>,
 
-    /// Last seen `release_ms` — for coefficient cache invalidation.
-    last_release_ms: f32,
+    /// Change-detector for hysteresis_db.
+    hysteresis_cache: Cached<f32>,
 
-    /// Last seen `hysteresis_db` — used to compute close threshold.
-    last_hysteresis_db: f32,
+    /// Change-detector for attack_ms → attack_coeff.
+    attack_cache: Cached<f32>,
 
-    /// Last seen `sidechain_freq_hz` — for HPF coefficient invalidation.
-    last_sidechain_freq_hz: f32,
+    /// Change-detector for release_ms → release_coeff.
+    release_cache: Cached<f32>,
+
+    /// Change-detector for sidechain HPF coefficients.
+    sc_hpf_cache: Cached<[f32; 6]>,
+
+    /// Diagnostic: 1.0 when gate is open/opening, 0.0 when closed/closing.
+    ///
+    /// Written each sample in `process_stereo`. Exposed at `GateParams` index 8
+    /// with `ParamFlags::READ_ONLY | ParamFlags::HIDDEN`.
+    pub gate_open_diagnostic: f32,
 }
 
 impl GateKernel {
@@ -465,6 +498,33 @@ impl GateKernel {
         let cached_threshold_linear = fast_db_to_linear(defaults.threshold_db);
         let cached_floor_linear = db_to_linear(defaults.range_db);
 
+        let sc_hpf_coeffs = {
+            let (b0, b1, b2, a0, a1, a2) = highpass_coefficients(80.0, 0.707, sample_rate);
+            [b0, b1, b2, a0, a1, a2]
+        };
+        let mut threshold_cache = Cached::new(cached_threshold_linear, 1);
+        threshold_cache.update(&[defaults.threshold_db], 1e-3, |inputs| {
+            fast_db_to_linear(inputs[0])
+        });
+        let mut range_cache = Cached::new(cached_floor_linear, 1);
+        range_cache.update(&[defaults.range_db], 1e-3, |inputs| db_to_linear(inputs[0]));
+        let mut hysteresis_cache = Cached::new(defaults.hysteresis_db, 1);
+        hysteresis_cache.update(&[defaults.hysteresis_db], 1e-3, |inputs| inputs[0]);
+        let mut attack_cache = Cached::new(attack_coeff, 1);
+        attack_cache.update(&[defaults.attack_ms], 1e-3, |inputs| {
+            Self::compute_coeff(inputs[0], sample_rate)
+        });
+        let mut release_cache = Cached::new(release_coeff, 1);
+        release_cache.update(&[defaults.release_ms], 1e-2, |inputs| {
+            Self::compute_coeff(inputs[0], sample_rate)
+        });
+        let mut sc_hpf_cache = Cached::new(sc_hpf_coeffs, 1);
+        sc_hpf_cache.update(&[defaults.sidechain_freq_hz], 0.5, |inputs| {
+            let freq = inputs[0].clamp(20.0, 500.0);
+            let (b0, b1, b2, a0, a1, a2) = highpass_coefficients(freq, 0.707, sample_rate);
+            [b0, b1, b2, a0, a1, a2]
+        });
+
         Self {
             sample_rate,
             envelope_follower,
@@ -475,13 +535,16 @@ impl GateKernel {
             attack_coeff,
             release_coeff,
             cached_threshold_linear,
+            cached_threshold_db: defaults.threshold_db,
             cached_floor_linear,
-            last_threshold_db: defaults.threshold_db,
-            last_range_db: defaults.range_db,
-            last_attack_ms: defaults.attack_ms,
-            last_release_ms: defaults.release_ms,
-            last_hysteresis_db: defaults.hysteresis_db,
-            last_sidechain_freq_hz: defaults.sidechain_freq_hz,
+            cached_hysteresis_db: defaults.hysteresis_db,
+            threshold_cache,
+            range_cache,
+            hysteresis_cache,
+            attack_cache,
+            release_cache,
+            sc_hpf_cache,
+            gate_open_diagnostic: 0.0,
         }
     }
 
@@ -505,36 +568,48 @@ impl GateKernel {
 
     /// Update all cached/derived values when params have changed.
     ///
-    /// Comparisons use small epsilon thresholds to avoid recomputing on
-    /// every sample when the adapter is smoothing. Only computes what
-    /// actually changed.
+    /// Uses `Cached<T>` instances to detect changes and recompute only what changed.
     #[inline]
     fn update_caches(&mut self, params: &GateParams) {
-        if (params.threshold_db - self.last_threshold_db).abs() > 0.001 {
-            self.cached_threshold_linear = fast_db_to_linear(params.threshold_db);
-            self.last_threshold_db = params.threshold_db;
-        }
-        if (params.range_db - self.last_range_db).abs() > 0.001 {
-            self.cached_floor_linear = db_to_linear(params.range_db);
-            self.last_range_db = params.range_db;
-        }
-        if (params.attack_ms - self.last_attack_ms).abs() > 0.001 {
-            self.attack_coeff = Self::compute_coeff(params.attack_ms, self.sample_rate);
-            self.last_attack_ms = params.attack_ms;
-        }
-        if (params.release_ms - self.last_release_ms).abs() > 0.01 {
-            self.release_coeff = Self::compute_coeff(params.release_ms, self.sample_rate);
-            self.last_release_ms = params.release_ms;
-        }
-        if (params.hysteresis_db - self.last_hysteresis_db).abs() > 0.001 {
-            self.last_hysteresis_db = params.hysteresis_db;
-        }
-        if (params.sidechain_freq_hz - self.last_sidechain_freq_hz).abs() > 0.5 {
-            let freq = params.sidechain_freq_hz.clamp(20.0, 500.0);
-            let (b0, b1, b2, a0, a1, a2) = highpass_coefficients(freq, 0.707, self.sample_rate);
-            self.sidechain_hpf.set_coefficients(b0, b1, b2, a0, a1, a2);
-            self.last_sidechain_freq_hz = params.sidechain_freq_hz;
-        }
+        self.cached_threshold_linear =
+            *self
+                .threshold_cache
+                .update(&[params.threshold_db], 1e-3, |inputs| {
+                    fast_db_to_linear(inputs[0])
+                });
+        self.cached_threshold_db = params.threshold_db;
+        self.cached_floor_linear = *self
+            .range_cache
+            .update(&[params.range_db], 1e-3, |inputs| db_to_linear(inputs[0]));
+        self.cached_hysteresis_db =
+            *self
+                .hysteresis_cache
+                .update(&[params.hysteresis_db], 1e-3, |inputs| inputs[0]);
+        self.attack_coeff = *self
+            .attack_cache
+            .update(&[params.attack_ms], 1e-3, |inputs| {
+                Self::compute_coeff(inputs[0], self.sample_rate)
+            });
+        self.release_coeff = *self
+            .release_cache
+            .update(&[params.release_ms], 1e-2, |inputs| {
+                Self::compute_coeff(inputs[0], self.sample_rate)
+            });
+        let sc_coeffs = *self
+            .sc_hpf_cache
+            .update(&[params.sidechain_freq_hz], 0.5, |inputs| {
+                let freq = inputs[0].clamp(20.0, 500.0);
+                let (b0, b1, b2, a0, a1, a2) = highpass_coefficients(freq, 0.707, self.sample_rate);
+                [b0, b1, b2, a0, a1, a2]
+            });
+        self.sidechain_hpf.set_coefficients(
+            sc_coeffs[0],
+            sc_coeffs[1],
+            sc_coeffs[2],
+            sc_coeffs[3],
+            sc_coeffs[4],
+            sc_coeffs[5],
+        );
     }
 
     /// Advance the gate state machine for one sample.
@@ -563,8 +638,10 @@ impl GateKernel {
     fn advance_gate_state(&mut self, envelope: f32, hold_samples: u32, floor: f32) {
         let threshold_linear = self.cached_threshold_linear;
 
-        // Close threshold = threshold_db - hysteresis_db (in linear via fast approx)
-        let close_threshold = fast_db_to_linear(self.last_threshold_db - self.last_hysteresis_db);
+        // Close threshold = threshold_db - hysteresis_db (in linear via fast approx).
+        // Uses cached threshold/hysteresis values updated by update_caches().
+        let close_threshold =
+            fast_db_to_linear(self.cached_threshold_db - self.cached_hysteresis_db);
 
         let above_open = envelope > threshold_linear;
         let above_close = envelope > close_threshold;
@@ -637,6 +714,11 @@ impl DspKernel for GateKernel {
         let hold_samples = ((params.hold_ms / 1000.0) * self.sample_rate) as u32;
         self.advance_gate_state(envelope, hold_samples, floor);
 
+        self.gate_open_diagnostic = match self.state {
+            GateState::Open | GateState::Opening | GateState::Holding => 1.0,
+            GateState::Closed | GateState::Closing => 0.0,
+        };
+
         let output_gain = fast_db_to_linear(params.output_db);
         input * self.gain * output_gain
     }
@@ -658,6 +740,11 @@ impl DspKernel for GateKernel {
         let hold_samples = ((params.hold_ms / 1000.0) * self.sample_rate) as u32;
         self.advance_gate_state(envelope, hold_samples, floor);
 
+        self.gate_open_diagnostic = match self.state {
+            GateState::Open | GateState::Opening | GateState::Holding => 1.0,
+            GateState::Closed | GateState::Closing => 0.0,
+        };
+
         let output_gain = fast_db_to_linear(params.output_db);
         (
             left * self.gain * output_gain,
@@ -672,22 +759,26 @@ impl DspKernel for GateKernel {
         self.gain = self.cached_floor_linear;
         self.hold_counter = 0;
         // Invalidate all caches — force recomputation on next process() call.
-        // NaN comparisons always fail (NaN != NaN), so every cache will recompute.
-        self.last_threshold_db = f32::NAN;
-        self.last_range_db = f32::NAN;
-        self.last_attack_ms = f32::NAN;
-        self.last_release_ms = f32::NAN;
-        self.last_hysteresis_db = f32::NAN;
-        self.last_sidechain_freq_hz = f32::NAN;
+        self.threshold_cache.invalidate();
+        self.range_cache.invalidate();
+        self.hysteresis_cache.invalidate();
+        self.attack_cache.invalidate();
+        self.release_cache.invalidate();
+        self.sc_hpf_cache.invalidate();
+        self.gate_open_diagnostic = 0.0;
     }
 
     fn set_sample_rate(&mut self, sample_rate: f32) {
         self.sample_rate = sample_rate;
         self.envelope_follower.set_sample_rate(sample_rate);
         // Invalidate time-dependent caches so they recompute at next process()
-        self.last_attack_ms = f32::NAN;
-        self.last_release_ms = f32::NAN;
-        self.last_sidechain_freq_hz = f32::NAN;
+        self.attack_cache.invalidate();
+        self.release_cache.invalidate();
+        self.sc_hpf_cache.invalidate();
+    }
+
+    fn update_diagnostics(&self, params: &mut GateParams) {
+        params.gate_open = self.gate_open_diagnostic;
     }
 }
 
@@ -738,7 +829,7 @@ mod tests {
     /// Descriptor count must equal `GateParams::COUNT` and all descriptors must be present.
     #[test]
     fn params_descriptor_count() {
-        assert_eq!(GateParams::COUNT, 8);
+        assert_eq!(GateParams::COUNT, 9);
         for i in 0..GateParams::COUNT {
             assert!(
                 GateParams::descriptor(i).is_some(),
@@ -746,8 +837,8 @@ mod tests {
             );
         }
         assert!(
-            GateParams::descriptor(8).is_none(),
-            "Index 8 should be None"
+            GateParams::descriptor(9).is_none(),
+            "Index 9 should be None"
         );
     }
 
@@ -770,6 +861,7 @@ mod tests {
             output_db: 0.0,
             range_db: -80.0,
             sidechain_freq_hz: 20.0, // HPF at 20 Hz — barely filters anything
+            gate_open: 0.0,
         };
 
         // Warm up with loud 500 Hz sine (well above -60 dB threshold)
@@ -856,17 +948,17 @@ mod tests {
         let kernel = GateKernel::new(48000.0);
         let adapter = KernelAdapter::new(kernel, 48000.0);
 
-        // Count
-        assert_eq!(adapter.param_count(), 8);
+        // Count (9 = 8 user params + 1 READ_ONLY diagnostic)
+        assert_eq!(adapter.param_count(), 9);
 
         // All present, none past end
-        for i in 0..8 {
+        for i in 0..9 {
             assert!(
                 adapter.param_info(i).is_some(),
                 "Missing param_info for index {i}"
             );
         }
-        assert!(adapter.param_info(8).is_none());
+        assert!(adapter.param_info(9).is_none());
 
         // Names match classic gate.rs
         let expected = [

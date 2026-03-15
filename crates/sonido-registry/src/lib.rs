@@ -58,8 +58,9 @@ pub use sonido_core::EffectWithParams;
 use sonido_core::{KernelAdapter, ParamDescriptor};
 use sonido_effects::kernels::{
     BitcrusherKernel, ChorusKernel, CompressorKernel, DelayKernel, DistortionKernel, EqKernel,
-    FilterKernel, FlangerKernel, GateKernel, LimiterKernel, PhaserKernel, PreampKernel,
-    ReverbKernel, RingModKernel, StageKernel, TapeKernel, TremoloKernel, VibratoKernel, WahKernel,
+    FilterKernel, FlangerKernel, GateKernel, LimiterKernel, LooperKernel, PhaserKernel,
+    PreampKernel, ReverbKernel, RingModKernel, StageKernel, TapeKernel, TremoloKernel,
+    VibratoKernel, WahKernel,
 };
 
 /// Category of audio effect for organization and filtering.
@@ -158,7 +159,7 @@ impl EffectRegistry {
     /// Create a new registry with all built-in effects registered.
     pub fn new() -> Self {
         let mut registry = Self {
-            entries: Vec::with_capacity(19),
+            entries: Vec::with_capacity(20),
         };
         registry.register_builtin_effects();
         registry
@@ -187,7 +188,7 @@ impl EffectRegistry {
                 short_name: "COMP",
                 description: "Dynamics compressor with program-dependent release",
                 category: EffectCategory::Dynamics,
-                param_count: 11,
+                param_count: 12,
             },
             |sr| Box::new(KernelAdapter::new(CompressorKernel::new(sr), sr)),
         );
@@ -200,7 +201,7 @@ impl EffectRegistry {
                 short_name: "CHOR",
                 description: "Multi-voice modulated delay chorus with feedback and tempo sync",
                 category: EffectCategory::Modulation,
-                param_count: 9,
+                param_count: 10,
             },
             |sr| Box::new(KernelAdapter::new(ChorusKernel::new(sr), sr)),
         );
@@ -213,7 +214,7 @@ impl EffectRegistry {
                 short_name: "FLNG",
                 description: "Classic flanger with through-zero mode, bipolar feedback, and tempo sync",
                 category: EffectCategory::Modulation,
-                param_count: 8,
+                param_count: 9,
             },
             |sr| Box::new(KernelAdapter::new(FlangerKernel::new(sr), sr)),
         );
@@ -226,7 +227,7 @@ impl EffectRegistry {
                 short_name: "PHAS",
                 description: "Multi-stage allpass phaser with LFO and tempo sync",
                 category: EffectCategory::Modulation,
-                param_count: 10,
+                param_count: 11,
             },
             |sr| Box::new(KernelAdapter::new(PhaserKernel::new(sr), sr)),
         );
@@ -317,7 +318,7 @@ impl EffectRegistry {
                 short_name: "TREM",
                 description: "Amplitude modulation with multiple waveforms and tempo sync",
                 category: EffectCategory::Modulation,
-                param_count: 7,
+                param_count: 8,
             },
             |sr| Box::new(KernelAdapter::new(TremoloKernel::new(sr), sr)),
         );
@@ -330,7 +331,7 @@ impl EffectRegistry {
                 short_name: "GATE",
                 description: "Noise gate with threshold, hold, hysteresis, and sidechain HPF",
                 category: EffectCategory::Dynamics,
-                param_count: 8,
+                param_count: 9,
             },
             |sr| Box::new(KernelAdapter::new(GateKernel::new(sr), sr)),
         );
@@ -411,6 +412,19 @@ impl EffectRegistry {
                 param_count: 12,
             },
             |sr| Box::new(KernelAdapter::new(StageKernel::new(sr), sr)),
+        );
+
+        // Looper
+        self.register(
+            EffectDescriptor {
+                id: "looper",
+                name: "Looper",
+                short_name: "LOOP",
+                description: "Stereo looper with record, play, and overdub",
+                category: EffectCategory::TimeBased,
+                param_count: 6,
+            },
+            |sr| Box::new(KernelAdapter::new(LooperKernel::new(sr), sr)),
         );
     }
 
@@ -539,14 +553,14 @@ mod tests {
     #[test]
     fn test_registry_creation() {
         let registry = EffectRegistry::new();
-        assert_eq!(registry.len(), 19);
+        assert_eq!(registry.len(), 20);
     }
 
     #[test]
     fn test_all_effects() {
         let registry = EffectRegistry::new();
         let effects = registry.all_effects();
-        assert_eq!(effects.len(), 19);
+        assert_eq!(effects.len(), 20);
     }
 
     #[test]
@@ -587,7 +601,7 @@ mod tests {
         assert_eq!(distortion.len(), 3); // Distortion, Tape, Bitcrusher
 
         let time_based = registry.effects_in_category(EffectCategory::TimeBased);
-        assert_eq!(time_based.len(), 2); // Delay and Reverb
+        assert_eq!(time_based.len(), 3); // Delay, Reverb, Looper
 
         let filter = registry.effects_in_category(EffectCategory::Filter);
         assert_eq!(filter.len(), 3); // LowPass, Wah, ParametricEQ

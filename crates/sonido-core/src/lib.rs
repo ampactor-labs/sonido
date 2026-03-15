@@ -95,6 +95,7 @@ extern crate alloc;
 pub mod adaa;
 pub mod allpass;
 pub mod biquad;
+pub mod cached;
 pub mod comb;
 pub mod dc_blocker;
 pub mod delay;
@@ -106,6 +107,7 @@ pub mod gain;
 pub mod graph;
 pub mod kernel;
 pub mod lfo;
+pub mod loop_buffer;
 pub mod math;
 pub mod modulation;
 pub mod one_pole;
@@ -122,10 +124,11 @@ pub use biquad::{
     Biquad, bandpass_coefficients, highpass_coefficients, lowpass_coefficients, notch_coefficients,
     peaking_eq_coefficients,
 };
+pub use cached::Cached;
 pub use comb::{CombFilter, ModulatedComb};
 pub use dc_blocker::DcBlocker;
 pub use delay::{FixedDelayLine, InterpolatedDelay, Interpolation};
-pub use effect::{Chain, Effect, EffectExt};
+pub use effect::{Chain, Effect, EffectExt, TailReporting};
 pub use effect_with_params::EffectWithParams;
 pub use envelope::{DetectionMode, EnvelopeFollower};
 pub use fast_math::{
@@ -138,6 +141,7 @@ pub use graph::{
 };
 pub use kernel::{DspKernel, KernelAdapter, KernelParams, SmoothingStyle};
 pub use lfo::{Lfo, LfoWaveform};
+pub use loop_buffer::LoopBuffer;
 pub use math::{
     asymmetric_clip, asymmetric_clip_ad, db_to_linear, fast_tanh, flush_denormal, foldback,
     foldback_ad, hard_clip, hard_clip_ad, linear_to_db, mono_sum, soft_clip, soft_clip_ad,
