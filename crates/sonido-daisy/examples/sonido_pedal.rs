@@ -50,9 +50,13 @@ use embedded_alloc::LlffHeap as Heap;
 use panic_probe as _;
 
 use sonido_core::graph::ProcessingGraph;
-use sonido_core::{EffectWithParams, ParamFlags};
+use sonido_core::{EffectWithParams, ParamFlags, TempoManager};
 use sonido_daisy::controls::HothouseBuffer;
+use sonido_daisy::expression::ExpressionInput;
 use sonido_daisy::hothouse::hothouse_control_task;
+use sonido_daisy::midi::{MidiEvent, MidiHandler};
+use sonido_daisy::qspi::{EffectSlotData, MAX_USER_PRESETS, PresetSlot};
+use sonido_daisy::tap_tempo::TapTempo;
 use sonido_daisy::{
     BLOCK_SIZE, ClockProfile, EmbeddedAdapter, SAMPLE_RATE, adc_to_param, f32_to_u24, heartbeat,
     led::UserLed, u24_to_f32,
@@ -678,6 +682,88 @@ fn apply_all_snapshots(
     }
 }
 
+// ── MIDI event handler ──────────────────────────────────────────────────────
+
+/// Process a single MIDI event into the control buffer.
+///
+/// Maps CC 0–5 to knobs, CC 11 to expression pedal, and MIDI Clock to tap
+/// tempo. Called per USB-MIDI packet once the USB task is spawned. See the
+/// TODO comment block in `main` for USB task setup.
+#[allow(dead_code)]
+fn process_midi_event(
+    event: &MidiEvent,
+    controls: &HothouseBuffer,
+    tap_tempo: &mut TapTempo,
+    now_ticks: u64,
+) {
+    if event.is_cc() {
+        match event.cc_number() {
+            // CC 0–5 → knobs 0–5 (normalized 0.0–1.0 from 7-bit MIDI value).
+            0..=5 => {
+                let knob_idx = event.cc_number() as usize;
+                let normalized = event.cc_value() as f32 / 127.0;
+                // Write with alpha=1.0 (no IIR smoothing — MIDI is already smooth).
+                controls.write_knob(knob_idx, normalized, 1.0);
+            }
+            // CC 11 (Expression) → expression pedal value.
+            11 => {
+                let normalized = event.cc_value() as f32 / 127.0;
+                controls.write_expression(normalized);
+            }
+            _ => {}
+        }
+    } else if event.is_clock() {
+        // MIDI Clock → tap tempo (24 clocks per beat; use every 24th clock
+        // for 1-tap-per-beat behavior — here we simply pass all clocks through
+        // and TapTempo's timeout filters out noise).
+        tap_tempo.tap(now_ticks);
+    }
+    // Program Change → preset load handled in the poll loop where preset state lives.
+}
+
+// ── Preset serialization ────────────────────────────────────────────────────
+
+/// Capture current pedal state into a [`PresetSlot`] for persistence.
+///
+/// Topology is encoded as 0=Linear, 1=Parallel, 2=Fan matching the [`Topology`]
+/// enum discriminants used in [`PresetSlot::topology`].
+fn current_state_to_preset_slot(
+    nodes: &[NodeState; NUM_SLOTS],
+    topology: Topology,
+) -> PresetSlot {
+    let topology_byte = match topology {
+        Topology::Linear => 0,
+        Topology::Parallel => 1,
+        Topology::Fan => 2,
+    };
+
+    let mut slot = PresetSlot {
+        valid: 0x01,
+        topology: topology_byte,
+        num_slots: 0,
+        _pad: 0,
+        effects: [EffectSlotData::default(); 3],
+    };
+
+    let mut active = 0u8;
+    for (i, node) in nodes.iter().enumerate() {
+        if let Some(eff_idx) = node.effect_index {
+            slot.effects[i].effect_idx = eff_idx as u8;
+            slot.effects[i].param_count = node.params_a.count as u8;
+            for p in 0..node.params_a.count.min(sonido_daisy::qspi::MAX_SLOT_PARAMS) {
+                slot.effects[i].params_a[p] = node.params_a.values[p];
+                slot.effects[i].params_b[p] = node
+                    .params_b
+                    .as_ref()
+                    .map_or(node.params_a.values[p], |b| b.values[p]);
+            }
+            active += 1;
+        }
+    }
+    slot.num_slots = active;
+    slot
+}
+
 // ── Init diagnostics ────────────────────────────────────────────────────────
 
 /// Single blink on LED2 for init milestone tracking.
@@ -785,6 +871,56 @@ async fn main(spawner: embassy_executor::Spawner) {
     let mut led_blink_remaining: u8 = 0;
     let mut led_blink_timer: u16 = 0;
 
+    // ── Tap tempo + TempoManager ─────────────────────────────────────────────
+    let mut tap_tempo = TapTempo::new();
+    let mut tempo_manager = TempoManager::new(SAMPLE_RATE, 120.0);
+
+    // ── Expression pedal ─────────────────────────────────────────────────────
+    let mut expression = ExpressionInput::new();
+
+    // ── MIDI ─────────────────────────────────────────────────────────────────
+    // TODO: Spawn USB MIDI task
+    // let usb_driver = embassy_stm32::usb::Driver::new(p.USB_OTG_FS, irqs, p.PA12, p.PA11, &mut ep_out_buffer, config);
+    // let mut midi_config = embassy_usb::Config::new(0x1209, 0x0001);
+    // midi_config.manufacturer = Some("Ampactor Labs");
+    // midi_config.product = Some("Sonido Pedal");
+    // midi_config.serial_number = Some("00000001");
+    // spawner.spawn(usb_task(usb_device)).unwrap();
+    // spawner.spawn(usb_midi_task(usb_driver, midi_handler)).unwrap();
+    //
+    // When the USB task is live, received 4-byte packets are dispatched via:
+    //   if let Some(event) = midi.parse_packet(&packet) {
+    //       process_midi_event(&event, &CONTROLS, &mut tap_tempo,
+    //                          embassy_time::Instant::now().as_ticks());
+    //   }
+    let _midi = MidiHandler::new();
+
+    // ── QSPI preset persistence ───────────────────────────────────────────────
+    // Preset RAM buffer (4 KB).  On boot we'd read from QSPI flash into this
+    // buffer and deserialize with PresetStore.  Writing back is deferred until
+    // save_debounce fires.
+    let mut preset_buffer = [0xFFu8; sonido_daisy::qspi::PRESET_SECTOR_SIZE];
+    let mut user_presets: [Option<PresetSlot>; MAX_USER_PRESETS] = [None; MAX_USER_PRESETS];
+    // On boot: init buffer and attempt to load user presets.
+    {
+        use sonido_daisy::qspi::PresetStore;
+        let mut store = PresetStore::new(&mut preset_buffer);
+        // TODO: Read from QSPI flash into preset_buffer before constructing store:
+        // qspi.read(PRESET_SECTOR_ADDR, &mut preset_buffer).unwrap();
+        let header = store.header();
+        if header.is_valid() {
+            user_presets = store.load_all();
+            defmt::info!("QSPI: loaded {} user presets", header.count);
+        } else {
+            // No valid data — initialize empty store in RAM.
+            store.init_empty();
+            defmt::info!("QSPI: no valid presets, starting empty");
+        }
+    }
+    let mut active_preset: usize = 0xFF; // 0xFF = no user preset active
+    // Auto-save debounce: counts down poll ticks (~50 Hz).  3 seconds ≈ 150 ticks.
+    let mut save_debounce: u32 = 0;
+
     // Effect-aware LED state
     let mut led_phase: f32 = 0.0; // LFO phase for modulation effects
     let mut led_envelope: f32 = 0.0; // one-pole follower for envelope effects
@@ -856,6 +992,10 @@ async fn main(spawner: embassy_executor::Spawner) {
                 left_in[i] = u24_to_f32(input[i * 2]);
                 right_in[i] = u24_to_f32(input[i * 2 + 1]);
             }
+
+            // ── Propagate tempo context to effects (once per block) ──
+            let tempo_ctx = tempo_manager.snapshot();
+            graph.set_tempo_context(&tempo_ctx);
 
             // ── Process through graph ──
             graph.process_block(&left_in, &right_in, &mut left_out, &mut right_out);
@@ -1067,6 +1207,20 @@ async fn main(spawner: embassy_executor::Spawner) {
                         EFFECT_LIST[nodes[focused_node].browse_cursor].id
                     );
                 }
+
+                // FS2 long-hold in B-mode = tap tempo.
+                // Kept separate from scroll: released after TAP_LIMIT means hold.
+                if ab_mode == AbMode::B
+                    && fs2_was_pressed
+                    && !fs2_pressed
+                    && fs2_held >= TAP_LIMIT as u32
+                {
+                    tap_tempo.tap(embassy_time::Instant::now().as_ticks());
+                    // Brief LED2 flash to confirm the tap was registered.
+                    led_blink_remaining = 1;
+                    led_blink_timer = 0;
+                    defmt::info!("tap tempo tap");
+                }
             }
 
             // Reset hold counters on release.
@@ -1078,6 +1232,49 @@ async fn main(spawner: embassy_executor::Spawner) {
             }
             fs1_was_pressed = fs1_pressed;
             fs2_was_pressed = fs2_pressed;
+
+            // ── 5b. Expression pedal update ──
+            // Update expression processor with the latest value from ControlBuffer.
+            // The hothouse control task writes CONTROLS.write_expression() from the
+            // ADC channel wired to the TRS expression jack.
+            //
+            // TODO (hothouse.rs): In hothouse_control_task, read the expression ADC
+            // channel and call: CONTROLS.write_expression(expr_raw as f32 / 65535.0);
+            expression.update(CONTROLS.read_expression());
+
+            // In morph mode: expression pedal overrides morph_t when connected.
+            if ab_mode == AbMode::Morph && expression.is_connected() {
+                morph_t = expression.value();
+            }
+
+            // ── 5c. Tap tempo: BPM → TempoManager ──
+            // (Tap is triggered in section 5 footswitch handling for FS2 long-hold
+            // in B-mode; here we flush any new BPM into the TempoManager.)
+            if let Some(bpm) = tap_tempo.bpm() {
+                tempo_manager.set_bpm(bpm);
+            }
+
+            // ── 5d. Save debounce countdown ──
+            if save_debounce > 0 {
+                save_debounce -= 1;
+                if save_debounce == 0 && ab_mode != AbMode::Morph {
+                    // Auto-save: serialize current state into RAM preset buffer.
+                    // TODO: after writing to preset_buffer, flush to QSPI flash:
+                    // qspi.sector_erase(PRESET_SECTOR_ADDR);
+                    // qspi.write(PRESET_SECTOR_ADDR, &preset_buffer);
+                    let preset = current_state_to_preset_slot(&nodes, topology);
+                    if active_preset == 0xFF {
+                        active_preset = 0;
+                    }
+                    {
+                        use sonido_daisy::qspi::PresetStore;
+                        let mut store = PresetStore::new(&mut preset_buffer);
+                        store.save(active_preset, &preset);
+                    }
+                    user_presets[active_preset] = Some(preset);
+                    defmt::info!("auto-saved preset slot {}", active_preset);
+                }
+            }
 
             // ── 6. Handle knobs (A/B modes only, not morph) ──
             if ab_mode != AbMode::Morph {
@@ -1122,6 +1319,9 @@ async fn main(spawner: embassy_executor::Spawner) {
 
                     // Update the current snapshot (A or B).
                     nodes[focused_node].update_snapshot(&ab_mode, &param_vals);
+
+                    // Any knob movement in A/B mode arms the auto-save timer.
+                    save_debounce = 150; // 3 seconds at 50 Hz poll rate
                 }
             } else {
                 // Morph mode: K6 = morph speed (0.2–10.0s). K1-K5 disabled.

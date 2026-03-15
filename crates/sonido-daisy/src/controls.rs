@@ -87,6 +87,11 @@ pub struct ControlBuffer<
     footswitches: [AtomicBool; FOOTSWITCHES],
     /// LED brightness values as f32 bits (0.0=off, 1.0=on).
     leds: [AtomicU32; LEDS],
+    /// Expression pedal value as f32 bits (0.0–1.0 normalized).
+    ///
+    /// Written by the hothouse control task at ~50 Hz; read by the audio
+    /// callback. Non-generic: there is always 0 or 1 expression input.
+    expression: AtomicU32,
 }
 
 /// Control buffer sized for the Cleveland Music Co. Hothouse pedal:
@@ -139,6 +144,7 @@ impl<const KNOBS: usize, const TOGGLES: usize, const FOOTSWITCHES: usize, const 
             toggles_changed: atomic_bool_array!(TOGGLES),
             footswitches: atomic_bool_array!(FOOTSWITCHES),
             leds: atomic_u32_array!(LEDS),
+            expression: AtomicU32::new(0),
         }
     }
 
@@ -270,6 +276,27 @@ impl<const KNOBS: usize, const TOGGLES: usize, const FOOTSWITCHES: usize, const 
     /// `true` if the footswitch is currently pressed.
     pub fn read_footswitch(&self, index: usize) -> bool {
         self.footswitches[index].load(Ordering::Relaxed)
+    }
+
+    // ── Expression pedal bridge (control task writes, audio callback reads) ─
+
+    /// Writes a normalized expression pedal value (0.0–1.0).
+    ///
+    /// Called by the hothouse control task at ~50 Hz with the pre-processed
+    /// output from [`ExpressionInput::value()`](crate::expression::ExpressionInput::value).
+    ///
+    /// # Parameters
+    ///
+    /// - `value`: Smoothed pedal position in 0.0–1.0 range.
+    pub fn write_expression(&self, value: f32) {
+        self.expression.store(value.to_bits(), Ordering::Relaxed);
+    }
+
+    /// Reads the current expression pedal value (0.0–1.0).
+    ///
+    /// Returns 0.0 when no expression pedal is connected (default after reset).
+    pub fn read_expression(&self) -> f32 {
+        f32::from_bits(self.expression.load(Ordering::Relaxed))
     }
 
     // ── LED bridge (audio writes, control task reads + drives GPIO) ───────

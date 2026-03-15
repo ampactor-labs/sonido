@@ -733,7 +733,7 @@ impl DspKernel for DelayKernel {
             return 0;
         }
         // Number of repeats to decay 60 dB: N = log(0.001) / log(feedback)
-        let repeats = (logf(0.001) / logf(feedback)).ceil() as usize;
+        let repeats = libm::ceilf(logf(0.001) / logf(feedback)) as usize;
         let tail = self.cached_delay_samples as usize * repeats;
         // Cap at 10 seconds.
         tail.min((10.0 * self.sample_rate) as usize)

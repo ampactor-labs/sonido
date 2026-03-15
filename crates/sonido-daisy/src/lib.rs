@@ -30,10 +30,14 @@
 pub mod adc;
 pub mod audio;
 pub mod controls;
+pub mod expression;
 pub mod hothouse;
 pub mod led;
+pub mod midi;
+pub mod qspi;
 pub mod rcc;
 pub mod sdram;
+pub mod tap_tempo;
 
 /// Zero-smoothing DspKernel wrapper — requires `alloc` feature.
 #[cfg(feature = "alloc")]
