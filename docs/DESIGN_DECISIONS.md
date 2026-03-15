@@ -10,7 +10,7 @@ Architecture Decision Records (ADRs) for the Sonido DSP framework. Each record c
 - [ADR-004: Index-Based Parameter System](#adr-004-index-based-parameter-system)
 - [ADR-005: Static vs. Dynamic Effect Chaining](#adr-005-static-vs-dynamic-effect-chaining)
 - [ADR-006: SmoothedParam Smoothing Strategy](#adr-006-smoothedparam-smoothing-strategy)
-- [ADR-007: Direct Form I for Biquad Filters](#adr-007-direct-form-i-for-biquad-filters)
+- [ADR-007: Transposed Direct Form II for Biquad Filters](#adr-007-transposed-direct-form-ii-for-biquad-filters)
 - [ADR-008: SVF Alongside Biquad](#adr-008-svf-alongside-biquad)
 - [ADR-009: Separate Reverb Tanks for Stereo](#adr-009-separate-reverb-tanks-for-stereo)
 - [ADR-010: f32 Throughout](#adr-010-f32-throughout)
@@ -273,29 +273,41 @@ This is derived from the one-pole lowpass time constant: after `smoothing_time_m
 
 ---
 
-## ADR-007: Direct Form I for Biquad Filters
+## ADR-007: Transposed Direct Form II for Biquad Filters
 
-**Status:** Accepted
+**Status:** Accepted (revised — originally Direct Form I, changed to TDF-II)
 **Source:** `crates/sonido-core/src/biquad.rs`
 
 ### Context
 
 Biquad filters can be implemented in several topologies: Direct Form I, Direct Form II, Transposed Direct Form II, and others. The choice affects numerical accuracy, state storage, and modulation behavior.
 
+The original implementation used Direct Form I (4 state variables). A competitive DSP assessment identified TDF-II as the standard choice for 32-bit float audio, with better coefficient quantization error and dynamic range.
+
 ### Decision
 
-Use Direct Form I with 4 state variables (`x[n-1]`, `x[n-2]`, `y[n-1]`, `y[n-2]`).
+Use Transposed Direct Form II with 2 state variables (`s1`, `s2`):
+```
+y[n] = b0 * x[n] + s1
+s1   = b1 * x[n] - a1 * y[n] + s2
+s2   = b2 * x[n] - a2 * y[n]
+```
 
 ### Rationale
 
-- **Numerical stability**: Direct Form I separates input and output delay lines, reducing the dynamic range of intermediate values. With `f32`, this matters: Direct Form II can exhibit limit-cycle oscillations (small DC offsets that never decay) when filter coefficients produce poles near the unit circle (high Q, low frequency).
-- **Modulation tolerance**: Changing biquad coefficients while the filter is active is technically incorrect for all direct forms, but Direct Form I handles it more gracefully because the delay line values remain valid across coefficient changes. Direct Form II stores internal state that depends on the current coefficients, making coefficient changes produce larger transients.
-- **Simplicity**: The implementation is 5 multiply-adds and 4 state updates, easy to verify and audit.
+- **Numerical precision**: TDF-II has the best noise performance of all direct forms in floating-point arithmetic. The state variables represent the "future contributions" of past inputs/outputs, keeping intermediate values in a tighter dynamic range than DF-I's separate delay lines.
+- **Memory**: Only 2 state variables instead of 4 (DF-I), saving 8 bytes per filter instance.
+- **Industry standard**: TDF-II is the topology used by most professional audio frameworks (JUCE, Faust, RTNeural) for exactly these reasons.
+- **Simplicity**: 3 multiply-adds for the output + 4 multiply-adds for state update. Slightly more multiplies per sample than DF-I, but fewer memory accesses.
 
 ### Tradeoffs
 
-- **Memory**: 4 state variables instead of 2 (Direct Form II). This is 8 extra bytes per filter, negligible even with many parallel filters.
-- **For clean modulation**: The SVF topology (ADR-008) is preferred over biquad when filter parameters change at audio rate.
+- **Modulation tolerance**: DF-I is slightly more graceful when coefficients change mid-stream, because its delay lines store raw input/output history. TDF-II state depends on current coefficients, so rapid coefficient changes can produce transients. This is mitigated by using the SVF (ADR-008) for audio-rate modulation.
+- **For audio-rate modulation**: The SVF topology (ADR-008) remains preferred over biquad when filter parameters change at audio rate.
+
+### Supersedes
+
+Original ADR-007 specified Direct Form I. The change to TDF-II required regeneration of all golden reference files (44 files) since filter output values changed slightly.
 
 ---
 

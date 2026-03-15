@@ -225,29 +225,31 @@ For the 48-tap downsample filter and 8-tap upsample kernel, this adds 27 samples
 
 **Source:** `crates/sonido-core/src/biquad.rs`
 
-The biquad is the workhorse of audio DSP. It implements a second-order IIR (Infinite Impulse Response) filter using the Direct Form I difference equation:
+The biquad is the workhorse of audio DSP. It implements a second-order IIR (Infinite Impulse Response) filter using the Transposed Direct Form II difference equation:
 
 ```
-y[n] = b0*x[n] + b1*x[n-1] + b2*x[n-2] - a1*y[n-1] - a2*y[n-2]
+y[n] = b0 * x[n] + s1
+s1   = b1 * x[n] - a1 * y[n] + s2
+s2   = b2 * x[n] - a2 * y[n]
 ```
 
-This requires only 5 multiplies and 4 additions per sample, plus 4 values of state (the delay lines `x[n-1]`, `x[n-2]`, `y[n-1]`, `y[n-2]`).
+This requires 7 multiply-adds per sample with only 2 state variables (`s1`, `s2`).
 
-**Direct Form I vs. Direct Form II:** Sonido uses Direct Form I (`biquad.rs:88-101`), which maintains separate input and output delay lines. While Direct Form II is more memory-efficient (2 state variables instead of 4), Direct Form I has better numerical behavior with 32-bit floats because the intermediate values have smaller dynamic range.
+**Why Transposed Direct Form II?** Sonido uses TDF-II (`biquad.rs:81-95`) because it has the best numerical properties of all direct forms in 32-bit floating-point: reduced coefficient quantization error, improved dynamic range, and fewer limit-cycle oscillations with high-Q filters. The state variables represent accumulated future contributions rather than raw delay lines, keeping intermediate values in a tighter dynamic range. This is the standard topology used by professional audio frameworks (JUCE, Faust, RTNeural). For audio-rate modulation where coefficient changes are frequent, the SVF topology is preferred (see below).
 
 ### RBJ Audio EQ Cookbook
 
 Coefficient calculation functions implement Robert Bristow-Johnson's Audio EQ Cookbook formulas, the standard reference for biquad filter design in audio. Sonido provides:
 
-- **Lowpass** (`biquad.rs:111-126`): Attenuates frequencies above the cutoff
-- **Highpass** (`biquad.rs:138-153`): Attenuates frequencies below the cutoff
-- **Bandpass** (`biquad.rs:166-181`): Passes a band around the center frequency
-- **Notch** (`biquad.rs:194-209`): Rejects a narrow band at the center frequency
-- **Peaking EQ** (`biquad.rs:224-245`): Boosts or cuts around a center frequency
+- **Lowpass** (`biquad.rs:121-139`): Attenuates frequencies above the cutoff
+- **Highpass** (`biquad.rs:152-170`): Attenuates frequencies below the cutoff
+- **Bandpass** (`biquad.rs:185-203`): Passes a band around the center frequency
+- **Notch** (`biquad.rs:216-234`): Rejects a narrow band at the center frequency
+- **Peaking EQ** (`biquad.rs:251-273`): Boosts or cuts around a center frequency
 
 All functions share the same structure: compute the intermediate variables `omega`, `cos(omega)`, `sin(omega)`, and `alpha = sin(omega) / (2*Q)`, then derive the six coefficients. The `Q` parameter controls the filter's bandwidth or resonance.
 
-The coefficient normalization (`biquad.rs:80-86`) divides all coefficients by `a0`, which is standard practice so the difference equation can omit the `a0` multiplication at runtime:
+The coefficient normalization (`biquad.rs:67-74`) divides all coefficients by `a0`, which is standard practice so the difference equation can omit the `a0` multiplication at runtime:
 
 ```rust
 let a0_inv = 1.0 / a0;

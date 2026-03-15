@@ -11,13 +11,19 @@ use libm::{cosf, sinf};
 
 /// Generic biquad filter coefficients and state.
 ///
-/// Implements the Direct Form I biquad structure:
+/// Implements the Transposed Direct Form II biquad structure:
 /// ```text
-/// y[n] = b0*x[n] + b1*x[n-1] + b2*x[n-2]
-///                - a1*y[n-1] - a2*y[n-2]
+/// y[n] = b0 * x[n] + s1
+/// s1   = b1 * x[n] - a1 * y[n] + s2
+/// s2   = b2 * x[n] - a2 * y[n]
 /// ```
 ///
-/// This is a building block for creating specific filter types.
+/// TDF-II uses only 2 state variables (vs 4 for Direct Form I), and has
+/// better numerical properties with 32-bit floats: reduced coefficient
+/// quantization error and improved dynamic range for high-Q / low-frequency
+/// filters.
+///
+/// Reference: Transposed Direct Form II, Zölzer "DAFX", Section 2.1.3.
 #[derive(Debug, Clone)]
 pub struct Biquad {
     /// Feedforward coefficients
@@ -25,17 +31,13 @@ pub struct Biquad {
     b1: f32,
     b2: f32,
 
-    /// Feedback coefficients (stored as negated for efficiency)
+    /// Feedback coefficients (normalized, stored as-is)
     a1: f32,
     a2: f32,
 
-    /// Input delay line: x[n-1], x[n-2]
-    x1: f32,
-    x2: f32,
-
-    /// Output delay line: y[n-1], y[n-2]
-    y1: f32,
-    y2: f32,
+    /// Transposed state registers
+    s1: f32,
+    s2: f32,
 }
 
 impl Biquad {
@@ -49,10 +51,8 @@ impl Biquad {
             b2: 0.0,
             a1: 0.0,
             a2: 0.0,
-            x1: 0.0,
-            x2: 0.0,
-            y1: 0.0,
-            y2: 0.0,
+            s1: 0.0,
+            s2: 0.0,
         }
     }
 
@@ -76,32 +76,28 @@ impl Biquad {
 
     /// Processes a single sample through the biquad filter.
     ///
-    /// Uses Direct Form I structure for numerical stability.
+    /// Uses Transposed Direct Form II for better 32-bit float precision.
     #[inline]
     pub fn process(&mut self, input: f32) -> f32 {
-        // Calculate output: y[n] = b0*x[n] + b1*x[n-1] + b2*x[n-2]
-        //                                   - a1*y[n-1] - a2*y[n-2]
-        let output = self.b0 * input + self.b1 * self.x1 + self.b2 * self.x2
-            - self.a1 * self.y1
-            - self.a2 * self.y2;
+        // TDF-II recurrence:
+        //   y[n] = b0 * x[n] + s1
+        //   s1   = b1 * x[n] - a1 * y[n] + s2
+        //   s2   = b2 * x[n] - a2 * y[n]
+        let output = self.b0 * input + self.s1;
 
-        // Update delay lines (flush denormals to prevent CPU slowdown in feedback)
-        self.x2 = self.x1;
-        self.x1 = flush_denormal(input);
-        self.y2 = self.y1;
-        self.y1 = flush_denormal(output);
+        // Update state registers (flush denormals to prevent CPU slowdown in feedback)
+        self.s1 = flush_denormal(self.b1 * input - self.a1 * output + self.s2);
+        self.s2 = flush_denormal(self.b2 * input - self.a2 * output);
 
         output
     }
 
-    /// Clears the filter state (delay lines).
+    /// Clears the filter state (transposed registers).
     ///
     /// Useful for resetting the filter without changing coefficients.
     pub fn clear(&mut self) {
-        self.x1 = 0.0;
-        self.x2 = 0.0;
-        self.y1 = 0.0;
-        self.y2 = 0.0;
+        self.s1 = 0.0;
+        self.s2 = 0.0;
     }
 }
 
@@ -305,10 +301,8 @@ mod tests {
         biquad.clear();
 
         // State should be zero
-        assert_eq!(biquad.x1, 0.0);
-        assert_eq!(biquad.x2, 0.0);
-        assert_eq!(biquad.y1, 0.0);
-        assert_eq!(biquad.y2, 0.0);
+        assert_eq!(biquad.s1, 0.0);
+        assert_eq!(biquad.s2, 0.0);
     }
 
     #[test]
