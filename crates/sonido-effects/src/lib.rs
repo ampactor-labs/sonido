@@ -1,6 +1,6 @@
 //! Sonido Effects - Production-ready audio effect implementations
 //!
-//! This crate provides 19 audio effects built on `sonido-core` using the
+//! This crate provides 20 audio effects built on `sonido-core` using the
 //! [`DspKernel`](sonido_core::DspKernel) + [`KernelAdapter`](sonido_core::KernelAdapter)
 //! architecture, suitable for real-time audio processing, plugins, and embedded systems.
 //!
@@ -12,6 +12,10 @@
 //! - [`LimiterKernel`] - Brickwall lookahead peak limiter with ceiling control
 //! - [`GateKernel`] - Noise gate with threshold, attack, release, and hold
 //! - [`PreampKernel`] - High-headroom gain stage with soft limiting
+//!
+//! ## Amp Simulation
+//!
+//! - [`AmpKernel`] - Full valve amp sim: dual gain stage + tone stack + sag + presence + bright
 //!
 //! ## Distortion & Saturation
 //!
@@ -36,6 +40,12 @@
 //! ## Filters
 //!
 //! - [`FilterKernel`] - Resonant state-variable filter (lowpass, highpass, bandpass)
+//!
+//! ## Pitch & Tuning
+//!
+//! - [`CabinetKernel`] - Guitar speaker cabinet IR simulator (3 factory IRs, direct convolution)
+//! - [`TunerKernel`] - Chromatic tuner with YIN pitch detection and READ_ONLY diagnostic params
+//! - [`PitchShiftKernel`] - Granular pitch shifter with Hann-windowed grain crossfade
 //!
 //! ## Utility
 //!
@@ -105,11 +115,12 @@ pub mod test_utils;
 
 // Re-export all kernel types at crate root
 pub use kernels::{
-    BitcrusherKernel, BitcrusherParams, ChorusKernel, ChorusParams, CompressorKernel,
-    CompressorParams, DelayKernel, DelayParams, DistortionKernel, DistortionParams, EqKernel,
-    EqParams, FilterKernel, FilterParams, FlangerKernel, FlangerParams, GateKernel, GateParams,
-    LimiterKernel, LimiterParams, LooperKernel, LooperParams, PhaserKernel, PhaserParams,
+    AmpKernel, AmpParams, BitcrusherKernel, BitcrusherParams, CabinetKernel, CabinetParams,
+    ChorusKernel, ChorusParams, CompressorKernel, CompressorParams, DelayKernel, DelayParams,
+    DistortionKernel, DistortionParams, EqKernel, EqParams, FilterKernel, FilterParams,
+    FlangerKernel, FlangerParams, GateKernel, GateParams, LimiterKernel, LimiterParams,
+    LooperKernel, LooperParams, PhaserKernel, PhaserParams, PitchShiftKernel, PitchShiftParams,
     PreampKernel, PreampParams, ReverbKernel, ReverbParams, RingModKernel, RingModParams,
-    StageKernel, StageParams, TapeKernel, TapeParams, TremoloKernel, TremoloParams, VibratoKernel,
-    VibratoParams, WahKernel, WahParams,
+    StageKernel, StageParams, TapeKernel, TapeParams, TremoloKernel, TremoloParams, TunerKernel,
+    TunerParams, VibratoKernel, VibratoParams, WahKernel, WahParams,
 };

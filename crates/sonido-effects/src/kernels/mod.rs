@@ -10,7 +10,9 @@
 //! Kernels are deployed via [`KernelAdapter`](sonido_core::KernelAdapter) for desktop/plugin
 //! use, or called directly on embedded targets.
 
+pub mod amp;
 pub mod bitcrusher;
+pub mod cabinet;
 pub mod chorus;
 pub mod compressor;
 pub mod delay;
@@ -22,16 +24,20 @@ pub mod gate;
 pub mod limiter;
 pub mod looper;
 pub mod phaser;
+pub mod pitch_shift;
 pub mod preamp;
 pub mod reverb;
 pub mod ringmod;
 pub mod stage;
 pub mod tape;
 pub mod tremolo;
+pub mod tuner;
 pub mod vibrato;
 pub mod wah;
 
+pub use amp::{AmpKernel, AmpParams};
 pub use bitcrusher::{BitcrusherKernel, BitcrusherParams};
+pub use cabinet::{CabinetKernel, CabinetParams};
 pub use chorus::{ChorusKernel, ChorusParams};
 pub use compressor::{CompressorKernel, CompressorParams};
 pub use delay::{DelayKernel, DelayParams};
@@ -43,11 +49,13 @@ pub use gate::{GateKernel, GateParams};
 pub use limiter::{LimiterKernel, LimiterParams};
 pub use looper::{LooperKernel, LooperParams};
 pub use phaser::{PhaserKernel, PhaserParams};
+pub use pitch_shift::{PitchShiftKernel, PitchShiftParams};
 pub use preamp::{PreampKernel, PreampParams};
 pub use reverb::{ReverbKernel, ReverbParams};
 pub use ringmod::{RingModKernel, RingModParams};
 pub use stage::{StageKernel, StageParams};
 pub use tape::{TapeKernel, TapeParams};
 pub use tremolo::{TremoloKernel, TremoloParams};
+pub use tuner::{TunerKernel, TunerParams};
 pub use vibrato::{VibratoKernel, VibratoParams};
 pub use wah::{WahKernel, WahParams};
