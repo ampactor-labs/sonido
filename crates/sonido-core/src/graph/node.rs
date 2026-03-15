@@ -138,6 +138,12 @@ pub(crate) struct NodeData {
     /// the entire output buffer after each control-rate `ProcessEffect` step.
     #[allow(dead_code)]
     pub control_output: (f32, f32),
+    /// CPU cycles consumed by the last `ProcessEffect` call for this node.
+    ///
+    /// Measured using the ARM DWT cycle counter on embedded targets.
+    /// Always `0` on non-ARM platforms (desktop, WASM). Used for per-effect
+    /// CPU profiling on the Daisy Seed.
+    pub last_cycles: u32,
 }
 
 impl NodeData {
@@ -160,6 +166,7 @@ impl NodeData {
             sidechain_source: None,
             node_rate: NodeRate::Audio,
             control_output: (0.0, 0.0),
+            last_cycles: 0,
         }
     }
 }

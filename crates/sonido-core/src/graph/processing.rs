@@ -722,6 +722,42 @@ impl ProcessingGraph {
         Some(node.peak_out)
     }
 
+    /// Returns the CPU cycle count consumed by the last `ProcessEffect` call for `id`.
+    ///
+    /// On ARM targets the count is sourced from the DWT cycle counter.
+    /// On all other platforms (desktop, WASM) this always returns `0` — profiling
+    /// is only meaningful on embedded hardware.
+    ///
+    /// Returns `None` if the node does not exist.
+    pub fn node_cycles(&self, id: NodeId) -> Option<u32> {
+        let node = self.nodes.get(id.0 as usize)?.as_ref()?;
+        Some(node.last_cycles)
+    }
+
+    /// Read the CPU cycle counter.
+    ///
+    /// Uses the ARM Cortex-M DWT `CYCCNT` register on `target_arch = "arm"`.
+    /// Returns `0` on all other platforms.
+    ///
+    /// # Safety
+    ///
+    /// On ARM the DWT peripheral must have been enabled before calling this
+    /// (typically done in startup code). Reading without enabling returns `0`
+    /// from the hardware, which is safe but produces meaningless deltas.
+    #[inline]
+    fn read_cycles() -> u32 {
+        #[cfg(target_arch = "arm")]
+        {
+            // SAFETY: DWT CYCCNT is a read-only MMIO register (0xE0001004).
+            // The read is inherently atomic on ARMv7-M and produces no side effects.
+            unsafe { core::ptr::read_volatile(0xE000_1004u32 as *const u32) }
+        }
+        #[cfg(not(target_arch = "arm"))]
+        {
+            0
+        }
+    }
+
     /// Returns the number of active (non-removed) nodes.
     pub fn node_count(&self) -> usize {
         self.nodes.iter().filter(|n| n.is_some()).count()
@@ -1630,6 +1666,7 @@ impl ProcessingGraph {
                                     }
 
                                     // Phase 2: Process through effect.
+                                    let cycles_start = Self::read_cycles();
                                     if let NodeKind::Effect(ref mut effect) = node.kind {
                                         if let Some(sc_buf) = sidechain_buf {
                                             // Copy SC data before borrowing input/output buffers.
@@ -1681,6 +1718,8 @@ impl ProcessingGraph {
                                             );
                                         }
                                     }
+                                    node.last_cycles =
+                                        Self::read_cycles().wrapping_sub(cycles_start);
 
                                     // Phase 3: Crossfade between dry and wet during fade.
                                     if bypass_fading {

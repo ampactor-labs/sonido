@@ -42,7 +42,7 @@ extern crate alloc;
 
 use alloc::boxed::Box;
 use alloc::vec::Vec;
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
 use defmt_rtt as _;
 use embassy_stm32 as hal;
@@ -783,6 +783,77 @@ static BYPASSED: AtomicBool = AtomicBool::new(false);
 
 // ── Deferred D-cache ────────────────────────────────────────────────────────
 
+// ── Watchdog ─────────────────────────────────────────────────────────────────
+
+/// Boot counter for safe-mode detection.
+///
+/// Incremented on every boot and stored in a register-backed static. After
+/// 3 consecutive watchdog resets the firmware should enter passthrough-only
+/// mode (future: read from RTC backup register for persistence across resets).
+static BOOT_COUNT: AtomicU8 = AtomicU8::new(0);
+
+/// Watchdog task — feeds the STM32H750 IWDG every 500 ms.
+///
+/// The IWDG has a ~1 second timeout (configured via prescaler + reload
+/// register). If this task is starved (e.g., the audio callback hangs or the
+/// executor deadlocks), the MCU resets after ~1 s.
+///
+/// # embassy-stm32 IWDG status
+///
+/// As of embassy-stm32 0.5 the `Iwdg` driver exists for STM32H7 targets but
+/// the peripheral is not yet mapped in the `stm32h750ib` PAC feature. Until
+/// that mapping ships, the implementation below uses a direct register write
+/// to the IWDG key register (0x4000_3000) to pet the watchdog.
+///
+/// TODO: replace raw pointer writes with `embassy_stm32::iwdg::IndependentWatchdog`
+///       once the HAL adds stm32h750ib support.
+///
+/// # Register-level fallback (current)
+///
+/// IWDG_KR  = 0x4000_3000: write 0xAAAA to reload, 0x5555 to unlock, 0xCCCC to start.
+/// IWDG_PR  = 0x4000_3004: prescaler — 0b100 = /64 → 625 Hz LSI tick
+/// IWDG_RLR = 0x4000_3008: reload value — 625 ticks ≈ 1.0 s timeout
+///
+/// LSI clock on STM32H750 is ~32 kHz. With /64 prescaler: 32000/64 = 500 Hz.
+/// Reload of 500 → ~1 s timeout. Feed every 500 ms gives 2× safety margin.
+#[embassy_executor::task]
+async fn watchdog_task() {
+    // SAFETY: Writes to IWDG MMIO registers. The IWDG is an independent
+    // peripheral — once started it cannot be stopped. Ensure this task is
+    // spawned unconditionally so it always feeds on schedule.
+    unsafe {
+        const IWDG_BASE: u32 = 0x4000_3000;
+        const IWDG_KR: *mut u32 = IWDG_BASE as *mut u32;
+        const IWDG_PR: *mut u32 = (IWDG_BASE + 0x04) as *mut u32;
+        const IWDG_RLR: *mut u32 = (IWDG_BASE + 0x08) as *mut u32;
+
+        // Unlock PR and RLR registers.
+        core::ptr::write_volatile(IWDG_KR, 0x5555);
+        // Prescaler /64 → ~500 Hz LSI tick rate.
+        core::ptr::write_volatile(IWDG_PR, 0b100);
+        // Reload = 500 → ~1.0 s timeout.
+        core::ptr::write_volatile(IWDG_RLR, 500);
+        // Start the watchdog.
+        core::ptr::write_volatile(IWDG_KR, 0xCCCC);
+    }
+
+    BOOT_COUNT.fetch_add(1, Ordering::Relaxed);
+    defmt::info!(
+        "watchdog started (boot #{})",
+        BOOT_COUNT.load(Ordering::Relaxed)
+    );
+
+    loop {
+        // Feed the watchdog — must happen within the ~1 s timeout window.
+        // SAFETY: Reload key register write; no side effects beyond resetting
+        // the IWDG down-counter.
+        unsafe {
+            core::ptr::write_volatile(0x4000_3000u32 as *mut u32, 0xAAAA);
+        }
+        embassy_time::Timer::after_millis(500).await;
+    }
+}
+
 /// Enables D-cache ~500ms after boot.
 ///
 /// D-cache must be enabled AFTER SAI DMA is running — enabling during DMA
@@ -952,6 +1023,9 @@ async fn main(spawner: embassy_executor::Spawner) {
 
     // Spawn deferred D-cache BEFORE audio setup.
     spawner.spawn(deferred_dcache()).unwrap();
+
+    // Spawn watchdog — must be alive for entire session.
+    spawner.spawn(watchdog_task()).unwrap();
 
     // ── Audio setup — start SAI as late as possible ──
     let audio_peripherals = sonido_daisy::audio::AudioPeripherals {

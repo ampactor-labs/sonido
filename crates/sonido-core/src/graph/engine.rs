@@ -524,6 +524,18 @@ impl GraphEngine {
         self.graph.node_peak(id)
     }
 
+    /// Returns the last measured CPU cycle count for the effect at the given slot.
+    ///
+    /// Counts CPU cycles consumed by the effect's `ProcessEffect` step during the
+    /// most recently processed block. On ARM (Daisy Seed) this reflects actual
+    /// DWT cycle counts. On all other platforms this always returns `0`.
+    ///
+    /// Returns `None` if `slot` is out of bounds.
+    pub fn effect_cycles(&self, slot: usize) -> Option<u32> {
+        let &node_id = self.chain_order.get(slot)?;
+        self.graph.node_cycles(node_id)
+    }
+
     // --- Control ---
 
     /// Returns the sample rate.
@@ -1298,5 +1310,51 @@ mod tests {
 
         // Wrong length — should panic
         engine.reorder_slots(&[0]);
+    }
+
+    // --- CPU cycle profiling tests ---
+
+    #[test]
+    fn test_effect_cycles_initial_zero() {
+        let engine = GraphEngine::from_chain(vec![gain(1.0)], 48000.0, 64).unwrap();
+        // Before any processing: last_cycles starts at 0.
+        assert_eq!(engine.effect_cycles(0), Some(0));
+    }
+
+    #[test]
+    fn test_effect_cycles_zero_on_desktop() {
+        // On non-ARM platforms read_cycles() always returns 0, so after
+        // processing last_cycles must remain 0 (0 - 0 = 0).
+        let mut engine = GraphEngine::from_chain(vec![gain(1.0)], 48000.0, 64).unwrap();
+        let input = vec![0.5f32; 64];
+        let mut left_out = vec![0.0f32; 64];
+        let mut right_out = vec![0.0f32; 64];
+        engine.process_block_stereo(&input, &input, &mut left_out, &mut right_out);
+        // On ARM this may be non-zero; on all CI/desktop targets it must be 0.
+        #[cfg(not(target_arch = "arm"))]
+        assert_eq!(engine.effect_cycles(0), Some(0));
+    }
+
+    #[test]
+    fn test_effect_cycles_out_of_bounds() {
+        let engine = GraphEngine::from_chain(vec![gain(1.0)], 48000.0, 64).unwrap();
+        assert_eq!(engine.effect_cycles(1), None);
+        assert_eq!(engine.effect_cycles(99), None);
+    }
+
+    #[test]
+    fn test_effect_cycles_no_panic() {
+        // Verify no panics occur across a multi-effect chain.
+        let mut engine =
+            GraphEngine::from_chain(vec![gain(1.0), gain(0.5), gain(2.0)], 48000.0, 64).unwrap();
+        let input = vec![1.0f32; 64];
+        let mut lo = vec![0.0f32; 64];
+        let mut ro = vec![0.0f32; 64];
+        engine.process_block_stereo(&input, &input, &mut lo, &mut ro);
+        // All slots must return Some (no panics, no None for valid slots).
+        assert!(engine.effect_cycles(0).is_some());
+        assert!(engine.effect_cycles(1).is_some());
+        assert!(engine.effect_cycles(2).is_some());
+        assert!(engine.effect_cycles(3).is_none());
     }
 }
