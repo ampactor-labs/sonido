@@ -927,6 +927,474 @@ sonido process in.wav --effect transient_shaper --param attack=50 --param sustai
 
 ---
 
+## amp
+
+Amp simulator — dual gain stage + interactive tone stack + sag.
+
+**Signal flow** (`crates/sonido-effects/src/kernels/amp.rs`):
+
+```text
+Input → Preamp (soft clip ADAA) → Bright (+3dB @ 2kHz) → Tone Stack (bass/mid/treble)
+      → Presence (4kHz shelf) → Sag envelope → Power Stage (asymmetric clip ADAA)
+      → Master → Output
+```
+
+Models a valve guitar amplifier using `GainStage` (soft/asymmetric clip with ADAA anti-aliasing) and `ToneStack` (interactive bass/mid/treble). Sag compresses dynamics when gain is high, simulating power supply droop.
+
+**Parameters:**
+
+| # | Name | Range | Default | Unit | Scale | Smoothing |
+|---|------|-------|---------|------|-------|-----------|
+| 0 | Gain | 0–100 | 50.0 | % | Linear | Fast |
+| 1 | Bass | 0–100 | 50.0 | % | Linear | Slow |
+| 2 | Mid | 0–100 | 50.0 | % | Linear | Slow |
+| 3 | Treble | 0–100 | 50.0 | % | Linear | Slow |
+| 4 | Presence | 0–100 | 50.0 | % | Linear | Slow |
+| 5 | Sag | 0–100 | 30.0 | % | Linear | Standard |
+| 6 | Bright | 0–1 | 0 | — | Stepped | None |
+| 7 | Master | −60–0 | −6.0 | dB | Linear | Fast |
+| 8 | Output | −60–+6 | 0.0 | dB | Linear | Fast |
+
+**CLI:**
+
+```bash
+sonido process in.wav --effect amp --param gain=70 --param bass=60 --param treble=40
+```
+
+---
+
+## cabinet
+
+Cabinet IR simulator — direct convolution with 3 factory impulse responses.
+
+**Signal flow** (`crates/sonido-effects/src/kernels/cabinet.rs`):
+
+```text
+Input → Low Cut HPF → IR Convolution (256-sample direct) → Mix → Output
+```
+
+Simulates guitar speaker cabinet frequency response via short direct time-domain convolution. Three programmatically generated IRs: Clean Combo, British Stack, Modern High-Gain.
+
+**Parameters:**
+
+| # | Name | Range | Default | Unit | Scale | Smoothing |
+|---|------|-------|---------|------|-------|-----------|
+| 0 | IR Select | 0–2 | 0 | — | Stepped | None |
+| 1 | Mix | 0–100 | 100.0 | % | Linear | Standard |
+| 2 | Low Cut | 20–500 | 80.0 | Hz | Logarithmic | Slow |
+| 3 | Output | −60–+6 | 0.0 | dB | Linear | Fast |
+
+IR labels: "Clean Combo", "British Stack", "Modern High-Gain".
+
+**CLI:**
+
+```bash
+sonido process in.wav --effect cabinet --param ir_select=1 --param low_cut=100
+```
+
+---
+
+## deesser
+
+De-esser — wideband sibilance reduction via sidechain HPF.
+
+**Signal flow** (`crates/sonido-effects/src/kernels/deesser.rs`):
+
+```text
+Input → HPF @ freq → Envelope → Gain Computer (threshold/ratio) → clamped gain → × Output
+```
+
+Uses a wideband approach: a highpass sidechain detects sibilance energy, then gain reduction is applied to the full-band signal. Avoids the "lispy" artifact of frequency-selective de-essing.
+
+**Parameters:**
+
+| # | Name | Range | Default | Unit | Scale | Smoothing |
+|---|------|-------|---------|------|-------|-----------|
+| 0 | Freq | 2000–16000 | 6000.0 | Hz | Logarithmic | Slow |
+| 1 | Threshold | −60–0 | −20.0 | dB | Linear | Standard |
+| 2 | Ratio | 1–20 | 8.0 | ratio | Linear | Standard |
+| 3 | Range | 0–24 | 12.0 | dB | Linear | Standard |
+| 4 | Output | −60–+6 | 0.0 | dB | Linear | Fast |
+
+**CLI:**
+
+```bash
+sonido process vocal.wav --effect deesser --param freq=7000 --param threshold=-18
+```
+
+---
+
+## drone
+
+Sympathetic resonance generator — harmonically-related sustaining tones.
+
+**Signal flow** (`crates/sonido-effects/src/kernels/drone.rs`):
+
+```text
+Input → Envelope Follower → gate tones → Zero-Crossing Detector
+      → 3 Sine Oscillators (root, +7st, +12st) → detune wobble
+      → Decay Envelope → add to dry → Output
+```
+
+Detects input amplitude and generates harmonically-related sine tones (root, perfect fifth, octave). Tones sustain independently after input stops, controlled by the `decay` parameter.
+
+**Parameters:**
+
+| # | Name | Range | Default | Unit | Scale | Smoothing |
+|---|------|-------|---------|------|-------|-----------|
+| 0 | Root Mix | 0–100 | 30.0 | % | Linear | Standard |
+| 1 | Fifth Mix | 0–100 | 20.0 | % | Linear | Standard |
+| 2 | Octave Mix | 0–100 | 25.0 | % | Linear | Standard |
+| 3 | Detune | 0–50 | 5.0 | cents | Linear | Slow |
+| 4 | Decay | 0.1–10 | 3.0 | s | Linear | Slow |
+| 5 | Output | −60–+6 | 0.0 | dB | Linear | Fast |
+
+**CLI:**
+
+```bash
+sonido process guitar.wav --effect drone --param root_mix=40 --param decay=5
+```
+
+---
+
+## glitch
+
+Buffer manipulation — stutter, tape-stop, reverse, shuffle.
+
+**Signal flow** (`crates/sonido-effects/src/kernels/glitch.rs`):
+
+```text
+Input → Circular Buffer → Mode Dispatch → Mix → Output
+```
+
+Captures input into a circular buffer and applies one of four destructive playback modes. Fires probabilistically at `rate` Hz, controlled by `probability`. Dry signal passes between trigger events.
+
+**Parameters:**
+
+| # | Name | Range | Default | Unit | Scale | Smoothing |
+|---|------|-------|---------|------|-------|-----------|
+| 0 | Mode | 0–3 | 0 | — | Stepped | None |
+| 1 | Rate | 1–32 | 4.0 | Hz | Linear | Slow |
+| 2 | Depth | 0–100 | 50.0 | % | Linear | Standard |
+| 3 | Probability | 0–100 | 50.0 | % | Linear | Standard |
+| 4 | Mix | 0–100 | 100.0 | % | Linear | Standard |
+| 5 | Output | −60–+6 | 0.0 | dB | Linear | Fast |
+
+Mode labels: "Stutter", "TapeStop", "Reverse", "Shuffle".
+
+**CLI:**
+
+```bash
+sonido process drums.wav --effect glitch --param mode=0 --param rate=8 --param probability=70
+```
+
+---
+
+## multiband_comp
+
+Three-band dynamics with Linkwitz-Riley crossovers.
+
+**Signal flow** (`crates/sonido-effects/src/kernels/multiband_comp.rs`):
+
+```text
+Input → LR2 Crossovers → [Low Comp] → gain makeup ─┐
+                        → [Mid Comp] → gain makeup  ├→ Sum → Output
+                        → [High Comp] → gain makeup ─┘
+```
+
+Splits signal into low, mid, and high bands via cascaded Linkwitz-Riley crossover filters. Each band is independently compressed (RMS envelope, 10ms attack, 100ms release, hard knee) with per-band makeup gain.
+
+**Parameters:**
+
+| # | Name | Range | Default | Unit | Scale | Smoothing |
+|---|------|-------|---------|------|-------|-----------|
+| 0 | Low Xover | 100–1000 | 250.0 | Hz | Logarithmic | Slow |
+| 1 | High Xover | 1000–10000 | 3000.0 | Hz | Logarithmic | Slow |
+| 2 | Low Thresh | −60–0 | −20.0 | dB | Linear | Standard |
+| 3 | Low Ratio | 1–20 | 4.0 | ratio | Linear | Standard |
+| 4 | Mid Thresh | −60–0 | −20.0 | dB | Linear | Standard |
+| 5 | Mid Ratio | 1–20 | 4.0 | ratio | Linear | Standard |
+| 6 | High Thresh | −60–0 | −20.0 | dB | Linear | Standard |
+| 7 | High Ratio | 1–20 | 4.0 | ratio | Linear | Standard |
+| 8 | Low Gain | −12–+12 | 0.0 | dB | Linear | Standard |
+| 9 | Mid Gain | −12–+12 | 0.0 | dB | Linear | Standard |
+| 10 | High Gain | −12–+12 | 0.0 | dB | Linear | Standard |
+| 11 | Output | −60–+6 | 0.0 | dB | Linear | Fast |
+
+**CLI:**
+
+```bash
+sonido process mix.wav --effect multiband_comp --param low_xover=200 --param high_xover=4000
+```
+
+---
+
+## pitch_shift
+
+Granular pitch shifter — overlapping Hann-windowed grain crossfade.
+
+**Signal flow** (`crates/sonido-effects/src/kernels/pitch_shift.rs`):
+
+```text
+Input → Circular Delay Buffer → 2/4 Grain Readers (Hann window) → Mix → Output
+```
+
+Implements pitch shifting via overlapping grains reading from a circular buffer at modified speed. Pitch ratio = `2^(semitones/12 + cents/1200)`. Quality=0 uses 2 grains, Quality=1 uses 4 grains for smoother output.
+
+**Parameters:**
+
+| # | Name | Range | Default | Unit | Scale | Smoothing |
+|---|------|-------|---------|------|-------|-----------|
+| 0 | Semitones | −24–+24 | 0.0 | st | Linear | Interpolated |
+| 1 | Cents | −50–+50 | 0.0 | cents | Linear | Interpolated |
+| 2 | Grain Size | 10–50 | 20.0 | ms | Linear | Slow |
+| 3 | Mix | 0–100 | 100.0 | % | Linear | Standard |
+| 4 | Quality | 0–1 | 0 | — | Stepped | None |
+| 5 | Output | −60–+6 | 0.0 | dB | Linear | Fast |
+
+Quality labels: "Standard", "High".
+
+**CLI:**
+
+```bash
+sonido process vocal.wav --effect pitch_shift --param semitones=-5 --param quality=1
+```
+
+---
+
+## plate_reverb
+
+Dattorro-inspired plate algorithm with input diffusion and modulated tank.
+
+**Signal flow** (`crates/sonido-effects/src/kernels/plate_reverb.rs`):
+
+```text
+Input → Bandwidth LP → Pre-delay → 4 Input Diffusers (allpass)
+      → Tank: [Mod Allpass L] ←→ [Delay + Damp] ←→ [Mod Allpass R]
+      → wet_L / wet_R (true stereo) → Mix → Output
+```
+
+Models the classic EMT 140 plate reverb: highly diffuse, colorless tail with smooth decay and natural density. True stereo output with decorrelated L/R tank taps.
+
+**Parameters:**
+
+| # | Name | Range | Default | Unit | Scale | Smoothing |
+|---|------|-------|---------|------|-------|-----------|
+| 0 | Decay | 0.1–10 | 2.0 | s | Linear | Slow |
+| 1 | Damping | 0–100 | 50.0 | % | Linear | Slow |
+| 2 | Pre-Delay | 0–100 | 20.0 | ms | Linear | Interpolated |
+| 3 | Bandwidth | 0–100 | 80.0 | % | Linear | Slow |
+| 4 | Diffusion | 0–100 | 70.0 | % | Linear | Standard |
+| 5 | Size | 0–100 | 50.0 | % | Linear | Slow |
+| 6 | Mix | 0–100 | 30.0 | % | Linear | Standard |
+| 7 | Output | −60–+6 | 0.0 | dB | Linear | Fast |
+
+**CLI:**
+
+```bash
+sonido process vocal.wav --effect plate_reverb --param decay=3 --param diffusion=80 --param mix=25
+```
+
+---
+
+## shelving_eq
+
+Low shelf + high shelf with output gain.
+
+**Signal flow** (`crates/sonido-effects/src/kernels/shelving_eq.rs`):
+
+```text
+Input → Low Shelf (RBJ biquad) → High Shelf (RBJ biquad) → Output
+```
+
+Dual-mono topology with two RBJ Audio EQ Cookbook shelving filters. Low shelf boosts/cuts below `low_freq`, high shelf boosts/cuts above `high_freq`. Slope S=1.
+
+**Parameters:**
+
+| # | Name | Range | Default | Unit | Scale | Smoothing |
+|---|------|-------|---------|------|-------|-----------|
+| 0 | Low Freq | 20–500 | 100.0 | Hz | Logarithmic | Slow |
+| 1 | Low Gain | −15–+15 | 0.0 | dB | Linear | Slow |
+| 2 | High Freq | 1000–20000 | 8000.0 | Hz | Logarithmic | Slow |
+| 3 | High Gain | −15–+15 | 0.0 | dB | Linear | Slow |
+| 4 | Output | −60–+6 | 0.0 | dB | Linear | Fast |
+
+**CLI:**
+
+```bash
+sonido process mix.wav --effect shelving_eq --param low_gain=3 --param high_gain=-2
+```
+
+---
+
+## spring_reverb
+
+Allpass dispersion chain — models physical spring reverb character.
+
+**Signal flow** (`crates/sonido-effects/src/kernels/spring_reverb.rs`):
+
+```text
+Input → Drip (soft clip) → 6 Dispersion Allpasses (tension-tuned)
+      → Feedback Delay + One-Pole Damp → Mix → Output
+```
+
+Models the distinctive boingy, splashy character of a physical spring reverb unit. References: Välimäki et al., "Physics-Based Model of a Spring Reverb Unit", DAFx-06 (2006).
+
+**Parameters:**
+
+| # | Name | Range | Default | Unit | Scale | Smoothing |
+|---|------|-------|---------|------|-------|-----------|
+| 0 | Decay | 0.5–5 | 2.0 | s | Linear | Slow |
+| 1 | Tension | 0–100 | 50.0 | % | Linear | Standard |
+| 2 | Drip | 0–100 | 40.0 | % | Linear | Standard |
+| 3 | Damping | 0–100 | 50.0 | % | Linear | Slow |
+| 4 | Mix | 0–100 | 30.0 | % | Linear | Standard |
+| 5 | Output | −60–+6 | 0.0 | dB | Linear | Fast |
+
+**CLI:**
+
+```bash
+sonido process guitar.wav --effect spring_reverb --param tension=70 --param drip=50
+```
+
+---
+
+## stereo_widener
+
+M/S width control, Haas delay, and bass mono.
+
+**Signal flow** (`crates/sonido-effects/src/kernels/stereo_widener.rs`):
+
+```text
+Input L/R → M/S Encode → Width Scale → M/S Decode
+          → Haas Delay (right channel) → Bass Mono (LR4 crossover) → Output
+```
+
+Uses mid-side processing for width scaling, a short interpolated delay on the right channel for spatial depth (Haas effect), and an LR4 Linkwitz-Riley crossover to mono-sum low frequencies below the bass mono cutoff.
+
+**Parameters:**
+
+| # | Name | Range | Default | Unit | Scale | Smoothing |
+|---|------|-------|---------|------|-------|-----------|
+| 0 | Width | 0–200 | 100.0 | % | Linear | Standard |
+| 1 | Haas Delay | 0–30 | 0.0 | ms | Linear | Interpolated |
+| 2 | Bass Mono | 0–500 | 0.0 | Hz | Logarithmic | Slow |
+| 3 | Output | −60–+6 | 0.0 | dB | Linear | Fast |
+
+- **Width 100%**: unchanged stereo field. **Width 0%**: mono. **Width 200%**: exaggerated stereo (sides doubled).
+- **Bass Mono > 0**: mono-sums frequencies below the cutoff to prevent phase issues on large speakers.
+
+**CLI:**
+
+```bash
+sonido process mix.wav --effect stereo_widener --param width=130 --param bass_mono=120
+```
+
+---
+
+## texture
+
+Granular ambient pad from input.
+
+**Signal flow** (`crates/sonido-effects/src/kernels/texture.rs`):
+
+```text
+Input → Circular Capture Buffer → Up to 20 Grain Readers
+        (random start, pitch variation, Hann envelope) → Sum → Mix → Output
+```
+
+Captures input into a circular buffer and plays back multiple overlapping grains with random start positions and pitch variation. The result is a smeared, ambient texture layer blended with the dry signal.
+
+**Parameters:**
+
+| # | Name | Range | Default | Unit | Scale | Smoothing |
+|---|------|-------|---------|------|-------|-----------|
+| 0 | Density | 1–20 | 8.0 | grains/s | Linear | Slow |
+| 1 | Size | 50–500 | 200.0 | ms | Linear | Slow |
+| 2 | Scatter | 0–100 | 50.0 | % | Linear | Standard |
+| 3 | Pitch Var | 0–24 | 2.0 | st | Linear | Slow |
+| 4 | Mix | 0–100 | 50.0 | % | Linear | Standard |
+| 5 | Output | −60–+6 | 0.0 | dB | Linear | Fast |
+
+**CLI:**
+
+```bash
+sonido process ambient.wav --effect texture --param density=12 --param size=300 --param pitch_var=5
+```
+
+---
+
+## time_stretch
+
+Independent pitch and time control via granular synthesis.
+
+**Signal flow** (`crates/sonido-effects/src/kernels/time_stretch.rs`):
+
+```text
+Input → Circular Buffer → 2 Grain Readers (Hann crossfade)
+        Write speed: time_ratio | Read speed: time_ratio × pitch_ratio → Output
+```
+
+Decouples time and pitch using independently controlled granular read heads. References: Zölzer, "DAFX: Digital Audio Effects" (2nd ed.), Chapter 7.
+
+**Parameters:**
+
+| # | Name | Range | Default | Unit | Scale | Smoothing |
+|---|------|-------|---------|------|-------|-----------|
+| 0 | Time Ratio | 0.25–4.0 | 1.0 | ratio | Linear | Interpolated |
+| 1 | Pitch Ratio | 0.25–4.0 | 1.0 | ratio | Linear | Interpolated |
+| 2 | Grain Size | 10–100 | 50.0 | ms | Linear | Slow |
+| 3 | Density | 0–100 | 50.0 | % | Linear | Standard |
+| 4 | Randomize | 0–100 | 20.0 | % | Linear | Standard |
+| 5 | Freeze | 0–1 | 0 | — | Stepped | None |
+| 6 | Sync | 0–1 | 0 | — | Stepped | None |
+| 7 | Output | −60–+6 | 0.0 | dB | Linear | Fast |
+
+- **Time Ratio < 1.0**: slower playback. **> 1.0**: faster.
+- **Pitch Ratio**: independent of time. 0.5 = octave down, 2.0 = octave up.
+- **Freeze**: holds the current buffer contents, stops writing.
+
+**CLI:**
+
+```bash
+sonido process vocal.wav --effect time_stretch --param time_ratio=0.75 --param pitch_ratio=1.0
+```
+
+---
+
+## tuner
+
+Chromatic tuner — YIN pitch detection with diagnostic outputs.
+
+**Signal flow** (`crates/sonido-effects/src/kernels/tuner.rs`):
+
+```text
+Input → [1024-sample buffer] → YIN Pitch Detection → Detected Hz / Cents (READ_ONLY)
+      → Mute switch → Output
+```
+
+Accumulates input into a 1024-sample buffer, runs YIN pitch detection when full, and exposes detected frequency and cents deviation as READ_ONLY parameters. Audio passes through with zero algorithmic latency. Reference: de Cheveigné & Kawahara, "YIN, a fundamental frequency estimator", JASA 111(4), 2002.
+
+**Parameters:**
+
+| # | Name | Range | Default | Unit | Scale | Smoothing | Flags |
+|---|------|-------|---------|------|-------|-----------|-------|
+| 0 | Reference | 415–465 | 440.0 | Hz | Linear | None | — |
+| 1 | Mute | 0–1 | 0 | — | Stepped | None | — |
+| 2 | Output | −60–+6 | 0.0 | dB | Linear | Fast | — |
+| 3 | Detected Hz | 0–5000 | 0.0 | Hz | Linear | None | READ_ONLY |
+| 4 | Cents | −50–+50 | 0.0 | cents | Linear | None | READ_ONLY |
+
+Mute labels: "Off", "On". Detected Hz and Cents are diagnostic readbacks — not knob-writable.
+
+**CLI:**
+
+```bash
+sonido process guitar.wav --effect tuner --param reference=442
+```
+
+---
+
 ## Effect Chains
 
 ### Chain Syntax
