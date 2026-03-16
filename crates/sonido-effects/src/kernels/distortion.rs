@@ -2,7 +2,7 @@
 //!
 //! `DistortionKernel` owns DSP state (filters, ADAA processors). Parameters
 //! are received via `&DistortionParams` each sample. Deployed via
-//! [`KernelAdapter`](sonido_core::KernelAdapter) for desktop/plugin, or called
+//! [`Adapter`](sonido_core::kernel::Adapter) for desktop/plugin, or called
 //! directly on embedded targets.
 //!
 //! # Signal Flow
@@ -17,7 +17,7 @@
 //!
 //! ```rust,ignore
 //! // Desktop / Plugin (via adapter — handles smoothing automatically)
-//! let adapter = KernelAdapter::new(DistortionKernel::new(48000.0), 48000.0);
+//! let adapter = Adapter::new(DistortionKernel::new(48000.0), 48000.0);
 //! let mut effect: Box<dyn Effect> = Box::new(adapter);
 //!
 //! // Embedded / Daisy Seed (direct — no smoothing, ADCs are hardware-filtered)
@@ -399,7 +399,7 @@ impl DspKernel for DistortionKernel {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sonido_core::kernel::KernelAdapter;
+    use sonido_core::kernel::Adapter;
     use sonido_core::{Effect, ParameterInfo};
 
     #[test]
@@ -550,7 +550,7 @@ mod tests {
         // Boundary checks: 0.0 → min, 1.0 → max
         let p_min = DistortionParams::from_knobs(0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
         assert!((p_min.drive_db - 0.0).abs() < 0.01, "drive min");
-        assert!((p_min.output_db - (-20.0)).abs() < 0.01, "output min");
+        assert!((p_min.output_db - (-6.0)).abs() < 0.01, "output min"); // output range [-6, 6]
 
         let p_max = DistortionParams::from_knobs(1.0, 1.0, 1.0, 1.0, 1.0, 1.0);
         assert!((p_max.drive_db - 40.0).abs() < 0.01, "drive max");
@@ -567,7 +567,7 @@ mod tests {
     #[test]
     fn adapter_wraps_kernel_as_effect() {
         let kernel = DistortionKernel::new(48000.0);
-        let mut adapter = KernelAdapter::new(kernel, 48000.0);
+        let mut adapter = Adapter::new(kernel, 48000.0);
 
         // Should work as a standard Effect
         adapter.reset();
@@ -579,7 +579,7 @@ mod tests {
     #[test]
     fn adapter_exposes_correct_params() {
         let kernel = DistortionKernel::new(48000.0);
-        let adapter = KernelAdapter::new(kernel, 48000.0);
+        let adapter = Adapter::new(kernel, 48000.0);
 
         assert_eq!(adapter.param_count(), 6);
         assert_eq!(adapter.param_info(0).unwrap().name, "Drive");
@@ -591,10 +591,10 @@ mod tests {
     #[test]
     fn adapter_set_get_roundtrip() {
         let kernel = DistortionKernel::new(48000.0);
-        let mut adapter = KernelAdapter::new(kernel, 48000.0);
+        let mut adapter = Adapter::new(kernel, 48000.0);
 
-        adapter.set_param(0, 25.0); // Drive = 25 dB
-        assert!((adapter.get_param(0) - 25.0).abs() < 0.01);
+        adapter.set_param(0, 12.0); // Drive = 12 dB
+        assert!((adapter.get_param(0) - 12.0).abs() < 0.01);
 
         adapter.set_param(4, 50.0); // Mix = 50%
         assert!((adapter.get_param(4) - 50.0).abs() < 0.01);
@@ -606,7 +606,7 @@ mod tests {
     fn params_are_presets() {
         // The params struct IS the preset — clone to save, restore to load
         let original = DistortionParams {
-            drive_db: 25.0,
+            drive_db: 14.0,
             tone_db: 3.0,
             output_db: -6.0,
             shape: 2.0,
@@ -619,11 +619,11 @@ mod tests {
 
         // "Load" into adapter
         let kernel = DistortionKernel::new(48000.0);
-        let mut adapter = KernelAdapter::new(kernel, 48000.0);
+        let mut adapter = Adapter::new(kernel, 48000.0);
         adapter.load_snapshot(&saved);
         adapter.reset(); // snap for instant recall
 
-        assert!((adapter.get_param(0) - 25.0).abs() < 0.01);
+        assert!((adapter.get_param(0) - 14.0).abs() < 0.01);
         assert!((adapter.get_param(4) - 80.0).abs() < 0.01);
     }
 
@@ -665,14 +665,14 @@ mod tests {
     #[test]
     fn params_snapshot_roundtrip_through_adapter() {
         let kernel = DistortionKernel::new(48000.0);
-        let mut adapter = KernelAdapter::new(kernel, 48000.0);
+        let mut adapter = Adapter::new(kernel, 48000.0);
 
-        adapter.set_param(0, 20.0);
+        adapter.set_param(0, 15.0);
         adapter.set_param(1, -5.0);
         adapter.set_param(4, 75.0);
 
         let saved = adapter.snapshot();
-        assert!((saved.drive_db - 20.0).abs() < 0.01);
+        assert!((saved.drive_db - 15.0).abs() < 0.01);
         assert!((saved.tone_db - (-5.0)).abs() < 0.01);
         assert!((saved.mix_pct - 75.0).abs() < 0.01);
     }

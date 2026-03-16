@@ -7,35 +7,18 @@
 //! All tests use [`EffectRegistry`] to iterate effects programmatically so
 //! the suite stays current as new effects are registered.
 
-use sonido_core::Effect;
-use sonido_registry::{EffectRegistry, EffectWithParams};
+mod helpers;
+
+use helpers::{all_ids, sine_440};
+use sonido_registry::EffectRegistry;
 
 const SAMPLE_RATE: f32 = 48000.0;
 const BLOCK_SIZE: usize = 4800; // 100 ms at 48 kHz
 const DC_CHECK_SAMPLES: usize = 4096;
 
-/// Generate a 440 Hz sine wave of the given length.
-fn sine_440(len: usize) -> Vec<f32> {
-    (0..len)
-        .map(|i| {
-            let t = i as f32 / SAMPLE_RATE;
-            (2.0 * std::f32::consts::PI * 440.0 * t).sin() * 0.5
-        })
-        .collect()
-}
-
 /// Generate a silence block.
 fn silence(len: usize) -> Vec<f32> {
     vec![0.0_f32; len]
-}
-
-/// All effect IDs currently registered.
-fn all_ids() -> Vec<String> {
-    EffectRegistry::new()
-        .all_effects()
-        .into_iter()
-        .map(|d| d.id.to_string())
-        .collect()
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -99,12 +82,12 @@ fn all_effects_finite_random_params() {
         let count = effect.effect_param_count();
 
         for idx in 0..count {
-            if let Some(desc) = effect.effect_param_info(idx) {
-                if !desc.flags.contains(sonido_core::ParamFlags::READ_ONLY) {
-                    let t = next_rand();
-                    let value = desc.min + t * (desc.max - desc.min);
-                    effect.effect_set_param(idx, value);
-                }
+            if let Some(desc) = effect.effect_param_info(idx)
+                && !desc.flags.contains(sonido_core::ParamFlags::READ_ONLY)
+            {
+                let t = next_rand();
+                let value = desc.min + t * (desc.max - desc.min);
+                effect.effect_set_param(idx, value);
             }
         }
 
@@ -253,7 +236,7 @@ fn all_effects_handle_sample_rate_change() {
 
 /// Setting a parameter beyond its declared bounds should not cause non-finite output.
 ///
-/// Verifies that the KernelAdapter's auto-clamp (from `impl_params!`) prevents
+/// Verifies that the `Adapter`'s auto-clamp (from `impl_params!`) prevents
 /// out-of-range values from reaching DSP internals.
 #[test]
 fn all_params_clamp_to_bounds() {
@@ -267,11 +250,11 @@ fn all_params_clamp_to_bounds() {
 
         // Set all params to extreme out-of-range values
         for idx in 0..count {
-            if let Some(desc) = effect.effect_param_info(idx) {
-                if !desc.flags.contains(sonido_core::ParamFlags::READ_ONLY) {
-                    // Set to well beyond max — adapter should clamp
-                    effect.effect_set_param(idx, desc.max * 10.0 + 1000.0);
-                }
+            if let Some(desc) = effect.effect_param_info(idx)
+                && !desc.flags.contains(sonido_core::ParamFlags::READ_ONLY)
+            {
+                // Set to well beyond max — adapter should clamp
+                effect.effect_set_param(idx, desc.max * 10.0 + 1000.0);
             }
         }
 
@@ -289,10 +272,10 @@ fn all_params_clamp_to_bounds() {
         // Now set to below min
         let mut effect = registry.create(&id, SAMPLE_RATE).unwrap();
         for idx in 0..count {
-            if let Some(desc) = effect.effect_param_info(idx) {
-                if !desc.flags.contains(sonido_core::ParamFlags::READ_ONLY) {
-                    effect.effect_set_param(idx, desc.min - 1000.0);
-                }
+            if let Some(desc) = effect.effect_param_info(idx)
+                && !desc.flags.contains(sonido_core::ParamFlags::READ_ONLY)
+            {
+                effect.effect_set_param(idx, desc.min - 1000.0);
             }
         }
 

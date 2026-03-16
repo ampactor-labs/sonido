@@ -33,6 +33,7 @@ Architecture Decision Records (ADRs) for the Sonido DSP framework. Each record c
 - [ADR-027: GraphEngine as Universal Chain Host](#adr-027-graphengine-as-universal-chain-host)
 - [ADR-028: Kernel Architecture — DSP/Parameter Separation](#adr-028-kernel-architecture--dspparameter-separation)
 - [ADR-029: Hardware Serves the Kernel — Embedded Design Principle](#adr-029-hardware-serves-the-kernel--embedded-design-principle)
+- [ADR-030: Noon Mapping Belongs in the Embedded Layer](#adr-030-noon-mapping-belongs-in-the-embedded-layer)
 
 ---
 
@@ -1184,7 +1185,7 @@ Introduce a three-layer kernel architecture:
 
 2. **`KernelParams` trait** — Typed parameter struct. Fields in user-facing units (dB, %, ms, index). Provides `descriptor()`, `smoothing()`, `get()`/`set()`, plus `lerp()` (preset morphing), `from_normalized()` (CLAP bridge), `from_knobs()` (embedded ADC bridge).
 
-3. **`KernelAdapter<K>`** — Platform bridge. Owns per-parameter `SmoothedParam` instances. Implements `Effect + ParameterInfo` automatically. The **only** `Effect` implementor for audio effects.
+3. **`Adapter<K, SmoothedPolicy>`** — Platform bridge. Owns per-parameter `SmoothedParam` instances. Implements `Effect + ParameterInfo` automatically. The **only** `Effect` implementor for audio effects.
 
 ### Consequences
 
@@ -1192,7 +1193,7 @@ Introduce a three-layer kernel architecture:
 - Identical DSP binary on x86_64 and ARM Cortex-M7 — kernel code is platform-independent
 - One parameter definition serves all platforms (GUI, plugin, preset, embedded)
 - Preset morphing via `KernelParams::lerp()` falls out for free
-- `impl_params!` macro still used by `KernelAdapter` for `ParameterInfo` — `KernelParams` provides the underlying data
+- `impl_params!` macro still used by `Adapter` for `ParameterInfo` — `KernelParams` provides the underlying data
 - Adapter is invisible to consumers — `Box<dyn EffectWithParams + Send>` works unchanged
 
 **Negative:**
@@ -1204,14 +1205,14 @@ Introduce a three-layer kernel architecture:
 - Kernels must NOT contain `SmoothedParam`, atomics, `Arc`, or platform types
 - `ParamId` and `string_id` values must match classic effects exactly (plugin API contract)
 - Params store user-facing units; kernels convert internally
-- After migration: classic effect structs deleted, `impl_params!` retained for `KernelAdapter` ParameterInfo bridging
+- After migration: classic effect structs deleted, `impl_params!` retained for `Adapter` ParameterInfo bridging
 
 ### References
 
 - `crates/sonido-core/src/kernel/traits.rs` — `DspKernel`, `KernelParams`, `SmoothingStyle`
-- `crates/sonido-core/src/kernel/adapter.rs` — `KernelAdapter`
+- `crates/sonido-core/src/kernel/adapter.rs` — `Adapter<K, P>`
 - `crates/sonido-effects/src/kernels/` — 19 kernel implementations (one per effect)
-- `crates/sonido-registry/src/lib.rs` — registry creates `KernelAdapter<XxxKernel>`
+- `crates/sonido-registry/src/lib.rs` — registry creates `Adapter<XxxKernel, SmoothedPolicy>`
 - `docs/KERNEL_ARCHITECTURE.md` — full architecture reference, patterns, and new-effect checklist
 
 ---
@@ -1238,11 +1239,11 @@ This is not a statement about dependency direction (that's already enforced by t
 
 2. **Audio format conversion at the hardware boundary, never inside kernels.** SAI delivers `u32` (24-bit left-justified in 32 bits). Convert to `f32` before calling `DspKernel::process_stereo(left: f32, right: f32)`. The kernel always sees normalized float audio.
 
-3. **Sample rate is a runtime parameter, never hardcoded.** Hardware determines the actual rate; `DspKernel::set_sample_rate()` and `KernelAdapter::new(kernel, sr)` accept it at init. Hardcoding 48000 anywhere is a bug.
+3. **Sample rate is a runtime parameter, never hardcoded.** Hardware determines the actual rate; `DspKernel::set_sample_rate()` and `Adapter::new(kernel, sr)` accept it at init. Hardcoding 48000 anywhere is a bug.
 
 4. **No HAL types in kernel code.** `DspKernel`, `KernelParams`, and all DSP logic are `no_std`, HAL-free. Firmware crates import kernel crates; kernel crates never import firmware crates.
 
-5. **Smoothing belongs to the platform layer.** `KernelAdapter` owns `SmoothedParam`. Direct kernel use on embedded skips smoothing — ADC values are hardware RC-filtered. Duplicating software smoothing on hardware is waste.
+5. **Smoothing belongs to the platform layer.** `Adapter<K, SmoothedPolicy>` owns `SmoothedParam`. Direct kernel use on embedded skips smoothing — ADC values are hardware RC-filtered. Duplicating software smoothing on hardware is waste.
 
 6. **Hardware diagnostics drive kernel validation.** The tier system (blinky → passthrough → single_effect → audio_input_diag → tone_out) is structured to validate kernel integration at each layer, not just hardware function.
 
@@ -1267,3 +1268,65 @@ The kernel architecture (ADR-028) was designed so the same kernel runs identical
 - `crates/sonido-daisy/examples/single_effect.rs` — reference `from_knobs()` usage on hardware
 - `docs/EMBEDDED.md` — Hardware Context governing principle, tier validation system
 - ADR-028 — Kernel Architecture (the system this principle protects)
+
+## ADR-030: Noon Mapping Belongs in the Embedded Layer
+
+**Status:** Accepted
+
+**Date:** 2026-03-15
+
+### Context
+
+The Hothouse 6-knob pedal has a "noon = sweet spot" convention: when all knobs are at their physical center (12 o'clock), the effect should sound musically useful. An initial implementation achieved this by calling `.noon_aligned()` on `ParamDescriptor` builders, which narrowed descriptor ranges so the arithmetic midpoint equaled the default. This worked for embedded but had an unintended consequence: plugin hosts, GUIs, and all other consumers also saw narrowed ranges, preventing access to the full parameter space.
+
+Research into hardware pedals (Boss DS-1, Rat, TS-808, Klon, MXR Phase 90, Cry Baby, etc.) and Ableton Live 12 confirmed that the "noon = sweet spot" convention is about **tone**, not about narrowing ranges. Commercial hardware achieves this through potentiometer tapers and circuit design — the parameter ranges remain full; only the mapping curve is biased.
+
+### Decision
+
+**Noon mapping is an embedded concern handled by `adc_to_param_biased()` in `sonido-daisy`, not by narrowing descriptor ranges in `sonido-core`.**
+
+`ParamDescriptor` defines the full musical range for every consumer. The embedded layer biases the ADC-to-parameter curve so that knob center maps to a per-effect "sweet spot" value (which equals the descriptor default — effect authors already set musically correct defaults).
+
+### Architecture
+
+```
+ParamDescriptor (sonido-core)          │  Embedded (sonido-daisy)
+Full range: drive [0,40], default=8    │  adc_to_param_biased(desc, noon=8, adc)
+Unchanged for all consumers            │  ADC 0.0→0, ADC 0.5→8, ADC 1.0→40
+```
+
+`adc_to_param_biased(desc, noon, normalized)` splits the knob travel at center:
+- `[0.0, 0.5]` maps `desc.min` → `noon`
+- `[0.5, 1.0]` maps `noon` → `desc.max`
+
+Both halves respect the descriptor's `ParamScale` (Linear, Logarithmic, Power) for musically consistent response curves.
+
+Per-effect noon values are centralized in `noon_presets::noon_value(effect_id, param_idx)`.
+
+### Rationale
+
+1. **Layer separation:** Descriptor ranges are a property of the DSP algorithm. Knob mapping is a property of the hardware interface. Mixing them violates ADR-029 ("hardware serves the kernel").
+2. **Full range for all consumers:** Plugin hosts (CLAP/VST), GUIs (egui), and CLI tools should expose the full parameter range. Only embedded knobs need biased mapping.
+3. **Hardware precedent:** No commercial pedal narrows its circuit's range to achieve noon alignment. They use potentiometer tapers (audio/log/reverse-log) and circuit topology.
+4. **Composability:** `adc_to_param_biased()` composes with any descriptor — it reads scale, min, max, and noon externally. No descriptor modification needed.
+
+### Alternatives Considered
+
+- **`noon_aligned()` on descriptors** (reverted): Narrowed ranges globally, making full parameter ranges inaccessible to non-embedded consumers.
+- **Custom `from_knobs()` per effect for embedded**: More code, harder to maintain, no centralized noon table.
+- **Potentiometer taper emulation**: More complex, hardware-specific concept that doesn't translate well to software abstractions.
+
+### Consequences
+
+- `ParamDescriptor` defines the full musical range — effect authors don't need to think about hardware mapping.
+- Adding noon alignment for a new effect requires one line in `noon_presets.rs`.
+- The `noon_aligned()` builder method remains available for ad-hoc use but is not applied to production descriptors.
+- `adc_to_param()` (linear mapping) remains available for effects that don't need biased mapping.
+
+### References
+
+- `crates/sonido-daisy/src/param_map.rs` — `adc_to_param_biased()`, `interpolate_scaled()`
+- `crates/sonido-daisy/src/noon_presets.rs` — per-effect sweet-spot values
+- `crates/sonido-core/src/param_info.rs` — `ParamDescriptor::noon_aligned()` (kept but not applied)
+- ADR-028 — Kernel Architecture (parameter ownership)
+- ADR-029 — Hardware Serves the Kernel (design priority)

@@ -13,12 +13,12 @@
 //!
 //! ```rust,ignore
 //! use sonido_core::graph::GraphEngine;
-//! use sonido_core::KernelAdapter;
+//! use sonido_core::Adapter;
 //! use sonido_effects::kernels::{DistortionKernel, ReverbKernel};
 //!
 //! let mut engine = GraphEngine::new_linear(48000.0, 256);
-//! let dist = engine.add_effect(Box::new(KernelAdapter::new(DistortionKernel::new(48000.0), 48000.0)));
-//! let reverb = engine.add_effect(Box::new(KernelAdapter::new(ReverbKernel::new(48000.0), 48000.0)));
+//! let dist = engine.add_effect(Box::new(Adapter::new(DistortionKernel::new(48000.0), 48000.0)));
+//! let reverb = engine.add_effect(Box::new(Adapter::new(ReverbKernel::new(48000.0), 48000.0)));
 //!
 //! engine.process_block_stereo(&left_in, &right_in, &mut left_out, &mut right_out);
 //! ```
@@ -1356,5 +1356,148 @@ mod tests {
         assert!(engine.effect_cycles(1).is_some());
         assert!(engine.effect_cycles(2).is_some());
         assert!(engine.effect_cycles(3).is_none());
+    }
+
+    // ── Coverage gap tests (added 2026-03-15) ──
+
+    /// Let bypass crossfade fully settle.
+    fn settle(engine: &mut GraphEngine) {
+        let bs = engine.graph().block_size();
+        let n = (2880 / bs) + 1;
+        let inp = vec![0.0f32; bs];
+        let mut lo = vec![0.0f32; bs];
+        let mut ro = vec![0.0f32; bs];
+        for _ in 0..n {
+            engine.process_block_stereo(&inp, &inp, &mut lo, &mut ro);
+        }
+    }
+
+    #[test]
+    fn test_new_linear_sample_rate_preserved() {
+        let engine = GraphEngine::new_linear(44100.0, 128);
+        assert_eq!(engine.sample_rate(), 44100.0);
+    }
+
+    #[test]
+    fn test_from_chain_empty_is_passthrough() {
+        let mut engine = GraphEngine::from_chain(vec![], 48000.0, 4).unwrap();
+        assert_eq!(engine.slot_count(), 0);
+        let inp = [1.0f32, 2.0, 3.0, 4.0];
+        let mut lo = [0.0f32; 4];
+        let mut ro = [0.0f32; 4];
+        engine.process_block_stereo(&inp, &inp, &mut lo, &mut ro);
+        assert_eq!(lo, inp, "empty chain must be a passthrough");
+    }
+
+    #[test]
+    fn test_from_chain_slot_count_matches_effect_count() {
+        let engine = GraphEngine::from_chain(vec![gain(1.0), gain(2.0)], 48000.0, 64).unwrap();
+        assert_eq!(engine.slot_count(), 2);
+        assert_eq!(engine.effect_count(), 2);
+    }
+
+    #[test]
+    fn test_set_sample_rate_updates_getter() {
+        let mut engine = GraphEngine::new_linear(48000.0, 256);
+        engine.set_sample_rate(44100.0);
+        assert_eq!(engine.sample_rate(), 44100.0);
+    }
+
+    #[test]
+    fn test_reset_does_not_panic_on_empty_chain() {
+        let mut engine = GraphEngine::new_linear(48000.0, 256);
+        engine.reset();
+    }
+
+    #[test]
+    fn test_reset_does_not_panic_with_effects() {
+        let mut engine = GraphEngine::from_chain(vec![gain(2.0), gain(0.5)], 48000.0, 4).unwrap();
+        engine.reset();
+        let inp = [1.0f32; 4];
+        let mut lo = [0.0f32; 4];
+        let mut ro = [0.0f32; 4];
+        engine.process_block_stereo(&inp, &inp, &mut lo, &mut ro);
+        assert!(lo.iter().all(|s| s.is_finite()));
+    }
+
+    #[test]
+    fn test_remove_effect_stale_node_returns_none() {
+        let mut engine = GraphEngine::new_linear(48000.0, 256);
+        let node = engine.add_effect(gain(1.0));
+        engine.remove_effect(node);
+        let result = engine.remove_effect(node);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_effect_id_at_returns_correct_id() {
+        let mut engine = GraphEngine::new_linear(48000.0, 256);
+        engine.add_effect_named(gain(1.0), "alpha");
+        engine.add_effect_named(gain(2.0), "beta");
+        assert_eq!(engine.effect_id_at(0), Some("alpha"));
+        assert_eq!(engine.effect_id_at(1), Some("beta"));
+        assert_eq!(engine.effect_id_at(2), None);
+    }
+
+    #[test]
+    fn test_reorder_preserves_effect_ids() {
+        let mut engine = GraphEngine::new_linear(48000.0, 256);
+        engine.add_effect_named(gain(1.0), "first");
+        engine.add_effect_named(gain(2.0), "second");
+        engine.add_effect_named(gain(3.0), "third");
+        engine.reorder_slots(&[2, 0, 1]);
+        assert_eq!(engine.effect_ids(), &["third", "first", "second"]);
+    }
+
+    #[test]
+    fn test_bypass_passes_dry_signal_through() {
+        let mut engine = GraphEngine::from_chain(vec![gain(10.0)], 48000.0, 256).unwrap();
+        engine.set_bypass_at(0, true);
+        settle(&mut engine);
+
+        let inp: Vec<f32> = (1..=256).map(|i| i as f32 * 0.001).collect();
+        let mut lo = vec![0.0f32; 256];
+        let mut ro = vec![0.0f32; 256];
+        engine.process_block_stereo(&inp, &inp, &mut lo, &mut ro);
+
+        for (i, (&exp, &got)) in inp.iter().zip(lo.iter()).enumerate() {
+            assert!(
+                (got - exp).abs() < 1e-4,
+                "bypass left[{i}]: expected {exp:.4}, got {got:.4}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_snapshot_empty_chain() {
+        let engine = GraphEngine::new_linear(48000.0, 256);
+        let snap = engine.snapshot();
+        assert!(snap.entries.is_empty());
+    }
+
+    #[test]
+    fn test_snapshot_captures_modified_params() {
+        let mut engine = GraphEngine::new_linear(48000.0, 256);
+        engine.add_effect_named(gain(1.0), "g");
+        engine.set_param_at(0, 0, 7.5);
+        let snap = engine.snapshot();
+        assert_eq!(snap.entries.len(), 1);
+        assert!(
+            (snap.entries[0].params[0] - 7.5).abs() < 1e-6,
+            "snapshot must capture updated param value"
+        );
+    }
+
+    #[test]
+    fn test_snapshot_clone_is_independent() {
+        let mut engine = GraphEngine::new_linear(48000.0, 256);
+        engine.add_effect_named(gain(2.0), "g");
+        let snap = engine.snapshot();
+        let cloned = snap.clone();
+        engine.set_param_at(0, 0, 9.0);
+        assert!(
+            (cloned.entries[0].params[0] - 2.0).abs() < 1e-6,
+            "cloned snapshot must be independent"
+        );
     }
 }

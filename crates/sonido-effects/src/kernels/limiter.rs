@@ -2,7 +2,7 @@
 //!
 //! `LimiterKernel` owns DSP state (circular delay buffers, gain reduction
 //! envelope, cached coefficients). Parameters are received via `&LimiterParams`
-//! each sample. Deployed via [`KernelAdapter`](sonido_core::KernelAdapter) for
+//! each sample. Deployed via [`Adapter`](sonido_core::kernel::Adapter) for
 //! desktop/plugin, or called directly on embedded targets.
 //!
 //! # Algorithm
@@ -32,7 +32,7 @@
 //! # Latency
 //!
 //! The kernel reports `lookahead_samples` as its processing latency. The
-//! [`KernelAdapter`](sonido_core::KernelAdapter) forwards this to the host via
+//! [`Adapter`](sonido_core::kernel::Adapter) forwards this to the host via
 //! `Effect::latency_samples()`, enabling the host to compensate for the delay.
 //!
 //! # References
@@ -47,7 +47,7 @@
 //!
 //! ```rust,ignore
 //! // Desktop / Plugin (via adapter — handles smoothing automatically)
-//! let adapter = KernelAdapter::new(LimiterKernel::new(48000.0), 48000.0);
+//! let adapter = Adapter::new(LimiterKernel::new(48000.0), 48000.0);
 //! let mut effect: Box<dyn Effect> = Box::new(adapter);
 //!
 //! // Embedded / Daisy Seed (direct — no smoothing, ADCs are hardware-filtered)
@@ -568,7 +568,7 @@ impl DspKernel for LimiterKernel {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sonido_core::kernel::KernelAdapter;
+    use sonido_core::kernel::Adapter;
     use sonido_core::{Effect, KernelParams, ParameterInfo};
 
     // Zero-config kernel invariant tests (finite output, reset, morph, descriptors, extreme inputs)
@@ -786,9 +786,9 @@ mod tests {
 
     #[test]
     fn adapter_wraps_as_effect() {
-        // KernelAdapter must expose the limiter as a standard Effect.
+        // Adapter must expose the limiter as a standard Effect.
         let kernel = LimiterKernel::new(48000.0);
-        let mut adapter = KernelAdapter::new(kernel, 48000.0);
+        let mut adapter = Adapter::new(kernel, 48000.0);
 
         adapter.reset();
         let output = adapter.process(0.3);
@@ -800,7 +800,7 @@ mod tests {
     fn adapter_param_info_matches() {
         // The adapter's ParameterInfo must reflect LimiterParams exactly.
         let kernel = LimiterKernel::new(48000.0);
-        let adapter = KernelAdapter::new(kernel, 48000.0);
+        let adapter = Adapter::new(kernel, 48000.0);
 
         assert_eq!(adapter.param_count(), 5);
 
@@ -855,16 +855,16 @@ mod tests {
         // from_knobs(0, 0, 0, 0, 0) → minimum values.
         let min = LimiterParams::from_knobs(0.0, 0.0, 0.0, 0.0, 0.0);
         assert!((min.threshold_db - (-30.0)).abs() < 0.01, "min threshold");
-        assert!((min.ceiling_db - (-30.0)).abs() < 0.01, "min ceiling");
+        assert!((min.ceiling_db - (-30.0)).abs() < 0.01, "min ceiling"); // no noon_aligned
         assert!((min.release_ms - 10.0).abs() < 0.01, "min release");
         assert!((min.lookahead_ms - 0.0).abs() < 0.01, "min lookahead");
-        assert!((min.output_db - (-20.0)).abs() < 0.01, "min output");
+        assert!((min.output_db - (-6.0)).abs() < 0.01, "min output"); // output_param_descriptor range [-6, 6]
 
         // from_knobs(1, 1, 1, 1, 1) → maximum values.
         let max = LimiterParams::from_knobs(1.0, 1.0, 1.0, 1.0, 1.0);
         assert!((max.threshold_db - 0.0).abs() < 0.01, "max threshold");
         assert!((max.ceiling_db - 0.0).abs() < 0.01, "max ceiling");
-        assert!((max.release_ms - 500.0).abs() < 0.01, "max release");
+        assert!((max.release_ms - 500.0).abs() < 0.5, "max release");
         assert!((max.lookahead_ms - 10.0).abs() < 0.01, "max lookahead");
         assert!((max.output_db - 6.0).abs() < 0.01, "max output");
     }

@@ -27,7 +27,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **sonido-daisy: Modular control/audio layer** — 4 new library modules extracted from example code:
   - `controls.rs` — lock-free `ControlBuffer` with IIR smoothing, change detection, LED bridge (pure `core`, no Embassy/alloc)
   - `hothouse.rs` — `HothouseControls`, `hothouse_control_task` (50 Hz Embassy task), `hothouse_pins!` macro, `decode_toggle`
-  - `embedded_adapter.rs` — `EmbeddedAdapter<K>` zero-smoothing `Effect + ParameterInfo` bridge for `DspKernel` (feature `alloc`)
+  - `embedded_adapter.rs` — `Adapter<K, DirectPolicy>` zero-smoothing `Effect + ParameterInfo` bridge for `DspKernel` (feature `alloc`)
   - `param_map.rs` — `adc_to_param()` scale-aware ADC→parameter conversion with STEPPED rounding (feature `alloc`)
 - **sonido-daisy: Feature flags** — `alloc` and `platform` features gate DSP-dependent modules; simple examples compile without heap allocator
 
@@ -38,7 +38,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **sonido-daisy: Uniform ADC polling** — `hothouse_control_task` now reads all 6 knobs via uniform `blocking_read()` polling (~48 µs per 20 ms cycle, 0.24% CPU). Removes the DMA channel, DMA buffer, and D2 SRAM allocation from the control path. `HothouseControls` stores knobs in a `[AnyAdcChannel; 6]` array instead of individual fields. Matches libDaisy's own `AnalogControl` polling approach.
 - **Morph Pedal v2**: Complete firmware rewrite (`morph_pedal.rs`)
   - Boot to passthrough — no pre-populated effects, Input→Output only
-  - `EmbeddedAdapter<K>` — zero-smoothing `Effect + ParameterInfo` bridge for `DspKernel`, replaces `KernelAdapter` and `EffectRegistry` on embedded
+  - `Adapter<K, DirectPolicy>` — zero-smoothing `Effect + ParameterInfo` bridge for `DspKernel`, replaces the desktop adapter and `EffectRegistry` on embedded
   - Incremental effect building — scroll 14 curated effects into 3 independent slots via footswitches
   - Curated 6-knob mapping per effect (K1=Primary, K2=Secondary, K3=Color, K4=Character, K5=Mix, K6=Level)
   - Scale-aware `adc_to_param()` — logarithmic for frequency knobs, linear for dB/mix, via `ParamDescriptor::scale`
@@ -168,8 +168,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.2.0] — In Progress
 
 ### Breaking Changes
-- Removed 19 classic `Effect` implementations from `sonido-effects`; all effects now use `DspKernel` + `KernelAdapter` architecture
-- Classic types (`Distortion`, `Chorus`, `Reverb`, etc.) no longer exist; use `KernelAdapter::new(XxxKernel::new(sr), sr)` or the registry (`EffectRegistry::new().create("distortion", sr)`)
+- Removed 19 classic `Effect` implementations from `sonido-effects`; all effects now use `DspKernel` + `Adapter` architecture
+- Classic types (`Distortion`, `Chorus`, `Reverb`, etc.) no longer exist; use `Adapter::new(XxxKernel::new(sr), sr)` or the registry (`EffectRegistry::new().create("distortion", sr)`)
 - Shared enums (`WaveShape`, `ReverbType`, `TremoloWaveform`, `WahMode`, `CarrierWaveform`, `ChannelMode`, `HaasSide`) removed; kernels use numeric parameters with step labels
 
 ### Added
@@ -213,10 +213,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `DspKernel` trait — pure DSP processing separated from parameter ownership
 - `KernelParams` trait — typed parameter struct with indexed access, descriptors, smoothing hints, `lerp()`, `from_normalized()`, `to_normalized()`
 - `SmoothingStyle` enum — None, Fast (5ms), Standard (10ms), Slow (20ms), Interpolated (50ms), Custom(ms)
-- `KernelAdapter<K>` — bridges kernel to `Effect + ParameterInfo`, manages per-parameter `SmoothedParam`
+- `Adapter<K, SmoothedPolicy>` — bridges kernel to `Effect + ParameterInfo`, manages per-parameter `SmoothedParam`
 - 19 kernel implementations: `BitcrusherKernel`, `ChorusKernel`, `CompressorKernel`, `DelayKernel`, `DistortionKernel`, `EqKernel`, `FilterKernel`, `FlangerKernel`, `GateKernel`, `LimiterKernel`, `PhaserKernel`, `PreampKernel`, `ReverbKernel`, `RingModKernel`, `StageKernel`, `TapeKernel`, `TremoloKernel`, `VibratoKernel`, `WahKernel`
 - Each kernel includes `from_knobs()` for direct ADC mapping on embedded targets
-- Registry switched to `KernelAdapter<XxxKernel>` for all 19 effects
+- Registry switched to `Adapter<XxxKernel, SmoothedPolicy>` for all 19 effects
 - 225 kernel-specific tests
 - ADR-028 accepted (docs/DESIGN_DECISIONS.md)
 

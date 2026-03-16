@@ -22,7 +22,7 @@ Sonido is a production-grade DSP framework in Rust. The following capabilities a
 
 ### Effects Library
 
-19 production effects using the kernel architecture (`DspKernel` + `KernelParams` + `KernelAdapter`):
+19 production effects using the kernel architecture (`DspKernel` + `KernelParams` + `Adapter`):
 
 - **Dynamics**: Compressor (11 params, sidechain-capable), Limiter, Gate
 - **Gain/Saturation**: Preamp, Distortion (4 waveshaper modes, ADAA), Tape Saturation (10 params, hysteresis + wow/flutter + head bump)
@@ -33,7 +33,7 @@ Sonido is a production-grade DSP framework in Rust. The following capabilities a
 
 Key DSP quality features active across all effects:
 - Kernel architecture: pure DSP separated from parameter ownership (ADR-028)
-- `KernelAdapter` manages per-parameter smoothing (5–50ms, click-free) via `SmoothingStyle`
+- `Adapter<K, SmoothedPolicy>` manages per-parameter smoothing (5–50ms, click-free) via `SmoothingStyle`
 - Kernels callable directly on embedded targets without smoothing overhead
 - Preset morphing via `KernelParams::lerp()` between any two parameter snapshots
 - Topology-aware feedback compensation (no uncontrolled gain at high feedback)
@@ -148,7 +148,7 @@ Benchmarks run on-demand via `gh workflow run ci-manual.yml -f job=bench` across
 
 **Status:** Complete
 
-All 19 effects migrated to `DspKernel` + `KernelParams` pattern, separating pure DSP from parameter ownership. `KernelAdapter<K>` bridges kernels to `Effect + ParameterInfo` with per-parameter smoothing. Registry creates `KernelAdapter<XxxKernel>` for all effects — transparent to all consumers.
+All 19 effects migrated to `DspKernel` + `KernelParams` pattern, separating pure DSP from parameter ownership. `Adapter<K, SmoothedPolicy>` bridges kernels to `Effect + ParameterInfo` with per-parameter smoothing. Registry creates `Adapter<XxxKernel, SmoothedPolicy>` for all effects — transparent to all consumers.
 
 Key capabilities unlocked:
 - Kernels callable directly on embedded targets without smoothing overhead or heap allocation

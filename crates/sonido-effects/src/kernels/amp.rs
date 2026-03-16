@@ -30,11 +30,11 @@
 //! # Deployment
 //!
 //! ```rust,ignore
-//! use sonido_core::kernel::KernelAdapter;
+//! use sonido_core::kernel::Adapter;
 //! use sonido_effects::kernels::{AmpKernel, AmpParams};
 //!
 //! // Desktop / Plugin (via adapter — handles parameter smoothing)
-//! let adapter = KernelAdapter::new(AmpKernel::new(48000.0), 48000.0);
+//! let adapter = Adapter::new(AmpKernel::new(48000.0), 48000.0);
 //!
 //! // Embedded / Daisy Seed (direct — no smoothing)
 //! let mut kernel = AmpKernel::new(48000.0);
@@ -684,7 +684,7 @@ impl DspKernel for AmpKernel {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sonido_core::kernel::KernelAdapter;
+    use sonido_core::kernel::Adapter;
     use sonido_core::{Effect, ParameterInfo};
 
     #[test]
@@ -855,7 +855,7 @@ mod tests {
     #[test]
     fn adapter_wraps_kernel() {
         let kernel = AmpKernel::new(48000.0);
-        let mut adapter = KernelAdapter::new(kernel, 48000.0);
+        let mut adapter = Adapter::new(kernel, 48000.0);
         adapter.reset();
         let out = adapter.process(0.3);
         assert!(out.is_finite(), "adapter output must be finite: {out}");
@@ -864,7 +864,7 @@ mod tests {
     #[test]
     fn adapter_param_count() {
         let kernel = AmpKernel::new(48000.0);
-        let adapter = KernelAdapter::new(kernel, 48000.0);
+        let adapter = Adapter::new(kernel, 48000.0);
         assert_eq!(adapter.param_count(), 9);
         assert_eq!(adapter.param_info(0).unwrap().name, "Gain");
         assert_eq!(adapter.param_info(7).unwrap().name, "Master");

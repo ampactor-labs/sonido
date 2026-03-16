@@ -1,7 +1,7 @@
 //! Hot-reload kernel support via cdylib swap.
 //!
 //! Compile a kernel to cdylib, load via dlopen, swap function pointer
-//! in `KernelAdapter` while preserving smoother state. Development mode:
+//! in `Adapter<K, SmoothedPolicy>` while preserving smoother state. Development mode:
 //! `cargo watch` triggers recompile + hot-swap on file save.
 //!
 //! # Workflow
@@ -9,9 +9,12 @@
 //! 1. Build kernel crate as `cdylib` (add `[lib] crate-type = ["cdylib"]`).
 //! 2. Construct a [`HotReloadConfig`] pointing at the build output directory.
 //! 3. Load via `HotKernel::load` (not yet implemented — returns placeholder).
-//! 4. Swap into a running `KernelAdapter` without restarting the audio thread.
+//! 4. Swap into a running `Adapter` without restarting the audio thread.
 //!
 //! Smoother state is preserved across swaps so parameter changes remain glitch-free.
+//!
+//! Only applicable to `Adapter<K, SmoothedPolicy>` — embedded (`DirectPolicy`) targets
+//! do not use software smoothers.
 //!
 //! # Status
 //!

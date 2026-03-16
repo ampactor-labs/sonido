@@ -4,7 +4,7 @@
 //! short (256-sample) direct time-domain convolution. Three programmatically
 //! generated IRs cover clean combo, British stack, and modern high-gain character.
 //! Parameters are received via `&CabinetParams` each sample. Deployed via
-//! [`KernelAdapter`](sonido_core::KernelAdapter) for desktop/plugin, or called
+//! [`Adapter`](sonido_core::kernel::Adapter) for desktop/plugin, or called
 //! directly on embedded targets.
 //!
 //! # Signal Flow
@@ -25,7 +25,7 @@
 //!
 //! ```rust,ignore
 //! // Desktop / Plugin (via adapter — handles smoothing automatically)
-//! let adapter = KernelAdapter::new(CabinetKernel::new(48000.0), 48000.0);
+//! let adapter = Adapter::new(CabinetKernel::new(48000.0), 48000.0);
 //! let mut effect: Box<dyn Effect> = Box::new(adapter);
 //!
 //! // Embedded / Daisy Seed (direct — no smoothing, ADCs are hardware-filtered)
@@ -379,7 +379,7 @@ impl DspKernel for CabinetKernel {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sonido_core::kernel::KernelAdapter;
+    use sonido_core::kernel::Adapter;
     use sonido_core::{Effect, ParameterInfo};
 
     #[test]
@@ -548,7 +548,7 @@ mod tests {
 
     #[test]
     fn adapter_wraps_as_effect() {
-        let mut adapter = KernelAdapter::new(CabinetKernel::new(48000.0), 48000.0);
+        let mut adapter = Adapter::new(CabinetKernel::new(48000.0), 48000.0);
         adapter.reset();
         let out = adapter.process(0.3);
         assert!(out.is_finite(), "Adapter output must be finite, got {out}");
@@ -556,7 +556,7 @@ mod tests {
 
     #[test]
     fn adapter_param_count() {
-        let adapter = KernelAdapter::new(CabinetKernel::new(48000.0), 48000.0);
+        let adapter = Adapter::new(CabinetKernel::new(48000.0), 48000.0);
         assert_eq!(adapter.param_count(), 4);
         assert_eq!(adapter.param_info(0).unwrap().name, "IR Select");
         assert_eq!(adapter.param_info(3).unwrap().name, "Output");

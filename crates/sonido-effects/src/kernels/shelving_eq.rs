@@ -2,7 +2,7 @@
 //!
 //! `ShelvingEqKernel` owns DSP state (four biquad filters, sample rate,
 //! coefficient caches). Parameters are received via `&ShelvingEqParams` each
-//! sample. Deployed via [`KernelAdapter`](sonido_core::KernelAdapter) for
+//! sample. Deployed via [`Adapter`](sonido_core::kernel::Adapter) for
 //! desktop/plugin, or called directly on embedded targets.
 //!
 //! # Signal Flow
@@ -46,7 +46,7 @@
 //!
 //! ```rust,ignore
 //! // Desktop / Plugin (via adapter — handles smoothing automatically)
-//! let adapter = KernelAdapter::new(ShelvingEqKernel::new(48000.0), 48000.0);
+//! let adapter = Adapter::new(ShelvingEqKernel::new(48000.0), 48000.0);
 //! let mut effect: Box<dyn Effect> = Box::new(adapter);
 //!
 //! // Embedded / Daisy Seed (direct — no smoothing, ADCs are hardware-filtered)
@@ -512,7 +512,7 @@ impl DspKernel for ShelvingEqKernel {
 mod tests {
     use super::*;
     use sonido_core::Effect;
-    use sonido_core::kernel::KernelAdapter;
+    use sonido_core::kernel::Adapter;
 
     #[test]
     fn silence_in_silence_out() {
@@ -578,7 +578,7 @@ mod tests {
     #[test]
     fn adapter_wraps_as_effect() {
         let kernel = ShelvingEqKernel::new(48000.0);
-        let mut adapter = KernelAdapter::new(kernel, 48000.0);
+        let mut adapter = Adapter::new(kernel, 48000.0);
         adapter.reset();
         let output = adapter.process(0.3);
         assert!(!output.is_nan(), "adapter.process() returned NaN");

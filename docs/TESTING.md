@@ -32,12 +32,12 @@ Each module contains a `#[cfg(test)]` block with unit tests:
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sonido_core::kernel::KernelAdapter;
+    use sonido_core::kernel::Adapter;
     use sonido_core::Effect;
 
     #[test]
     fn test_reverb_basic() {
-        let mut reverb = KernelAdapter::new(ReverbKernel::new(48000.0), 48000.0);
+        let mut reverb = Adapter::new(ReverbKernel::new(48000.0), 48000.0);
         let output = reverb.process(0.5);
         assert!(output.is_finite());
     }
@@ -71,7 +71,7 @@ Example pattern:
 ```rust
 #[test]
 fn test_distortion_basic() {
-    let mut effect = KernelAdapter::new(DistortionKernel::new(48000.0), 48000.0);
+    let mut effect = Adapter::new(DistortionKernel::new(48000.0), 48000.0);
     effect.set_param(0, 20.0);  // drive_db
 
     // Test single sample
@@ -82,7 +82,7 @@ fn test_distortion_basic() {
 
 #[test]
 fn test_distortion_block() {
-    let mut effect = KernelAdapter::new(DistortionKernel::new(48000.0), 48000.0);
+    let mut effect = Adapter::new(DistortionKernel::new(48000.0), 48000.0);
     let input = vec![0.5; 512];
     let mut output = vec![0.0; 512];
 
@@ -139,7 +139,7 @@ True stereo effects need additional tests:
 ```rust
 #[test]
 fn test_reverb_stereo_decorrelation() {
-    let mut reverb = KernelAdapter::new(ReverbKernel::new(48000.0), 48000.0);
+    let mut reverb = Adapter::new(ReverbKernel::new(48000.0), 48000.0);
     // Find and set the mix parameter to 1.0 (full wet)
     reverb.set_param(4, 100.0);  // mix = 100%
 

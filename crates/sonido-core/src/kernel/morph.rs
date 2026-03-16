@@ -33,7 +33,7 @@
 //! ```
 
 #[cfg(not(feature = "std"))]
-use alloc::vec::Vec;
+use alloc::{vec, vec::Vec};
 
 use crate::{ParamDescriptor, ParamFlags, ParamScale};
 

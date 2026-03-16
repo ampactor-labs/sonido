@@ -2,7 +2,7 @@
 //!
 //! `FlangerKernel` owns DSP state (delay lines, LFOs, feedback samples).
 //! Parameters are received via `&FlangerParams` each sample. Deployed via
-//! [`KernelAdapter`](sonido_core::KernelAdapter) for desktop/plugin, or called
+//! [`Adapter`](sonido_core::kernel::Adapter) for desktop/plugin, or called
 //! directly on embedded targets.
 //!
 //! # Signal Flow
@@ -30,8 +30,8 @@
 //!
 //! ```rust,ignore
 //! // Desktop / Plugin (via adapter — handles smoothing automatically)
-//! use sonido_core::KernelAdapter;
-//! let adapter = KernelAdapter::new(FlangerKernel::new(48000.0), 48000.0);
+//! use sonido_core::kernel::Adapter;
+//! let adapter = Adapter::new(FlangerKernel::new(48000.0), 48000.0);
 //! let mut effect: Box<dyn Effect> = Box::new(adapter);
 //!
 //! // Embedded / Daisy Seed (direct — no smoothing, ADCs are hardware-filtered)
@@ -84,7 +84,7 @@ pub struct FlangerParams {
     /// Regeneration (feedback) amount in percent.
     ///
     /// Range: −95.0 to +95.0 %. Positive values reinforce odd harmonics;
-    /// negative values shift comb peaks to even harmonics. Default 50.0 %.
+    /// negative values shift comb peaks to even harmonics. Default 50.0%.
     pub feedback_pct: f32,
 
     /// Wet/dry mix in percent.
@@ -480,7 +480,7 @@ impl DspKernel for FlangerKernel {
         // is active by checking — but since we have no cached bool in the
         // kernel, we use a conservative approximation: the host queries latency
         // rarely (on plugin instantiation / state change), so we expose a method
-        // that the KernelAdapter / host can call after setting params via the
+        // that the Adapter / host can call after setting params via the
         // adapter.  For correct host reporting, callers should call
         // `set_tzf_hint()` after changing the TZF param.
         //
@@ -543,7 +543,7 @@ impl DspKernel for FlangerKernel {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sonido_core::kernel::KernelAdapter;
+    use sonido_core::kernel::Adapter;
     use sonido_core::{Effect, ParameterInfo};
 
     // ── Silence invariant ──
@@ -717,11 +717,11 @@ mod tests {
 
     // ── Adapter — wraps as Effect ──
 
-    /// `KernelAdapter` exposes the kernel as a standard `Effect`.
+    /// `Adapter` exposes the kernel as a standard `Effect`.
     #[test]
     fn adapter_wraps_as_effect() {
         let kernel = FlangerKernel::new(48000.0);
-        let mut adapter = KernelAdapter::new(kernel, 48000.0);
+        let mut adapter = Adapter::new(kernel, 48000.0);
 
         adapter.reset();
         let output = adapter.process(0.3);
@@ -734,7 +734,7 @@ mod tests {
     #[test]
     fn adapter_param_info_matches() {
         let kernel = FlangerKernel::new(48000.0);
-        let adapter = KernelAdapter::new(kernel, 48000.0);
+        let adapter = Adapter::new(kernel, 48000.0);
 
         assert_eq!(
             adapter.param_count(),
@@ -882,7 +882,7 @@ mod tests {
         // rate: 0.5 → ~2.525 Hz (mid of 0.05–5.0)
         assert!(params.rate > 0.05 && params.rate < 5.0, "rate out of range");
 
-        // depth: 0.5 → 50 %
+        // depth: 0.5 → 50 % (full range [0, 100])
         assert!((params.depth_pct - 50.0).abs() < 1.0, "depth mid-point");
 
         // feedback: 0.5 → 0 % (centre of −95–+95)
@@ -891,11 +891,8 @@ mod tests {
         // mix: 0.5 → 50 %
         assert!((params.mix_pct - 50.0).abs() < 1.0, "mix mid-point");
 
-        // output: 0.5 → -7.0 dB (centre of −20–+6)
-        assert!(
-            (params.output_db - (-7.0)).abs() < 1.0,
-            "output centre at 0.5"
-        );
+        // output: 0.5 → 0.0 dB (output_param_descriptor range [−6, +6])
+        assert!((params.output_db - 0.0).abs() < 1.0, "output centre at 0.5");
 
         // tzf off
         assert!(params.tzf < 0.5, "tzf should be Off at 0.0");
@@ -907,21 +904,21 @@ mod tests {
     #[test]
     fn snapshot_roundtrip_through_adapter() {
         let kernel = FlangerKernel::new(48000.0);
-        let mut adapter = KernelAdapter::new(kernel, 48000.0);
+        let mut adapter = Adapter::new(kernel, 48000.0);
 
         adapter.set_param(0, 2.0); // rate
-        adapter.set_param(1, 80.0); // depth
+        adapter.set_param(1, 60.0); // depth
         adapter.set_param(2, -40.0); // feedback
 
         let saved = adapter.snapshot();
 
         let kernel2 = FlangerKernel::new(48000.0);
-        let mut adapter2 = KernelAdapter::new(kernel2, 48000.0);
+        let mut adapter2 = Adapter::new(kernel2, 48000.0);
         adapter2.load_snapshot(&saved);
 
         assert!((adapter2.get_param(0) - 2.0).abs() < 0.01, "rate snapshot");
         assert!(
-            (adapter2.get_param(1) - 80.0).abs() < 0.01,
+            (adapter2.get_param(1) - 60.0).abs() < 0.01,
             "depth snapshot"
         );
         assert!(

@@ -16,7 +16,7 @@
 //! ```
 
 use sonido_analysis::compare::{mse, snr_db, spectral_correlation};
-use sonido_core::{Effect, KernelAdapter, ParameterInfo};
+use sonido_core::{Adapter, Effect, ParameterInfo};
 use sonido_effects::kernels::{
     AmpKernel, BitcrusherKernel, CabinetKernel, ChorusKernel, CompressorKernel, DeesserKernel,
     DelayKernel, DistortionKernel, EqKernel, FilterKernel, FlangerKernel, GateKernel,
@@ -209,7 +209,7 @@ fn run_regression_test<E: Effect>(
 #[test]
 fn test_distortion_regression() {
     // Distortion params: 0=drive_db, 1=tone_db, 2=output_db, 3=shape, 4=mix_pct
-    let mut effect = KernelAdapter::new(DistortionKernel::new(SAMPLE_RATE), SAMPLE_RATE);
+    let mut effect = Adapter::new(DistortionKernel::new(SAMPLE_RATE), SAMPLE_RATE);
     effect.set_param(0, 15.0); // drive_db
     effect.set_param(1, 3.0); // tone_db
 
@@ -220,7 +220,7 @@ fn test_distortion_regression() {
 #[test]
 fn test_compressor_regression() {
     // Compressor params: 0=threshold_db, 1=ratio, 2=attack_ms, 3=release_ms, ...
-    let mut effect = KernelAdapter::new(CompressorKernel::new(SAMPLE_RATE), SAMPLE_RATE);
+    let mut effect = Adapter::new(CompressorKernel::new(SAMPLE_RATE), SAMPLE_RATE);
     effect.set_param(0, -20.0); // threshold_db
     effect.set_param(1, 4.0); // ratio
     effect.set_param(2, 5.0); // attack_ms
@@ -233,7 +233,7 @@ fn test_compressor_regression() {
 #[test]
 fn test_chorus_regression() {
     // Chorus params: 0=rate, 1=depth_pct, 2=mix_pct, ...
-    let mut effect = KernelAdapter::new(ChorusKernel::new(SAMPLE_RATE), SAMPLE_RATE);
+    let mut effect = Adapter::new(ChorusKernel::new(SAMPLE_RATE), SAMPLE_RATE);
     effect.set_param(0, 2.0); // rate Hz
     effect.set_param(1, 70.0); // depth_pct (classic: 0.7 -> 70%)
     effect.set_param(2, 50.0); // mix_pct (classic: 0.5 -> 50%)
@@ -245,7 +245,7 @@ fn test_chorus_regression() {
 #[test]
 fn test_delay_regression() {
     // Delay params: 0=time_ms, 1=feedback_pct, 2=mix_pct, 3=ping_pong, ...
-    let mut effect = KernelAdapter::new(DelayKernel::new(SAMPLE_RATE), SAMPLE_RATE);
+    let mut effect = Adapter::new(DelayKernel::new(SAMPLE_RATE), SAMPLE_RATE);
     effect.set_param(0, 20.0); // time_ms
     effect.set_param(1, 50.0); // feedback_pct (classic: 0.5 -> 50%)
     effect.set_param(2, 50.0); // mix_pct (classic: 0.5 -> 50%)
@@ -258,7 +258,7 @@ fn test_delay_regression() {
 #[test]
 fn test_reverb_regression() {
     // Reverb params: 0=room_size_pct, 1=decay_pct, 2=damping_pct, 3=predelay_ms, 4=mix_pct, ...
-    let mut effect = KernelAdapter::new(ReverbKernel::new(SAMPLE_RATE), SAMPLE_RATE);
+    let mut effect = Adapter::new(ReverbKernel::new(SAMPLE_RATE), SAMPLE_RATE);
     effect.set_param(0, 70.0); // room_size_pct (classic: 0.7 -> 70%)
     effect.set_param(1, 60.0); // decay_pct (classic: 0.6 -> 60%)
     effect.set_param(2, 30.0); // damping_pct (classic: 0.3 -> 30%)
@@ -272,7 +272,7 @@ fn test_reverb_regression() {
 #[test]
 fn test_lowpass_regression() {
     // Filter params: 0=cutoff_hz, 1=resonance, 2=output_db
-    let mut effect = KernelAdapter::new(FilterKernel::new(SAMPLE_RATE), SAMPLE_RATE);
+    let mut effect = Adapter::new(FilterKernel::new(SAMPLE_RATE), SAMPLE_RATE);
     effect.set_param(0, 1000.0); // cutoff_hz
     effect.set_param(1, 2.0); // resonance (Q)
 
@@ -283,7 +283,7 @@ fn test_lowpass_regression() {
 #[test]
 fn test_phaser_regression() {
     // Phaser params: 0=rate, 1=depth_pct, 2=stages, 3=feedback_pct, 4=mix_pct, ...
-    let mut effect = KernelAdapter::new(PhaserKernel::new(SAMPLE_RATE), SAMPLE_RATE);
+    let mut effect = Adapter::new(PhaserKernel::new(SAMPLE_RATE), SAMPLE_RATE);
     effect.set_param(0, 1.0); // rate Hz
     effect.set_param(1, 80.0); // depth_pct (classic: 0.8 -> 80%)
     effect.set_param(3, 50.0); // feedback_pct (classic: 0.5 -> 50%)
@@ -295,7 +295,7 @@ fn test_phaser_regression() {
 #[test]
 fn test_flanger_regression() {
     // Flanger params: 0=rate, 1=depth_pct, 2=feedback_pct, 3=mix_pct, ...
-    let mut effect = KernelAdapter::new(FlangerKernel::new(SAMPLE_RATE), SAMPLE_RATE);
+    let mut effect = Adapter::new(FlangerKernel::new(SAMPLE_RATE), SAMPLE_RATE);
     effect.set_param(0, 0.5); // rate Hz
     effect.set_param(1, 70.0); // depth_pct (classic: 0.7 -> 70%)
     effect.set_param(2, 50.0); // feedback_pct (classic: 0.5 -> 50%)
@@ -308,7 +308,7 @@ fn test_flanger_regression() {
 #[test]
 fn test_tremolo_regression() {
     // Tremolo params: 0=rate, 1=depth_pct, 2=waveform, ...
-    let mut effect = KernelAdapter::new(TremoloKernel::new(SAMPLE_RATE), SAMPLE_RATE);
+    let mut effect = Adapter::new(TremoloKernel::new(SAMPLE_RATE), SAMPLE_RATE);
     effect.set_param(0, 5.0); // rate Hz
     effect.set_param(1, 80.0); // depth_pct (classic: 0.8 -> 80%)
 
@@ -325,7 +325,7 @@ fn test_tape_regression() {
     // isn't directly comparable. We use from_knobs-style conversion: for the test,
     // set drive_db and saturation_pct to reasonable values that represent
     // similar processing characteristics.
-    let mut effect = KernelAdapter::new(TapeKernel::new(SAMPLE_RATE), SAMPLE_RATE);
+    let mut effect = Adapter::new(TapeKernel::new(SAMPLE_RATE), SAMPLE_RATE);
     effect.set_param(0, 6.0); // drive_db (moderate drive)
     effect.set_param(1, 60.0); // saturation_pct (classic: 0.6 -> 60%)
 
@@ -336,7 +336,7 @@ fn test_tape_regression() {
 #[test]
 fn test_clean_preamp_regression() {
     // Preamp params: 0=gain_db, 1=tone_db, 2=output_db
-    let mut effect = KernelAdapter::new(PreampKernel::new(SAMPLE_RATE), SAMPLE_RATE);
+    let mut effect = Adapter::new(PreampKernel::new(SAMPLE_RATE), SAMPLE_RATE);
     effect.set_param(0, 12.0); // gain_db
     effect.set_param(2, -6.0); // output_db
 
@@ -351,7 +351,7 @@ fn test_vibrato_regression() {
     // Classic: set_depth(0.8) 0-4 scale -> depth_pct 0-100
     // Classic depth scale is 0-4, kernel depth_pct is 0-100
     // Classic set_depth(0.8) with clamp 0-4 -> kernel default depth range is 0-100%
-    let mut effect = KernelAdapter::new(VibratoKernel::new(SAMPLE_RATE), SAMPLE_RATE);
+    let mut effect = Adapter::new(VibratoKernel::new(SAMPLE_RATE), SAMPLE_RATE);
     effect.set_param(0, 80.0); // depth_pct (classic: 0.8 -> 80%)
     effect.set_param(1, 100.0); // mix_pct (classic: 1.0 -> 100%)
 
@@ -362,7 +362,7 @@ fn test_vibrato_regression() {
 #[test]
 fn test_gate_regression() {
     // Gate params: 0=threshold_db, 1=attack_ms, 2=release_ms, ...
-    let mut effect = KernelAdapter::new(GateKernel::new(SAMPLE_RATE), SAMPLE_RATE);
+    let mut effect = Adapter::new(GateKernel::new(SAMPLE_RATE), SAMPLE_RATE);
     effect.set_param(0, -30.0); // threshold_db
     effect.set_param(1, 1.0); // attack_ms
     effect.set_param(2, 50.0); // release_ms
@@ -374,7 +374,7 @@ fn test_gate_regression() {
 #[test]
 fn test_wah_regression() {
     // Wah params: 0=freq_hz, 1=resonance, 2=sensitivity_pct, 3=mode, 4=output_db
-    let mut effect = KernelAdapter::new(WahKernel::new(SAMPLE_RATE), SAMPLE_RATE);
+    let mut effect = Adapter::new(WahKernel::new(SAMPLE_RATE), SAMPLE_RATE);
     effect.set_param(0, 1500.0); // freq_hz
     effect.set_param(1, 4.0); // resonance
 
@@ -385,7 +385,7 @@ fn test_wah_regression() {
 #[test]
 fn test_eq_regression() {
     // EQ params: 0=low_freq, 1=low_gain_db, 2=low_q, 3=mid_freq, 4=mid_gain_db, ...
-    let mut effect = KernelAdapter::new(EqKernel::new(SAMPLE_RATE), SAMPLE_RATE);
+    let mut effect = Adapter::new(EqKernel::new(SAMPLE_RATE), SAMPLE_RATE);
     effect.set_param(1, 3.0); // low_gain_db
     effect.set_param(4, -2.0); // mid_gain_db
     effect.set_param(3, 1000.0); // mid_freq
@@ -399,11 +399,11 @@ fn test_eq_regression() {
 //
 // These verify that each effect's output at factory defaults remains stable.
 // Unlike the tests above (which set specific param values), these use only
-// `KernelAdapter::new()` with no overrides.
+// `Adapter::new()` with no overrides.
 
 #[test]
 fn test_distortion_defaults_regression() {
-    let effect = KernelAdapter::new(DistortionKernel::new(SAMPLE_RATE), SAMPLE_RATE);
+    let effect = Adapter::new(DistortionKernel::new(SAMPLE_RATE), SAMPLE_RATE);
     let input = generate_test_signal(TEST_DURATION_SAMPLES);
     run_regression_test("distortion_defaults", effect, &input)
         .expect("Distortion defaults regression test failed");
@@ -411,7 +411,7 @@ fn test_distortion_defaults_regression() {
 
 #[test]
 fn test_compressor_defaults_regression() {
-    let effect = KernelAdapter::new(CompressorKernel::new(SAMPLE_RATE), SAMPLE_RATE);
+    let effect = Adapter::new(CompressorKernel::new(SAMPLE_RATE), SAMPLE_RATE);
     let input = generate_test_signal(TEST_DURATION_SAMPLES);
     run_regression_test("compressor_defaults", effect, &input)
         .expect("Compressor defaults regression test failed");
@@ -419,7 +419,7 @@ fn test_compressor_defaults_regression() {
 
 #[test]
 fn test_chorus_defaults_regression() {
-    let effect = KernelAdapter::new(ChorusKernel::new(SAMPLE_RATE), SAMPLE_RATE);
+    let effect = Adapter::new(ChorusKernel::new(SAMPLE_RATE), SAMPLE_RATE);
     let input = generate_test_signal(TEST_DURATION_SAMPLES);
     run_regression_test("chorus_defaults", effect, &input)
         .expect("Chorus defaults regression test failed");
@@ -427,7 +427,7 @@ fn test_chorus_defaults_regression() {
 
 #[test]
 fn test_delay_defaults_regression() {
-    let effect = KernelAdapter::new(DelayKernel::new(SAMPLE_RATE), SAMPLE_RATE);
+    let effect = Adapter::new(DelayKernel::new(SAMPLE_RATE), SAMPLE_RATE);
     let input = generate_test_signal(TEST_DURATION_SAMPLES);
     run_regression_test("delay_defaults", effect, &input)
         .expect("Delay defaults regression test failed");
@@ -435,7 +435,7 @@ fn test_delay_defaults_regression() {
 
 #[test]
 fn test_reverb_defaults_regression() {
-    let effect = KernelAdapter::new(ReverbKernel::new(SAMPLE_RATE), SAMPLE_RATE);
+    let effect = Adapter::new(ReverbKernel::new(SAMPLE_RATE), SAMPLE_RATE);
     let input = generate_test_signal(TEST_DURATION_SAMPLES);
     run_regression_test("reverb_defaults", effect, &input)
         .expect("Reverb defaults regression test failed");
@@ -443,7 +443,7 @@ fn test_reverb_defaults_regression() {
 
 #[test]
 fn test_lowpass_defaults_regression() {
-    let effect = KernelAdapter::new(FilterKernel::new(SAMPLE_RATE), SAMPLE_RATE);
+    let effect = Adapter::new(FilterKernel::new(SAMPLE_RATE), SAMPLE_RATE);
     let input = generate_test_signal(TEST_DURATION_SAMPLES);
     run_regression_test("lowpass_defaults", effect, &input)
         .expect("LowPass defaults regression test failed");
@@ -451,7 +451,7 @@ fn test_lowpass_defaults_regression() {
 
 #[test]
 fn test_phaser_defaults_regression() {
-    let effect = KernelAdapter::new(PhaserKernel::new(SAMPLE_RATE), SAMPLE_RATE);
+    let effect = Adapter::new(PhaserKernel::new(SAMPLE_RATE), SAMPLE_RATE);
     let input = generate_test_signal(TEST_DURATION_SAMPLES);
     run_regression_test("phaser_defaults", effect, &input)
         .expect("Phaser defaults regression test failed");
@@ -459,7 +459,7 @@ fn test_phaser_defaults_regression() {
 
 #[test]
 fn test_flanger_defaults_regression() {
-    let effect = KernelAdapter::new(FlangerKernel::new(SAMPLE_RATE), SAMPLE_RATE);
+    let effect = Adapter::new(FlangerKernel::new(SAMPLE_RATE), SAMPLE_RATE);
     let input = generate_test_signal(TEST_DURATION_SAMPLES);
     run_regression_test("flanger_defaults", effect, &input)
         .expect("Flanger defaults regression test failed");
@@ -467,7 +467,7 @@ fn test_flanger_defaults_regression() {
 
 #[test]
 fn test_tremolo_defaults_regression() {
-    let effect = KernelAdapter::new(TremoloKernel::new(SAMPLE_RATE), SAMPLE_RATE);
+    let effect = Adapter::new(TremoloKernel::new(SAMPLE_RATE), SAMPLE_RATE);
     let input = generate_test_signal(TEST_DURATION_SAMPLES);
     run_regression_test("tremolo_defaults", effect, &input)
         .expect("Tremolo defaults regression test failed");
@@ -475,7 +475,7 @@ fn test_tremolo_defaults_regression() {
 
 #[test]
 fn test_tape_defaults_regression() {
-    let effect = KernelAdapter::new(TapeKernel::new(SAMPLE_RATE), SAMPLE_RATE);
+    let effect = Adapter::new(TapeKernel::new(SAMPLE_RATE), SAMPLE_RATE);
     let input = generate_test_signal(TEST_DURATION_SAMPLES);
     run_regression_test("tape_defaults", effect, &input)
         .expect("TapeSaturation defaults regression test failed");
@@ -483,7 +483,7 @@ fn test_tape_defaults_regression() {
 
 #[test]
 fn test_clean_preamp_defaults_regression() {
-    let effect = KernelAdapter::new(PreampKernel::new(SAMPLE_RATE), SAMPLE_RATE);
+    let effect = Adapter::new(PreampKernel::new(SAMPLE_RATE), SAMPLE_RATE);
     let input = generate_test_signal(TEST_DURATION_SAMPLES);
     run_regression_test("clean_preamp_defaults", effect, &input)
         .expect("CleanPreamp defaults regression test failed");
@@ -491,7 +491,7 @@ fn test_clean_preamp_defaults_regression() {
 
 #[test]
 fn test_vibrato_defaults_regression() {
-    let effect = KernelAdapter::new(VibratoKernel::new(SAMPLE_RATE), SAMPLE_RATE);
+    let effect = Adapter::new(VibratoKernel::new(SAMPLE_RATE), SAMPLE_RATE);
     let input = generate_test_signal(TEST_DURATION_SAMPLES);
     run_regression_test("vibrato_defaults", effect, &input)
         .expect("MultiVibrato defaults regression test failed");
@@ -499,7 +499,7 @@ fn test_vibrato_defaults_regression() {
 
 #[test]
 fn test_gate_defaults_regression() {
-    let effect = KernelAdapter::new(GateKernel::new(SAMPLE_RATE), SAMPLE_RATE);
+    let effect = Adapter::new(GateKernel::new(SAMPLE_RATE), SAMPLE_RATE);
     let input = generate_test_signal(TEST_DURATION_SAMPLES);
     run_regression_test("gate_defaults", effect, &input)
         .expect("Gate defaults regression test failed");
@@ -507,7 +507,7 @@ fn test_gate_defaults_regression() {
 
 #[test]
 fn test_wah_defaults_regression() {
-    let effect = KernelAdapter::new(WahKernel::new(SAMPLE_RATE), SAMPLE_RATE);
+    let effect = Adapter::new(WahKernel::new(SAMPLE_RATE), SAMPLE_RATE);
     let input = generate_test_signal(TEST_DURATION_SAMPLES);
     run_regression_test("wah_defaults", effect, &input)
         .expect("Wah defaults regression test failed");
@@ -515,7 +515,7 @@ fn test_wah_defaults_regression() {
 
 #[test]
 fn test_eq_defaults_regression() {
-    let effect = KernelAdapter::new(EqKernel::new(SAMPLE_RATE), SAMPLE_RATE);
+    let effect = Adapter::new(EqKernel::new(SAMPLE_RATE), SAMPLE_RATE);
     let input = generate_test_signal(TEST_DURATION_SAMPLES);
     run_regression_test("eq_defaults", effect, &input)
         .expect("ParametricEq defaults regression test failed");
@@ -706,7 +706,7 @@ fn run_regression_test_stereo<E: Effect>(
 #[test]
 fn test_chorus_stereo_regression() {
     // Chorus params: 0=rate, 1=depth_pct, 2=mix_pct
-    let mut effect = KernelAdapter::new(ChorusKernel::new(SAMPLE_RATE), SAMPLE_RATE);
+    let mut effect = Adapter::new(ChorusKernel::new(SAMPLE_RATE), SAMPLE_RATE);
     effect.set_param(0, 2.0); // rate Hz
     effect.set_param(1, 70.0); // depth_pct
     effect.set_param(2, 50.0); // mix_pct
@@ -718,7 +718,7 @@ fn test_chorus_stereo_regression() {
 #[test]
 fn test_reverb_stereo_regression() {
     // Reverb params: 0=room_size_pct, 1=decay_pct, 2=damping_pct, 3=predelay_ms, 4=mix_pct
-    let mut effect = KernelAdapter::new(ReverbKernel::new(SAMPLE_RATE), SAMPLE_RATE);
+    let mut effect = Adapter::new(ReverbKernel::new(SAMPLE_RATE), SAMPLE_RATE);
     effect.set_param(0, 70.0); // room_size_pct
     effect.set_param(1, 60.0); // decay_pct
     effect.set_param(2, 30.0); // damping_pct
@@ -734,7 +734,7 @@ fn test_reverb_stereo_regression() {
 #[test]
 fn test_delay_stereo_regression() {
     // Delay params: 0=time_ms, 1=feedback_pct, 2=mix_pct, 3=ping_pong
-    let mut effect = KernelAdapter::new(DelayKernel::new(SAMPLE_RATE), SAMPLE_RATE);
+    let mut effect = Adapter::new(DelayKernel::new(SAMPLE_RATE), SAMPLE_RATE);
     effect.set_param(0, 20.0); // time_ms
     effect.set_param(1, 50.0); // feedback_pct
     effect.set_param(2, 50.0); // mix_pct
@@ -747,7 +747,7 @@ fn test_delay_stereo_regression() {
 #[test]
 fn test_phaser_stereo_regression() {
     // Phaser params: 0=rate, 1=depth_pct, 3=feedback_pct
-    let mut effect = KernelAdapter::new(PhaserKernel::new(SAMPLE_RATE), SAMPLE_RATE);
+    let mut effect = Adapter::new(PhaserKernel::new(SAMPLE_RATE), SAMPLE_RATE);
     effect.set_param(0, 1.0); // rate Hz
     effect.set_param(1, 80.0); // depth_pct
     effect.set_param(3, 50.0); // feedback_pct
@@ -759,7 +759,7 @@ fn test_phaser_stereo_regression() {
 #[test]
 fn test_flanger_stereo_regression() {
     // Flanger params: 0=rate, 1=depth_pct, 2=feedback_pct, 3=mix_pct
-    let mut effect = KernelAdapter::new(FlangerKernel::new(SAMPLE_RATE), SAMPLE_RATE);
+    let mut effect = Adapter::new(FlangerKernel::new(SAMPLE_RATE), SAMPLE_RATE);
     effect.set_param(0, 0.5); // rate Hz
     effect.set_param(1, 70.0); // depth_pct
     effect.set_param(2, 50.0); // feedback_pct
@@ -772,7 +772,7 @@ fn test_flanger_stereo_regression() {
 #[test]
 fn test_limiter_regression() {
     // Limiter params: 0=threshold_db, 1=ceiling_db, 2=release_ms, 3=lookahead_ms, 4=output_db
-    let mut effect = KernelAdapter::new(LimiterKernel::new(SAMPLE_RATE), SAMPLE_RATE);
+    let mut effect = Adapter::new(LimiterKernel::new(SAMPLE_RATE), SAMPLE_RATE);
     effect.set_param(0, -12.0); // threshold_db
     effect.set_param(1, -0.3); // ceiling_db
     effect.set_param(2, 50.0); // release_ms
@@ -783,7 +783,7 @@ fn test_limiter_regression() {
 
 #[test]
 fn test_limiter_defaults_regression() {
-    let effect = KernelAdapter::new(LimiterKernel::new(SAMPLE_RATE), SAMPLE_RATE);
+    let effect = Adapter::new(LimiterKernel::new(SAMPLE_RATE), SAMPLE_RATE);
     let input = generate_test_signal(TEST_DURATION_SAMPLES);
     run_regression_test("limiter_defaults", effect, &input)
         .expect("Limiter defaults regression test failed");
@@ -792,7 +792,7 @@ fn test_limiter_defaults_regression() {
 #[test]
 fn test_bitcrusher_regression() {
     // Bitcrusher params: 0=bits, 1=rate(downsample), 2=jitter_pct, 3=mix_pct, 4=output_db
-    let mut effect = KernelAdapter::new(BitcrusherKernel::new(SAMPLE_RATE), SAMPLE_RATE);
+    let mut effect = Adapter::new(BitcrusherKernel::new(SAMPLE_RATE), SAMPLE_RATE);
     effect.set_param(0, 4.0); // bit_depth
     effect.set_param(1, 8.0); // downsample rate
 
@@ -802,7 +802,7 @@ fn test_bitcrusher_regression() {
 
 #[test]
 fn test_bitcrusher_defaults_regression() {
-    let effect = KernelAdapter::new(BitcrusherKernel::new(SAMPLE_RATE), SAMPLE_RATE);
+    let effect = Adapter::new(BitcrusherKernel::new(SAMPLE_RATE), SAMPLE_RATE);
     let input = generate_test_signal(TEST_DURATION_SAMPLES);
     run_regression_test("bitcrusher_defaults", effect, &input)
         .expect("Bitcrusher defaults regression test failed");
@@ -811,7 +811,7 @@ fn test_bitcrusher_defaults_regression() {
 #[test]
 fn test_ringmod_regression() {
     // RingMod params: 0=freq_hz, 1=depth_pct, 2=waveform, 3=mix_pct, 4=output_db
-    let mut effect = KernelAdapter::new(RingModKernel::new(SAMPLE_RATE), SAMPLE_RATE);
+    let mut effect = Adapter::new(RingModKernel::new(SAMPLE_RATE), SAMPLE_RATE);
     effect.set_param(0, 440.0); // freq_hz
     effect.set_param(1, 100.0); // depth_pct (classic: 1.0 -> 100%)
     effect.set_param(3, 100.0); // mix_pct (classic: 1.0 -> 100%)
@@ -822,7 +822,7 @@ fn test_ringmod_regression() {
 
 #[test]
 fn test_ringmod_defaults_regression() {
-    let effect = KernelAdapter::new(RingModKernel::new(SAMPLE_RATE), SAMPLE_RATE);
+    let effect = Adapter::new(RingModKernel::new(SAMPLE_RATE), SAMPLE_RATE);
     let input = generate_test_signal(TEST_DURATION_SAMPLES);
     run_regression_test("ringmod_defaults", effect, &input)
         .expect("RingMod defaults regression test failed");
@@ -832,7 +832,7 @@ fn test_ringmod_defaults_regression() {
 fn test_stage_regression() {
     // Stage params: 0=gain_db, 1=width_pct, 2=balance_pct, 3=phase_l, 4=phase_r,
     //   5=channel, 6=dc_block, 7=bass_mono, 8=bass_freq_hz, 9=haas_ms, 10=haas_side, 11=output_db
-    let mut effect = KernelAdapter::new(StageKernel::new(SAMPLE_RATE), SAMPLE_RATE);
+    let mut effect = Adapter::new(StageKernel::new(SAMPLE_RATE), SAMPLE_RATE);
     effect.set_param(0, 3.0); // gain_db
     effect.set_param(1, 150.0); // width_pct
     effect.set_param(2, 25.0); // balance_pct
@@ -845,7 +845,7 @@ fn test_stage_regression() {
 
 #[test]
 fn test_stage_defaults_regression() {
-    let effect = KernelAdapter::new(StageKernel::new(SAMPLE_RATE), SAMPLE_RATE);
+    let effect = Adapter::new(StageKernel::new(SAMPLE_RATE), SAMPLE_RATE);
     let input = generate_test_signal(TEST_DURATION_SAMPLES);
     run_regression_test("stage_defaults", effect, &input)
         .expect("Stage defaults regression test failed");
@@ -861,7 +861,7 @@ fn test_stage_defaults_regression() {
 fn test_amp_regression() {
     // AmpKernel params: 0=gain_pct, 1=bass_pct, 2=mid_pct, 3=treble_pct,
     //   4=presence_pct, 5=sag_pct, 6=bright, 7=master_db, 8=output_db
-    let mut effect = KernelAdapter::new(AmpKernel::new(SAMPLE_RATE), SAMPLE_RATE);
+    let mut effect = Adapter::new(AmpKernel::new(SAMPLE_RATE), SAMPLE_RATE);
     effect.set_param(0, 60.0); // gain_pct
     effect.set_param(1, 50.0); // bass_pct
     effect.set_param(2, 50.0); // mid_pct
@@ -875,7 +875,7 @@ fn test_amp_regression() {
 
 #[test]
 fn test_amp_defaults_regression() {
-    let effect = KernelAdapter::new(AmpKernel::new(SAMPLE_RATE), SAMPLE_RATE);
+    let effect = Adapter::new(AmpKernel::new(SAMPLE_RATE), SAMPLE_RATE);
     let input = generate_test_signal(TEST_DURATION_SAMPLES);
     run_regression_test("amp_defaults", effect, &input)
         .expect("Amp defaults regression test failed");
@@ -884,7 +884,7 @@ fn test_amp_defaults_regression() {
 #[test]
 fn test_cabinet_regression() {
     // CabinetKernel params: 0=ir_select, 1=mix_pct, 2=low_cut_hz, 3=output_db
-    let mut effect = KernelAdapter::new(CabinetKernel::new(SAMPLE_RATE), SAMPLE_RATE);
+    let mut effect = Adapter::new(CabinetKernel::new(SAMPLE_RATE), SAMPLE_RATE);
     effect.set_param(0, 1.0); // ir_select: British Stack
     effect.set_param(1, 100.0); // mix_pct
     effect.set_param(2, 100.0); // low_cut_hz
@@ -895,7 +895,7 @@ fn test_cabinet_regression() {
 
 #[test]
 fn test_cabinet_defaults_regression() {
-    let effect = KernelAdapter::new(CabinetKernel::new(SAMPLE_RATE), SAMPLE_RATE);
+    let effect = Adapter::new(CabinetKernel::new(SAMPLE_RATE), SAMPLE_RATE);
     let input = generate_test_signal(TEST_DURATION_SAMPLES);
     run_regression_test("cabinet_defaults", effect, &input)
         .expect("Cabinet defaults regression test failed");
@@ -905,7 +905,7 @@ fn test_cabinet_defaults_regression() {
 fn test_tuner_regression() {
     // TunerKernel params: 0=reference_hz, 1=mute, 2=output_db, 3=detected_hz (RO), 4=cents (RO)
     // Use a 440 Hz sine so the tuner detects a real frequency
-    let effect = KernelAdapter::new(TunerKernel::new(SAMPLE_RATE), SAMPLE_RATE);
+    let effect = Adapter::new(TunerKernel::new(SAMPLE_RATE), SAMPLE_RATE);
 
     // Generate 440 Hz sine (A4)
     let input: Vec<f32> = (0..TEST_DURATION_SAMPLES)
@@ -919,7 +919,7 @@ fn test_tuner_regression() {
 
 #[test]
 fn test_tuner_defaults_regression() {
-    let effect = KernelAdapter::new(TunerKernel::new(SAMPLE_RATE), SAMPLE_RATE);
+    let effect = Adapter::new(TunerKernel::new(SAMPLE_RATE), SAMPLE_RATE);
     let input = generate_test_signal(TEST_DURATION_SAMPLES);
     run_regression_test("tuner_defaults", effect, &input)
         .expect("Tuner defaults regression test failed");
@@ -928,7 +928,7 @@ fn test_tuner_defaults_regression() {
 #[test]
 fn test_pitch_shift_regression() {
     // PitchShiftKernel params: 0=semitones, 1=cents, 2=grain_ms, 3=mix_pct, 4=quality, 5=output_db
-    let mut effect = KernelAdapter::new(PitchShiftKernel::new(SAMPLE_RATE), SAMPLE_RATE);
+    let mut effect = Adapter::new(PitchShiftKernel::new(SAMPLE_RATE), SAMPLE_RATE);
     effect.set_param(0, 5.0); // semitones: +5
     effect.set_param(1, 0.0); // cents
     effect.set_param(2, 20.0); // grain_ms
@@ -940,7 +940,7 @@ fn test_pitch_shift_regression() {
 
 #[test]
 fn test_pitch_shift_defaults_regression() {
-    let effect = KernelAdapter::new(PitchShiftKernel::new(SAMPLE_RATE), SAMPLE_RATE);
+    let effect = Adapter::new(PitchShiftKernel::new(SAMPLE_RATE), SAMPLE_RATE);
     let input = generate_test_signal(TEST_DURATION_SAMPLES);
     run_regression_test("pitch_shift_defaults", effect, &input)
         .expect("PitchShift defaults regression test failed");
@@ -949,7 +949,7 @@ fn test_pitch_shift_defaults_regression() {
 #[test]
 fn test_shelving_eq_regression() {
     // ShelvingEqKernel params: 0=low_freq_hz, 1=low_gain_db, 2=high_freq_hz, 3=high_gain_db, 4=output_db
-    let mut effect = KernelAdapter::new(ShelvingEqKernel::new(SAMPLE_RATE), SAMPLE_RATE);
+    let mut effect = Adapter::new(ShelvingEqKernel::new(SAMPLE_RATE), SAMPLE_RATE);
     effect.set_param(0, 150.0); // low_freq_hz
     effect.set_param(1, 4.0); // low_gain_db: +4 dB boost
     effect.set_param(2, 6000.0); // high_freq_hz
@@ -961,7 +961,7 @@ fn test_shelving_eq_regression() {
 
 #[test]
 fn test_shelving_eq_defaults_regression() {
-    let effect = KernelAdapter::new(ShelvingEqKernel::new(SAMPLE_RATE), SAMPLE_RATE);
+    let effect = Adapter::new(ShelvingEqKernel::new(SAMPLE_RATE), SAMPLE_RATE);
     let input = generate_test_signal(TEST_DURATION_SAMPLES);
     run_regression_test("shelving_eq_defaults", effect, &input)
         .expect("ShelvingEq defaults regression test failed");
@@ -972,7 +972,7 @@ fn test_multiband_comp_regression() {
     // MultibandCompKernel params: 0=xover_low_hz, 1=xover_high_hz,
     //   2=low_thresh, 3=low_ratio, 4=mid_thresh, 5=mid_ratio,
     //   6=high_thresh, 7=high_ratio, 8=low_gain, 9=mid_gain, 10=high_gain, 11=output_db
-    let mut effect = KernelAdapter::new(MultibandCompKernel::new(SAMPLE_RATE), SAMPLE_RATE);
+    let mut effect = Adapter::new(MultibandCompKernel::new(SAMPLE_RATE), SAMPLE_RATE);
     effect.set_param(0, 250.0); // xover_low_hz
     effect.set_param(1, 3000.0); // xover_high_hz
     effect.set_param(2, -24.0); // low_thresh_db
@@ -989,7 +989,7 @@ fn test_multiband_comp_regression() {
 
 #[test]
 fn test_multiband_comp_defaults_regression() {
-    let effect = KernelAdapter::new(MultibandCompKernel::new(SAMPLE_RATE), SAMPLE_RATE);
+    let effect = Adapter::new(MultibandCompKernel::new(SAMPLE_RATE), SAMPLE_RATE);
     let input = generate_test_signal(TEST_DURATION_SAMPLES);
     run_regression_test("multiband_comp_defaults", effect, &input)
         .expect("MultibandComp defaults regression test failed");
@@ -999,7 +999,7 @@ fn test_multiband_comp_defaults_regression() {
 fn test_plate_reverb_regression() {
     // PlateReverbKernel params: 0=decay_s, 1=damping_pct, 2=predelay_ms,
     //   3=bandwidth_pct, 4=diffusion_pct, 5=size_pct, 6=mix_pct, 7=output_db
-    let mut effect = KernelAdapter::new(PlateReverbKernel::new(SAMPLE_RATE), SAMPLE_RATE);
+    let mut effect = Adapter::new(PlateReverbKernel::new(SAMPLE_RATE), SAMPLE_RATE);
     effect.set_param(0, 2.0); // decay_s
     effect.set_param(1, 50.0); // damping_pct
     effect.set_param(2, 20.0); // predelay_ms
@@ -1015,7 +1015,7 @@ fn test_plate_reverb_regression() {
 
 #[test]
 fn test_plate_reverb_defaults_regression() {
-    let effect = KernelAdapter::new(PlateReverbKernel::new(SAMPLE_RATE), SAMPLE_RATE);
+    let effect = Adapter::new(PlateReverbKernel::new(SAMPLE_RATE), SAMPLE_RATE);
     let input = generate_impulse(TEST_DURATION_SAMPLES);
     run_regression_test("plate_reverb_defaults", effect, &input)
         .expect("PlateReverb defaults regression test failed");
@@ -1023,7 +1023,7 @@ fn test_plate_reverb_defaults_regression() {
 
 #[test]
 fn test_plate_reverb_stereo_regression() {
-    let mut effect = KernelAdapter::new(PlateReverbKernel::new(SAMPLE_RATE), SAMPLE_RATE);
+    let mut effect = Adapter::new(PlateReverbKernel::new(SAMPLE_RATE), SAMPLE_RATE);
     effect.set_param(0, 2.0); // decay_s
     effect.set_param(4, 70.0); // diffusion_pct
     effect.set_param(6, 30.0); // mix_pct
@@ -1036,7 +1036,7 @@ fn test_plate_reverb_stereo_regression() {
 #[test]
 fn test_spring_reverb_regression() {
     // SpringReverbKernel params: 0=decay_s, 1=tension_pct, 2=drip_pct, 3=damping_pct, 4=mix_pct, 5=output_db
-    let mut effect = KernelAdapter::new(SpringReverbKernel::new(SAMPLE_RATE), SAMPLE_RATE);
+    let mut effect = Adapter::new(SpringReverbKernel::new(SAMPLE_RATE), SAMPLE_RATE);
     effect.set_param(0, 2.0); // decay_s
     effect.set_param(1, 50.0); // tension_pct
     effect.set_param(2, 40.0); // drip_pct
@@ -1052,7 +1052,7 @@ fn test_spring_reverb_regression() {
 
 #[test]
 fn test_spring_reverb_defaults_regression() {
-    let effect = KernelAdapter::new(SpringReverbKernel::new(SAMPLE_RATE), SAMPLE_RATE);
+    let effect = Adapter::new(SpringReverbKernel::new(SAMPLE_RATE), SAMPLE_RATE);
     let input = generate_test_signal(TEST_DURATION_SAMPLES);
     run_regression_test("spring_reverb_defaults", effect, &input)
         .expect("SpringReverb defaults regression test failed");
@@ -1061,7 +1061,7 @@ fn test_spring_reverb_defaults_regression() {
 #[test]
 fn test_transient_shaper_regression() {
     // TransientShaperKernel params: 0=attack_pct, 1=sustain_pct, 2=sensitivity_pct, 3=mix_pct, 4=output_db
-    let mut effect = KernelAdapter::new(TransientShaperKernel::new(SAMPLE_RATE), SAMPLE_RATE);
+    let mut effect = Adapter::new(TransientShaperKernel::new(SAMPLE_RATE), SAMPLE_RATE);
     effect.set_param(0, 50.0); // attack_pct: boost transients
     effect.set_param(1, -30.0); // sustain_pct: cut sustain
     effect.set_param(2, 60.0); // sensitivity_pct
@@ -1074,7 +1074,7 @@ fn test_transient_shaper_regression() {
 
 #[test]
 fn test_transient_shaper_defaults_regression() {
-    let effect = KernelAdapter::new(TransientShaperKernel::new(SAMPLE_RATE), SAMPLE_RATE);
+    let effect = Adapter::new(TransientShaperKernel::new(SAMPLE_RATE), SAMPLE_RATE);
     let input = generate_test_signal(TEST_DURATION_SAMPLES);
     run_regression_test("transient_shaper_defaults", effect, &input)
         .expect("TransientShaper defaults regression test failed");
@@ -1083,7 +1083,7 @@ fn test_transient_shaper_defaults_regression() {
 #[test]
 fn test_deesser_regression() {
     // DeesserKernel params: 0=freq_hz, 1=thresh_db, 2=ratio, 3=range_db, 4=output_db
-    let mut effect = KernelAdapter::new(DeesserKernel::new(SAMPLE_RATE), SAMPLE_RATE);
+    let mut effect = Adapter::new(DeesserKernel::new(SAMPLE_RATE), SAMPLE_RATE);
     effect.set_param(0, 6000.0); // freq_hz
     effect.set_param(1, -20.0); // thresh_db
     effect.set_param(2, 8.0); // ratio
@@ -1095,7 +1095,7 @@ fn test_deesser_regression() {
 
 #[test]
 fn test_deesser_defaults_regression() {
-    let effect = KernelAdapter::new(DeesserKernel::new(SAMPLE_RATE), SAMPLE_RATE);
+    let effect = Adapter::new(DeesserKernel::new(SAMPLE_RATE), SAMPLE_RATE);
     let input = generate_test_signal(TEST_DURATION_SAMPLES);
     run_regression_test("deesser_defaults", effect, &input)
         .expect("Deesser defaults regression test failed");
@@ -1104,7 +1104,7 @@ fn test_deesser_defaults_regression() {
 #[test]
 fn test_stereo_widener_regression() {
     // StereoWidenerKernel params: 0=width_pct, 1=haas_delay_ms, 2=bass_mono_hz, 3=output_db
-    let mut effect = KernelAdapter::new(StereoWidenerKernel::new(SAMPLE_RATE), SAMPLE_RATE);
+    let mut effect = Adapter::new(StereoWidenerKernel::new(SAMPLE_RATE), SAMPLE_RATE);
     effect.set_param(0, 150.0); // width_pct: widen
     effect.set_param(1, 8.0); // haas_delay_ms
     effect.set_param(2, 120.0); // bass_mono_hz
@@ -1116,7 +1116,7 @@ fn test_stereo_widener_regression() {
 
 #[test]
 fn test_stereo_widener_defaults_regression() {
-    let effect = KernelAdapter::new(StereoWidenerKernel::new(SAMPLE_RATE), SAMPLE_RATE);
+    let effect = Adapter::new(StereoWidenerKernel::new(SAMPLE_RATE), SAMPLE_RATE);
     let input = generate_test_signal(TEST_DURATION_SAMPLES);
     run_regression_test("stereo_widener_defaults", effect, &input)
         .expect("StereoWidener defaults regression test failed");
@@ -1125,7 +1125,7 @@ fn test_stereo_widener_defaults_regression() {
 #[test]
 fn test_looper_defaults_regression() {
     // LooperKernel at default params (mode=Stop) should pass audio through.
-    let effect = KernelAdapter::new(LooperKernel::new(SAMPLE_RATE), SAMPLE_RATE);
+    let effect = Adapter::new(LooperKernel::new(SAMPLE_RATE), SAMPLE_RATE);
     let input = generate_test_signal(TEST_DURATION_SAMPLES);
     run_regression_test("looper_defaults", effect, &input)
         .expect("Looper defaults regression test failed");

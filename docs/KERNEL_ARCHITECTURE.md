@@ -33,16 +33,16 @@ The kernel architecture separates DSP math from parameter ownership:
             |
             +----------+-----------------+
                        v
-          +-----------------------+
-          | KernelAdapter<K>      |  (provided by sonido-core)
-          |                       |
-          |  impl Effect          |  <- automatic
-          |  impl ParameterInfo   |  <- automatic
-          |  impl EffectWithParams|  <- blanket impl, free
-          |  owns SmoothedParams  |  <- managed by adapter
-          |  load_snapshot()      |  <- preset recall
-          |  snapshot()           |  <- preset save
-          +-----------------------+
+          +-------------------------------+
+          | Adapter<K, SmoothedPolicy>    |  (provided by sonido-core)
+          |                               |
+          |  impl Effect                  |  <- automatic
+          |  impl ParameterInfo           |  <- automatic
+          |  impl EffectWithParams        |  <- blanket impl, free
+          |  owns SmoothedParams          |  <- managed by adapter
+          |  load_snapshot()              |  <- preset recall
+          |  snapshot()                   |  <- preset save
+          +-------------------------------+
                        |
        +---------------+------------------+
        v               v                  v
@@ -93,21 +93,21 @@ Unit conversion (`dB->linear`, `%->fraction`) happens INSIDE the kernel's
 
 ### Smoothing is external
 
-The kernel never smooths parameters. It receives instantaneous values. The `KernelAdapter`
+The kernel never smooths parameters. It receives instantaneous values. The `Adapter<K, SmoothedPolicy>`
 (or embedded hardware filtering, or the host's parameter smoothing) handles transitions.
 `KernelParams::smoothing()` is a *preference* that the adapter respects -- not a guarantee.
 
 ### One path, no duplication
 
-Every effect is implemented as a `DspKernel`. The `KernelAdapter` is the **only** type that
+Every effect is implemented as a `DspKernel`. The `Adapter` is the **only** type that
 implements `Effect` for audio effects. If you find yourself writing `impl Effect for MyEffect`
 directly, write a kernel instead.
 
 ### Adapter is invisible
 
 Code that uses `Box<dyn Effect>`, `Box<dyn EffectWithParams + Send>`, or the registry
-**must not know** that the underlying implementation is a kernel adapter. The adapter
-implements the full `Effect` + `ParameterInfo` interface.
+**must not know** that the underlying implementation is `Adapter<K, SmoothedPolicy>`. The
+adapter implements the full `Effect` + `ParameterInfo` interface.
 
 ---
 
@@ -232,6 +232,11 @@ impl DelayParams {
     }
 }
 ```
+
+When using `Adapter<K, DirectPolicy>` (the preferred embedded path), parameter mapping
+is handled by `adc_to_param_biased()` in `sonido-daisy` instead of `from_knobs()`.
+This uses `ParamDescriptor` metadata to provide scale-aware mapping with a biased
+center point ("noon = sweet spot"). See ADR-030 and `docs/EMBEDDED.md` for details.
 
 ### Preset morphing
 
@@ -442,7 +447,7 @@ self.register(
         category: EffectCategory::Dynamics,
         param_count: 3,
     },
-    |sr| Box::new(KernelAdapter::new(MyEffectKernel::new(sr), sr)),
+    |sr| Box::new(Adapter::new(MyEffectKernel::new(sr), sr)),
 );
 ```
 
@@ -467,7 +472,7 @@ fn silence_in_silence_out() {
 ```rust
 #[test]
 fn adapter_wraps_as_effect() {
-    let mut adapter = KernelAdapter::new(MyEffectKernel::new(48000.0), 48000.0);
+    let mut adapter = Adapter::new(MyEffectKernel::new(48000.0), 48000.0);
     adapter.reset();
     let output = adapter.process(0.3);
     assert!(output.is_finite());
@@ -532,7 +537,7 @@ the baseline, then verify the output sounds correct.
 crates/sonido-core/src/kernel/
 +-- mod.rs          # Module root, doc comments, re-exports
 +-- traits.rs       # DspKernel, KernelParams, SmoothingStyle
-+-- adapter.rs      # KernelAdapter<K> -- the only Effect implementor
++-- adapter.rs      # Adapter<K, P> -- the only Effect implementor
 
 crates/sonido-effects/src/kernels/
 +-- mod.rs          # Module root, re-exports all 19 kernels
@@ -567,13 +572,13 @@ negligible (~5 smoother advances per sample per effect) and the integration simp
 is worth it.
 
 **Q: What about block processing optimizations?**
-The `KernelAdapter` calls `process_stereo()` per sample inside its block methods because
-it advances smoothers per sample. The `DspKernel` trait also has `process_block_stereo()`
-which takes a single params snapshot for the entire block -- this is for embedded use
-where params don't change mid-block.
+`Adapter<K, SmoothedPolicy>` calls `process_stereo()` per sample inside its block methods
+because it advances smoothers per sample. The `DspKernel` trait also has
+`process_block_stereo()` which takes a single params snapshot for the entire block -- this
+is for embedded use where params don't change mid-block.
 
 **Q: What about the `impl_params!` macro?**
-`KernelParams` replaces the need for per-effect `impl_params!`. The `KernelAdapter` uses
+`KernelParams` replaces the need for per-effect `impl_params!`. The `Adapter` uses
 `KernelParams` to implement `ParameterInfo` automatically. Eventually, a
 `#[derive(KernelParams)]` proc macro will eliminate the manual `get/set/descriptor/smoothing`
 match arms.
@@ -586,8 +591,8 @@ adapter. Common fixup: `use sonido_effects::Distortion` ->
 **Q: How does the plugin integration work?**
 The CLAP plugin adapter gets kernels automatically through the registry.
 `SonidoShared::new()` calls `registry.create(effect_id, sr)` which returns
-`KernelAdapter<K>`. The plugin's atomic parameter array writes to
-`KernelAdapter::set_param()`, which sets the smoother target.
+`Adapter<K, SmoothedPolicy>`. The plugin's atomic parameter array writes to
+`Adapter::set_param()`, which sets the smoother target.
 
 **Q: How does embedded use work without the adapter?**
 On Daisy Seed / Hothouse, use kernels directly:

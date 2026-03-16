@@ -3,7 +3,7 @@
 //! `TapeKernel` owns DSP state (ADAA processors, LFOs, delay lines, hysteresis
 //! registers, biquad filters, envelope followers, one-pole filters). Parameters
 //! are received via `&TapeParams` each sample. Deployed via
-//! [`KernelAdapter`](sonido_core::KernelAdapter) for desktop/plugin, or called
+//! [`Adapter`](sonido_core::kernel::Adapter) for desktop/plugin, or called
 //! directly on embedded targets.
 //!
 //! # Signal Flow
@@ -60,7 +60,7 @@
 //!
 //! ```rust,ignore
 //! // Desktop / Plugin (via adapter)
-//! let adapter = KernelAdapter::new(TapeKernel::new(48000.0), 48000.0);
+//! let adapter = Adapter::new(TapeKernel::new(48000.0), 48000.0);
 //! let mut effect: Box<dyn Effect> = Box::new(adapter);
 //!
 //! // Embedded / Daisy Seed (direct)
@@ -151,7 +151,7 @@ fn tape_waveshape(x: f32) -> f32 {
 /// | 6 | `hysteresis` | none | 0-0.5 | 0.15 | 1407 | tape_hysteresis |
 /// | 7 | `head_bump` | none | 0-1 | 0.3 | 1408 | tape_head_bump |
 /// | 8 | `bump_freq_hz` | Hz | 40-200 | 80.0 | 1409 | tape_bump_freq |
-/// | 9 | `output_db` | dB | -12-12 | -6.0 | 1402 | tape_output |
+/// | 9 | `output_db` | dB | -12-+12 | -6.0 | 1402 | tape_output |
 #[derive(Debug, Clone, Copy)]
 pub struct TapeParams {
     /// Input drive in decibels.
@@ -209,7 +209,7 @@ pub struct TapeParams {
 
     /// Output level in decibels.
     ///
-    /// Range: -12.0 to 12.0 dB. Applied after all processing. Default -6.0 dB.
+    /// Range: -12.0 to +12.0 dB. Applied after all processing. Default -6.0 dB.
     pub output_db: f32,
 }
 
@@ -247,7 +247,7 @@ impl TapeParams {
     /// - `hysteresis`: Hysteresis knob (0–1) → 0–0.5
     /// - `head_bump`: Head bump level knob (0–1) → 0–1
     /// - `bump_freq`: Bump freq knob (0–1) → 40–200 Hz (logarithmic)
-    /// - `output`: Output knob (0–1) → -12 to +12 dB
+    /// - `output`: Output knob (0–1) → -6 to +6 dB
     #[allow(clippy::too_many_arguments)]
     pub fn from_knobs(
         drive: f32,
@@ -393,17 +393,8 @@ impl KernelParams for TapeParams {
                 .with_scale(ParamScale::Logarithmic),
             ),
             9 => Some(
-                ParamDescriptor {
-                    name: "Output",
-                    short_name: "Output",
-                    unit: ParamUnit::Decibels,
-                    min: -12.0,
-                    max: 12.0,
-                    default: -6.0,
-                    step: 0.5,
-                    ..ParamDescriptor::mix()
-                }
-                .with_id(ParamId(1402), "tape_output"),
+                ParamDescriptor::gain_db("Output", "Out", -12.0, 12.0, -6.0)
+                    .with_id(ParamId(1402), "tape_output"),
             ),
             _ => None,
         }
@@ -912,7 +903,7 @@ impl DspKernel for TapeKernel {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sonido_core::kernel::KernelAdapter;
+    use sonido_core::kernel::Adapter;
     use sonido_core::{Effect, ParameterInfo};
 
     /// Silence in produces silence out at default settings.
@@ -953,11 +944,11 @@ mod tests {
         );
     }
 
-    /// KernelAdapter exposes the kernel as a standard Effect.
+    /// Adapter exposes the kernel as a standard Effect.
     #[test]
     fn adapter_wraps_as_effect() {
         let kernel = TapeKernel::new(48000.0);
-        let mut adapter = KernelAdapter::new(kernel, 48000.0);
+        let mut adapter = Adapter::new(kernel, 48000.0);
         adapter.reset();
         let output = adapter.process(0.3);
         assert!(output.is_finite(), "Adapter output not finite: {output}");
@@ -967,7 +958,7 @@ mod tests {
     #[test]
     fn adapter_param_info_matches() {
         let kernel = TapeKernel::new(48000.0);
-        let adapter = KernelAdapter::new(kernel, 48000.0);
+        let adapter = Adapter::new(kernel, 48000.0);
 
         assert_eq!(adapter.param_count(), TapeParams::COUNT);
 
@@ -1300,23 +1291,23 @@ mod tests {
     #[test]
     fn snapshot_roundtrip_through_adapter() {
         let kernel = TapeKernel::new(48000.0);
-        let mut adapter = KernelAdapter::new(kernel, 48000.0);
-        adapter.set_param(0, 18.0);
-        adapter.set_param(1, 80.0);
+        let mut adapter = Adapter::new(kernel, 48000.0);
+        adapter.set_param(0, 10.0);
+        adapter.set_param(1, 50.0);
         adapter.set_param(6, 0.25);
 
         let saved = adapter.snapshot();
 
         let kernel2 = TapeKernel::new(48000.0);
-        let mut adapter2 = KernelAdapter::new(kernel2, 48000.0);
+        let mut adapter2 = Adapter::new(kernel2, 48000.0);
         adapter2.load_snapshot(&saved);
 
         assert!(
-            (adapter2.get_param(0) - 18.0).abs() < 0.01,
+            (adapter2.get_param(0) - 10.0).abs() < 0.01,
             "drive snapshot"
         );
         assert!(
-            (adapter2.get_param(1) - 80.0).abs() < 0.01,
+            (adapter2.get_param(1) - 50.0).abs() < 0.01,
             "saturation snapshot"
         );
         assert!(

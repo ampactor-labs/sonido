@@ -7,7 +7,7 @@ description = "Sonido DSP firmware for Electrosmith Daisy Seed (STM32H750 Cortex
 publish = false
 
 [features]
-## Enables `EmbeddedAdapter`, `adc_to_param`, and DSP-dependent library modules.
+## Enables `Adapter`/`DirectPolicy` re-exports, `adc_to_param`, and DSP-dependent library modules.
 ## Required for DSP examples (single_effect, sonido_pedal, hothouse_diag).
 ## Not needed for simple examples (blinky, passthrough) that don't use alloc.
 alloc = []

@@ -15,7 +15,6 @@
 //!    the existing [`Effect`](crate::Effect) + [`ParameterInfo`](crate::ParameterInfo)
 //!    interface. The smoothing policy `S` controls how parameter changes are applied:
 //!    [`SmoothedPolicy`] (desktop/plugin) or [`DirectPolicy`] (embedded).
-//!    [`KernelAdapter<K>`] is the type alias for `Adapter<K, SmoothedPolicy>`.
 //!
 //! # Why This Exists
 //!
@@ -38,8 +37,8 @@
 //!
 //! Existing `Effect` implementations continue to work unchanged. New effects can
 //! use the kernel architecture from the start. Existing effects can be migrated
-//! incrementally — the [`KernelAdapter`] produces a standard `Effect` that the
-//! rest of the system (graph, registry, plugin, GUI) consumes without knowing
+//! incrementally — `Adapter<K, SmoothedPolicy>` produces a standard `Effect` that
+//! the rest of the system (graph, registry, plugin, GUI) consumes without knowing
 //! whether the underlying implementation is a classic `Effect` or a `DspKernel`.
 //!
 //! See `docs/KERNEL_ARCHITECTURE.md` for the full architecture reference and
@@ -48,7 +47,7 @@
 //! # Example
 //!
 //! ```rust,ignore
-//! use sonido_core::kernel::{DspKernel, KernelParams, KernelAdapter, SmoothingStyle};
+//! use sonido_core::kernel::{DspKernel, KernelParams, Adapter, SmoothingStyle};
 //!
 //! // 1. Define parameters (one definition for all platforms)
 //! struct GainParams { gain_db: f32 }
@@ -66,7 +65,7 @@
 //! }
 //!
 //! // 3. Deploy anywhere
-//! let adapter = KernelAdapter::new(GainKernel, 48000.0); // → dyn Effect
+//! let adapter = Adapter::new(GainKernel, 48000.0); // → dyn Effect
 //! ```
 //!
 //! # no_std Support
@@ -78,6 +77,6 @@ pub mod hot_reload;
 pub mod morph;
 mod traits;
 
-pub use adapter::{Adapter, DirectPolicy, KernelAdapter, SmoothedPolicy, SmoothingPolicy};
+pub use adapter::{Adapter, DirectPolicy, SmoothedPolicy, SmoothingPolicy};
 pub use morph::{MorphCurve, MorphSpace};
 pub use traits::{DspKernel, KernelParams, SmoothingStyle};

@@ -2,7 +2,7 @@
 //!
 //! `StageKernel` owns DSP state (DC blockers, LR4 biquads, Haas delay line).
 //! Parameters are received via `&StageParams` each sample. Deployed via
-//! [`KernelAdapter`](sonido_core::KernelAdapter) for desktop/plugin, or called
+//! [`Adapter`](sonido_core::kernel::Adapter) for desktop/plugin, or called
 //! directly on embedded targets.
 //!
 //! # Signal Flow
@@ -57,8 +57,8 @@
 //!
 //! ```rust,ignore
 //! // Desktop / Plugin (via adapter — handles smoothing automatically)
-//! use sonido_core::KernelAdapter;
-//! let adapter = KernelAdapter::new(StageKernel::new(48000.0), 48000.0);
+//! use sonido_core::kernel::Adapter;
+//! let adapter = Adapter::new(StageKernel::new(48000.0), 48000.0);
 //! let mut effect: Box<dyn Effect> = Box::new(adapter);
 //!
 //! // Embedded / Daisy Seed (direct — no smoothing, ADCs are hardware-filtered)
@@ -662,7 +662,7 @@ impl DspKernel for StageKernel {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sonido_core::kernel::KernelAdapter;
+    use sonido_core::kernel::Adapter;
     use sonido_core::{Effect, ParameterInfo};
 
     // ── Basic correctness ─────────────────────────────────────────────────────
@@ -727,11 +727,11 @@ mod tests {
         );
     }
 
-    /// The kernel must wrap into a `KernelAdapter` and function as an `Effect`.
+    /// The kernel must wrap into an `Adapter` and function as an `Effect`.
     #[test]
     fn adapter_wraps_as_effect() {
         let kernel = StageKernel::new(48000.0);
-        let mut adapter = KernelAdapter::new(kernel, 48000.0);
+        let mut adapter = Adapter::new(kernel, 48000.0);
 
         adapter.reset();
         let output = adapter.process(0.3);
@@ -743,7 +743,7 @@ mod tests {
     #[test]
     fn adapter_param_info_matches() {
         let kernel = StageKernel::new(48000.0);
-        let adapter = KernelAdapter::new(kernel, 48000.0);
+        let adapter = Adapter::new(kernel, 48000.0);
 
         assert_eq!(adapter.param_count(), 12);
 
@@ -868,10 +868,10 @@ mod tests {
             p.haas_ms
         );
         assert!(
-            (p.output_db - (-20.0)).abs() < 0.1,
-            "Output at 0.0 should be -20 dB, got {}",
+            (p.output_db - (-6.0)).abs() < 0.1,
+            "Output at 0.0 should be -6 dB, got {}",
             p.output_db
-        );
+        ); // output_param_descriptor range [-6, 6]
     }
 
     /// Default parameters must pass a sustained signal with unity gain.

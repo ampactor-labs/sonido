@@ -50,7 +50,7 @@ Rows marked `<!-- PLANNED -->` are pre-reserved for v0.3+ features. Do not updat
 | `crates/sonido-plugin/src/chain/*.rs` | CLAUDE.md (Key Files table), `docs/ARCHITECTURE.md` (plugin section), `docs/DESIGN_DECISIONS.md` ADR-026, `docs/CHANGELOG.md` | ChainPlugin, ClapParamId, ChainShared, ChainAudioProcessor, ChainMainThread, ChainParamBridge, ChainEditor |
 | `crates/sonido-config/src/*.rs` | `docs/GETTING_STARTED.md` (presets section) | Preset format, config paths, validation |
 | Any new crate | CLAUDE.md (Crates table + Key Files table), `docs/ARCHITECTURE.md` (diagram) | Crate purpose, no_std status, dependency position |
-| `crates/sonido-core/src/kernel/traits.rs`, `adapter.rs` | CLAUDE.md (Kernel Architecture section), `docs/ARCHITECTURE.md` (Kernel Architecture), `docs/KERNEL_ARCHITECTURE.md`, `docs/DESIGN_DECISIONS.md` ADR-028 | DspKernel, KernelParams, SmoothingStyle, KernelAdapter |
+| `crates/sonido-core/src/kernel/traits.rs`, `adapter.rs` | CLAUDE.md (Kernel Architecture section), `docs/ARCHITECTURE.md` (Kernel Architecture), `docs/KERNEL_ARCHITECTURE.md`, `docs/DESIGN_DECISIONS.md` ADR-028 | DspKernel, KernelParams, SmoothingStyle, Adapter (SmoothedPolicy / DirectPolicy) |
 | `crates/sonido-effects/src/kernels/*.rs` | `docs/EFFECTS_REFERENCE.md` (Kernel Architecture), `docs/ARCHITECTURE.md` | Kernel implementations, parameter tables, from_knobs() |
 | `crates/sonido-core/src/graph/` | `docs/ARCHITECTURE.md` (DAG section), `docs/DESIGN_DECISIONS.md` ADR-025, CLAUDE.md (Crates table, Key Patterns, Key Files) | Node types, buffer pool, topological sort, `ProcessingGraph` API |
 | `crates/sonido-core/src/graph/engine.rs` | `docs/ARCHITECTURE.md` (data flow), CLAUDE.md (Key Files) | `GraphEngine` API, `from_chain()` migration path |

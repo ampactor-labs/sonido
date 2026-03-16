@@ -41,14 +41,14 @@
 //!
 //! ```rust,ignore
 //! use sonido_core::graph::{ProcessingGraph, GraphError};
-//! use sonido_core::KernelAdapter;
+//! use sonido_core::Adapter;
 //! use sonido_effects::kernels::{DistortionKernel, ReverbKernel};
 //!
 //! let mut graph = ProcessingGraph::new(48000.0, 256);
 //! let input = graph.add_input();
 //! let output = graph.add_output();
-//! let dist = graph.add_effect(Box::new(KernelAdapter::new(DistortionKernel::new(48000.0), 48000.0)));
-//! let reverb = graph.add_effect(Box::new(KernelAdapter::new(ReverbKernel::new(48000.0), 48000.0)));
+//! let dist = graph.add_effect(Box::new(Adapter::new(DistortionKernel::new(48000.0), 48000.0)));
+//! let reverb = graph.add_effect(Box::new(Adapter::new(ReverbKernel::new(48000.0), 48000.0)));
 //!
 //! graph.connect(input, dist)?;
 //! graph.connect(dist, reverb)?;

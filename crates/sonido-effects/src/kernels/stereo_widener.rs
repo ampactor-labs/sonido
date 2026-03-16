@@ -2,7 +2,7 @@
 //!
 //! `StereoWidenerKernel` owns DSP state (LR4 biquads, Haas delay line,
 //! coefficient cache). Parameters are received via `&StereoWidenerParams` each
-//! sample. Deployed via [`KernelAdapter`](sonido_core::KernelAdapter) for
+//! sample. Deployed via [`Adapter`](sonido_core::kernel::Adapter) for
 //! desktop/plugin, or called directly on embedded targets.
 //!
 //! # Signal Flow
@@ -52,7 +52,7 @@
 //!
 //! ```rust,ignore
 //! // Desktop / Plugin (via adapter — handles smoothing automatically)
-//! let adapter = KernelAdapter::new(StereoWidenerKernel::new(48000.0), 48000.0);
+//! let adapter = Adapter::new(StereoWidenerKernel::new(48000.0), 48000.0);
 //! let mut effect: Box<dyn Effect> = Box::new(adapter);
 //!
 //! // Embedded / Daisy Seed (direct — no smoothing, ADCs are hardware-filtered)
@@ -409,7 +409,7 @@ impl DspKernel for StereoWidenerKernel {
 mod tests {
     use super::*;
     use sonido_core::Effect;
-    use sonido_core::kernel::KernelAdapter;
+    use sonido_core::kernel::Adapter;
 
     #[test]
     fn silence_in_silence_out() {
@@ -471,7 +471,7 @@ mod tests {
     #[test]
     fn adapter_wraps_as_effect() {
         let kernel = StereoWidenerKernel::new(48000.0);
-        let mut adapter = KernelAdapter::new(kernel, 48000.0);
+        let mut adapter = Adapter::new(kernel, 48000.0);
         adapter.reset();
         let output = adapter.process(0.3);
         assert!(!output.is_nan(), "adapter.process() returned NaN");

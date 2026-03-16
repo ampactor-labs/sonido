@@ -2,7 +2,7 @@
 //!
 //! `PreampKernel` owns DSP state (tone biquad filter, sample rate, cached
 //! coefficient tracking). Parameters are received via `&PreampParams` each
-//! sample. Deployed via [`KernelAdapter`](sonido_core::KernelAdapter) for
+//! sample. Deployed via [`Adapter`](sonido_core::kernel::Adapter) for
 //! desktop/plugin, or called directly on embedded targets.
 //!
 //! # Signal Flow
@@ -52,8 +52,8 @@
 //!
 //! ```rust,ignore
 //! // Desktop / Plugin (via adapter — handles smoothing automatically)
-//! use sonido_core::kernel::KernelAdapter;
-//! let adapter = KernelAdapter::new(PreampKernel::new(48000.0), 48000.0);
+//! use sonido_core::kernel::Adapter;
+//! let adapter = Adapter::new(PreampKernel::new(48000.0), 48000.0);
 //! let mut effect: Box<dyn Effect> = Box::new(adapter);
 //!
 //! // Embedded / Daisy Seed (direct — no smoothing, ADCs are hardware-filtered)
@@ -365,7 +365,7 @@ impl DspKernel for PreampKernel {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sonido_core::kernel::KernelAdapter;
+    use sonido_core::kernel::Adapter;
     use sonido_core::{Effect, KernelParams, ParameterInfo};
 
     // Zero-config kernel invariant tests (finite output, reset, morph, descriptors, extreme inputs)
@@ -487,7 +487,7 @@ mod tests {
     #[test]
     fn adapter_wraps_as_effect() {
         let kernel = PreampKernel::new(48000.0);
-        let mut adapter = KernelAdapter::new(kernel, 48000.0);
+        let mut adapter = Adapter::new(kernel, 48000.0);
 
         // Should behave as a standard Effect
         adapter.reset();
@@ -499,7 +499,7 @@ mod tests {
     #[test]
     fn adapter_param_info_matches() {
         let kernel = PreampKernel::new(48000.0);
-        let adapter = KernelAdapter::new(kernel, 48000.0);
+        let adapter = Adapter::new(kernel, 48000.0);
 
         assert_eq!(adapter.param_count(), 3);
 
@@ -695,18 +695,15 @@ mod tests {
         let p = PreampParams::from_knobs(0.5, 1.0, 0.5);
         assert!((p.tone_db - 12.0).abs() < 0.01, "tone knob 1.0 → +12 dB");
 
-        // 0.5 on output → -20 + 0.5*26 = -7.0 dB  (output range is -20..+6)
+        // 0.5 on output → -6 + 0.5*12 = 0.0 dB  (output_param_descriptor range is -6..+6)
         let p = PreampParams::from_knobs(0.5, 0.5, 0.5);
-        assert!(
-            (p.output_db - (-7.0)).abs() < 0.01,
-            "output knob 0.5 → -7 dB"
-        );
+        assert!((p.output_db - 0.0).abs() < 0.01, "output knob 0.5 → 0 dB");
 
-        // 0.0 on output → -20.0 dB
+        // 0.0 on output → -6.0 dB
         let p = PreampParams::from_knobs(0.5, 0.5, 0.0);
         assert!(
-            (p.output_db - (-20.0)).abs() < 0.01,
-            "output knob 0.0 → -20 dB"
+            (p.output_db - (-6.0)).abs() < 0.01,
+            "output knob 0.0 → -6 dB"
         );
 
         // 1.0 on output → +6.0 dB  (OUTPUT_MAX_DB = 6.0)
@@ -779,7 +776,7 @@ mod tests {
     #[test]
     fn adapter_set_get_roundtrip() {
         let kernel = PreampKernel::new(48000.0);
-        let mut adapter = KernelAdapter::new(kernel, 48000.0);
+        let mut adapter = Adapter::new(kernel, 48000.0);
 
         adapter.set_param(0, 20.0); // gain
         assert!(
@@ -803,24 +800,24 @@ mod tests {
     #[test]
     fn adapter_snapshot_roundtrip() {
         let kernel = PreampKernel::new(48000.0);
-        let mut adapter = KernelAdapter::new(kernel, 48000.0);
+        let mut adapter = Adapter::new(kernel, 48000.0);
 
         adapter.set_param(0, 18.0);
         adapter.set_param(1, 4.0);
-        adapter.set_param(2, -9.0);
+        adapter.set_param(2, -3.0); // within output_param_descriptor range [-6, 6]
 
         let saved = adapter.snapshot();
         assert!((saved.gain_db - 18.0).abs() < 0.01);
         assert!((saved.tone_db - 4.0).abs() < 0.01);
-        assert!((saved.output_db - (-9.0)).abs() < 0.01);
+        assert!((saved.output_db - (-3.0)).abs() < 0.01);
 
         // Load into a fresh adapter
         let kernel2 = PreampKernel::new(48000.0);
-        let mut adapter2 = KernelAdapter::new(kernel2, 48000.0);
+        let mut adapter2 = Adapter::new(kernel2, 48000.0);
         adapter2.load_snapshot(&saved);
 
         assert!((adapter2.get_param(0) - 18.0).abs() < 0.01);
         assert!((adapter2.get_param(1) - 4.0).abs() < 0.01);
-        assert!((adapter2.get_param(2) - (-9.0)).abs() < 0.01);
+        assert!((adapter2.get_param(2) - (-3.0)).abs() < 0.01);
     }
 }

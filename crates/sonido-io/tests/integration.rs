@@ -618,10 +618,10 @@ fn engine_process_block_inplace() {
 
 #[test]
 fn engine_with_real_distortion_effect() {
-    use sonido_core::KernelAdapter;
+    use sonido_core::Adapter;
     use sonido_effects::kernels::DistortionKernel;
 
-    let mut dist = KernelAdapter::new(DistortionKernel::new(48000.0), 48000.0);
+    let mut dist = Adapter::new(DistortionKernel::new(48000.0), 48000.0);
     dist.set_param(0, 20.0); // drive
     let mut engine = GraphEngine::from_chain(vec![Box::new(dist)], 48000.0, 256).unwrap();
 
@@ -649,10 +649,10 @@ fn engine_with_real_distortion_effect() {
 
 #[test]
 fn engine_with_real_reverb_stereo() {
-    use sonido_core::KernelAdapter;
+    use sonido_core::Adapter;
     use sonido_effects::kernels::ReverbKernel;
 
-    let mut reverb = KernelAdapter::new(ReverbKernel::new(48000.0), 48000.0);
+    let mut reverb = Adapter::new(ReverbKernel::new(48000.0), 48000.0);
     reverb.set_param(4, 50.0); // mix (percent)
     reverb.set_param(1, 80.0); // decay (percent)
     let mut engine = GraphEngine::from_chain(vec![Box::new(reverb)], 48000.0, 256).unwrap();
@@ -691,7 +691,7 @@ fn engine_with_real_reverb_stereo() {
 
 #[test]
 fn end_to_end_wav_process_wav() {
-    use sonido_core::KernelAdapter;
+    use sonido_core::Adapter;
     use sonido_effects::kernels::CompressorKernel;
 
     // Write input WAV
@@ -712,10 +712,7 @@ fn end_to_end_wav_process_wav() {
     // Process through engine
     let sr_f = spec.sample_rate as f32;
     let mut engine = GraphEngine::from_chain(
-        vec![Box::new(KernelAdapter::new(
-            CompressorKernel::new(sr_f),
-            sr_f,
-        ))],
+        vec![Box::new(Adapter::new(CompressorKernel::new(sr_f), sr_f))],
         sr_f,
         512,
     )

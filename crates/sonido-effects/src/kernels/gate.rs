@@ -3,7 +3,7 @@
 //! `GateKernel` owns DSP state (envelope follower, sidechain biquad, gate
 //! state machine, exponential coefficients, linear caches). Parameters are
 //! received via `&GateParams` each sample. Deployed via
-//! [`KernelAdapter`](sonido_core::KernelAdapter) for desktop/plugin, or
+//! [`Adapter`](sonido_core::kernel::Adapter) for desktop/plugin, or
 //! called directly on embedded targets.
 //!
 //! # Signal Flow
@@ -34,7 +34,7 @@
 //!
 //! ```rust,ignore
 //! // Desktop / Plugin (adapter handles smoothing)
-//! let adapter = KernelAdapter::new(GateKernel::new(48000.0), 48000.0);
+//! let adapter = Adapter::new(GateKernel::new(48000.0), 48000.0);
 //! let mut effect: Box<dyn Effect> = Box::new(adapter);
 //!
 //! // Embedded / Daisy Seed (direct — no smoothing)
@@ -822,7 +822,7 @@ impl DspKernel for GateKernel {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sonido_core::kernel::KernelAdapter;
+    use sonido_core::kernel::Adapter;
     use sonido_core::{Effect, ParameterInfo};
 
     // ── Kernel unit tests ──────────────────────────────────────────────────
@@ -960,11 +960,11 @@ mod tests {
 
     // ── Adapter integration tests ──────────────────────────────────────────
 
-    /// Wrapping in KernelAdapter must produce a functioning Effect.
+    /// Wrapping in Adapter must produce a functioning Effect.
     #[test]
     fn adapter_wraps_as_effect() {
         let kernel = GateKernel::new(48000.0);
-        let mut adapter = KernelAdapter::new(kernel, 48000.0);
+        let mut adapter = Adapter::new(kernel, 48000.0);
 
         adapter.reset();
         let output = adapter.process(0.0);
@@ -983,7 +983,7 @@ mod tests {
     #[test]
     fn adapter_param_info_matches() {
         let kernel = GateKernel::new(48000.0);
-        let adapter = KernelAdapter::new(kernel, 48000.0);
+        let adapter = Adapter::new(kernel, 48000.0);
 
         // Count (9 = 8 user params + 1 READ_ONLY diagnostic)
         assert_eq!(adapter.param_count(), 9);

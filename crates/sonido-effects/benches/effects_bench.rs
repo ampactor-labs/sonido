@@ -4,7 +4,7 @@
 #![allow(missing_docs)]
 
 use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
-use sonido_core::{Effect, EffectExt, KernelAdapter, Oversampled, ParameterInfo};
+use sonido_core::{Adapter, Effect, EffectExt, Oversampled, ParameterInfo};
 use sonido_effects::kernels::{
     BitcrusherKernel, ChorusKernel, CompressorKernel, DelayKernel, DistortionKernel, EqKernel,
     FilterKernel, FlangerKernel, GateKernel, LimiterKernel, PhaserKernel, PreampKernel,
@@ -46,14 +46,14 @@ fn bench_effect<E: Effect>(c: &mut Criterion, name: &str, mut effect: E) {
 }
 
 fn bench_distortion(c: &mut Criterion) {
-    let mut effect = KernelAdapter::new(DistortionKernel::new(SAMPLE_RATE), SAMPLE_RATE);
+    let mut effect = Adapter::new(DistortionKernel::new(SAMPLE_RATE), SAMPLE_RATE);
     effect.set_param(0, 20.0); // drive
     effect.set_param(1, 3.0); // tone
     bench_effect(c, "Distortion", effect);
 }
 
 fn bench_compressor(c: &mut Criterion) {
-    let mut effect = KernelAdapter::new(CompressorKernel::new(SAMPLE_RATE), SAMPLE_RATE);
+    let mut effect = Adapter::new(CompressorKernel::new(SAMPLE_RATE), SAMPLE_RATE);
     effect.set_param(0, -20.0); // threshold
     effect.set_param(1, 4.0); // ratio
     effect.set_param(2, 5.0); // attack
@@ -62,7 +62,7 @@ fn bench_compressor(c: &mut Criterion) {
 }
 
 fn bench_chorus(c: &mut Criterion) {
-    let mut effect = KernelAdapter::new(ChorusKernel::new(SAMPLE_RATE), SAMPLE_RATE);
+    let mut effect = Adapter::new(ChorusKernel::new(SAMPLE_RATE), SAMPLE_RATE);
     effect.set_param(0, 2.0); // rate
     effect.set_param(1, 70.0); // depth (percent)
     effect.set_param(2, 50.0); // mix (percent)
@@ -70,7 +70,7 @@ fn bench_chorus(c: &mut Criterion) {
 }
 
 fn bench_delay(c: &mut Criterion) {
-    let mut effect = KernelAdapter::new(DelayKernel::new(SAMPLE_RATE), SAMPLE_RATE);
+    let mut effect = Adapter::new(DelayKernel::new(SAMPLE_RATE), SAMPLE_RATE);
     effect.set_param(0, 375.0); // time_ms
     effect.set_param(1, 50.0); // feedback (percent)
     effect.set_param(2, 30.0); // mix (percent)
@@ -78,35 +78,35 @@ fn bench_delay(c: &mut Criterion) {
 }
 
 fn bench_lowpass(c: &mut Criterion) {
-    let mut effect = KernelAdapter::new(FilterKernel::new(SAMPLE_RATE), SAMPLE_RATE);
+    let mut effect = Adapter::new(FilterKernel::new(SAMPLE_RATE), SAMPLE_RATE);
     effect.set_param(0, 1000.0); // cutoff
     effect.set_param(1, 0.707); // resonance
     bench_effect(c, "LowPassFilter", effect);
 }
 
 fn bench_vibrato(c: &mut Criterion) {
-    let mut effect = KernelAdapter::new(VibratoKernel::new(SAMPLE_RATE), SAMPLE_RATE);
+    let mut effect = Adapter::new(VibratoKernel::new(SAMPLE_RATE), SAMPLE_RATE);
     effect.set_param(1, 100.0); // mix (percent)
     effect.set_param(0, 100.0); // depth (percent)
     bench_effect(c, "Vibrato", effect);
 }
 
 fn bench_tape(c: &mut Criterion) {
-    let mut effect = KernelAdapter::new(TapeKernel::new(SAMPLE_RATE), SAMPLE_RATE);
+    let mut effect = Adapter::new(TapeKernel::new(SAMPLE_RATE), SAMPLE_RATE);
     effect.set_param(0, 6.0); // drive (dB, range 0-24, default 6)
     effect.set_param(1, 60.0); // saturation (percent)
     bench_effect(c, "Tape", effect);
 }
 
 fn bench_clean_preamp(c: &mut Criterion) {
-    let mut effect = KernelAdapter::new(PreampKernel::new(SAMPLE_RATE), SAMPLE_RATE);
+    let mut effect = Adapter::new(PreampKernel::new(SAMPLE_RATE), SAMPLE_RATE);
     effect.set_param(0, 12.0); // gain_db
     effect.set_param(2, -6.0); // output_db
     bench_effect(c, "CleanPreamp", effect);
 }
 
 fn bench_reverb(c: &mut Criterion) {
-    let mut effect = KernelAdapter::new(ReverbKernel::new(SAMPLE_RATE), SAMPLE_RATE);
+    let mut effect = Adapter::new(ReverbKernel::new(SAMPLE_RATE), SAMPLE_RATE);
     effect.set_param(0, 70.0); // room_size (percent)
     effect.set_param(1, 80.0); // decay (percent)
     effect.set_param(2, 30.0); // damping (percent)
@@ -116,7 +116,7 @@ fn bench_reverb(c: &mut Criterion) {
 }
 
 fn bench_flanger(c: &mut Criterion) {
-    let mut effect = KernelAdapter::new(FlangerKernel::new(SAMPLE_RATE), SAMPLE_RATE);
+    let mut effect = Adapter::new(FlangerKernel::new(SAMPLE_RATE), SAMPLE_RATE);
     effect.set_param(0, 0.5); // rate
     effect.set_param(1, 70.0); // depth (percent)
     effect.set_param(2, 50.0); // feedback (percent)
@@ -125,7 +125,7 @@ fn bench_flanger(c: &mut Criterion) {
 }
 
 fn bench_phaser(c: &mut Criterion) {
-    let mut effect = KernelAdapter::new(PhaserKernel::new(SAMPLE_RATE), SAMPLE_RATE);
+    let mut effect = Adapter::new(PhaserKernel::new(SAMPLE_RATE), SAMPLE_RATE);
     effect.set_param(0, 1.0); // rate
     effect.set_param(1, 80.0); // depth (percent)
     effect.set_param(2, 6.0); // stages
@@ -135,7 +135,7 @@ fn bench_phaser(c: &mut Criterion) {
 }
 
 fn bench_gate(c: &mut Criterion) {
-    let mut effect = KernelAdapter::new(GateKernel::new(SAMPLE_RATE), SAMPLE_RATE);
+    let mut effect = Adapter::new(GateKernel::new(SAMPLE_RATE), SAMPLE_RATE);
     effect.set_param(0, -40.0); // threshold
     effect.set_param(1, 1.0); // attack
     effect.set_param(2, 50.0); // release
@@ -144,14 +144,14 @@ fn bench_gate(c: &mut Criterion) {
 }
 
 fn bench_tremolo(c: &mut Criterion) {
-    let mut effect = KernelAdapter::new(TremoloKernel::new(SAMPLE_RATE), SAMPLE_RATE);
+    let mut effect = Adapter::new(TremoloKernel::new(SAMPLE_RATE), SAMPLE_RATE);
     effect.set_param(0, 5.0); // rate
     effect.set_param(1, 80.0); // depth (percent)
     bench_effect(c, "Tremolo", effect);
 }
 
 fn bench_wah(c: &mut Criterion) {
-    let mut effect = KernelAdapter::new(WahKernel::new(SAMPLE_RATE), SAMPLE_RATE);
+    let mut effect = Adapter::new(WahKernel::new(SAMPLE_RATE), SAMPLE_RATE);
     // Wah param 0 is frequency, param 1 is resonance, param 2 is sensitivity
     // Classic: set_sensitivity(0.7) maps to sensitivity at index 2 (range 0-100%)
     effect.set_param(2, 70.0); // sensitivity (percent)
@@ -159,7 +159,7 @@ fn bench_wah(c: &mut Criterion) {
 }
 
 fn bench_eq(c: &mut Criterion) {
-    let mut effect = KernelAdapter::new(EqKernel::new(SAMPLE_RATE), SAMPLE_RATE);
+    let mut effect = Adapter::new(EqKernel::new(SAMPLE_RATE), SAMPLE_RATE);
     effect.set_param(0, 200.0); // low_freq
     effect.set_param(1, 3.0); // low_gain
     effect.set_param(2, 1.0); // low_q
@@ -173,7 +173,7 @@ fn bench_eq(c: &mut Criterion) {
 }
 
 fn bench_limiter(c: &mut Criterion) {
-    let mut effect = KernelAdapter::new(LimiterKernel::new(SAMPLE_RATE), SAMPLE_RATE);
+    let mut effect = Adapter::new(LimiterKernel::new(SAMPLE_RATE), SAMPLE_RATE);
     effect.set_param(0, -6.0); // threshold
     effect.set_param(1, -0.3); // ceiling
     effect.set_param(2, 100.0); // release
@@ -181,14 +181,14 @@ fn bench_limiter(c: &mut Criterion) {
 }
 
 fn bench_bitcrusher(c: &mut Criterion) {
-    let mut effect = KernelAdapter::new(BitcrusherKernel::new(SAMPLE_RATE), SAMPLE_RATE);
+    let mut effect = Adapter::new(BitcrusherKernel::new(SAMPLE_RATE), SAMPLE_RATE);
     effect.set_param(0, 8.0); // bit_depth
     effect.set_param(1, 4.0); // downsample
     bench_effect(c, "Bitcrusher", effect);
 }
 
 fn bench_ringmod(c: &mut Criterion) {
-    let mut effect = KernelAdapter::new(RingModKernel::new(SAMPLE_RATE), SAMPLE_RATE);
+    let mut effect = Adapter::new(RingModKernel::new(SAMPLE_RATE), SAMPLE_RATE);
     effect.set_param(0, 440.0); // frequency
     effect.set_param(1, 100.0); // depth (percent)
     effect.set_param(3, 50.0); // mix (percent)
@@ -196,7 +196,7 @@ fn bench_ringmod(c: &mut Criterion) {
 }
 
 fn bench_stage(c: &mut Criterion) {
-    let mut effect = KernelAdapter::new(StageKernel::new(SAMPLE_RATE), SAMPLE_RATE);
+    let mut effect = Adapter::new(StageKernel::new(SAMPLE_RATE), SAMPLE_RATE);
     effect.set_param(0, 6.0); // gain_db
     effect.set_param(1, 120.0); // width (percent)
     bench_effect(c, "Stage", effect);
@@ -249,7 +249,7 @@ fn bench_stereo_effect<E: Effect>(c: &mut Criterion, name: &str, mut effect: E) 
 }
 
 fn bench_stereo_chorus(c: &mut Criterion) {
-    let mut effect = KernelAdapter::new(ChorusKernel::new(SAMPLE_RATE), SAMPLE_RATE);
+    let mut effect = Adapter::new(ChorusKernel::new(SAMPLE_RATE), SAMPLE_RATE);
     effect.set_param(0, 2.0); // rate
     effect.set_param(1, 70.0); // depth (percent)
     effect.set_param(2, 50.0); // mix (percent)
@@ -257,7 +257,7 @@ fn bench_stereo_chorus(c: &mut Criterion) {
 }
 
 fn bench_stereo_reverb(c: &mut Criterion) {
-    let mut effect = KernelAdapter::new(ReverbKernel::new(SAMPLE_RATE), SAMPLE_RATE);
+    let mut effect = Adapter::new(ReverbKernel::new(SAMPLE_RATE), SAMPLE_RATE);
     effect.set_param(0, 70.0); // room_size (percent)
     effect.set_param(1, 80.0); // decay (percent)
     effect.set_param(2, 30.0); // damping (percent)
@@ -267,7 +267,7 @@ fn bench_stereo_reverb(c: &mut Criterion) {
 }
 
 fn bench_stereo_phaser(c: &mut Criterion) {
-    let mut effect = KernelAdapter::new(PhaserKernel::new(SAMPLE_RATE), SAMPLE_RATE);
+    let mut effect = Adapter::new(PhaserKernel::new(SAMPLE_RATE), SAMPLE_RATE);
     effect.set_param(0, 1.0); // rate
     effect.set_param(1, 80.0); // depth (percent)
     effect.set_param(2, 6.0); // stages
@@ -277,7 +277,7 @@ fn bench_stereo_phaser(c: &mut Criterion) {
 }
 
 fn bench_stereo_flanger(c: &mut Criterion) {
-    let mut effect = KernelAdapter::new(FlangerKernel::new(SAMPLE_RATE), SAMPLE_RATE);
+    let mut effect = Adapter::new(FlangerKernel::new(SAMPLE_RATE), SAMPLE_RATE);
     effect.set_param(0, 0.5); // rate
     effect.set_param(1, 70.0); // depth (percent)
     effect.set_param(2, 50.0); // feedback (percent)
@@ -286,7 +286,7 @@ fn bench_stereo_flanger(c: &mut Criterion) {
 }
 
 fn bench_stereo_delay(c: &mut Criterion) {
-    let mut effect = KernelAdapter::new(DelayKernel::new(SAMPLE_RATE), SAMPLE_RATE);
+    let mut effect = Adapter::new(DelayKernel::new(SAMPLE_RATE), SAMPLE_RATE);
     effect.set_param(0, 375.0); // time_ms
     effect.set_param(1, 50.0); // feedback (percent)
     effect.set_param(2, 30.0); // mix (percent)
@@ -299,19 +299,19 @@ fn bench_stereo_delay(c: &mut Criterion) {
 fn bench_oversampling(c: &mut Criterion) {
     // Inner effect created at base rate — Oversampled::new() handles the Nx rate internally
     let dist_2x = Oversampled::<2, _>::new(
-        KernelAdapter::new(DistortionKernel::new(SAMPLE_RATE), SAMPLE_RATE),
+        Adapter::new(DistortionKernel::new(SAMPLE_RATE), SAMPLE_RATE),
         SAMPLE_RATE,
     );
     bench_effect(c, "Oversampled_2x_Distortion", dist_2x);
 
     let dist_4x = Oversampled::<4, _>::new(
-        KernelAdapter::new(DistortionKernel::new(SAMPLE_RATE), SAMPLE_RATE),
+        Adapter::new(DistortionKernel::new(SAMPLE_RATE), SAMPLE_RATE),
         SAMPLE_RATE,
     );
     bench_effect(c, "Oversampled_4x_Distortion", dist_4x);
 
     let dist_8x = Oversampled::<8, _>::new(
-        KernelAdapter::new(DistortionKernel::new(SAMPLE_RATE), SAMPLE_RATE),
+        Adapter::new(DistortionKernel::new(SAMPLE_RATE), SAMPLE_RATE),
         SAMPLE_RATE,
     );
     bench_effect(c, "Oversampled_8x_Distortion", dist_8x);
@@ -322,25 +322,25 @@ fn bench_effect_chain(c: &mut Criterion) {
 
     // Typical guitar chain: preamp -> distortion -> chorus -> delay
     let preamp = {
-        let mut p = KernelAdapter::new(PreampKernel::new(SAMPLE_RATE), SAMPLE_RATE);
+        let mut p = Adapter::new(PreampKernel::new(SAMPLE_RATE), SAMPLE_RATE);
         p.set_param(0, 6.0); // gain_db
         p
     };
     let distortion = {
-        let mut d = KernelAdapter::new(DistortionKernel::new(SAMPLE_RATE), SAMPLE_RATE);
+        let mut d = Adapter::new(DistortionKernel::new(SAMPLE_RATE), SAMPLE_RATE);
         d.set_param(0, 12.0); // drive
         d.set_param(1, 3.0); // tone
         d
     };
     let chorus = {
-        let mut c = KernelAdapter::new(ChorusKernel::new(SAMPLE_RATE), SAMPLE_RATE);
+        let mut c = Adapter::new(ChorusKernel::new(SAMPLE_RATE), SAMPLE_RATE);
         c.set_param(0, 1.5); // rate
         c.set_param(1, 50.0); // depth (percent)
         c.set_param(2, 30.0); // mix (percent)
         c
     };
     let delay = {
-        let mut d = KernelAdapter::new(DelayKernel::new(SAMPLE_RATE), SAMPLE_RATE);
+        let mut d = Adapter::new(DelayKernel::new(SAMPLE_RATE), SAMPLE_RATE);
         d.set_param(0, 300.0); // time_ms
         d.set_param(1, 40.0); // feedback (percent)
         d.set_param(2, 25.0); // mix (percent)

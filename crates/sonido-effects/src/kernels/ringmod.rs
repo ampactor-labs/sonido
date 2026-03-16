@@ -2,7 +2,7 @@
 //!
 //! `RingModKernel` owns DSP state (carrier oscillator phase, sample rate).
 //! Parameters are received via `&RingModParams` each sample. Deployed via
-//! [`KernelAdapter`](sonido_core::KernelAdapter) for desktop/plugin, or called
+//! [`Adapter`](sonido_core::kernel::Adapter) for desktop/plugin, or called
 //! directly on embedded targets.
 //!
 //! # Signal Flow
@@ -33,7 +33,7 @@
 //!
 //! ```rust,ignore
 //! // Desktop / Plugin (via adapter — handles smoothing automatically)
-//! let adapter = KernelAdapter::new(RingModKernel::new(48000.0), 48000.0);
+//! let adapter = Adapter::new(RingModKernel::new(48000.0), 48000.0);
 //! let mut effect: Box<dyn Effect> = Box::new(adapter);
 //!
 //! // Embedded / Daisy Seed (direct — no smoothing, ADCs are hardware-filtered)
@@ -325,7 +325,7 @@ impl DspKernel for RingModKernel {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sonido_core::kernel::KernelAdapter;
+    use sonido_core::kernel::Adapter;
     use sonido_core::{Effect, ParameterInfo};
 
     // ── Kernel unit tests ─────────────────────────────────────────────────
@@ -495,11 +495,11 @@ mod tests {
 
     // ── Adapter integration tests ─────────────────────────────────────────
 
-    /// Kernel wrapped in KernelAdapter should function as a standard Effect.
+    /// Kernel wrapped in Adapter should function as a standard Effect.
     #[test]
     fn adapter_wraps_as_effect() {
         let kernel = RingModKernel::new(48000.0);
-        let mut adapter = KernelAdapter::new(kernel, 48000.0);
+        let mut adapter = Adapter::new(kernel, 48000.0);
 
         adapter.reset();
         let output = adapter.process(0.5);
@@ -507,11 +507,11 @@ mod tests {
         assert!(output.is_finite(), "Adapter output is infinite");
     }
 
-    /// KernelAdapter ParameterInfo must expose the same 5 params with matching IDs.
+    /// Adapter ParameterInfo must expose the same 5 params with matching IDs.
     #[test]
     fn adapter_param_info_matches() {
         let kernel = RingModKernel::new(48000.0);
-        let adapter = KernelAdapter::new(kernel, 48000.0);
+        let adapter = Adapter::new(kernel, 48000.0);
 
         assert_eq!(adapter.param_count(), 5, "Should expose exactly 5 params");
 
@@ -603,8 +603,8 @@ mod tests {
         // Mix should be 50%
         assert!((params.mix_pct - 50.0).abs() < 0.5);
 
-        // Output at 0.5 should be -7 dB (-20 + 0.5 * 26 = -7)
-        assert!((params.output_db - (-7.0)).abs() < 0.5);
+        // Output at 0.5 should be 0 dB (-6 + 0.5 * 12 = 0, output_param_descriptor range [-6, 6])
+        assert!((params.output_db - 0.0).abs() < 0.5);
     }
 
     /// Extremes of `from_knobs` (0.0 and 1.0) should stay within param bounds.
@@ -615,7 +615,7 @@ mod tests {
         assert!((low.depth_pct - 0.0).abs() < 0.5);
         assert_eq!(low.waveform, 0.0);
         assert!((low.mix_pct - 0.0).abs() < 0.5);
-        assert!((low.output_db - (-20.0)).abs() < 0.5);
+        assert!((low.output_db - (-6.0)).abs() < 0.5); // output_param_descriptor min=-6
 
         let high = RingModParams::from_knobs(1.0, 1.0, 1.0, 1.0, 1.0);
         assert!((high.freq_hz - 2000.0).abs() < 0.5);

@@ -326,7 +326,7 @@ fix: Correct compressor attack time calculation
 5. Implement `process_stereo()` if the effect has decorrelated L/R processing
 6. Add tests in a `#[cfg(test)] mod tests` block
 7. Export from `crates/sonido-effects/src/kernels/mod.rs` and `crates/sonido-effects/src/lib.rs`
-8. Register in `crates/sonido-registry/src/lib.rs` using `KernelAdapter::new(XxxKernel::new(sr), sr)`
+8. Register in `crates/sonido-registry/src/lib.rs` using `Adapter::new(XxxKernel::new(sr), sr)`
 9. Add to CLI in `crates/sonido-cli/src/commands/effects.rs`
 
 ### Documentation Steps (all required)

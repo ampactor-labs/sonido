@@ -31,13 +31,13 @@
 //!
 //! ```rust,ignore
 //! use sonido_io::{read_wav, write_wav, GraphEngine};
-//! use sonido_core::KernelAdapter;
+//! use sonido_core::Adapter;
 //! use sonido_effects::kernels::ReverbKernel;
 //!
 //! let (samples, spec) = read_wav("input.wav")?;
 //! let sr = spec.sample_rate as f32;
 //! let mut engine = GraphEngine::new_linear(sr, 256);
-//! engine.add_effect(Box::new(KernelAdapter::new(ReverbKernel::new(sr), sr)));
+//! engine.add_effect(Box::new(Adapter::new(ReverbKernel::new(sr), sr)));
 //! let processed = engine.process_file(&samples, 256);
 //! write_wav("output.wav", &processed, spec)?;
 //! ```

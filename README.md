@@ -37,7 +37,7 @@ let (out_l, out_r) = kernel.process_stereo(in_l, in_r, &params);
 
 ### Desktop / Plugin Path
 
-The registry wraps every kernel in `KernelAdapter`, which adds per-parameter smoothing and bridges to `Effect` + `ParameterInfo`:
+The registry wraps every kernel in `Adapter<K, SmoothedPolicy>`, which adds per-parameter smoothing and bridges to `Effect` + `ParameterInfo`:
 
 ```rust
 use sonido_registry::EffectRegistry;
@@ -70,7 +70,7 @@ Every effect is implemented as a three-layer stack that separates pure DSP from 
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│                   KernelAdapter<K>                       │
+│              Adapter<K, SmoothedPolicy>                   │
 │  Bridges to Effect + ParameterInfo traits                │
 │  Manages per-parameter SmoothedParam instances           │
 │  Desktop / Plugin / GUI consumer                         │
@@ -89,7 +89,7 @@ Every effect is implemented as a three-layer stack that separates pure DSP from 
 └─────────────────────────────────────────────────────────┘
 ```
 
-**Why this matters for embedded**: The kernel never allocates, never owns parameters, and never smooths. On a Cortex-M7, your DMA audio callback calls `kernel.process_stereo()` with parameters constructed directly from ADC readings. The adapter layer — smoothing, trait dispatch, boxing — only exists on desktop where you can afford it.
+**Why this matters for embedded**: The kernel never allocates, never owns parameters, and never smooths. On a Cortex-M7, your DMA audio callback calls `kernel.process_stereo()` with parameters constructed directly from ADC readings. The `Adapter<K, SmoothedPolicy>` layer — smoothing, trait dispatch, boxing — only exists on desktop where you can afford it.
 
 ### Anti-Aliasing
 
@@ -98,7 +98,7 @@ Every effect is implemented as a three-layer stack that separates pure DSP from 
 
 ### Parameter Smoothing
 
-`KernelAdapter` applies per-parameter smoothing based on `SmoothingStyle` declared by each `KernelParams`:
+`Adapter<K, SmoothedPolicy>` applies per-parameter smoothing based on `SmoothingStyle` declared by each `KernelParams`:
 
 | Style | Time | Use Case |
 |-------|------|----------|
@@ -275,8 +275,8 @@ graph TD
 
 | Crate | Purpose | no_std |
 |-------|---------|--------|
-| `sonido-core` | Effect trait, DspKernel/KernelParams/KernelAdapter, parameters, delays, filters, LFOs, tempo, DAG processing graph | Yes |
-| `sonido-effects` | 19 effects via DspKernel + KernelAdapter architecture | Yes |
+| `sonido-core` | Effect trait, DspKernel/KernelParams/Adapter, parameters, delays, filters, LFOs, tempo, DAG processing graph | Yes |
+| `sonido-effects` | 19 effects via DspKernel + Adapter architecture | Yes |
 | `sonido-synth` | PolyBLEP oscillators, ADSR envelopes, voice management, modulation matrix | Yes |
 | `sonido-registry` | Effect factory and discovery by name/category | Yes |
 | `sonido-platform` | Hardware abstraction: PlatformController, ControlMapper | Yes |

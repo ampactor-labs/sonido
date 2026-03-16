@@ -2,7 +2,7 @@
 //!
 //! `WahKernel` owns DSP state (SVF filters, envelope follower, sample rate).
 //! Parameters are received via `&WahParams` each sample. Deployed via
-//! [`KernelAdapter`](sonido_core::KernelAdapter) for desktop/plugin, or called
+//! [`Adapter`](sonido_core::kernel::Adapter) for desktop/plugin, or called
 //! directly on embedded targets.
 //!
 //! # Signal Flow
@@ -21,7 +21,7 @@
 //!
 //! ```rust,ignore
 //! // Desktop / Plugin (via adapter — handles smoothing automatically)
-//! let adapter = KernelAdapter::new(WahKernel::new(48000.0), 48000.0);
+//! let adapter = Adapter::new(WahKernel::new(48000.0), 48000.0);
 //! let mut effect: Box<dyn Effect> = Box::new(adapter);
 //!
 //! // Embedded / Daisy Seed (direct — no smoothing, ADCs are hardware-filtered)
@@ -421,7 +421,7 @@ impl DspKernel for WahKernel {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sonido_core::kernel::KernelAdapter;
+    use sonido_core::kernel::Adapter;
     use sonido_core::{Effect, ParameterInfo};
 
     // ── Kernel unit tests ────────────────────────────────────────────────────
@@ -500,7 +500,7 @@ mod tests {
     #[test]
     fn adapter_wraps_as_effect() {
         let kernel = WahKernel::new(48000.0);
-        let mut adapter = KernelAdapter::new(kernel, 48000.0);
+        let mut adapter = Adapter::new(kernel, 48000.0);
 
         adapter.reset();
         let output = adapter.process(0.3);
@@ -511,7 +511,7 @@ mod tests {
     #[test]
     fn adapter_param_info_matches() {
         let kernel = WahKernel::new(48000.0);
-        let adapter = KernelAdapter::new(kernel, 48000.0);
+        let adapter = Adapter::new(kernel, 48000.0);
 
         assert_eq!(adapter.param_count(), 5);
 
@@ -611,18 +611,15 @@ mod tests {
         // Mid-point knobs → mid-range parameters
         let params = WahParams::from_knobs(0.5, 0.5, 0.5, 0.0, 0.5);
 
-        // Frequency at 0.5 should be geometric mean of 200..2000 (≈ 632 Hz)
-        let expected_freq = libm::powf(
-            10.0,
-            (libm::log10f(MIN_FREQ) + libm::log10f(MAX_FREQ)) * 0.5,
-        );
+        // Frequency at 0.5: log range [200..2000]; geo-mean = sqrt(200*2000) ≈ 632 Hz
+        let expected_freq = libm::sqrtf(200.0 * MAX_FREQ);
         assert!(
             (params.freq_hz - expected_freq).abs() < 1.0,
             "freq_hz={}, expected≈{expected_freq}",
             params.freq_hz
         );
 
-        // Resonance mid-point: 1 + 0.5 * 9 = 5.5
+        // Resonance mid-point: linear [1..10], so 1 + 0.5 * 9 = 5.5
         assert!(
             (params.resonance - 5.5).abs() < 0.01,
             "resonance={}",
@@ -639,9 +636,9 @@ mod tests {
         // Mode knob at 0.0 → Auto (0.0)
         assert_eq!(params.mode, 0.0);
 
-        // Output mid-point: -20 + 0.5 * 26 = -7.0 dB
+        // Output mid-point: noon-aligned [-6..+6], default 0 dB → 0 dB
         assert!(
-            (params.output_db - (-7.0)).abs() < 0.01,
+            params.output_db.abs() < 0.01,
             "output_db={}",
             params.output_db
         );
@@ -660,7 +657,7 @@ mod tests {
     #[test]
     fn params_snapshot_roundtrip_through_adapter() {
         let kernel = WahKernel::new(48000.0);
-        let mut adapter = KernelAdapter::new(kernel, 48000.0);
+        let mut adapter = Adapter::new(kernel, 48000.0);
 
         adapter.set_param(0, 1200.0); // frequency
         adapter.set_param(1, 7.0); // resonance

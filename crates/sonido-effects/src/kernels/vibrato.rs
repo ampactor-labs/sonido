@@ -2,7 +2,7 @@
 //!
 //! `VibratoKernel` owns DSP state (6 x 2 `VibratoUnit` structs, each with
 //! its own delay line and LFO). Parameters are received via `&VibratoParams`
-//! each sample. Deployed via [`KernelAdapter`](sonido_core::KernelAdapter) for
+//! each sample. Deployed via [`Adapter`](sonido_core::kernel::Adapter) for
 //! desktop/plugin, or called directly on embedded targets.
 //!
 //! # Algorithm
@@ -41,7 +41,7 @@
 //!
 //! ```rust,ignore
 //! // Desktop / Plugin (via adapter — handles smoothing automatically)
-//! let adapter = KernelAdapter::new(VibratoKernel::new(48000.0), 48000.0);
+//! let adapter = Adapter::new(VibratoKernel::new(48000.0), 48000.0);
 //! let mut effect: Box<dyn Effect> = Box::new(adapter);
 //!
 //! // Embedded / Daisy Seed (direct — no smoothing, ADCs are hardware-filtered)
@@ -168,7 +168,7 @@ impl VibratoUnit {
 /// | Index | Field | Unit | Range | Default |
 /// |-------|-------|------|-------|---------|
 /// | 0 | `depth_pct` | % | 0–400 | 100.0 |
-/// | 1 | `mix_pct` | % | 0–100 | 100.0 |
+/// | 1 | `mix_pct` | % | 0–100 | 50.0 |
 /// | 2 | `output_db` | dB | −20–20 | 0.0 |
 #[derive(Debug, Clone, Copy)]
 pub struct VibratoParams {
@@ -437,7 +437,7 @@ impl DspKernel for VibratoKernel {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sonido_core::kernel::KernelAdapter;
+    use sonido_core::kernel::Adapter;
     use sonido_core::{Effect, KernelParams, ParameterInfo};
 
     // Zero-config kernel invariant tests (finite output, reset, morph, descriptors, extreme inputs)
@@ -524,10 +524,10 @@ mod tests {
         );
     }
 
-    /// The kernel must wrap into a `KernelAdapter` and function as a `dyn Effect`.
+    /// The kernel must wrap into an `Adapter` and function as a `dyn Effect`.
     #[test]
     fn adapter_wraps_as_effect() {
-        let mut adapter = KernelAdapter::new(VibratoKernel::new(48000.0), 48000.0);
+        let mut adapter = Adapter::new(VibratoKernel::new(48000.0), 48000.0);
         adapter.reset();
 
         let output = adapter.process(0.3);
@@ -541,7 +541,7 @@ mod tests {
     /// matching the classic `MultiVibrato` effect's parameter contract exactly.
     #[test]
     fn adapter_param_info_matches() {
-        let adapter = KernelAdapter::new(VibratoKernel::new(48000.0), 48000.0);
+        let adapter = Adapter::new(VibratoKernel::new(48000.0), 48000.0);
 
         assert_eq!(
             adapter.param_count(),
@@ -634,8 +634,8 @@ mod tests {
             min.mix_pct
         );
         assert!(
-            (min.output_db - (-20.0)).abs() < 0.01,
-            "Output at 0.0 should be −20 dB, got {}",
+            (min.output_db - (-6.0)).abs() < 0.01,
+            "Output at 0.0 should be −6 dB, got {}",
             min.output_db
         );
 
@@ -652,8 +652,8 @@ mod tests {
             mid.mix_pct
         );
         assert!(
-            (mid.output_db - (-7.0)).abs() < 0.1,
-            "Output at 0.5 should be -7 dB, got {}",
+            mid.output_db.abs() < 0.1,
+            "Output at 0.5 should be 0 dB, got {}",
             mid.output_db
         );
     }

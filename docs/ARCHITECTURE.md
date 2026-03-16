@@ -129,9 +129,9 @@ All 19 effects have kernel-architecture implementations in `crates/sonido-effect
 
 2. **`DspKernel`** (`XxxKernel`) — owns ONLY DSP state (filters, delay buffers, ADAA processors, LFO phases). Receives `&Params` by reference each sample. No `SmoothedParam`, no platform types.
 
-3. **`KernelAdapter<K>`** — bridges kernel to `Effect + ParameterInfo`. Owns per-parameter `SmoothedParam` instances configured from `KernelParams::smoothing()`. Advances smoothers per sample, writes into a params snapshot, passes to `kernel.process_stereo()`.
+3. **`Adapter<K, SmoothedPolicy>`** — bridges kernel to `Effect + ParameterInfo`. Owns per-parameter `SmoothedParam` instances configured from `KernelParams::smoothing()`. Advances smoothers per sample, writes into a params snapshot, passes to `kernel.process_stereo()`.
 
-**Desktop/plugin** uses `KernelAdapter` (the registry creates `KernelAdapter<XxxKernel>` for all 19 effects). **Embedded** calls the kernel directly with `XxxParams::from_knobs()` — no smoothing overhead, no heap allocation.
+**Desktop/plugin** uses `Adapter<K, SmoothedPolicy>` (the registry creates `Adapter<XxxKernel, SmoothedPolicy>` for all 19 effects). **Embedded** calls the kernel directly with `XxxParams::from_knobs()` — no smoothing overhead, no heap allocation.
 
 `SmoothingStyle` tiers: `None` (snap), `Fast` (5ms), `Standard` (10ms), `Slow` (20ms), `Interpolated` (50ms), `Custom(ms)`.
 

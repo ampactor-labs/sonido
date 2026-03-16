@@ -2,7 +2,7 @@
 //!
 //! `TremoloKernel` owns DSP state (two `Lfo` instances and a `TempoManager`).
 //! Parameters are received via `&TremoloParams` each sample. Deployed via
-//! [`KernelAdapter`](sonido_core::KernelAdapter) for desktop/plugin, or called
+//! [`Adapter`](sonido_core::kernel::Adapter) for desktop/plugin, or called
 //! directly on embedded targets.
 //!
 //! # Signal Flow
@@ -39,7 +39,7 @@
 //!
 //! ```rust,ignore
 //! // Desktop / Plugin (via adapter — handles smoothing automatically)
-//! let adapter = KernelAdapter::new(TremoloKernel::new(48000.0), 48000.0);
+//! let adapter = Adapter::new(TremoloKernel::new(48000.0), 48000.0);
 //! let mut effect: Box<dyn Effect> = Box::new(adapter);
 //!
 //! // Embedded / Daisy Seed (direct — no smoothing, ADCs are hardware-filtered)
@@ -400,7 +400,7 @@ impl DspKernel for TremoloKernel {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sonido_core::kernel::KernelAdapter;
+    use sonido_core::kernel::Adapter;
     use sonido_core::{Effect, ParameterInfo, TempoContext};
 
     // ── Kernel unit tests ──
@@ -548,7 +548,7 @@ mod tests {
     #[test]
     fn adapter_wraps_as_effect() {
         let kernel = TremoloKernel::new(48000.0);
-        let mut adapter = KernelAdapter::new(kernel, 48000.0);
+        let mut adapter = Adapter::new(kernel, 48000.0);
 
         adapter.reset();
         let output = adapter.process(0.4);
@@ -558,7 +558,7 @@ mod tests {
     #[test]
     fn adapter_param_info_matches() {
         let kernel = TremoloKernel::new(48000.0);
-        let adapter = KernelAdapter::new(kernel, 48000.0);
+        let adapter = Adapter::new(kernel, 48000.0);
 
         assert_eq!(adapter.param_count(), 8, "Must expose exactly 8 parameters");
 
@@ -642,7 +642,7 @@ mod tests {
         // Mid-point of all knobs
         let params = TremoloParams::from_knobs(0.5, 0.5, 0.0, 0.5, 0.0, 0.0, 0.5);
 
-        // rate: log geometric mean of 0.5..20.0 = sqrt(0.5 * 20.0) ≈ 3.162 Hz
+        // rate: log range [0.5..20.0]; geometric mean = sqrt(0.5 * 20.0) ≈ 3.162 Hz
         let expected_rate = libm::sqrtf(0.5_f32 * 20.0_f32);
         assert!(
             (params.rate - expected_rate).abs() < 0.01,
@@ -670,10 +670,10 @@ mod tests {
         // sync: 0.0 < 0.5 → Off (0.0)
         assert_eq!(params.sync, 0.0, "Sync should be Off (0.0)");
 
-        // output: -20 + 0.5 * 26 = -7.0 dB
+        // output: noon-aligned [-6..+6], default 0 dB → knob=0.5 gives 0 dB
         assert!(
-            (params.output_db - (-7.0)).abs() < 0.01,
-            "Mid output should be -7 dB, got {}",
+            params.output_db.abs() < 0.01,
+            "Mid output should be 0 dB, got {}",
             params.output_db
         );
 
@@ -773,7 +773,7 @@ mod tests {
     #[test]
     fn snapshot_roundtrip_through_adapter() {
         let kernel = TremoloKernel::new(48000.0);
-        let mut adapter = KernelAdapter::new(kernel, 48000.0);
+        let mut adapter = Adapter::new(kernel, 48000.0);
 
         adapter.set_param(0, 12.0); // rate = 12.0 Hz
         adapter.set_param(1, 75.0); // depth = 75%
@@ -795,7 +795,7 @@ mod tests {
 
         // Reload into a fresh adapter
         let kernel2 = TremoloKernel::new(48000.0);
-        let mut adapter2 = KernelAdapter::new(kernel2, 48000.0);
+        let mut adapter2 = Adapter::new(kernel2, 48000.0);
         adapter2.load_snapshot(&saved);
 
         assert!(

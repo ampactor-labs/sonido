@@ -7,9 +7,9 @@ A step-by-step guide to implementing a new DSP effect using the kernel architect
 Every effect is built from three layers:
 
 ```
-XxxParams  (KernelParams)   — typed parameter struct, metadata, smoothing hints
-XxxKernel  (DspKernel)      — pure DSP state: filters, delay lines, ADAA state
-KernelAdapter<XxxKernel>    — bridges to Effect + ParameterInfo for all consumers
+XxxParams  (KernelParams)              — typed parameter struct, metadata, smoothing hints
+XxxKernel  (DspKernel)                 — pure DSP state: filters, delay lines, ADAA state
+Adapter<XxxKernel, SmoothedPolicy>     — bridges to Effect + ParameterInfo for all consumers
 ```
 
 The kernel never owns parameters. Parameters are passed in on every call.
@@ -135,8 +135,8 @@ pub use mygain::{GainKernel, GainParams};
 
 ```rust
 // crates/sonido-effects/src/lib.rs
-use sonido_core::kernel::KernelAdapter;
-pub type GainEffect = KernelAdapter<kernels::GainKernel>;
+use sonido_core::kernel::{Adapter, SmoothedPolicy};
+pub type GainEffect = Adapter<kernels::GainKernel, SmoothedPolicy>;
 ```
 
 ### 4c. Register in the Effect Registry
@@ -145,7 +145,7 @@ pub type GainEffect = KernelAdapter<kernels::GainKernel>;
 // crates/sonido-registry/src/lib.rs
 "mygain" => {
     let k = kernels::GainKernel;
-    Box::new(KernelAdapter::new(k, sample_rate))
+    Box::new(Adapter::new(k, sample_rate))
 }
 ```
 

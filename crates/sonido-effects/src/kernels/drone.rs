@@ -30,7 +30,7 @@
 //!
 //! ```rust,ignore
 //! // Desktop / Plugin (via adapter — handles smoothing automatically)
-//! let adapter = KernelAdapter::new(DroneKernel::new(48000.0), 48000.0);
+//! let adapter = Adapter::new(DroneKernel::new(48000.0), 48000.0);
 //! let mut effect: Box<dyn Effect> = Box::new(adapter);
 //!
 //! // Embedded / Daisy Seed (direct — no smoothing)
@@ -345,7 +345,7 @@ impl DspKernel for DroneKernel {
 mod tests {
     use super::*;
     use sonido_core::Effect;
-    use sonido_core::kernel::KernelAdapter;
+    use sonido_core::kernel::Adapter;
 
     #[test]
     fn finite_output() {
@@ -392,7 +392,7 @@ mod tests {
 
     #[test]
     fn adapter_wraps_as_effect() {
-        let mut adapter = KernelAdapter::new(DroneKernel::new(48000.0), 48000.0);
+        let mut adapter = Adapter::new(DroneKernel::new(48000.0), 48000.0);
         adapter.reset();
         let out = adapter.process(0.3);
         assert!(out.is_finite(), "Adapter output must be finite, got {out}");

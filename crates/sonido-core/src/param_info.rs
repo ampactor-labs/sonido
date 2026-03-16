@@ -614,10 +614,10 @@ impl ParamDescriptor {
         }
     }
 
-    /// Standard feedback parameter (0–95%, default 50%).
+    /// Standard feedback parameter (5–95%, default 50%).
     ///
     /// Used by delay-based effects (delay, flanger, chorus).
-    /// Capped at 95% to prevent runaway oscillation.
+    /// Range 0–95%, capped at 95% to prevent runaway oscillation.
     pub fn feedback() -> Self {
         Self {
             name: "Feedback",
@@ -964,6 +964,93 @@ impl ParamDescriptor {
         }
     }
 
+    /// Adjusts `min` or `max` so that `denormalize(0.5)` equals `default`.
+    ///
+    /// The method shrinks whichever end of the range requires less reduction.
+    /// STEPPED parameters are returned unchanged (discrete selectors have
+    /// no meaningful "noon" position).
+    ///
+    /// # Panics
+    ///
+    /// Panics if the computed range is degenerate (max ≤ min), which happens
+    /// when `default` equals `min` or `max`. For those "bypass-default" params,
+    /// don't call this method — their extreme defaults are intentional.
+    ///
+    /// # Scale math
+    ///
+    /// - **Linear**: `noon = (min + max) / 2 = default` → pick `max = 2·default − min`
+    ///   or `min = 2·default − max`, whichever shrinks the range.
+    /// - **Logarithmic**: `noon = √(min · max) = default` → `min · max = default²`.
+    ///   Solve for the bound that shrinks the range.
+    /// - **Power(e)**: `noon = min + 0.5ᵉ · (max − min) = default` → solve for `max`.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use sonido_core::ParamDescriptor;
+    ///
+    /// // Drive: range [0, 40], default 8 → noon_aligned shrinks to [0, 16]
+    /// let d = ParamDescriptor::gain_db("Drive", "Drive", 0.0, 40.0, 8.0).noon_aligned();
+    /// assert!((d.denormalize(0.5) - 8.0).abs() < 0.01);
+    /// assert_eq!(d.min, 0.0);
+    /// assert_eq!(d.max, 16.0);
+    /// ```
+    pub fn noon_aligned(self) -> Self {
+        if self.flags.contains(ParamFlags::STEPPED) {
+            return self;
+        }
+        let (new_min, new_max) = match self.scale {
+            ParamScale::Linear => {
+                let max_adj = 2.0 * self.default - self.min;
+                let min_adj = 2.0 * self.default - self.max;
+                if max_adj < self.max && max_adj > self.min {
+                    (self.min, max_adj)
+                } else if min_adj > self.min && min_adj < self.max {
+                    (min_adj, self.max)
+                } else {
+                    (self.min, self.max)
+                }
+            }
+            ParamScale::Logarithmic => {
+                if self.min <= 0.0 || self.default <= 0.0 {
+                    return self;
+                }
+                let d2 = self.default * self.default;
+                let max_adj = d2 / self.min;
+                let min_adj = d2 / self.max;
+                if max_adj < self.max && max_adj > self.min {
+                    (self.min, max_adj)
+                } else if min_adj > self.min && min_adj < self.max {
+                    (min_adj, self.max)
+                } else {
+                    (self.min, self.max)
+                }
+            }
+            ParamScale::Power(exp) => {
+                let factor = libm::powf(0.5, exp);
+                if factor <= 0.0 {
+                    return self;
+                }
+                let max_adj = self.min + (self.default - self.min) / factor;
+                if max_adj > self.min {
+                    (self.min, max_adj)
+                } else {
+                    (self.min, self.max)
+                }
+            }
+        };
+        assert!(
+            new_max > new_min,
+            "noon_aligned: default={} produces degenerate range [{new_min}, {new_max}]",
+            self.default,
+        );
+        Self {
+            min: new_min,
+            max: new_max,
+            ..self
+        }
+    }
+
     /// Formats a parameter value as human-readable text for DAW display.
     ///
     /// Stepped parameters with [`step_labels`](Self::step_labels) return the label
@@ -1065,6 +1152,7 @@ impl ParamDescriptor {
 ///         ParamUnit::Percent => format!("{:.0}%", value),
 ///         ParamUnit::Ratio => format!("{:.1}:1", value),
 ///         ParamUnit::None => format!("{:.2}", value),
+///         _ => format!("{:.2}", value),
 ///     }
 /// }
 /// ```

@@ -35,7 +35,7 @@
 //!
 //! ```rust,ignore
 //! // Desktop / Plugin (via adapter — handles smoothing automatically)
-//! let adapter = KernelAdapter::new(DeesserKernel::new(48000.0), 48000.0);
+//! let adapter = Adapter::new(DeesserKernel::new(48000.0), 48000.0);
 //! let mut effect: Box<dyn Effect> = Box::new(adapter);
 //!
 //! // Embedded / Daisy Seed (direct — no smoothing)
@@ -399,7 +399,7 @@ impl DspKernel for DeesserKernel {
 mod tests {
     use super::*;
     use sonido_core::ParameterInfo;
-    use sonido_core::kernel::KernelAdapter;
+    use sonido_core::kernel::Adapter;
 
     /// All outputs must be finite — no NaN or Inf under any input.
     #[test]
@@ -509,11 +509,11 @@ mod tests {
         );
     }
 
-    /// KernelAdapter wraps the kernel and exposes the correct parameter count and IDs.
+    /// `Adapter` wraps the kernel and exposes the correct parameter count and IDs.
     #[test]
     fn adapter_param_info() {
         let kernel = DeesserKernel::new(48000.0);
-        let adapter = KernelAdapter::new(kernel, 48000.0);
+        let adapter = Adapter::new(kernel, 48000.0);
 
         assert_eq!(adapter.param_count(), 5);
         for i in 0..5 {

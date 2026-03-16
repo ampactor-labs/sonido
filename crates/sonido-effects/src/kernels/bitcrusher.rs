@@ -2,7 +2,7 @@
 //!
 //! `BitcrusherKernel` owns DSP state (held samples, counter, RNG state).
 //! Parameters are received via `&BitcrusherParams` each sample. Deployed via
-//! [`KernelAdapter`](sonido_core::KernelAdapter) for desktop/plugin, or called
+//! [`Adapter`](sonido_core::kernel::Adapter) for desktop/plugin, or called
 //! directly on embedded targets.
 //!
 //! # Signal Flow
@@ -29,7 +29,7 @@
 //!
 //! ```rust,ignore
 //! // Desktop / Plugin (via adapter — handles smoothing automatically)
-//! let adapter = KernelAdapter::new(BitcrusherKernel::new(48000.0), 48000.0);
+//! let adapter = Adapter::new(BitcrusherKernel::new(48000.0), 48000.0);
 //! let mut effect: Box<dyn Effect> = Box::new(adapter);
 //!
 //! // Embedded / Daisy Seed (direct — no smoothing, ADCs are hardware-filtered)
@@ -58,7 +58,7 @@ use sonido_core::{
 /// | 0 | `bits` | steps | 2–16 | 8.0 |
 /// | 1 | `rate` | steps | 1–64 | 1.0 |
 /// | 2 | `jitter_pct` | % | 0–100 | 0.0 |
-/// | 3 | `mix_pct` | % | 0–100 | 100.0 |
+/// | 3 | `mix_pct` | % | 0–100 | 50.0 |
 /// | 4 | `output_db` | dB | −20–+20 | 0.0 |
 #[derive(Debug, Clone, Copy)]
 pub struct BitcrusherParams {
@@ -125,7 +125,6 @@ impl KernelParams for BitcrusherParams {
                     .with_id(ParamId(1702), "crush_jitter"),
             ),
             3 => Some(
-                // Match the classic effect: mix default is 100%, unit is percent
                 ParamDescriptor {
                     default: 100.0,
                     ..ParamDescriptor::mix()
@@ -350,7 +349,7 @@ impl DspKernel for BitcrusherKernel {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sonido_core::kernel::KernelAdapter;
+    use sonido_core::kernel::Adapter;
     use sonido_core::{Effect, ParameterInfo};
 
     // ── Kernel unit tests ──
@@ -496,7 +495,7 @@ mod tests {
     #[test]
     fn adapter_wraps_as_effect() {
         let kernel = BitcrusherKernel::new(48000.0);
-        let mut adapter = KernelAdapter::new(kernel, 48000.0);
+        let mut adapter = Adapter::new(kernel, 48000.0);
 
         adapter.reset();
         let output = adapter.process(0.3);
@@ -507,7 +506,7 @@ mod tests {
     #[test]
     fn adapter_param_info_matches() {
         let kernel = BitcrusherKernel::new(48000.0);
-        let adapter = KernelAdapter::new(kernel, 48000.0);
+        let adapter = Adapter::new(kernel, 48000.0);
 
         assert_eq!(adapter.param_count(), 5);
 
@@ -590,7 +589,7 @@ mod tests {
         assert!((min_params.rate - 1.0).abs() < 1.0, "min rate should be ~1");
         assert!((min_params.jitter_pct - 0.0).abs() < 1e-5);
         assert!((min_params.mix_pct - 0.0).abs() < 1e-5);
-        assert!((min_params.output_db - (-20.0)).abs() < 1e-4);
+        assert!((min_params.output_db - (-6.0)).abs() < 1e-4); // output_param_descriptor range [-6, 6]
 
         // All-one knobs → maximum values
         let max_params = BitcrusherParams::from_knobs(1.0, 1.0, 1.0, 1.0, 1.0);
@@ -642,7 +641,7 @@ mod tests {
     #[test]
     fn adapter_set_get_roundtrip() {
         let kernel = BitcrusherKernel::new(48000.0);
-        let mut adapter = KernelAdapter::new(kernel, 48000.0);
+        let mut adapter = Adapter::new(kernel, 48000.0);
 
         adapter.set_param(0, 4.0); // bit depth
         assert!((adapter.get_param(0) - 4.0).abs() < 1e-5, "bits roundtrip");

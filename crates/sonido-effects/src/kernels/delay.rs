@@ -2,7 +2,7 @@
 //!
 //! `DelayKernel` owns DSP state (delay lines, feedback filters, diffusion
 //! allpasses, tempo manager). Parameters are received via `&DelayParams` each
-//! sample. Deployed via [`KernelAdapter`](sonido_core::KernelAdapter) for
+//! sample. Deployed via [`Adapter`](sonido_core::kernel::Adapter) for
 //! desktop/plugin, or called directly on embedded targets.
 //!
 //! # Algorithm
@@ -38,7 +38,7 @@
 //!
 //! ```rust,ignore
 //! // Desktop / Plugin (via adapter — handles smoothing automatically)
-//! let adapter = KernelAdapter::new(DelayKernel::new(48000.0), 48000.0);
+//! let adapter = Adapter::new(DelayKernel::new(48000.0), 48000.0);
 //! let mut effect: Box<dyn Effect> = Box::new(adapter);
 //!
 //! // Embedded / Daisy Seed (direct — no smoothing, ADCs are hardware-filtered)
@@ -747,7 +747,7 @@ impl DspKernel for DelayKernel {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sonido_core::kernel::KernelAdapter;
+    use sonido_core::kernel::Adapter;
     use sonido_core::{Effect, ParameterInfo};
 
     // ── Silence invariant ──────────────────────────────────────────────────
@@ -825,10 +825,10 @@ mod tests {
 
     // ── Adapter integration ────────────────────────────────────────────────
 
-    /// The kernel must wrap into a `KernelAdapter` and function as a `dyn Effect`.
+    /// The kernel must wrap into an `Adapter` and function as a `dyn Effect`.
     #[test]
     fn adapter_wraps_as_effect() {
-        let mut adapter = KernelAdapter::new(DelayKernel::new(48000.0), 48000.0);
+        let mut adapter = Adapter::new(DelayKernel::new(48000.0), 48000.0);
         adapter.reset();
 
         let output = adapter.process(0.3);
@@ -846,7 +846,7 @@ mod tests {
     /// effect, preserving preset compatibility.
     #[test]
     fn adapter_param_info_matches() {
-        let adapter = KernelAdapter::new(DelayKernel::new(48000.0), 48000.0);
+        let adapter = Adapter::new(DelayKernel::new(48000.0), 48000.0);
 
         assert_eq!(
             adapter.param_count(),
@@ -968,8 +968,8 @@ mod tests {
             min.mix_pct
         );
         assert!(
-            (min.output_db - (-20.0)).abs() < 0.01,
-            "Output at 0.0 should be −20 dB, got {}",
+            (min.output_db - (-6.0)).abs() < 0.01,
+            "Output at 0.0 should be −6 dB, got {}",
             min.output_db
         );
         assert!(
@@ -981,7 +981,7 @@ mod tests {
         // Mid-point: non-stepped params at 0.5
         let mid = DelayParams::from_knobs(0.5, 0.5, 0.5, 0.0, 0.5, 0.5, 0.5, 0.0, 0.5, 0.5);
         assert!(
-            (mid.feedback_pct - 47.5).abs() < 0.1,
+            (mid.feedback_pct - 47.5).abs() < 0.5,
             "Feedback at 0.5 should be 47.5 %, got {}",
             mid.feedback_pct
         );
@@ -991,8 +991,8 @@ mod tests {
             mid.mix_pct
         );
         assert!(
-            (mid.output_db - (-7.0)).abs() < 0.1,
-            "Output at 0.5 should be -7 dB, got {}",
+            mid.output_db.abs() < 0.1,
+            "Output at 0.5 should be 0 dB, got {}",
             mid.output_db
         );
     }

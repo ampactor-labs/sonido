@@ -3,7 +3,7 @@
 //! `PhaserKernel` owns DSP state (allpass arrays, LFOs, feedback samples,
 //! tempo manager, coefficient decimation counter). Parameters are received via
 //! `&PhaserParams` each sample. Deployed via
-//! [`KernelAdapter`](sonido_core::KernelAdapter) for desktop/plugin, or called
+//! [`Adapter`](sonido_core::kernel::Adapter) for desktop/plugin, or called
 //! directly on embedded targets.
 //!
 //! # Signal Flow
@@ -39,7 +39,7 @@
 //!
 //! ```rust,ignore
 //! // Desktop / Plugin (via adapter — handles smoothing automatically)
-//! let adapter = KernelAdapter::new(PhaserKernel::new(48000.0), 48000.0);
+//! let adapter = Adapter::new(PhaserKernel::new(48000.0), 48000.0);
 //! let mut effect: Box<dyn Effect> = Box::new(adapter);
 //!
 //! // Embedded / Daisy Seed (direct — no smoothing, ADCs are hardware-filtered)
@@ -604,7 +604,7 @@ impl DspKernel for PhaserKernel {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sonido_core::kernel::KernelAdapter;
+    use sonido_core::kernel::Adapter;
     use sonido_core::{Effect, ParameterInfo};
 
     // ── Kernel unit tests ─────────────────────────────────────────────────
@@ -763,11 +763,11 @@ mod tests {
 
     // ── Adapter integration tests ─────────────────────────────────────────
 
-    /// Kernel wrapped in `KernelAdapter` must function as a standard `Effect`.
+    /// Kernel wrapped in `Adapter` must function as a standard `Effect`.
     #[test]
     fn adapter_wraps_as_effect() {
         let kernel = PhaserKernel::new(48000.0);
-        let mut adapter = KernelAdapter::new(kernel, 48000.0);
+        let mut adapter = Adapter::new(kernel, 48000.0);
 
         adapter.reset();
         let output = adapter.process(0.5);
@@ -775,11 +775,11 @@ mod tests {
         assert!(output.is_finite(), "Adapter output is infinite");
     }
 
-    /// `KernelAdapter` must expose the same 10 parameters with matching `ParamId`s.
+    /// `Adapter` must expose the same 10 parameters with matching `ParamId`s.
     #[test]
     fn adapter_param_info_matches() {
         let kernel = PhaserKernel::new(48000.0);
-        let adapter = KernelAdapter::new(kernel, 48000.0);
+        let adapter = Adapter::new(kernel, 48000.0);
 
         assert_eq!(adapter.param_count(), 11, "Should expose exactly 11 params");
 
@@ -909,7 +909,7 @@ mod tests {
             low.depth_pct
         );
         assert!(
-            (low.feedback_pct - 0.0).abs() < 0.5,
+            low.feedback_pct.abs() < 0.5,
             "feedback low: {}",
             low.feedback_pct
         );

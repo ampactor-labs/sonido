@@ -746,6 +746,7 @@ impl ProcessingGraph {
     /// (typically done in startup code). Reading without enabling returns `0`
     /// from the hardware, which is safe but produces meaningless deltas.
     #[inline]
+    #[allow(unsafe_code)]
     fn read_cycles() -> u32 {
         #[cfg(target_arch = "arm")]
         {

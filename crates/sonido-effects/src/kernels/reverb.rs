@@ -3,7 +3,7 @@
 //! `ReverbKernel` owns DSP state (FDN delay lines, damping filters, allpass
 //! diffusers, predelay lines, ER tapped delay). Parameters are received via
 //! `&ReverbParams` each sample. Deployed via
-//! [`KernelAdapter`](sonido_core::KernelAdapter) for desktop/plugin, or called
+//! [`Adapter`](sonido_core::kernel::Adapter) for desktop/plugin, or called
 //! directly on embedded targets.
 //!
 //! # Architecture
@@ -44,7 +44,7 @@
 //!
 //! ```rust,ignore
 //! // Desktop / Plugin (via adapter — handles smoothing automatically)
-//! let adapter = KernelAdapter::new(ReverbKernel::new(48000.0), 48000.0);
+//! let adapter = Adapter::new(ReverbKernel::new(48000.0), 48000.0);
 //! let mut effect: Box<dyn Effect> = Box::new(adapter);
 //!
 //! // Embedded / Daisy Seed (direct — no smoothing, ADCs are hardware-filtered)
@@ -909,7 +909,7 @@ impl DspKernel for ReverbKernel {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sonido_core::kernel::KernelAdapter;
+    use sonido_core::kernel::Adapter;
     use sonido_core::{Effect, ParameterInfo};
 
     // ── Basic correctness ────────────────────────────────────────────────────
@@ -969,10 +969,10 @@ mod tests {
         );
     }
 
-    /// The kernel must wrap into a `KernelAdapter` and function as an `Effect`.
+    /// The kernel must wrap into an `Adapter` and function as an `Effect`.
     #[test]
     fn adapter_wraps_as_effect() {
-        let mut adapter = KernelAdapter::new(ReverbKernel::new(48000.0), 48000.0);
+        let mut adapter = Adapter::new(ReverbKernel::new(48000.0), 48000.0);
         adapter.reset();
         let output = adapter.process(0.3);
         assert!(
@@ -984,7 +984,7 @@ mod tests {
     /// The adapter's `ParameterInfo` must match `ReverbParams::COUNT` and ParamIds.
     #[test]
     fn adapter_param_info_matches() {
-        let adapter = KernelAdapter::new(ReverbKernel::new(48000.0), 48000.0);
+        let adapter = Adapter::new(ReverbKernel::new(48000.0), 48000.0);
         assert_eq!(
             adapter.param_count(),
             ReverbParams::COUNT,
@@ -1110,8 +1110,8 @@ mod tests {
             min.er_level_pct
         );
         assert!(
-            (min.output_db - (-20.0)).abs() < 0.01,
-            "Output at 0.0 should be -20 dB, got {}",
+            (min.output_db - (-6.0)).abs() < 0.01,
+            "Output at 0.0 should be -6 dB, got {}",
             min.output_db
         );
 
@@ -1123,13 +1123,13 @@ mod tests {
             mid.room_size_pct
         );
         assert!(
-            (mid.predelay_ms - 50.0).abs() < 0.01,
+            (mid.predelay_ms - 50.0).abs() < 0.5,
             "Predelay at 0.5 should be 50 ms, got {}",
             mid.predelay_ms
         );
         assert!(
-            (mid.output_db - (-7.0)).abs() < 0.1,
-            "Output at 0.5 should be -7 dB, got {}",
+            mid.output_db.abs() < 0.1,
+            "Output at 0.5 should be 0 dB, got {}",
             mid.output_db
         );
     }

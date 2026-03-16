@@ -40,18 +40,19 @@ pub mod rcc;
 pub mod sdram;
 pub mod tap_tempo;
 
-/// Zero-smoothing DspKernel wrapper — requires `alloc` feature.
-#[cfg(feature = "alloc")]
-pub mod embedded_adapter;
 /// Scale-aware ADC→parameter conversion — requires `alloc` feature.
 #[cfg(feature = "alloc")]
 pub mod param_map;
 
+/// Per-effect "noon preset" sweet-spot values — requires `alloc` feature.
+#[cfg(feature = "alloc")]
+pub mod noon_presets;
+
 pub use controls::ControlBuffer;
 #[cfg(feature = "alloc")]
-pub use embedded_adapter::EmbeddedAdapter;
+pub use sonido_core::kernel::{Adapter, DirectPolicy};
 #[cfg(feature = "alloc")]
-pub use param_map::adc_to_param;
+pub use param_map::{adc_to_param, adc_to_param_biased};
 pub use rcc::{ClockProfile, cycles_per_block, rcc_config};
 
 use cortex_m::peripheral::DWT;

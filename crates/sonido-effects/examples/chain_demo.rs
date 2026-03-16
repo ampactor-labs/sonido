@@ -5,7 +5,7 @@
 //!
 //! Run with: cargo run --example chain_demo
 
-use sonido_core::{Effect, EffectExt, KernelAdapter, ParameterInfo};
+use sonido_core::{Adapter, Effect, EffectExt, ParameterInfo};
 use sonido_effects::kernels::{
     ChorusKernel, CompressorKernel, DelayKernel, DistortionKernel, FilterKernel, PreampKernel,
     TapeKernel,
@@ -30,13 +30,13 @@ fn main() {
     println!("-------------------------------------------------");
 
     let preamp = {
-        let mut p = KernelAdapter::new(PreampKernel::new(SAMPLE_RATE), SAMPLE_RATE);
+        let mut p = Adapter::new(PreampKernel::new(SAMPLE_RATE), SAMPLE_RATE);
         p.set_param(0, 6.0); // gain_db
         p
     };
 
     let distortion = {
-        let mut d = KernelAdapter::new(DistortionKernel::new(SAMPLE_RATE), SAMPLE_RATE);
+        let mut d = Adapter::new(DistortionKernel::new(SAMPLE_RATE), SAMPLE_RATE);
         d.set_param(0, 12.0); // drive
         d.set_param(3, 0.0); // waveshape: SoftClip
         d.set_param(1, 3.0); // tone
@@ -44,14 +44,14 @@ fn main() {
     };
 
     let tape = {
-        let mut t = KernelAdapter::new(TapeKernel::new(SAMPLE_RATE), SAMPLE_RATE);
+        let mut t = Adapter::new(TapeKernel::new(SAMPLE_RATE), SAMPLE_RATE);
         t.set_param(0, 6.0); // drive (dB, range 0-24)
         t.set_param(1, 40.0); // saturation (percent)
         t
     };
 
     let chorus = {
-        let mut c = KernelAdapter::new(ChorusKernel::new(SAMPLE_RATE), SAMPLE_RATE);
+        let mut c = Adapter::new(ChorusKernel::new(SAMPLE_RATE), SAMPLE_RATE);
         c.set_param(0, 1.2); // rate
         c.set_param(1, 50.0); // depth (percent)
         c.set_param(2, 30.0); // mix (percent)
@@ -59,7 +59,7 @@ fn main() {
     };
 
     let delay = {
-        let mut d = KernelAdapter::new(DelayKernel::new(SAMPLE_RATE), SAMPLE_RATE);
+        let mut d = Adapter::new(DelayKernel::new(SAMPLE_RATE), SAMPLE_RATE);
         d.set_param(0, 375.0); // time_ms
         d.set_param(1, 40.0); // feedback (percent)
         d.set_param(2, 25.0); // mix (percent)
@@ -92,13 +92,13 @@ fn main() {
 
     let mut dynamic_chain: Vec<Box<dyn Effect>> = vec![
         Box::new({
-            let mut f = KernelAdapter::new(FilterKernel::new(SAMPLE_RATE), SAMPLE_RATE);
+            let mut f = Adapter::new(FilterKernel::new(SAMPLE_RATE), SAMPLE_RATE);
             f.set_param(0, 2000.0); // cutoff
             f.set_param(1, 1.0); // resonance
             f
         }),
         Box::new({
-            let mut c = KernelAdapter::new(CompressorKernel::new(SAMPLE_RATE), SAMPLE_RATE);
+            let mut c = Adapter::new(CompressorKernel::new(SAMPLE_RATE), SAMPLE_RATE);
             c.set_param(0, -18.0); // threshold
             c.set_param(1, 4.0); // ratio
             c.set_param(2, 5.0); // attack
@@ -106,7 +106,7 @@ fn main() {
             c
         }),
         Box::new({
-            let mut d = KernelAdapter::new(DelayKernel::new(SAMPLE_RATE), SAMPLE_RATE);
+            let mut d = Adapter::new(DelayKernel::new(SAMPLE_RATE), SAMPLE_RATE);
             d.set_param(0, 250.0); // time_ms
             d.set_param(1, 30.0); // feedback (percent)
             d.set_param(2, 20.0); // mix (percent)

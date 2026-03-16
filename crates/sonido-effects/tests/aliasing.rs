@@ -24,7 +24,7 @@
 //! 5 kHz input to verify that no blowup or NaN occurs — a sign that aliased
 //! energy is not being reinforced into a feedback loop.
 
-use sonido_core::{Effect, KernelAdapter, ParameterInfo};
+use sonido_core::{Adapter, Effect, ParameterInfo};
 use sonido_effects::kernels::{AmpKernel, DistortionKernel, PreampKernel, TapeKernel};
 
 const SAMPLE_RATE: f32 = 48000.0;
@@ -144,7 +144,7 @@ fn naive_tanh_clip(input: &[f32], drive: f32) -> Vec<f32> {
 #[test]
 fn distortion_adaa_suppresses_aliasing() {
     // DistortionKernel params: 0=drive_db, 1=tone_db, 2=output_db, 3=shape, 4=mix_pct, 5=dynamics
-    let mut effect = KernelAdapter::new(DistortionKernel::new(SAMPLE_RATE), SAMPLE_RATE);
+    let mut effect = Adapter::new(DistortionKernel::new(SAMPLE_RATE), SAMPLE_RATE);
     effect.set_param(0, 30.0); // drive_db
     effect.set_param(3, 0.0); // shape = soft clip
     effect.set_param(4, 100.0); // mix_pct: fully wet
@@ -190,7 +190,7 @@ fn distortion_adaa_suppresses_aliasing() {
 /// PreampKernel uses ADAA gain stage. Params: 0=gain_db.
 #[test]
 fn preamp_adaa_suppresses_aliasing() {
-    let mut effect = KernelAdapter::new(PreampKernel::new(SAMPLE_RATE), SAMPLE_RATE);
+    let mut effect = Adapter::new(PreampKernel::new(SAMPLE_RATE), SAMPLE_RATE);
     effect.set_param(0, 30.0); // gain_db: high gain to stress the nonlinearity
 
     let warmup = generate_sine(FUNDAMENTAL_HZ, 0.5, 2400);
@@ -230,7 +230,7 @@ fn preamp_adaa_suppresses_aliasing() {
 /// Params: 0=gain_pct, 7=master_db.
 #[test]
 fn amp_adaa_suppresses_aliasing() {
-    let mut effect = KernelAdapter::new(AmpKernel::new(SAMPLE_RATE), SAMPLE_RATE);
+    let mut effect = Adapter::new(AmpKernel::new(SAMPLE_RATE), SAMPLE_RATE);
     effect.set_param(0, 80.0); // gain_pct: high gain
     effect.set_param(7, -6.0); // master_db
 
@@ -267,7 +267,7 @@ fn amp_adaa_suppresses_aliasing() {
 /// TapeKernel uses ADAA for saturation. Params: 0=drive_db, 1=saturation_pct.
 #[test]
 fn tape_adaa_suppresses_aliasing() {
-    let mut effect = KernelAdapter::new(TapeKernel::new(SAMPLE_RATE), SAMPLE_RATE);
+    let mut effect = Adapter::new(TapeKernel::new(SAMPLE_RATE), SAMPLE_RATE);
     effect.set_param(0, 18.0); // drive_db: heavy drive
     effect.set_param(1, 90.0); // saturation_pct: near maximum
 

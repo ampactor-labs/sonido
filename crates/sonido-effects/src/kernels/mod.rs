@@ -7,7 +7,7 @@
 //! - A `Params` struct (parameter values + metadata via [`KernelParams`](sonido_core::KernelParams))
 //! - A `Kernel` struct (DSP state only — filters, delay lines, ADAA processors)
 //!
-//! Kernels are deployed via [`KernelAdapter`](sonido_core::KernelAdapter) for desktop/plugin
+//! Kernels are deployed via [`Adapter`](sonido_core::kernel::Adapter) for desktop/plugin
 //! use, or called directly on embedded targets.
 
 pub mod amp;

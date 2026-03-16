@@ -120,7 +120,7 @@ Coefficient calculation overhead:
 
 ### Individual Effects (Mono Block Processing)
 
-All 19 effects benchmarked via `KernelAdapter<XxxKernel>` with typical parameter settings. Measured on
+All 19 effects benchmarked via `Adapter<XxxKernel, SmoothedPolicy>` with typical parameter settings. Measured on
 Intel i5-6300U @ 3.0 GHz (turbo).
 
 | Effect | Key Parameters | 256 samples | ns/sample |

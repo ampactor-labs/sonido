@@ -151,7 +151,10 @@ pub use graph::{
     GraphSnapshot, NodeId, NodeKind, NodeRate, ProcessStep, ProcessingGraph, SnapshotEntry,
     StereoBuffer, StereoSamples,
 };
-pub use kernel::{DspKernel, KernelAdapter, KernelParams, MorphCurve, MorphSpace, SmoothingStyle};
+pub use kernel::{
+    Adapter, DirectPolicy, DspKernel, KernelParams, MorphCurve, MorphSpace, SmoothedPolicy,
+    SmoothingPolicy, SmoothingStyle,
+};
 pub use lfo::{Lfo, LfoWaveform};
 pub use loop_buffer::LoopBuffer;
 pub use macro_map::{MacroMap, MacroMapping};

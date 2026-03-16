@@ -2,7 +2,7 @@
 //!
 //! `LooperKernel` owns DSP state (a stereo [`LoopBuffer`] and the cached mode).
 //! Parameters are received via `&LooperParams` each sample. Deployed via
-//! [`KernelAdapter`](sonido_core::KernelAdapter) for desktop/plugin, or called
+//! [`Adapter`](sonido_core::kernel::Adapter) for desktop/plugin, or called
 //! directly on embedded targets.
 //!
 //! # State Machine
@@ -56,7 +56,7 @@
 //!
 //! ```rust,ignore
 //! // Desktop / Plugin (via adapter — handles smoothing automatically)
-//! let adapter = KernelAdapter::new(LooperKernel::new(48000.0), 48000.0);
+//! let adapter = Adapter::new(LooperKernel::new(48000.0), 48000.0);
 //! let mut effect: Box<dyn Effect> = Box::new(adapter);
 //!
 //! // Embedded / Daisy Seed (direct — no smoothing, ADCs are hardware-filtered)
@@ -106,7 +106,7 @@ const MODE_LABELS: &[&str] = &["Stop", "Record", "Play", "Overdub"];
 /// | Index | Field | Unit | Range | Default |
 /// |-------|-------|------|-------|---------|
 /// | 0 | `mode` | index | 0–3 (Stop/Record/Play/Overdub) | 0.0 |
-/// | 1 | `feedback_pct` | % | 0–100 | 80.0 |
+/// | 1 | `feedback_pct` | % | 0–100 | 50.0 |
 /// | 2 | `half_speed` | index | 0–1 | 0.0 |
 /// | 3 | `reverse` | index | 0–1 | 0.0 |
 /// | 4 | `mix_pct` | % | 0–100 | 100.0 |
@@ -121,10 +121,10 @@ pub struct LooperParams {
 
     /// Overdub feedback decay in percent.
     ///
-    /// Range: 0.0 to 100.0 %. In Overdub mode, the existing loop content is
-    /// scaled by `feedback_pct / 100.0` before the new input is added, causing
-    /// the loop to fade with each pass. At 100 % the loop is preserved indefinitely.
-    /// At 0 % only the newest layer survives.
+    /// Range: 0.0 to 100.0 % (default 50.0). In Overdub mode, the existing loop
+    /// content is scaled by `feedback_pct / 100.0` before the new input is added,
+    /// causing the loop to fade with each pass. At 100 % the loop is preserved
+    /// indefinitely. At 0 % only the newest layer survives.
     pub feedback_pct: f32,
 
     /// Half-speed toggle: 0.0 = Off, 1.0 = On.
@@ -152,7 +152,7 @@ pub struct LooperParams {
 }
 
 impl Default for LooperParams {
-    /// Default: Stop mode, 80 % feedback, no half-speed/reverse, 100 % wet, 0 dB output.
+    /// Default: Stop mode, 50 % feedback, no half-speed/reverse, 100 % wet, 0 dB output.
     fn default() -> Self {
         Self {
             mode: 0.0,
@@ -484,7 +484,7 @@ impl DspKernel for LooperKernel {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sonido_core::kernel::KernelAdapter;
+    use sonido_core::kernel::Adapter;
     use sonido_core::{Effect, ParameterInfo};
 
     // ── Helpers ───────────────────────────────────────────────────────────
@@ -799,10 +799,10 @@ mod tests {
 
     // ── adapter integration ───────────────────────────────────────────────
 
-    /// The kernel must wrap into a `KernelAdapter` and function as a `dyn Effect`.
+    /// The kernel must wrap into an `Adapter` and function as a `dyn Effect`.
     #[test]
     fn adapter_wraps_as_effect() {
-        let mut adapter = KernelAdapter::new(LooperKernel::new(48000.0), 48000.0);
+        let mut adapter = Adapter::new(LooperKernel::new(48000.0), 48000.0);
         adapter.reset();
         let out = adapter.process(0.3);
         assert!(out.is_finite(), "Adapter output must be finite, got {out}");
@@ -811,7 +811,7 @@ mod tests {
     /// The adapter's `ParameterInfo` must expose 6 params with the correct `ParamId`s.
     #[test]
     fn adapter_param_info_matches() {
-        let adapter = KernelAdapter::new(LooperKernel::new(48000.0), 48000.0);
+        let adapter = Adapter::new(LooperKernel::new(48000.0), 48000.0);
         assert_eq!(adapter.param_count(), 6, "Expected 6 params via adapter");
 
         let p = |i: usize| {

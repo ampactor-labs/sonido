@@ -1,7 +1,7 @@
 //! Sonido Effects - Production-ready audio effect implementations
 //!
 //! This crate provides 20 audio effects built on `sonido-core` using the
-//! [`DspKernel`](sonido_core::DspKernel) + [`KernelAdapter`](sonido_core::KernelAdapter)
+//! [`DspKernel`](sonido_core::DspKernel) + [`Adapter`](sonido_core::kernel::Adapter)
 //! architecture, suitable for real-time audio processing, plugins, and embedded systems.
 //!
 //! # Effect Categories
@@ -53,25 +53,26 @@
 //!
 //! # Usage
 //!
-//! Effects are deployed via [`KernelAdapter`](sonido_core::KernelAdapter) for desktop/plugin
+//! Effects are deployed via [`Adapter`](sonido_core::kernel::Adapter) for desktop/plugin
 //! use, or called directly on embedded targets via [`DspKernel`](sonido_core::DspKernel).
 //!
-//! ## Desktop / Plugin (via KernelAdapter)
+//! ## Desktop / Plugin (via Adapter)
 //!
 //! ```rust,ignore
-//! use sonido_core::{Effect, EffectExt, KernelAdapter, ParameterInfo};
+//! use sonido_core::{Effect, EffectExt, ParameterInfo};
+//! use sonido_core::kernel::Adapter;
 //! use sonido_effects::kernels::{DistortionKernel, ChorusKernel, DelayKernel, ReverbKernel};
 //!
 //! let sr = 48000.0;
 //!
-//! // Create effects via KernelAdapter (handles parameter smoothing)
-//! let mut dist = KernelAdapter::new(DistortionKernel::new(sr), sr);
+//! // Create effects via Adapter (handles parameter smoothing)
+//! let mut dist = Adapter::new(DistortionKernel::new(sr), sr);
 //! dist.set_param(0, 15.0); // drive_db
 //! dist.set_param(1, 3.0);  // tone_db
 //!
-//! let chorus = KernelAdapter::new(ChorusKernel::new(sr), sr);
-//! let delay = KernelAdapter::new(DelayKernel::new(sr), sr);
-//! let reverb = KernelAdapter::new(ReverbKernel::new(sr), sr);
+//! let chorus = Adapter::new(ChorusKernel::new(sr), sr);
+//! let delay = Adapter::new(DelayKernel::new(sr), sr);
+//! let reverb = Adapter::new(ReverbKernel::new(sr), sr);
 //!
 //! // Chain with zero-cost static dispatch
 //! let mut chain = dist.chain(chorus).chain(delay).chain(reverb);

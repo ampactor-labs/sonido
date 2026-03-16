@@ -2,7 +2,7 @@
 //!
 //! `TransientShaperKernel` owns DSP state (two parallel envelope followers).
 //! Parameters are received via `&TransientShaperParams` each sample. Deployed via
-//! [`KernelAdapter`](sonido_core::KernelAdapter) for desktop/plugin, or called
+//! [`Adapter`](sonido_core::kernel::Adapter) for desktop/plugin, or called
 //! directly on embedded targets.
 //!
 //! # Algorithm
@@ -36,7 +36,7 @@
 //!
 //! ```rust,ignore
 //! // Desktop / Plugin (adapter handles smoothing automatically)
-//! let adapter = KernelAdapter::new(TransientShaperKernel::new(48000.0), 48000.0);
+//! let adapter = Adapter::new(TransientShaperKernel::new(48000.0), 48000.0);
 //! let mut effect: Box<dyn Effect> = Box::new(adapter);
 //!
 //! // Embedded / Daisy Seed (direct — no smoothing, ADCs are hardware-filtered)

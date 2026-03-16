@@ -2,7 +2,7 @@
 //!
 //! `ChorusKernel` owns DSP state (delay lines, LFOs, feedback state).
 //! Parameters are received via `&ChorusParams` each sample. Deployed via
-//! [`KernelAdapter`](sonido_core::KernelAdapter) for desktop/plugin, or
+//! [`Adapter`](sonido_core::kernel::Adapter) for desktop/plugin, or
 //! called directly on embedded targets.
 //!
 //! # Algorithm
@@ -43,7 +43,7 @@
 //!
 //! ```rust,ignore
 //! // Desktop / Plugin (via adapter — handles smoothing automatically)
-//! let adapter = KernelAdapter::new(ChorusKernel::new(48000.0), 48000.0);
+//! let adapter = Adapter::new(ChorusKernel::new(48000.0), 48000.0);
 //! let mut effect: Box<dyn Effect> = Box::new(adapter);
 //!
 //! // Embedded / Daisy Seed (direct — no smoothing, ADCs are hardware-filtered)
@@ -587,7 +587,7 @@ impl DspKernel for ChorusKernel {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sonido_core::kernel::KernelAdapter;
+    use sonido_core::kernel::Adapter;
     use sonido_core::{Effect, ParameterInfo};
 
     // ── Basic correctness ────────────────────────────────────────────────────
@@ -758,10 +758,10 @@ mod tests {
 
     // ── Adapter integration ──────────────────────────────────────────────────
 
-    /// The kernel must wrap into a `KernelAdapter` and function as an `Effect`.
+    /// The kernel must wrap into an `Adapter` and function as an `Effect`.
     #[test]
     fn adapter_wraps_as_effect() {
-        let mut adapter = KernelAdapter::new(ChorusKernel::new(48000.0), 48000.0);
+        let mut adapter = Adapter::new(ChorusKernel::new(48000.0), 48000.0);
         adapter.reset();
         let output = adapter.process(0.3);
         assert!(
@@ -773,7 +773,7 @@ mod tests {
     /// The adapter's `ParameterInfo` must match `ChorusParams::COUNT`.
     #[test]
     fn adapter_param_info_matches() {
-        let adapter = KernelAdapter::new(ChorusKernel::new(48000.0), 48000.0);
+        let adapter = Adapter::new(ChorusKernel::new(48000.0), 48000.0);
         assert_eq!(
             adapter.param_count(),
             ChorusParams::COUNT,
@@ -879,8 +879,8 @@ mod tests {
             p.feedback_pct
         );
         assert!(
-            (p.output_db - (-20.0)).abs() < 0.01,
-            "Output at 0.0 should be ~-20 dB, got {}",
+            (p.output_db - (-6.0)).abs() < 0.01,
+            "Output at 0.0 should be ~-6 dB, got {}",
             p.output_db
         );
     }
@@ -924,7 +924,7 @@ mod tests {
     /// Adapter's `is_true_stereo` must forward to the kernel.
     #[test]
     fn adapter_is_true_stereo() {
-        let adapter = KernelAdapter::new(ChorusKernel::new(48000.0), 48000.0);
+        let adapter = Adapter::new(ChorusKernel::new(48000.0), 48000.0);
         assert!(adapter.is_true_stereo());
     }
 }

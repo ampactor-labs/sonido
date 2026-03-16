@@ -1,36 +1,29 @@
-//! Tier 4: Single effect processing on hardware.
+//! Generic single-effect test harness for hardware tuning.
 //!
-//! Processes audio through a Sonido distortion kernel with parameters mapped
-//! from ADC knob readings via `from_knobs()`. This is the first real DSP
-//! running on the Daisy Seed / Hothouse platform.
+//! Change the `use` + `type Effect` lines to test a different effect.
+//! Only that kernel gets compiled — no registry, no vtable, no smoothing.
 //!
-//! # Architecture
+//! `Adapter<K, DirectPolicy>` provides `ParameterInfo` (descriptors drive
+//! `adc_to_param` automatically) and `Effect` (for `process_stereo`),
+//! with `DirectPolicy` — knob changes land instantly.
 //!
-//! ADC and GPIO reads run in [`hothouse_control_task`] at 50 Hz, separate
-//! from the audio DMA callback. Shared state flows through a lock-free
-//! [`HothouseBuffer`]. The audio callback reads smoothed knob values and
-//! processes audio through a `DistortionKernel`.
+//! # Switching effects
 //!
-//! # Hardware Mapping
+//! Change all three lines in the marked block:
 //!
-//! | Control      | Pin(s)       | Function                                      |
-//! |--------------|--------------|-----------------------------------------------|
-//! | KNOB_1       | PA3          | Drive (0-40 dB)                               |
-//! | KNOB_2       | PB1          | Tone (-12 to 12 dB)                           |
-//! | KNOB_3       | PA6          | Output level (−20 to +6 dB)                   |
-//! | KNOB_4       | PC1          | Mix / dry-wet (0-100%)                        |
-//! | TOGGLE_1 up  | PB4          | Distortion mode: Up=Overdrive (SoftClip)      |
-//! | TOGGLE_1 mid | (neither)    | Distortion mode: Mid=Distortion (HardClip)    |
-//! | TOGGLE_1 dn  | PB5          | Distortion mode: Down=Fuzz (Foldback)         |
-//! | FOOTSWITCH_1 | PA0 (pull-up)| Bypass toggle on release                      |
-//! | LED_1        | PA5          | Active (on) / Bypassed (off)                  |
+//! ```rust,ignore
+//! use sonido_effects::kernels::ReverbKernel;
+//! type TestEffect = Adapter<ReverbKernel, DirectPolicy>;
+//! // ... and in main():
+//! let mut effect = TestEffect::new_direct(ReverbKernel::new(SAMPLE_RATE));
+//! ```
 //!
 //! # Build & Flash
 //!
 //! ```bash
 //! cd crates/sonido-daisy
-//! cargo objcopy --example single_effect --release -- -O binary -R .sram1_bss single_effect.bin
-//! # Press RESET, then flash within the 2.5s grace period:
+//! cargo objcopy --example single_effect --release --features alloc -- -O binary -R .sram1_bss single_effect.bin
+//! # Press RESET, then flash within 2.5s:
 //! dfu-util -a 0 -s 0x90040000:leave -D single_effect.bin
 //! ```
 
@@ -44,30 +37,42 @@ use embassy_stm32 as hal;
 use embedded_alloc::LlffHeap as Heap;
 use panic_probe as _;
 
-use sonido_core::kernel::DspKernel;
+use sonido_core::{Effect, ParameterInfo};
 use sonido_daisy::controls::HothouseBuffer;
 use sonido_daisy::hothouse::hothouse_control_task;
+use sonido_daisy::param_map::{adc_to_param_biased};
+use sonido_daisy::noon_presets;
+use sonido_core::kernel::{Adapter, DirectPolicy};
 use sonido_daisy::{ClockProfile, SAMPLE_RATE, f32_to_u24, heartbeat, led::UserLed, u24_to_f32};
-use sonido_effects::kernels::{DistortionKernel, DistortionParams};
 
-// ── Heap allocator (DistortionKernel needs alloc for ADAA state) ─────────
+// ═══════════════════════════════════════════════════════════════════════════
+//  CHANGE THESE LINES to test a different effect (and the constructor below):
+// ═══════════════════════════════════════════════════════════════════════════
+use sonido_effects::kernels::DistortionKernel;
+type TestEffect = Adapter<DistortionKernel, DirectPolicy>;
+const EFFECT_ID: &str = "distortion";
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Number of Hothouse knobs.
+const NUM_KNOBS: usize = 6;
+
+/// Max params we cache descriptors for.
+const MAX_PARAMS: usize = 16;
+
+/// Control poll decimation: every 15th block ≈ 100 Hz at 48kHz/32.
+const POLL_EVERY: u32 = 15;
 
 #[global_allocator]
 static HEAP: Heap = Heap::empty();
 
-// ── Shared control buffer ────────────────────────────────────────────────
-
 static CONTROLS: HothouseBuffer = HothouseBuffer::new();
-
-// ── Main ─────────────────────────────────────────────────────────────────
 
 #[embassy_executor::main]
 async fn main(spawner: embassy_executor::Spawner) {
-    // D2 SRAM clocks are disabled at reset — enable before heap init.
     sonido_daisy::enable_d2_sram();
     sonido_daisy::enable_fpu_ftz();
 
-    // Initialize heap at D2 SRAM (256 KB)
+    #[allow(unsafe_code)]
     unsafe {
         HEAP.init(0x3000_8000, 256 * 1024);
     }
@@ -78,19 +83,15 @@ async fn main(spawner: embassy_executor::Spawner) {
     let led = UserLed::new(p.PC7);
     spawner.spawn(heartbeat(led)).unwrap();
 
-    defmt::info!("sonido-daisy single_effect: initializing...");
+    defmt::info!("single_effect: booting...");
 
-    // ── Extract control pins and spawn control task ──
-    // Must happen BEFORE constructing audio peripherals (both consume from p).
     let ctrl = sonido_daisy::hothouse_pins!(p);
     spawner
         .spawn(hothouse_control_task(ctrl, &CONTROLS))
         .unwrap();
 
-    // LED1 starts on (effect active). Write via ControlBuffer.
     CONTROLS.write_led(0, 1.0);
 
-    // ── Construct audio peripherals directly ──
     let audio_peripherals = sonido_daisy::audio::AudioPeripherals {
         codec_pins: sonido_daisy::codec_pins!(p),
         sai1: p.SAI1,
@@ -103,23 +104,43 @@ async fn main(spawner: embassy_executor::Spawner) {
         .await;
     let mut interface = defmt::unwrap!(interface.start_interface().await);
 
-    defmt::info!("audio interface started — distortion effect active");
+    // ── Create effect (monomorphized, zero smoothing) ──
+    let mut effect = TestEffect::new_direct(DistortionKernel::new(SAMPLE_RATE));
 
-    // ── Create distortion kernel (captured by audio callback closure) ──
-    let mut kernel = DistortionKernel::new(SAMPLE_RATE);
+    let param_count = effect.param_count();
+    let knob_count = param_count.min(NUM_KNOBS);
 
-    // ── Start audio callback ──
-    // Audio processing and control reads are cleanly separated:
-    // - hothouse_control_task reads ADC/GPIO at 50 Hz → ControlBuffer
-    // - Audio callback reads ControlBuffer (lock-free) → processes audio
+    // Cache descriptors for adc_to_param
+    defmt::assert!(param_count <= MAX_PARAMS, "effect has {} params, max is {}", param_count, MAX_PARAMS);
+    let mut descs = [None; MAX_PARAMS];
+    for i in 0..param_count {
+        descs[i] = effect.param_info(i);
+    }
+
+    // Log param table
+    defmt::info!("{} params, {} knobs:", param_count, knob_count);
+    for i in 0..param_count.min(MAX_PARAMS) {
+        if let Some(ref d) = descs[i] {
+            if i < NUM_KNOBS {
+                defmt::info!("  K{}: [{}] {} ({} .. {})", i + 1, i, d.name, d.min, d.max);
+            } else {
+                defmt::info!("  --: [{}] {} ({} .. {})", i, d.name, d.min, d.max);
+            }
+        }
+    }
+
+    // ── Audio callback ──
     let mut active = true;
     let mut foot_was_pressed = false;
+    let mut poll_counter: u32 = 0;
+    let mut prev_raw = [0.0f32; NUM_KNOBS];
+
+    defmt::info!("ready — play guitar");
 
     defmt::unwrap!(
         interface
             .start_callback(move |input, output| {
-                // ── Read controls from ControlBuffer ──
-                // Footswitch bypass toggle (fire on release)
+                // Footswitch: bypass toggle on release
                 let foot_pressed = CONTROLS.read_footswitch(0);
                 if foot_was_pressed && !foot_pressed {
                     active = !active;
@@ -128,44 +149,40 @@ async fn main(spawner: embassy_executor::Spawner) {
                 foot_was_pressed = foot_pressed;
 
                 if !active {
-                    // Bypass: copy input directly to output
                     output.copy_from_slice(input);
                     return;
                 }
 
-                // Read knob values (0.0–1.0, IIR-smoothed by control task)
-                // HothouseControls order: 0=PA3, 1=PB1, 2=PA7, 3=PA6, 4=PC1
-                let drive = CONTROLS.read_knob(0); // K1=PA3
-                let tone = CONTROLS.read_knob(1); // K2=PB1
-                let out_level = CONTROLS.read_knob(3); // K4=PA6 (Output, −20 to +6 dB)
-                let mix = CONTROLS.read_knob(4); // K5=PC1 (Mix)
+                // Read knobs → params (decimated to ~100 Hz)
+                poll_counter += 1;
+                if poll_counter >= POLL_EVERY {
+                    poll_counter = 0;
 
-                // Read toggle switch: 0=UP, 1=MID, 2=DN → mode 0/1/2
-                let toggle = CONTROLS.read_toggle(0);
-                let mode = match toggle {
-                    0 => 0.0 / 3.99, // UP = Overdrive (SoftClip)
-                    2 => 2.0 / 3.99, // DN = Fuzz (Foldback)
-                    _ => 1.0 / 3.99, // MID = Distortion (HardClip)
-                };
+                    for k in 0..knob_count {
+                        if let Some(ref desc) = descs[k] {
+                            let raw = CONTROLS.read_knob(k);
+                            let noon = noon_presets::noon_value(EFFECT_ID, k)
+                                .unwrap_or(desc.default);
+                            let value = adc_to_param_biased(desc, noon, raw);
+                            effect.set_param(k, value);
 
-                // from_knobs maps 0.0-1.0 to parameter ranges
-                let params = DistortionParams::from_knobs(drive, tone, out_level, mode, mix, 0.0);
+                            prev_raw[k] = raw;
+                        }
+                    }
+                }
 
-                // Process 32 stereo sample pairs (64 interleaved u32 values)
+                // Process audio
                 for i in (0..input.len()).step_by(2) {
                     let left_in = u24_to_f32(input[i]);
                     let right_in = u24_to_f32(input[i + 1]);
 
-                    let (left_out, right_out) = kernel.process_stereo(left_in, right_in, &params);
-                    let left_out = if left_out.is_finite() { left_out } else { 0.0 };
-                    let right_out = if right_out.is_finite() {
-                        right_out
-                    } else {
-                        0.0
-                    };
+                    let (mut l, mut r) = effect.process_stereo(left_in, right_in);
 
-                    output[i] = f32_to_u24(left_out.clamp(-1.0, 1.0));
-                    output[i + 1] = f32_to_u24(right_out.clamp(-1.0, 1.0));
+                    if !l.is_finite() { l = 0.0; }
+                    if !r.is_finite() { r = 0.0; }
+
+                    output[i] = f32_to_u24(l.clamp(-1.0, 1.0));
+                    output[i + 1] = f32_to_u24(r.clamp(-1.0, 1.0));
                 }
             })
             .await

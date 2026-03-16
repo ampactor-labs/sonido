@@ -2,7 +2,7 @@
 //!
 //! `EqKernel` owns DSP state (six biquad filters, sample rate, coefficient
 //! caches, decimation counter). Parameters are received via `&EqParams` each
-//! sample. Deployed via [`KernelAdapter`](sonido_core::KernelAdapter) for
+//! sample. Deployed via [`Adapter`](sonido_core::kernel::Adapter) for
 //! desktop/plugin, or called directly on embedded targets.
 //!
 //! # Signal Flow
@@ -49,7 +49,7 @@
 //!
 //! ```rust,ignore
 //! // Desktop / Plugin (via adapter — handles smoothing automatically)
-//! let adapter = KernelAdapter::new(EqKernel::new(48000.0), 48000.0);
+//! let adapter = Adapter::new(EqKernel::new(48000.0), 48000.0);
 //! let mut effect: Box<dyn Effect> = Box::new(adapter);
 //!
 //! // Embedded / Daisy Seed (direct — no smoothing, ADCs are hardware-filtered)
@@ -672,7 +672,7 @@ impl DspKernel for EqKernel {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sonido_core::kernel::KernelAdapter;
+    use sonido_core::kernel::Adapter;
     use sonido_core::{Effect, ParameterInfo};
 
     // ── Kernel unit tests ──────────────────────────────────────────────────
@@ -775,7 +775,7 @@ mod tests {
     #[test]
     fn adapter_wraps_as_effect() {
         let kernel = EqKernel::new(48000.0);
-        let mut adapter = KernelAdapter::new(kernel, 48000.0);
+        let mut adapter = Adapter::new(kernel, 48000.0);
 
         adapter.reset();
         let output = adapter.process(0.3);
@@ -786,7 +786,7 @@ mod tests {
     #[test]
     fn adapter_param_info_matches() {
         let kernel = EqKernel::new(48000.0);
-        let adapter = KernelAdapter::new(kernel, 48000.0);
+        let adapter = Adapter::new(kernel, 48000.0);
 
         assert_eq!(adapter.param_count(), 10);
 
@@ -890,17 +890,17 @@ mod tests {
             params.high_gain_db
         );
 
-        // Mid-point output (0.5) → -20 + 0.5 * 26 = -7.0 dB
+        // Mid-point output (0.5) → noon-aligned [-6..+6], default 0 dB → 0 dB
         assert!(
-            (params.output_db - (-7.0)).abs() < 0.01,
-            "output_db should be -7 at mid-point, got {}",
+            params.output_db.abs() < 0.01,
+            "output_db should be 0 at mid-point, got {}",
             params.output_db
         );
 
-        // Mid-point Q (0.5) → 0.5 + 0.5 * 4.5 = 2.75
+        // Mid-point Q (0.5) → Linear: 0.5 + 0.5 * 4.5 = 2.75
         assert!(
             (params.low_q - 2.75).abs() < 0.01,
-            "low_q should be 2.75 at mid-point, got {}",
+            "low_q should be ~2.75 at mid-point, got {}",
             params.low_q
         );
 
@@ -919,8 +919,8 @@ mod tests {
             "low_q at 0 should be 0.5"
         );
         assert!(
-            (min_params.output_db - (-20.0)).abs() < 0.01,
-            "output at 0 should be -20 dB"
+            (min_params.output_db - (-6.0)).abs() < 0.01,
+            "output at 0 should be -6 dB"
         );
 
         let max_params = EqParams::from_knobs(1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0);

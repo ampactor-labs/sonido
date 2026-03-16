@@ -29,7 +29,7 @@
 //!
 //! ```rust,ignore
 //! // Desktop / Plugin (via adapter — handles smoothing automatically)
-//! let adapter = KernelAdapter::new(TextureKernel::new(48000.0), 48000.0);
+//! let adapter = Adapter::new(TextureKernel::new(48000.0), 48000.0);
 //! let mut effect: Box<dyn Effect> = Box::new(adapter);
 //!
 //! // Embedded / Daisy Seed (direct — no smoothing)
@@ -412,7 +412,7 @@ impl DspKernel for TextureKernel {
 mod tests {
     use super::*;
     use sonido_core::Effect;
-    use sonido_core::kernel::KernelAdapter;
+    use sonido_core::kernel::Adapter;
 
     #[test]
     fn finite_output() {
@@ -454,7 +454,7 @@ mod tests {
             let t = i as f32 / 48000.0;
             let s = libm::sinf(2.0 * core::f32::consts::PI * 220.0 * t) * 0.5;
             let (l, _) = kernel.process_stereo(s, s, &params);
-            if i >= 5000 && i < 7000 {
+            if (5000..7000).contains(&i) {
                 energy += l * l;
             }
         }
@@ -478,7 +478,7 @@ mod tests {
 
     #[test]
     fn adapter_wraps_as_effect() {
-        let mut adapter = KernelAdapter::new(TextureKernel::new(48000.0), 48000.0);
+        let mut adapter = Adapter::new(TextureKernel::new(48000.0), 48000.0);
         adapter.reset();
         let out = adapter.process(0.3);
         assert!(out.is_finite(), "Adapter output must be finite, got {out}");

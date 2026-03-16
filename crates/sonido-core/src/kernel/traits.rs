@@ -15,8 +15,8 @@ use std::{format, string::String, vec::Vec};
 /// How a parameter should be smoothed when values change.
 ///
 /// The kernel never sees smoothing — it receives pre-smoothed values each sample.
-/// This enum tells the [`KernelAdapter`](super::KernelAdapter) (or any platform
-/// layer) what smoothing strategy to use.
+/// This enum tells the [`Adapter`](super::Adapter) (or any platform layer) what
+/// smoothing strategy to use.
 ///
 /// On embedded targets with hardware-filtered ADCs, the platform may ignore
 /// this entirely and pass raw readings. That's the whole point.
@@ -184,7 +184,7 @@ pub trait KernelParams: Default + Clone + Send {
 
     /// Set parameter value in user-facing units.
     ///
-    /// Implementors should NOT clamp here — the [`KernelAdapter`](super::KernelAdapter)
+    /// Implementors should NOT clamp here — the [`Adapter`](super::Adapter)
     /// clamps via the descriptor before calling this.
     fn set(&mut self, index: usize, value: f32);
 
@@ -338,10 +338,10 @@ pub trait KernelParams: Default + Clone + Send {
 /// effects that benefit from block-level optimizations (vectorization, per-block
 /// coefficient updates, etc.).
 ///
-/// Note: The [`KernelAdapter`](super::KernelAdapter) does NOT call the kernel's
-/// block methods — it calls `process_stereo()` per sample because it advances
-/// smoothers each sample. The kernel's block methods are for **embedded use**
-/// where params don't change mid-block.
+/// Note: [`Adapter`](super::Adapter) does NOT call the kernel's block methods —
+/// it calls `process_stereo()` per sample because it advances smoothers each
+/// sample. The kernel's block methods are for **embedded use** where params
+/// don't change mid-block.
 ///
 /// # no_std
 ///
@@ -402,9 +402,9 @@ pub trait DspKernel: Send {
     /// processing or per-block coefficient updates on embedded targets.
     ///
     /// The parameter snapshot is constant for the entire block. On desktop,
-    /// the [`KernelAdapter`](super::KernelAdapter) calls per-sample methods
-    /// instead (advancing smoothers each sample). This block method is
-    /// primarily for embedded use where params are stable across a block.
+    /// [`Adapter`](super::Adapter) calls per-sample methods instead (advancing
+    /// smoothers each sample). This block method is primarily for embedded use
+    /// where params are stable across a block.
     fn process_block_stereo(
         &mut self,
         left_in: &[f32],
@@ -454,7 +454,7 @@ pub trait DspKernel: Send {
 
     /// Report the effect's ring-out tail duration in samples.
     ///
-    /// Used by [`KernelAdapter`](super::KernelAdapter) to implement
+    /// Used by [`Adapter`](super::Adapter) to implement
     /// [`TailReporting`](crate::TailReporting). Override for effects that
     /// produce output after input stops (reverb decay, delay feedback,
     /// looper playback).
@@ -466,8 +466,8 @@ pub trait DspKernel: Send {
 
     /// Write READ_ONLY diagnostic values into the params snapshot.
     ///
-    /// Called by [`KernelAdapter`](super::KernelAdapter) after each
-    /// `process_stereo()` call. Override in kernels that have `ParamFlags::READ_ONLY`
+    /// Called by [`Adapter`](super::Adapter) after each `process_stereo()` call.
+    /// Override in kernels that have `ParamFlags::READ_ONLY`
     /// diagnostic parameters (gain reduction, gate state, LFO phase, etc.).
     ///
     /// The adapter then exposes these values through `ParameterInfo::get_param()`.

@@ -90,7 +90,7 @@ cargo check -p sonido-daisy \
 | 3 | `passthrough_blink.rs` | Audio passthrough + LED heartbeat task | Hothouse |
 | 3 | `hothouse_diag.rs` | All Hothouse hardware (knobs, toggles, FS, temp) | Hothouse |
 | 4 | `single_effect.rs` | Real-time DSP, ADC parameter mapping (distortion) | Hothouse |
-| 5 | `sonido_pedal.rs` | EmbeddedAdapter + ProcessingGraph DAG + A/B morph | Hothouse |
+| 5 | `sonido_pedal.rs` | `Adapter<K, DirectPolicy>` + ProcessingGraph DAG + A/B morph | Hothouse |
 
 ### Modern Rust on Daisy Seed
 
@@ -128,8 +128,36 @@ All 6 knobs use uniform `blocking_read()` polling in a 50 Hz Embassy task (`hoth
 |--------|---------|-------------|
 | `controls.rs` | `ControlBuffer<KNOBS,TOGGLES,FS,LEDS>` — lock-free shared state with IIR smoothing, change detection, LED bridge | `core` only |
 | `hothouse.rs` | `HothouseControls` (knobs array + GPIO), `hothouse_control_task` (uniform polling), `hothouse_pins!` macro, `decode_toggle` | `controls.rs` + Embassy |
-| `embedded_adapter.rs` | `EmbeddedAdapter<K>` — zero-smoothing `Effect + ParameterInfo` for `DspKernel` | `sonido-core` (feature `alloc`) |
-| `param_map.rs` | `adc_to_param()` — scale-aware ADC→parameter conversion with STEPPED rounding | `sonido-core` (feature `alloc`) |
+| `embedded_adapter.rs` | `Adapter<K, DirectPolicy>` — zero-smoothing `Effect + ParameterInfo` for `DspKernel` | `sonido-core` (feature `alloc`) |
+| `param_map.rs` | `adc_to_param()` / `adc_to_param_biased()` — scale-aware ADC→parameter conversion with STEPPED rounding | `sonido-core` (feature `alloc`) |
+| `noon_presets.rs` | Per-effect sweet-spot values for biased knob mapping | `sonido-core` (feature `alloc`) |
+
+### Biased Knob Mapping (Noon = Sweet Spot)
+
+The Hothouse 6-knob pedal uses a "noon = sweet spot" convention: knobs at 12 o'clock should produce a musically useful tone. This is achieved by biasing the ADC-to-parameter mapping curve, **not** by narrowing descriptor ranges (see ADR-030).
+
+`adc_to_param_biased(desc, noon, normalized)` splits the knob travel at center:
+- `[0.0, 0.5]` maps `desc.min` → `noon`
+- `[0.5, 1.0]` maps `noon` → `desc.max`
+
+Both halves respect the descriptor's `ParamScale` (Linear, Logarithmic, Power).
+
+```rust
+use sonido_daisy::{adc_to_param_biased, noon_presets};
+
+// In the audio callback:
+for k in 0..knob_count {
+    let desc = effect.param_info(k).unwrap();
+    let raw = CONTROLS.read_knob(k);
+    let noon = noon_presets::noon_value(effect_id, k).unwrap_or(desc.default);
+    let value = adc_to_param_biased(&desc, noon, raw);
+    effect.set_param(k, value);
+}
+```
+
+The noon values are centralized in `noon_presets::noon_value(effect_id, param_idx)` and equal the descriptor defaults — effect authors already set musically correct sweet spots. The biased mapping just centers the ADC curve on them without narrowing the available range.
+
+For effects without noon presets or for new effects, `adc_to_param()` (linear mapping) remains available as a fallback.
 
 **Usage pattern** (all Hothouse examples):
 
@@ -238,7 +266,7 @@ remain appropriate.
 | `measure_cycles(\|\| { })` | — | DWT cycle counter wrapper |
 | `enable_cycle_counter()` | — | Call once at startup before measuring |
 | `ControlBuffer` | — | Re-export from `controls.rs` |
-| `EmbeddedAdapter` | — | Re-export from `embedded_adapter.rs` (feature `alloc`) |
+| `Adapter` (DirectPolicy) | — | Re-export from `embedded_adapter.rs` (feature `alloc`) |
 | `adc_to_param()` | — | Re-export from `param_map.rs` (feature `alloc`) |
 
 ### Feature Flags
@@ -246,7 +274,7 @@ remain appropriate.
 | Feature | Enables | Required By |
 |---------|---------|-------------|
 | *(none)* | Core library: audio, controls, hothouse, LED, RCC | Simple examples (blinky, passthrough) |
-| `alloc` | `EmbeddedAdapter`, `adc_to_param`, DSP-dependent modules | sonido_pedal, bench_kernels |
+| `alloc` | `Adapter<K, DirectPolicy>`, `adc_to_param`, DSP-dependent modules | sonido_pedal, bench_kernels |
 | `platform` | `HothousePlatform` (`PlatformController` impl) + implies `alloc` | Future platform integration |
 
 ### Dependencies
@@ -495,7 +523,7 @@ mode (Overdrive / Distortion / Fuzz). Footswitch 1 toggles bypass.
 
 This is the canonical pattern for **direct kernel usage** on embedded:
 `from_knobs(adc_0..adc_3)` maps ADC readings to a `DistortionParams` struct,
-which is passed directly to `DspKernel::process_stereo()`. No `KernelAdapter`,
+which is passed directly to `DspKernel::process_stereo()`. No adapter,
 no smoothing.
 
 ```bash
@@ -610,7 +638,7 @@ cargo run --example <name> --release
 The morph pedal (`examples/sonido_pedal.rs`) is the flagship firmware — a
 3-slot, DAG-routed, A/B morphing guitar pedal with 14 curated effects. It
 demonstrates all of sonido's embedded capabilities: `ProcessingGraph` for
-routing, `EmbeddedAdapter` for zero-smoothing kernel access, scale-aware
+routing, `Adapter<K, DirectPolicy>` for zero-smoothing kernel access, scale-aware
 ADC parameter mapping, and footswitch-controlled crossfade between two
 parameter snapshots.
 
@@ -627,7 +655,7 @@ parameter snapshots.
                         ▼
    ┌─────────────────────────────────────────────────────┐
    │             ProcessingGraph (compiled DAG)           │
-   │  Input → [EmbeddedAdapter<K>] → ... → Output        │
+   │  Input → [Adapter<K, DirectPolicy>] → ... → Output  │
    │          (zero-smoothing kernel wrapper)             │
    └─────────────────────────────────────────────────────┘
 ```
@@ -636,26 +664,26 @@ Two sonido pillars are used together:
 
 - **ProcessingGraph** — DAG routing with serial/parallel/fan topologies via
   split/merge nodes. Zero-alloc per audio block after `compile()`.
-- **EmbeddedAdapter\<K: DspKernel\>** — wraps any kernel in `Effect + ParameterInfo`
+- **`Adapter<K, DirectPolicy>`** — wraps any kernel in `Effect + ParameterInfo`
   (and thus `EffectWithParams` via blanket impl) with zero smoothing overhead.
   `set_param()` writes directly to the kernel's typed params struct. The value
   is live on the next `process_stereo()` call.
 
-Why not `KernelAdapter`? It adds per-sample `SmoothedParam::advance()` calls
+Why not `Adapter<K, SmoothedPolicy>`? It adds per-sample `SmoothedParam::advance()` calls
 (~1.15M advances/sec for 24 params × 48kHz). On embedded, ADCs are
 hardware-filtered and params change at ~100Hz. Smoothing is redundant overhead.
 
-### EmbeddedAdapter Pattern
+### DirectPolicy Adapter Pattern
 
-`EmbeddedAdapter<K>` is defined in `embedded_adapter.rs` (~55 lines):
+`Adapter<K, DirectPolicy>` is defined in `embedded_adapter.rs` (~55 lines):
 
 ```rust
-struct EmbeddedAdapter<K: DspKernel> {
+struct Adapter<K: DspKernel, DirectPolicy> {
     kernel: K,
     params: K::Params,
 }
 
-impl<K: DspKernel> Effect for EmbeddedAdapter<K> {
+impl<K: DspKernel> Effect for Adapter<K, DirectPolicy> {
     fn process_stereo(&mut self, l: f32, r: f32) -> (f32, f32) {
         self.kernel.process_stereo(l, r, &self.params)
     }
@@ -664,7 +692,7 @@ impl<K: DspKernel> Effect for EmbeddedAdapter<K> {
     // ... block processing, is_true_stereo(), latency_samples()
 }
 
-impl<K: DspKernel> ParameterInfo for EmbeddedAdapter<K> {
+impl<K: DspKernel> ParameterInfo for Adapter<K, DirectPolicy> {
     fn param_count(&self) -> usize { K::Params::COUNT }
     fn param_info(&self, idx: usize) -> Option<ParamDescriptor> { K::Params::descriptor(idx) }
     fn get_param(&self, idx: usize) -> f32 { self.params.get(idx) }
@@ -676,11 +704,11 @@ Comparison with sonido's other DSP bridge patterns:
 
 | Pattern | Context | Smoothing | Trait impl |
 |---------|---------|-----------|------------|
-| `KernelAdapter<K>` | Desktop / Plugin | Yes (SmoothedParam per param) | Effect + ParameterInfo |
-| `EmbeddedAdapter<K>` | Embedded firmware (morph pedal) | None (direct write) | Effect + ParameterInfo |
+| `Adapter<K, SmoothedPolicy>` | Desktop / Plugin | Yes (SmoothedParam per param) | Effect + ParameterInfo |
+| `Adapter<K, DirectPolicy>` | Embedded firmware (morph pedal) | None (direct write) | Effect + ParameterInfo |
 | Direct `DspKernel` | `single_effect.rs` | None (`from_knobs()`) | No trait — call `process_stereo()` directly |
 
-Use `EmbeddedAdapter` when you need `ProcessingGraph` compatibility (the graph
+Use `Adapter<K, DirectPolicy>` when you need `ProcessingGraph` compatibility (the graph
 requires `Effect + ParameterInfo` behind `EffectWithParams`). Use direct kernel
 access when you have a single fixed effect and don't need the graph.
 
@@ -766,14 +794,14 @@ const EFFECT_LIST: [EffectEntry; 14] = [
 ];
 ```
 
-The `create_effect(idx, sr)` factory creates the correct `EmbeddedAdapter`
+The `create_effect(idx, sr)` factory creates the correct `Adapter<K, DirectPolicy>`
 for each index:
 
 ```rust
 fn create_effect(idx: usize, sr: f32) -> Option<Box<dyn EffectWithParams + Send>> {
     match idx {
-        0  => Some(Box::new(EmbeddedAdapter::new(FilterKernel::new(sr)))),
-        1  => Some(Box::new(EmbeddedAdapter::new(TremoloKernel::new(sr)))),
+        0  => Some(Box::new(Adapter::new_direct(FilterKernel::new(sr)))),
+        1  => Some(Box::new(Adapter::new_direct(TremoloKernel::new(sr)))),
         // ... all 14
         _ => None,
     }
@@ -815,7 +843,7 @@ poll. STEPPED params snap at t=0.5 — the same logic as `KernelParams::lerp()`:
 
 ```rust
 let val = if stepped { if t < 0.5 { a } else { b } } else { a + (b - a) * t };
-effect.effect_set_param(p, val);  // direct write via EmbeddedAdapter
+effect.effect_set_param(p, val);  // direct write via Adapter<K, DirectPolicy>
 ```
 
 ### Presets
@@ -837,7 +865,7 @@ A-state parameters, B-state parameters, morph speed.
 
 3. **Add a match arm to `create_effect()`** at the matching index:
    ```rust
-   N => Some(Box::new(EmbeddedAdapter::new(MyKernel::new(sr)))),
+   N => Some(Box::new(Adapter::new_direct(MyKernel::new(sr)))),
    ```
 
 4. **Update `NUM_EFFECTS`** constant to match the new list length.

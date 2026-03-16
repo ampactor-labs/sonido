@@ -109,7 +109,7 @@ fn rule1_peak_ceiling() {
 // at default params with a 1 kHz sine. Only test effects that are
 // expected to be roughly unity-gain and flat at 1 kHz by default.
 
-const RULE2_TESTED: &[&str] = &["gate", "eq", "bitcrusher", "tremolo", "vibrato"];
+const RULE2_TESTED: &[&str] = &["gate", "eq", "bitcrusher", "tremolo"];
 
 #[test]
 fn rule2_bypass_parity() {

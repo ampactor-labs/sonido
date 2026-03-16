@@ -7,7 +7,7 @@
 //! output for silent tuning.
 //!
 //! Parameters are received via `&TunerParams` each sample. Deployed via
-//! [`KernelAdapter`](sonido_core::KernelAdapter) for desktop/plugin, or called
+//! [`Adapter`](sonido_core::kernel::Adapter) for desktop/plugin, or called
 //! directly on embedded targets.
 //!
 //! # Signal Flow
@@ -39,7 +39,7 @@
 //!
 //! ```rust,ignore
 //! // Desktop / Plugin (via adapter — handles smoothing automatically)
-//! let adapter = KernelAdapter::new(TunerKernel::new(48000.0), 48000.0);
+//! let adapter = Adapter::new(TunerKernel::new(48000.0), 48000.0);
 //! let mut effect: Box<dyn Effect> = Box::new(adapter);
 //! ```
 
@@ -404,7 +404,7 @@ mod tests {
     extern crate alloc;
     use alloc::{vec, vec::Vec};
     use sonido_core::Effect;
-    use sonido_core::kernel::KernelAdapter;
+    use sonido_core::kernel::Adapter;
 
     /// Generate a sine wave at the given frequency.
     fn sine_wave(freq_hz: f32, sample_rate: f32, n_samples: usize) -> Vec<f32> {
@@ -570,7 +570,7 @@ mod tests {
 
     #[test]
     fn adapter_wraps_as_effect() {
-        let mut adapter = KernelAdapter::new(TunerKernel::new(48000.0), 48000.0);
+        let mut adapter = Adapter::new(TunerKernel::new(48000.0), 48000.0);
         adapter.reset();
         let out = adapter.process(0.3);
         assert!(out.is_finite(), "Adapter output must be finite, got {out}");

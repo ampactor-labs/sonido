@@ -46,7 +46,7 @@
 //!
 //! ```rust,ignore
 //! // Desktop / Plugin (via adapter — handles smoothing automatically)
-//! let adapter = KernelAdapter::new(MultibandCompKernel::new(48000.0), 48000.0);
+//! let adapter = Adapter::new(MultibandCompKernel::new(48000.0), 48000.0);
 //! let mut effect: Box<dyn Effect> = Box::new(adapter);
 //!
 //! // Embedded / Daisy Seed (direct — no smoothing)
@@ -692,7 +692,7 @@ impl DspKernel for MultibandCompKernel {
 mod tests {
     use super::*;
     use sonido_core::ParameterInfo;
-    use sonido_core::kernel::KernelAdapter;
+    use sonido_core::kernel::Adapter;
 
     /// All outputs must be finite — no NaN or Inf under any input.
     #[test]
@@ -770,11 +770,11 @@ mod tests {
         }
     }
 
-    /// KernelAdapter wraps the kernel and exposes the correct parameter count.
+    /// Adapter wraps the kernel and exposes the correct parameter count.
     #[test]
     fn adapter_param_count() {
         let kernel = MultibandCompKernel::new(48000.0);
-        let adapter = KernelAdapter::new(kernel, 48000.0);
+        let adapter = Adapter::new(kernel, 48000.0);
         assert_eq!(adapter.param_count(), 12);
         for i in 0..12 {
             assert!(adapter.param_info(i).is_some(), "Missing param {i}");

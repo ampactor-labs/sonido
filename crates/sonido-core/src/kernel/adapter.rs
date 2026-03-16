@@ -6,10 +6,10 @@
 //! - **[`SmoothedPolicy`]** — per-sample [`SmoothedParam`] advancement (desktop / plugin).
 //! - **[`DirectPolicy`]** — zero-overhead immediate writes (embedded targets).
 //!
-//! Two type aliases keep backward compatibility:
+//! Use the concrete types directly:
 //!
-//! - [`KernelAdapter<K>`] — `Adapter<K, SmoothedPolicy>`, the original desktop adapter.
-//! - [`EmbeddedAdapter<K>`] (re-exported from `sonido-daisy`) — `Adapter<K, DirectPolicy>`.
+//! - `Adapter<K, SmoothedPolicy>` — canonical desktop/plugin adapter.
+//! - `Adapter<K, DirectPolicy>` — canonical embedded adapter.
 //!
 //! # Processing Flow (SmoothedPolicy)
 //!
@@ -231,8 +231,9 @@ impl SmoothingPolicy for DirectPolicy {
 
 /// Generic kernel adapter — bridges [`DspKernel`] to [`Effect`] + [`ParameterInfo`].
 ///
-/// Parameterised by `K` (the kernel) and `S` (the smoothing policy). Use the
-/// type aliases [`KernelAdapter`] (desktop/plugin) or `EmbeddedAdapter` (embedded).
+/// Parameterised by `K` (the kernel) and `S` (the smoothing policy). Use
+/// `Adapter<K, SmoothedPolicy>` for desktop/plugin targets or
+/// `Adapter<K, DirectPolicy>` for embedded targets.
 ///
 /// # Peak Tracking (Pattern P1 — Observable Kernel)
 ///
@@ -561,26 +562,6 @@ impl<K: DspKernel, S: SmoothingPolicy> ParameterInfo for Adapter<K, S> {
     }
 }
 
-// ── Type aliases ─────────────────────────────────────────────────────────────
-
-/// Desktop/plugin adapter with per-parameter smoothing.
-///
-/// Wraps a [`DspKernel`] into [`Effect`] + [`ParameterInfo`] with per-sample
-/// [`SmoothedParam`] advancement. The rest of the system (DAG graph, registry,
-/// CLAP plugin, GUI) sees a standard `Effect`.
-///
-/// # Example
-///
-/// ```rust,ignore
-/// use sonido_core::kernel::KernelAdapter;
-/// use sonido_core::Effect;
-///
-/// let adapter = KernelAdapter::new(DistortionKernel::new(48000.0), 48000.0);
-/// let mut effect: Box<dyn Effect> = Box::new(adapter);
-/// let output = effect.process(0.5);
-/// ```
-pub type KernelAdapter<K> = Adapter<K, SmoothedPolicy>;
-
 // ── Tests ────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -664,11 +645,11 @@ mod tests {
         }
     }
 
-    // ── Existing KernelAdapter tests (unchanged) ──
+    // ── Adapter<K, SmoothedPolicy> tests ──
 
     #[test]
     fn adapter_implements_effect() {
-        let mut adapter = KernelAdapter::new(TestGainKernel, 48000.0);
+        let mut adapter = Adapter::<TestGainKernel, SmoothedPolicy>::new(TestGainKernel, 48000.0);
 
         // Default gain is 0 dB → unity gain
         // Snap smoother so we get exact values
@@ -682,7 +663,7 @@ mod tests {
 
     #[test]
     fn adapter_implements_parameter_info() {
-        let adapter = KernelAdapter::new(TestGainKernel, 48000.0);
+        let adapter = Adapter::<TestGainKernel, SmoothedPolicy>::new(TestGainKernel, 48000.0);
         assert_eq!(adapter.param_count(), 1);
 
         let desc = adapter.param_info(0).unwrap();
@@ -693,7 +674,7 @@ mod tests {
 
     #[test]
     fn adapter_set_param_clamps() {
-        let mut adapter = KernelAdapter::new(TestGainKernel, 48000.0);
+        let mut adapter = Adapter::<TestGainKernel, SmoothedPolicy>::new(TestGainKernel, 48000.0);
 
         // Try to set beyond max
         adapter.set_param(0, 100.0);
@@ -712,7 +693,7 @@ mod tests {
 
     #[test]
     fn adapter_stereo_processing() {
-        let mut adapter = KernelAdapter::new(TestGainKernel, 48000.0);
+        let mut adapter = Adapter::<TestGainKernel, SmoothedPolicy>::new(TestGainKernel, 48000.0);
         adapter.reset(); // snap smoothers
 
         let (left, right) = adapter.process_stereo(1.0, 0.5);
@@ -723,7 +704,7 @@ mod tests {
 
     #[test]
     fn adapter_block_stereo_processing() {
-        let mut adapter = KernelAdapter::new(TestGainKernel, 48000.0);
+        let mut adapter = Adapter::<TestGainKernel, SmoothedPolicy>::new(TestGainKernel, 48000.0);
         adapter.reset();
 
         let left_in = [1.0, 0.5, 0.25];
@@ -745,7 +726,7 @@ mod tests {
 
     #[test]
     fn adapter_param_change_affects_output() {
-        let mut adapter = KernelAdapter::new(TestGainKernel, 48000.0);
+        let mut adapter = Adapter::<TestGainKernel, SmoothedPolicy>::new(TestGainKernel, 48000.0);
         adapter.reset();
 
         // Set gain to 6 dB (~2x)
@@ -767,7 +748,7 @@ mod tests {
 
     #[test]
     fn adapter_sample_rate_propagates() {
-        let mut adapter = KernelAdapter::new(TestGainKernel, 44100.0);
+        let mut adapter = Adapter::<TestGainKernel, SmoothedPolicy>::new(TestGainKernel, 44100.0);
         adapter.set_sample_rate(96000.0);
         // Should not panic or produce NaN
         let output = adapter.process(1.0);
@@ -776,7 +757,7 @@ mod tests {
 
     #[test]
     fn adapter_load_snapshot_sets_targets() {
-        let mut adapter = KernelAdapter::new(TestGainKernel, 48000.0);
+        let mut adapter = Adapter::<TestGainKernel, SmoothedPolicy>::new(TestGainKernel, 48000.0);
 
         let preset = TestGainParams { gain_db: -12.0 };
 
@@ -789,14 +770,14 @@ mod tests {
 
     #[test]
     fn adapter_snapshot_roundtrip() {
-        let mut adapter = KernelAdapter::new(TestGainKernel, 48000.0);
+        let mut adapter = Adapter::<TestGainKernel, SmoothedPolicy>::new(TestGainKernel, 48000.0);
         adapter.set_param(0, 6.0);
 
         let saved = adapter.snapshot();
         assert!((saved.gain_db - 6.0).abs() < 0.01);
 
         // Load into a fresh adapter
-        let mut adapter2 = KernelAdapter::new(TestGainKernel, 48000.0);
+        let mut adapter2 = Adapter::<TestGainKernel, SmoothedPolicy>::new(TestGainKernel, 48000.0);
         adapter2.load_snapshot(&saved);
         assert!((adapter2.get_param(0) - 6.0).abs() < 0.01);
     }
@@ -867,7 +848,8 @@ mod tests {
 
     #[test]
     fn true_stereo_kernel() {
-        let mut adapter = KernelAdapter::new(StereoSwapKernel, 48000.0);
+        let mut adapter =
+            Adapter::<StereoSwapKernel, SmoothedPolicy>::new(StereoSwapKernel, 48000.0);
         assert!(adapter.is_true_stereo());
 
         let (l, r) = adapter.process_stereo(1.0, 2.0);
@@ -875,7 +857,7 @@ mod tests {
         assert_eq!(r, 1.0);
     }
 
-    // ── DirectPolicy (EmbeddedAdapter) tests ──
+    // ── DirectPolicy tests ──
 
     #[test]
     fn direct_policy_param_change_is_instant() {
@@ -915,7 +897,7 @@ mod tests {
 
     #[test]
     fn peak_tracking_input_and_output() {
-        let mut adapter = KernelAdapter::new(TestGainKernel, 48000.0);
+        let mut adapter = Adapter::<TestGainKernel, SmoothedPolicy>::new(TestGainKernel, 48000.0);
         adapter.reset();
 
         adapter.process_stereo(0.8, 0.4);
@@ -931,7 +913,7 @@ mod tests {
 
     #[test]
     fn peak_tracking_accumulates_max() {
-        let mut adapter = KernelAdapter::new(TestGainKernel, 48000.0);
+        let mut adapter = Adapter::<TestGainKernel, SmoothedPolicy>::new(TestGainKernel, 48000.0);
         adapter.reset();
 
         adapter.process_stereo(0.3, 0.1);
@@ -945,7 +927,7 @@ mod tests {
 
     #[test]
     fn peak_reset_clears_accumulators() {
-        let mut adapter = KernelAdapter::new(TestGainKernel, 48000.0);
+        let mut adapter = Adapter::<TestGainKernel, SmoothedPolicy>::new(TestGainKernel, 48000.0);
         adapter.reset();
 
         adapter.process_stereo(0.9, 0.9);
@@ -963,13 +945,14 @@ mod tests {
 
     #[test]
     fn tail_reporting_delegates_to_kernel() {
-        let adapter = KernelAdapter::new(TailKernel { tail: 96000 }, 48000.0);
+        let adapter =
+            Adapter::<TailKernel, SmoothedPolicy>::new(TailKernel { tail: 96000 }, 48000.0);
         assert_eq!(TailReporting::tail_samples(&adapter), 96000);
     }
 
     #[test]
     fn tail_reporting_default_is_zero() {
-        let adapter = KernelAdapter::new(TestGainKernel, 48000.0);
+        let adapter = Adapter::<TestGainKernel, SmoothedPolicy>::new(TestGainKernel, 48000.0);
         assert_eq!(TailReporting::tail_samples(&adapter), 0);
     }
 

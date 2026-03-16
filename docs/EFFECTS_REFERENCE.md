@@ -4,13 +4,13 @@ Complete parameter reference for all Sonido effects.
 
 ## Kernel Architecture
 
-All 20 effects have kernel-architecture implementations in `crates/sonido-effects/src/kernels/`. Each effect defines `XxxKernel` (`DspKernel` impl) and `XxxParams` (`KernelParams` impl). The registry creates `KernelAdapter<XxxKernel>` — all consumers (GUI, CLI, plugin) use kernel-backed effects transparently.
+All 20 effects have kernel-architecture implementations in `crates/sonido-effects/src/kernels/`. Each effect defines `XxxKernel` (`DspKernel` impl) and `XxxParams` (`KernelParams` impl). The registry creates `Adapter<XxxKernel, SmoothedPolicy>` — all consumers (GUI, CLI, plugin) use kernel-backed effects transparently.
 
 Classic `Effect` implementations have been removed as of v0.2. All effects are kernel-only.
 
 ```rust
-// Desktop/plugin: KernelAdapter handles smoothing
-let adapter = KernelAdapter::new(DistortionKernel::new(48000.0), 48000.0);
+// Desktop/plugin: Adapter<K, SmoothedPolicy> handles smoothing
+let adapter = Adapter::new(DistortionKernel::new(48000.0), 48000.0);
 
 // Embedded: call kernel directly, no smoothing overhead
 let mut kernel = DistortionKernel::new(48000.0);
@@ -52,7 +52,7 @@ Waveshaping distortion with multiple modes.
 Input -> [Envelope] -> Drive (gain, dynamic) -> Waveshaper -> Tone Filter -> Output Level
 ```
 
-The distortion applies a static nonlinear transfer function (waveshaper) to the input signal, preceded by a gain stage (drive) to push the signal into the nonlinear region. The `KernelAdapter` handles per-parameter smoothing via `SmoothingStyle` (Fast for drive, Standard for others).
+The distortion applies a static nonlinear transfer function (waveshaper) to the input signal, preceded by a gain stage (drive) to push the signal into the nonlinear region. The `Adapter<K, SmoothedPolicy>` handles per-parameter smoothing via `SmoothingStyle` (Fast for drive, Standard for others).
 
 | Parameter | Description | Default | Range |
 |-----------|-------------|---------|-------|

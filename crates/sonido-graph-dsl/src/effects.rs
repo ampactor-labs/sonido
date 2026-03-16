@@ -1,7 +1,7 @@
 //! Effect factory and parameter parsing.
 //!
 //! All effect creation goes through [`sonido_registry::EffectRegistry`], which
-//! returns `Box<dyn EffectWithParams + Send>` backed by `KernelAdapter<XxxKernel>`.
+//! returns `Box<dyn EffectWithParams + Send>` backed by `Adapter<XxxKernel, SmoothedPolicy>`.
 //! CLI and GUI aliases for effect names, parameter names, and enum values are
 //! normalized here before being passed to the registry.
 

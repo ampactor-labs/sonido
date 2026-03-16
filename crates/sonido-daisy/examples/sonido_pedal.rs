@@ -57,10 +57,12 @@ use sonido_daisy::hothouse::hothouse_control_task;
 use sonido_daisy::midi::{MidiEvent, MidiHandler};
 use sonido_daisy::qspi::{EffectSlotData, MAX_USER_PRESETS, PresetSlot};
 use sonido_daisy::tap_tempo::TapTempo;
+use sonido_core::kernel::Adapter;
 use sonido_daisy::{
-    BLOCK_SIZE, ClockProfile, EmbeddedAdapter, SAMPLE_RATE, adc_to_param, f32_to_u24, heartbeat,
+    BLOCK_SIZE, ClockProfile, SAMPLE_RATE, adc_to_param_biased, f32_to_u24, heartbeat,
     led::UserLed, u24_to_f32,
 };
+use sonido_daisy::noon_presets;
 use sonido_effects::{
     BitcrusherKernel, ChorusKernel, CompressorKernel, DelayKernel, DistortionKernel, FilterKernel,
     FlangerKernel, LooperKernel, PhaserKernel, ReverbKernel, RingModKernel, TapeKernel,
@@ -262,26 +264,26 @@ use sonido_core::graph::NodeId;
 
 /// Create an effect by `EFFECT_LIST` index. Returns `None` for out-of-range.
 ///
-/// Each arm wraps a `DspKernel` in `EmbeddedAdapter` for zero-smoothing
+/// Each arm wraps a `DspKernel` in `Adapter<K, DirectPolicy>` for zero-smoothing
 /// `Effect + ParameterInfo`. Replaces `EffectRegistry` — we know our 14
 /// effects at compile time.
 fn create_effect(idx: usize, sr: f32) -> Option<Box<dyn EffectWithParams + Send>> {
     match idx {
-        0 => Some(Box::new(EmbeddedAdapter::new_direct(FilterKernel::new(sr)))),
-        1 => Some(Box::new(EmbeddedAdapter::new_direct(TremoloKernel::new(sr)))),
-        2 => Some(Box::new(EmbeddedAdapter::new_direct(VibratoKernel::new(sr)))),
-        3 => Some(Box::new(EmbeddedAdapter::new_direct(ChorusKernel::new(sr)))),
-        4 => Some(Box::new(EmbeddedAdapter::new_direct(PhaserKernel::new(sr)))),
-        5 => Some(Box::new(EmbeddedAdapter::new_direct(FlangerKernel::new(sr)))),
-        6 => Some(Box::new(EmbeddedAdapter::new_direct(DelayKernel::new(sr)))),
-        7 => Some(Box::new(EmbeddedAdapter::new_direct(ReverbKernel::new(sr)))),
-        8 => Some(Box::new(EmbeddedAdapter::new_direct(TapeKernel::new(sr)))),
-        9 => Some(Box::new(EmbeddedAdapter::new_direct(CompressorKernel::new(sr)))),
-        10 => Some(Box::new(EmbeddedAdapter::new_direct(WahKernel::new(sr)))),
-        11 => Some(Box::new(EmbeddedAdapter::new_direct(DistortionKernel::new(sr)))),
-        12 => Some(Box::new(EmbeddedAdapter::new_direct(BitcrusherKernel::new(sr)))),
-        13 => Some(Box::new(EmbeddedAdapter::new_direct(RingModKernel::new(sr)))),
-        14 => Some(Box::new(EmbeddedAdapter::new_direct(LooperKernel::new(sr)))),
+        0 => Some(Box::new(Adapter::new_direct(FilterKernel::new(sr)))),
+        1 => Some(Box::new(Adapter::new_direct(TremoloKernel::new(sr)))),
+        2 => Some(Box::new(Adapter::new_direct(VibratoKernel::new(sr)))),
+        3 => Some(Box::new(Adapter::new_direct(ChorusKernel::new(sr)))),
+        4 => Some(Box::new(Adapter::new_direct(PhaserKernel::new(sr)))),
+        5 => Some(Box::new(Adapter::new_direct(FlangerKernel::new(sr)))),
+        6 => Some(Box::new(Adapter::new_direct(DelayKernel::new(sr)))),
+        7 => Some(Box::new(Adapter::new_direct(ReverbKernel::new(sr)))),
+        8 => Some(Box::new(Adapter::new_direct(TapeKernel::new(sr)))),
+        9 => Some(Box::new(Adapter::new_direct(CompressorKernel::new(sr)))),
+        10 => Some(Box::new(Adapter::new_direct(WahKernel::new(sr)))),
+        11 => Some(Box::new(Adapter::new_direct(DistortionKernel::new(sr)))),
+        12 => Some(Box::new(Adapter::new_direct(BitcrusherKernel::new(sr)))),
+        13 => Some(Box::new(Adapter::new_direct(RingModKernel::new(sr)))),
+        14 => Some(Box::new(Adapter::new_direct(LooperKernel::new(sr)))),
         _ => None,
     }
 }
@@ -1367,7 +1369,12 @@ async fn main(spawner: embassy_executor::Spawner) {
                             if param_idx != NULL_KNOB
                                 && let Some(desc) = effect.effect_param_info(param_idx as usize)
                             {
-                                let val = adc_to_param(&desc, norm_knobs[k]);
+                                let noon = noon_presets::noon_value(
+                                    entry.id,
+                                    param_idx as usize,
+                                )
+                                .unwrap_or(desc.default);
+                                let val = adc_to_param_biased(&desc, noon, norm_knobs[k]);
                                 // Skip K1 (mode) for looper when FS override is active,
                                 // unless the user turned K1 to Stop (clears override).
                                 if looper_fs_override && eff_idx == 14 && param_idx == 0 {

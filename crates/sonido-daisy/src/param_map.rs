@@ -17,6 +17,30 @@
 
 use sonido_core::{ParamDescriptor, ParamFlags, ParamScale};
 
+/// Scale-aware interpolation between two values.
+fn interpolate_scaled(lo: f32, hi: f32, t: f32, scale: ParamScale) -> f32 {
+    match scale {
+        ParamScale::Linear => lo + t * (hi - lo),
+        ParamScale::Logarithmic => {
+            let log_lo = libm::log2f(if lo > 1e-6 { lo } else { 1e-6 });
+            let log_hi = libm::log2f(if hi > 1e-6 { hi } else { 1e-6 });
+            libm::exp2f(log_lo + t * (log_hi - log_lo))
+        }
+        ParamScale::Power(exp) => lo + libm::powf(t, exp) * (hi - lo),
+        _ => lo + t * (hi - lo),
+    }
+}
+
+fn clamp(v: f32, min: f32, max: f32) -> f32 {
+    if v < min {
+        min
+    } else if v > max {
+        max
+    } else {
+        v
+    }
+}
+
 /// Converts a normalized ADC reading (0.0–1.0) to a parameter's native value.
 ///
 /// Applies the parameter's scale (Linear, Logarithmic, Power) and rounds
@@ -53,6 +77,53 @@ pub fn adc_to_param(desc: &ParamDescriptor, normalized: f32) -> f32 {
             libm::exp2f(log_min + normalized * (log_max - log_min))
         }
         ParamScale::Power(exp) => desc.min + libm::powf(normalized, exp) * (desc.max - desc.min),
+        _ => desc.min + normalized * (desc.max - desc.min), // future scale variants: linear fallback
+    };
+    if desc.flags.contains(ParamFlags::STEPPED) {
+        libm::roundf(val)
+    } else {
+        val
+    }
+}
+
+/// Converts a normalized ADC reading to a parameter value, biased so that
+/// knob center (0.5) maps to a caller-specified "noon" sweet-spot value.
+///
+/// The knob travel is split at center:
+/// - `[0.0, 0.5]`: interpolates from `desc.min` to `noon`
+/// - `[0.5, 1.0]`: interpolates from `noon` to `desc.max`
+///
+/// Both halves use the descriptor's scale (Linear, Logarithmic, Power) so
+/// the response curve is musically consistent across the entire range.
+/// STEPPED parameters are rounded to the nearest integer after scaling.
+///
+/// # Parameters
+///
+/// - `desc`: Parameter descriptor defining the full range and scale.
+/// - `noon`: The "sweet spot" value at knob center. Clamped to `[min, max]`.
+/// - `normalized`: ADC reading normalized to 0.0–1.0.
+///
+/// # Example
+///
+/// ```ignore
+/// use sonido_daisy::adc_to_param_biased;
+/// use sonido_core::ParamDescriptor;
+///
+/// // Drive [0, 40] with sweet spot at 8 dB
+/// let desc = ParamDescriptor::gain_db("Drive", "Drive", 0.0, 40.0, 8.0);
+/// let val = adc_to_param_biased(&desc, 8.0, 0.5); // → 8.0 (noon = sweet spot)
+/// let val = adc_to_param_biased(&desc, 8.0, 0.0); // → 0.0 (full min)
+/// let val = adc_to_param_biased(&desc, 8.0, 1.0); // → 40.0 (full max)
+/// ```
+#[inline]
+pub fn adc_to_param_biased(desc: &ParamDescriptor, noon: f32, normalized: f32) -> f32 {
+    let noon = clamp(noon, desc.min, desc.max);
+    let val = if normalized <= 0.5 {
+        let t = normalized * 2.0; // 0.0→1.0 in bottom half
+        interpolate_scaled(desc.min, noon, t, desc.scale)
+    } else {
+        let t = (normalized - 0.5) * 2.0; // 0.0→1.0 in top half
+        interpolate_scaled(noon, desc.max, t, desc.scale)
     };
     if desc.flags.contains(ParamFlags::STEPPED) {
         libm::roundf(val)

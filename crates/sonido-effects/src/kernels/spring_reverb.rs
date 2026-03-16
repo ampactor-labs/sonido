@@ -34,7 +34,7 @@
 //!
 //! ```rust,ignore
 //! // Desktop / Plugin (via adapter)
-//! let adapter = KernelAdapter::new(SpringReverbKernel::new(48000.0), 48000.0);
+//! let adapter = Adapter::new(SpringReverbKernel::new(48000.0), 48000.0);
 //! let mut effect: Box<dyn Effect> = Box::new(adapter);
 //!
 //! // Embedded / Daisy Seed (direct)
