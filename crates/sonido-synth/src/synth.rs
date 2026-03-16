@@ -652,7 +652,7 @@ impl<const VOICES: usize> PolyphonicSynth<VOICES> {
     }
 }
 
-/// Synthesizer wrapped as an [`Effect`] node for use in a [`ProcessingGraph`].
+/// Synthesizer wrapped as an `Effect` node for use in a `ProcessingGraph`.
 ///
 /// `SynthNode` exposes a fixed 8-voice polyphonic synthesizer as a graph node.
 /// The incoming audio signal is **ignored** — the synth is a source, not a

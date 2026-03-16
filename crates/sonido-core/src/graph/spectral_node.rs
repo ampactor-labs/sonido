@@ -58,7 +58,7 @@ pub enum WindowType {
 /// - `hop_size` must satisfy `hop_size < fft_size`.  Typical: `fft_size / 4`
 ///   (75 % overlap), which gives the best reconstruction for Hann windows.
 /// - `hop_size` must divide evenly into the block size supplied to
-///   [`SpectralNode::process`].
+///   `SpectralNode::process`.
 pub struct SpectralConfig {
     /// FFT frame size in samples.
     ///

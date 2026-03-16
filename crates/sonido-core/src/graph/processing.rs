@@ -440,7 +440,7 @@ impl ProcessingGraph {
     /// when `to` is processed.
     ///
     /// Effects that support sidechain detection (compressor, gate, de-esser)
-    /// override [`DspKernel::process_stereo_with_sidechain`] to use the external
+    /// override `DspKernel::process_stereo_with_sidechain` to use the external
     /// signal. All other effects ignore it silently.
     ///
     /// After calling this method, recompile the graph with [`compile()`](Self::compile).

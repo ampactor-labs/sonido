@@ -39,7 +39,7 @@ pub enum ProcessStep {
     /// references into `ProcessingGraph.nodes`. When `sidechain_buf` is
     /// `Some`, the effect's sidechain kernel path is invoked. When
     /// `is_control_rate` is `true`, only the first sample is processed
-    /// and the output is held via a subsequent [`SampleAndHold`] step.
+    /// and the output is held via a subsequent `SampleAndHold` step.
     ProcessEffect {
         /// Index into the graph's node storage.
         node_idx: usize,
@@ -55,14 +55,14 @@ pub enum ProcessStep {
         /// Whether this node operates at control rate.
         ///
         /// When `true`, the executor processes only 1 sample instead of the
-        /// full block.  A [`SampleAndHold`] step must follow immediately to
+        /// full block.  A `SampleAndHold` step must follow immediately to
         /// replicate that sample across the buffer.
         is_control_rate: bool,
     },
 
     /// Process a sub-graph as a single opaque step.
     ///
-    /// The inner [`ProcessingGraph`] is stored inside the
+    /// The inner [`super::ProcessingGraph`] is stored inside the
     /// [`NodeKind::SubGraph`](super::node::NodeKind::SubGraph) variant.  The
     /// schedule compiler emits this step instead of descending into the inner
     /// graph's nodes individually.
@@ -137,7 +137,7 @@ pub enum ProcessStep {
 
     /// Replicate the first sample of a buffer across the whole block.
     ///
-    /// Inserted immediately after a control-rate [`ProcessEffect`] step.
+    /// Inserted immediately after a control-rate `ProcessEffect` step.
     /// The control-rate node writes exactly 1 sample into `buffer_idx`; this
     /// step copies that sample to positions `1..block_len` so downstream
     /// audio-rate nodes see a full-length block.

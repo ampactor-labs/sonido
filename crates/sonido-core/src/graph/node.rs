@@ -85,7 +85,7 @@ pub enum NodeKind {
     Merge,
     /// A nested sub-graph processed as a single opaque block.
     ///
-    /// The inner [`ProcessingGraph`] is compiled independently.  During outer
+    /// The inner [`super::ProcessingGraph`] is compiled independently.  During outer
     /// schedule execution, its Input and Output nodes are wired to the outer
     /// buffer slots, making the sub-graph look like a single effect node from
     /// the outer schedule's perspective.

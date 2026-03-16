@@ -50,9 +50,9 @@ pub struct AccessibilityContext {
 ///
 /// # Contract
 ///
-/// - [`accessible_label`] must include the parameter name and formatted value
+/// - `accessible_label` must include the parameter name and formatted value
 ///   with units, e.g. `"Drive: 18 dB"`.
-/// - [`accessible_role`] must return one of the ARIA role strings listed below.
+/// - `accessible_role` must return one of the ARIA role strings listed below.
 ///
 /// # ARIA Roles Used in Sonido
 ///

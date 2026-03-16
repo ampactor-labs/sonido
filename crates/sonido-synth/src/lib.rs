@@ -101,7 +101,7 @@
 //!
 //! - [`MonophonicSynth`] - Single-voice synth with glide
 //! - [`PolyphonicSynth`] - Multi-voice synth
-//! - [`SynthNode`] - Polyphonic synth as a graph [`Effect`] node
+//! - [`SynthNode`] - Polyphonic synth as a graph `Effect` node
 //!
 //! # no_std Support
 //!
