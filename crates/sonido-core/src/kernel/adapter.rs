@@ -298,13 +298,13 @@ impl<K: DspKernel> Adapter<K, DirectPolicy> {
     ///
     /// Parameters written via [`set_param`](ParameterInfo::set_param) are live
     /// on the very next processing call.
-    pub fn new_direct(kernel: K) -> Self {
+    pub fn new_direct(kernel: K, sample_rate: f32) -> Self {
         let defaults = K::Params::from_defaults();
         Self {
             kernel,
             policy: DirectPolicy,
             snapshot: defaults,
-            sample_rate: 48000.0,
+            sample_rate,
             peak_in: (0.0, 0.0),
             peak_out: (0.0, 0.0),
         }
@@ -401,9 +401,28 @@ impl<K: DspKernel, S: SmoothingPolicy> Adapter<K, S> {
 impl<K: DspKernel, S: SmoothingPolicy> Effect for Adapter<K, S> {
     #[inline]
     fn process(&mut self, input: f32) -> f32 {
+        // Track input peak (mono → mirror to both L,R)
+        let abs_in = input.abs();
+        if abs_in > self.peak_in.0 {
+            self.peak_in.0 = abs_in;
+        }
+        if abs_in > self.peak_in.1 {
+            self.peak_in.1 = abs_in;
+        }
+
         self.advance_params();
         let out = self.kernel.process(input, &self.snapshot);
         self.kernel.update_diagnostics(&mut self.snapshot);
+
+        // Track output peak (mono → mirror to both L,R)
+        let abs_out = out.abs();
+        if abs_out > self.peak_out.0 {
+            self.peak_out.0 = abs_out;
+        }
+        if abs_out > self.peak_out.1 {
+            self.peak_out.1 = abs_out;
+        }
+
         out
     }
 
@@ -441,9 +460,27 @@ impl<K: DspKernel, S: SmoothingPolicy> Effect for Adapter<K, S> {
     fn process_block(&mut self, input: &[f32], output: &mut [f32]) {
         debug_assert_eq!(input.len(), output.len());
         for (inp, out) in input.iter().zip(output.iter_mut()) {
+            // Track input peak (mono → mirror to both L,R)
+            let abs_in = inp.abs();
+            if abs_in > self.peak_in.0 {
+                self.peak_in.0 = abs_in;
+            }
+            if abs_in > self.peak_in.1 {
+                self.peak_in.1 = abs_in;
+            }
+
             self.advance_params();
             *out = self.kernel.process(*inp, &self.snapshot);
             self.kernel.update_diagnostics(&mut self.snapshot);
+
+            // Track output peak (mono → mirror to both L,R)
+            let abs_out = out.abs();
+            if abs_out > self.peak_out.0 {
+                self.peak_out.0 = abs_out;
+            }
+            if abs_out > self.peak_out.1 {
+                self.peak_out.1 = abs_out;
+            }
         }
     }
 
@@ -459,6 +496,16 @@ impl<K: DspKernel, S: SmoothingPolicy> Effect for Adapter<K, S> {
         debug_assert_eq!(left_out.len(), right_out.len());
 
         for i in 0..left_in.len() {
+            // Track input peaks
+            let abs_l = left_in[i].abs();
+            let abs_r = right_in[i].abs();
+            if abs_l > self.peak_in.0 {
+                self.peak_in.0 = abs_l;
+            }
+            if abs_r > self.peak_in.1 {
+                self.peak_in.1 = abs_r;
+            }
+
             self.advance_params();
             let (l, r) = self
                 .kernel
@@ -466,6 +513,16 @@ impl<K: DspKernel, S: SmoothingPolicy> Effect for Adapter<K, S> {
             self.kernel.update_diagnostics(&mut self.snapshot);
             left_out[i] = l;
             right_out[i] = r;
+
+            // Track output peaks
+            let abs_l_out = l.abs();
+            let abs_r_out = r.abs();
+            if abs_l_out > self.peak_out.0 {
+                self.peak_out.0 = abs_l_out;
+            }
+            if abs_r_out > self.peak_out.1 {
+                self.peak_out.1 = abs_r_out;
+            }
         }
     }
 
@@ -861,7 +918,8 @@ mod tests {
 
     #[test]
     fn direct_policy_param_change_is_instant() {
-        let mut adapter = Adapter::<TestGainKernel, DirectPolicy>::new_direct(TestGainKernel);
+        let mut adapter =
+            Adapter::<TestGainKernel, DirectPolicy>::new_direct(TestGainKernel, 48000.0);
         // Default is 0 dB
         adapter.set_param(0, 6.0);
         // No need to snap — DirectPolicy is immediate
@@ -875,7 +933,8 @@ mod tests {
 
     #[test]
     fn direct_policy_get_param_reads_snapshot() {
-        let mut adapter = Adapter::<TestGainKernel, DirectPolicy>::new_direct(TestGainKernel);
+        let mut adapter =
+            Adapter::<TestGainKernel, DirectPolicy>::new_direct(TestGainKernel, 48000.0);
         adapter.set_param(0, -6.0);
         assert!(
             (adapter.get_param(0) - (-6.0)).abs() < 0.01,
@@ -885,7 +944,8 @@ mod tests {
 
     #[test]
     fn direct_policy_clamps() {
-        let mut adapter = Adapter::<TestGainKernel, DirectPolicy>::new_direct(TestGainKernel);
+        let mut adapter =
+            Adapter::<TestGainKernel, DirectPolicy>::new_direct(TestGainKernel, 48000.0);
         adapter.set_param(0, 999.0);
         assert!(
             (adapter.get_param(0) - 12.0).abs() < 0.01,
@@ -941,6 +1001,62 @@ mod tests {
         assert_eq!(po_r, 0.0);
     }
 
+    // ── Peak tracking: process() / process_block() / process_block_stereo() ──
+
+    #[test]
+    fn peak_tracking_process_mono() {
+        let mut adapter = Adapter::<TestGainKernel, SmoothedPolicy>::new(TestGainKernel, 48000.0);
+        adapter.reset();
+
+        adapter.process(0.7);
+        let (pi_l, pi_r) = adapter.peak_in();
+        let (po_l, po_r) = adapter.peak_out();
+
+        // Mono mirrors to both channels
+        assert!((pi_l - 0.7).abs() < 0.01, "peak_in left: {pi_l}");
+        assert!((pi_r - 0.7).abs() < 0.01, "peak_in right: {pi_r}");
+        assert!((po_l - 0.7).abs() < 0.01, "peak_out left: {po_l}");
+        assert!((po_r - 0.7).abs() < 0.01, "peak_out right: {po_r}");
+    }
+
+    #[test]
+    fn peak_tracking_process_block() {
+        let mut adapter = Adapter::<TestGainKernel, SmoothedPolicy>::new(TestGainKernel, 48000.0);
+        adapter.reset();
+
+        let input = [0.3, 0.6, 0.2];
+        let mut output = [0.0; 3];
+        adapter.process_block(&input, &mut output);
+
+        let (pi_l, pi_r) = adapter.peak_in();
+        assert!((pi_l - 0.6).abs() < 0.01, "peak_in left: {pi_l}");
+        assert!((pi_r - 0.6).abs() < 0.01, "peak_in right: {pi_r}");
+
+        let (po_l, po_r) = adapter.peak_out();
+        assert!((po_l - 0.6).abs() < 0.01, "peak_out left: {po_l}");
+        assert!((po_r - 0.6).abs() < 0.01, "peak_out right: {po_r}");
+    }
+
+    #[test]
+    fn peak_tracking_process_block_stereo() {
+        let mut adapter = Adapter::<TestGainKernel, SmoothedPolicy>::new(TestGainKernel, 48000.0);
+        adapter.reset();
+
+        let left_in = [0.1, 0.8, 0.2];
+        let right_in = [0.5, 0.3, 0.9];
+        let mut left_out = [0.0; 3];
+        let mut right_out = [0.0; 3];
+        adapter.process_block_stereo(&left_in, &right_in, &mut left_out, &mut right_out);
+
+        let (pi_l, pi_r) = adapter.peak_in();
+        assert!((pi_l - 0.8).abs() < 0.01, "peak_in left: {pi_l}");
+        assert!((pi_r - 0.9).abs() < 0.01, "peak_in right: {pi_r}");
+
+        let (po_l, po_r) = adapter.peak_out();
+        assert!((po_l - 0.8).abs() < 0.01, "peak_out left: {po_l}");
+        assert!((po_r - 0.9).abs() < 0.01, "peak_out right: {po_r}");
+    }
+
     // ── TailReporting tests ──
 
     #[test]
@@ -958,7 +1074,8 @@ mod tests {
 
     #[test]
     fn tail_reporting_direct_policy() {
-        let adapter = Adapter::<TailKernel, DirectPolicy>::new_direct(TailKernel { tail: 48000 });
+        let adapter =
+            Adapter::<TailKernel, DirectPolicy>::new_direct(TailKernel { tail: 48000 }, 48000.0);
         assert_eq!(TailReporting::tail_samples(&adapter), 48000);
     }
 }

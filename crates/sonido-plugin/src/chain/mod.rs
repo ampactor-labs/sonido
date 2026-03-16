@@ -48,6 +48,8 @@ pub const SLOT_STRIDE: usize = 32;
 /// Total pre-allocated CLAP parameter count (always visible to host).
 pub const TOTAL_PARAMS: usize = MAX_SLOTS * SLOT_STRIDE;
 
+const _: () = assert!(TOTAL_PARAMS == MAX_SLOTS * SLOT_STRIDE);
+
 /// Validated CLAP parameter ID for the chain plugin.
 ///
 /// Encodes `slot * SLOT_STRIDE + local_param_index` in a single `u32`.

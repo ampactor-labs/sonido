@@ -367,6 +367,10 @@ impl ChainAudioProcessor<'_> {
     fn sync_gui_changes(&mut self, output: &mut OutputEvents) {
         let order = self.cached_order.clone();
         for &plugin_slot in &order {
+            if !self.shared.take_slot_dirty(plugin_slot) {
+                continue;
+            }
+
             let Some(engine_slot) = self.slot_map.iter().position(|&ps| ps == plugin_slot) else {
                 continue;
             };

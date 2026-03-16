@@ -838,8 +838,8 @@ for each index:
 ```rust
 fn create_effect(idx: usize, sr: f32) -> Option<Box<dyn EffectWithParams + Send>> {
     match idx {
-        0  => Some(Box::new(Adapter::new_direct(FilterKernel::new(sr)))),
-        1  => Some(Box::new(Adapter::new_direct(TremoloKernel::new(sr)))),
+        0  => Some(Box::new(Adapter::new_direct(FilterKernel::new(sr), sr))),
+        1  => Some(Box::new(Adapter::new_direct(TremoloKernel::new(sr), sr))),
         // ... all 14
         _ => None,
     }
@@ -903,7 +903,7 @@ A-state parameters, B-state parameters, morph speed.
 
 3. **Add a match arm to `create_effect()`** at the matching index:
    ```rust
-   N => Some(Box::new(Adapter::new_direct(MyKernel::new(sr)))),
+   N => Some(Box::new(Adapter::new_direct(MyKernel::new(sr), sr))),
    ```
 
 4. **Update `NUM_EFFECTS`** constant to match the new list length.

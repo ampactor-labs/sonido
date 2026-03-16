@@ -293,14 +293,19 @@ pub trait KernelParams: Default + Clone + Send {
             let va = a.get(i);
             let vb = b.get(i);
 
-            let value = if Self::descriptor(i)
-                .is_some_and(|d| d.flags.contains(crate::ParamFlags::STEPPED))
-            {
-                // Stepped parameters: snap at midpoint, no fractional values
-                if t < 0.5 { va } else { vb }
-            } else {
-                // Continuous parameters: linear interpolation
-                va + (vb - va) * t
+            let value = match Self::descriptor(i) {
+                Some(d) if d.flags.contains(crate::ParamFlags::STEPPED) => {
+                    // Stepped parameters: snap at midpoint, no fractional values
+                    if t < 0.5 { va } else { vb }
+                }
+                Some(d) if d.scale == crate::ParamScale::Logarithmic && va > 0.0 && vb > 0.0 => {
+                    // Logarithmic parameters: geometric interpolation
+                    libm::expf(libm::logf(va) * (1.0 - t) + libm::logf(vb) * t)
+                }
+                _ => {
+                    // Continuous parameters: linear interpolation
+                    va + (vb - va) * t
+                }
             };
 
             result.set(i, value);
@@ -508,5 +513,80 @@ pub trait DspKernel: Send {
     ) -> (f32, f32) {
         // Default: ignore sidechain, fall back to regular stereo processing.
         self.process_stereo(left, right, params)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::param_info::{ParamDescriptor, ParamId, ParamScale};
+
+    /// Test params with a logarithmic frequency parameter (20–20000 Hz).
+    #[derive(Debug, Clone, Copy, Default)]
+    struct LogFreqParams {
+        freq_hz: f32,
+    }
+
+    impl KernelParams for LogFreqParams {
+        const COUNT: usize = 1;
+
+        fn descriptor(index: usize) -> Option<ParamDescriptor> {
+            match index {
+                0 => Some(
+                    ParamDescriptor::time_ms("Frequency", "Freq", 20.0, 20000.0, 1000.0)
+                        .with_id(ParamId(1), "freq")
+                        .with_scale(ParamScale::Logarithmic),
+                ),
+                _ => None,
+            }
+        }
+
+        fn smoothing(index: usize) -> SmoothingStyle {
+            match index {
+                0 => SmoothingStyle::Slow,
+                _ => SmoothingStyle::Standard,
+            }
+        }
+
+        fn get(&self, index: usize) -> f32 {
+            match index {
+                0 => self.freq_hz,
+                _ => 0.0,
+            }
+        }
+
+        fn set(&mut self, index: usize, value: f32) {
+            if index == 0 {
+                self.freq_hz = value;
+            }
+        }
+    }
+
+    #[test]
+    fn params_lerp_logarithmic_geometric() {
+        let a = LogFreqParams { freq_hz: 100.0 };
+        let b = LogFreqParams { freq_hz: 10000.0 };
+
+        let mid = LogFreqParams::lerp(&a, &b, 0.5);
+        // Geometric mean of 100 and 10000 = sqrt(100 * 10000) = 1000
+        assert!(
+            (mid.freq_hz - 1000.0).abs() < 1.0,
+            "Expected ~1000 Hz (geometric mean), got {}",
+            mid.freq_hz
+        );
+
+        // Verify endpoints
+        let at_a = LogFreqParams::lerp(&a, &b, 0.0);
+        assert!(
+            (at_a.freq_hz - 100.0).abs() < 0.01,
+            "Expected 100 at t=0, got {}",
+            at_a.freq_hz
+        );
+        let at_b = LogFreqParams::lerp(&a, &b, 1.0);
+        assert!(
+            (at_b.freq_hz - 10000.0).abs() < 0.01,
+            "Expected 10000 at t=1, got {}",
+            at_b.freq_hz
+        );
     }
 }

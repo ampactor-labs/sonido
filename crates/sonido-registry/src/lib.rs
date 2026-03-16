@@ -125,7 +125,7 @@ pub struct EffectDescriptor {
     pub description: &'static str,
     /// Category for organization.
     pub category: EffectCategory,
-    /// Number of parameters.
+    /// Number of parameters (auto-filled by `EffectRegistry::register()`).
     pub param_count: usize,
 }
 
@@ -175,7 +175,7 @@ impl EffectRegistry {
                 short_name: "DIST",
                 description: "Anti-aliased waveshaping distortion with multiple algorithms",
                 category: EffectCategory::Distortion,
-                param_count: 6,
+                param_count: 0,
             },
             |sr| Box::new(Adapter::new(DistortionKernel::new(sr), sr)),
         );
@@ -188,7 +188,7 @@ impl EffectRegistry {
                 short_name: "COMP",
                 description: "Dynamics compressor with program-dependent release",
                 category: EffectCategory::Dynamics,
-                param_count: 12,
+                param_count: 0,
             },
             |sr| Box::new(Adapter::new(CompressorKernel::new(sr), sr)),
         );
@@ -201,7 +201,7 @@ impl EffectRegistry {
                 short_name: "CHOR",
                 description: "Multi-voice modulated delay chorus with feedback and tempo sync",
                 category: EffectCategory::Modulation,
-                param_count: 10,
+                param_count: 0,
             },
             |sr| Box::new(Adapter::new(ChorusKernel::new(sr), sr)),
         );
@@ -214,7 +214,7 @@ impl EffectRegistry {
                 short_name: "FLNG",
                 description: "Classic flanger with through-zero mode, bipolar feedback, and tempo sync",
                 category: EffectCategory::Modulation,
-                param_count: 9,
+                param_count: 0,
             },
             |sr| Box::new(Adapter::new(FlangerKernel::new(sr), sr)),
         );
@@ -227,7 +227,7 @@ impl EffectRegistry {
                 short_name: "PHAS",
                 description: "Multi-stage allpass phaser with LFO and tempo sync",
                 category: EffectCategory::Modulation,
-                param_count: 11,
+                param_count: 0,
             },
             |sr| Box::new(Adapter::new(PhaserKernel::new(sr), sr)),
         );
@@ -240,7 +240,7 @@ impl EffectRegistry {
                 short_name: "DLY",
                 description: "Feedback delay with filtering, diffusion, and tempo sync",
                 category: EffectCategory::TimeBased,
-                param_count: 10,
+                param_count: 0,
             },
             |sr| Box::new(Adapter::new(DelayKernel::new(sr), sr)),
         );
@@ -249,11 +249,11 @@ impl EffectRegistry {
         self.register(
             EffectDescriptor {
                 id: "filter",
-                name: "Low Pass Filter",
+                name: "Filter",
                 short_name: "FILT",
                 description: "Multimode biquad filter (LPF/HPF/BPF/Notch)",
                 category: EffectCategory::Filter,
-                param_count: 4,
+                param_count: 0,
             },
             |sr| Box::new(Adapter::new(FilterKernel::new(sr), sr)),
         );
@@ -266,7 +266,7 @@ impl EffectRegistry {
                 short_name: "VIB",
                 description: "6-unit tape wow/flutter simulation",
                 category: EffectCategory::Modulation,
-                param_count: 3,
+                param_count: 0,
             },
             |sr| Box::new(Adapter::new(VibratoKernel::new(sr), sr)),
         );
@@ -279,7 +279,7 @@ impl EffectRegistry {
                 short_name: "TAPE",
                 description: "Full tape-machine model with wow/flutter, hysteresis, head bump, and self-erasure",
                 category: EffectCategory::Distortion,
-                param_count: 10,
+                param_count: 0,
             },
             |sr| Box::new(Adapter::new(TapeKernel::new(sr), sr)),
         );
@@ -292,7 +292,7 @@ impl EffectRegistry {
                 short_name: "PRE",
                 description: "High-headroom gain stage",
                 category: EffectCategory::Utility,
-                param_count: 3,
+                param_count: 0,
             },
             |sr| Box::new(Adapter::new(PreampKernel::new(sr), sr)),
         );
@@ -305,7 +305,7 @@ impl EffectRegistry {
                 short_name: "VERB",
                 description: "Freeverb-style algorithmic reverb",
                 category: EffectCategory::TimeBased,
-                param_count: 8,
+                param_count: 0,
             },
             |sr| Box::new(Adapter::new(ReverbKernel::new(sr), sr)),
         );
@@ -318,7 +318,7 @@ impl EffectRegistry {
                 short_name: "TREM",
                 description: "Amplitude modulation with multiple waveforms and tempo sync",
                 category: EffectCategory::Modulation,
-                param_count: 8,
+                param_count: 0,
             },
             |sr| Box::new(Adapter::new(TremoloKernel::new(sr), sr)),
         );
@@ -331,7 +331,7 @@ impl EffectRegistry {
                 short_name: "GATE",
                 description: "Noise gate with threshold, hold, hysteresis, and sidechain HPF",
                 category: EffectCategory::Dynamics,
-                param_count: 9,
+                param_count: 0,
             },
             |sr| Box::new(Adapter::new(GateKernel::new(sr), sr)),
         );
@@ -344,7 +344,7 @@ impl EffectRegistry {
                 short_name: "WAH",
                 description: "Auto-wah and manual wah with envelope follower",
                 category: EffectCategory::Filter,
-                param_count: 5,
+                param_count: 0,
             },
             |sr| Box::new(Adapter::new(WahKernel::new(sr), sr)),
         );
@@ -357,7 +357,7 @@ impl EffectRegistry {
                 short_name: "PEQ",
                 description: "3-band parametric equalizer with frequency, gain, and Q",
                 category: EffectCategory::Filter,
-                param_count: 10,
+                param_count: 0,
             },
             |sr| Box::new(Adapter::new(EqKernel::new(sr), sr)),
         );
@@ -370,7 +370,7 @@ impl EffectRegistry {
                 short_name: "LIM",
                 description: "Brickwall lookahead peak limiter with ceiling control",
                 category: EffectCategory::Dynamics,
-                param_count: 5,
+                param_count: 0,
             },
             |sr| Box::new(Adapter::new(LimiterKernel::new(sr), sr)),
         );
@@ -383,7 +383,7 @@ impl EffectRegistry {
                 short_name: "CRSH",
                 description: "Lo-fi bit depth and sample rate reduction with jitter",
                 category: EffectCategory::Distortion,
-                param_count: 5,
+                param_count: 0,
             },
             |sr| Box::new(Adapter::new(BitcrusherKernel::new(sr), sr)),
         );
@@ -396,7 +396,7 @@ impl EffectRegistry {
                 short_name: "RING",
                 description: "Ring modulation with sine, triangle, and square carriers",
                 category: EffectCategory::Modulation,
-                param_count: 5,
+                param_count: 0,
             },
             |sr| Box::new(Adapter::new(RingModKernel::new(sr), sr)),
         );
@@ -409,7 +409,7 @@ impl EffectRegistry {
                 short_name: "STGE",
                 description: "Signal conditioning: gain, phase, width, balance, bass mono, Haas delay",
                 category: EffectCategory::Utility,
-                param_count: 12,
+                param_count: 0,
             },
             |sr| Box::new(Adapter::new(StageKernel::new(sr), sr)),
         );
@@ -422,7 +422,7 @@ impl EffectRegistry {
                 short_name: "LOOP",
                 description: "Stereo looper with record, play, and overdub",
                 category: EffectCategory::TimeBased,
-                param_count: 6,
+                param_count: 0,
             },
             |sr| Box::new(Adapter::new(LooperKernel::new(sr), sr)),
         );
@@ -435,6 +435,8 @@ impl EffectRegistry {
     /// names without allocating at query time.
     fn register(&mut self, descriptor: EffectDescriptor, factory: EffectFactory) {
         let temp = factory(48000.0);
+        let mut descriptor = descriptor;
+        descriptor.param_count = temp.effect_param_count();
         let param_descriptors = (0..temp.effect_param_count())
             .filter_map(|i| temp.effect_param_info(i))
             .collect();

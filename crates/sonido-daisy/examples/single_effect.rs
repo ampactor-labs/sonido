@@ -15,7 +15,7 @@
 //! use sonido_effects::kernels::ReverbKernel;
 //! type TestEffect = Adapter<ReverbKernel, DirectPolicy>;
 //! // ... and in main():
-//! let mut effect = TestEffect::new_direct(ReverbKernel::new(SAMPLE_RATE));
+//! let mut effect = TestEffect::new_direct(ReverbKernel::new(SAMPLE_RATE), SAMPLE_RATE);
 //! ```
 //!
 //! # Build & Flash
@@ -105,7 +105,7 @@ async fn main(spawner: embassy_executor::Spawner) {
     let mut interface = defmt::unwrap!(interface.start_interface().await);
 
     // ── Create effect (monomorphized, zero smoothing) ──
-    let mut effect = TestEffect::new_direct(DistortionKernel::new(SAMPLE_RATE));
+    let mut effect = TestEffect::new_direct(DistortionKernel::new(SAMPLE_RATE), SAMPLE_RATE);
 
     let param_count = effect.param_count();
     let knob_count = param_count.min(NUM_KNOBS);

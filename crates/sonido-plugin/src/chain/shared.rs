@@ -110,6 +110,12 @@ struct ChainSharedData {
     /// Per-slot bypass state.
     bypass_flags: [AtomicBool; MAX_SLOTS],
 
+    /// Per-slot dirty flag — set when a GUI param change touches this slot.
+    ///
+    /// Audio thread checks and clears via [`ChainShared::take_slot_dirty`] to
+    /// skip unchanged slots in `sync_gui_changes`.
+    param_dirty: [AtomicBool; MAX_SLOTS],
+
     /// Slot metadata snapshots, published atomically after structural mutations.
     slots: ArcSwap<Vec<SlotSnapshot>>,
 
@@ -178,6 +184,7 @@ impl ChainShared {
                 values: core::array::from_fn(|_| zero_u32()),
                 gesture_flags: core::array::from_fn(|_| zero_u8()),
                 bypass_flags: core::array::from_fn(|_| false_bool()),
+                param_dirty: core::array::from_fn(|_| false_bool()),
                 slots: ArcSwap::from_pointee(empty_slots),
                 order: ArcSwap::from_pointee(Vec::new()),
                 commands: Mutex::new(VecDeque::new()),
@@ -212,6 +219,7 @@ impl ChainShared {
         };
 
         self.inner.values[id.raw() as usize].store(clamped.to_bits(), Ordering::Release);
+        self.mark_slot_dirty(id.slot());
     }
 
     /// Read raw atomic value (no clamping, used by audio thread).
@@ -229,11 +237,13 @@ impl ChainShared {
     /// Signal the start of a parameter gesture (GUI drag start).
     pub fn gesture_begin(&self, id: ClapParamId) {
         self.inner.gesture_flags[id.raw() as usize].fetch_or(GESTURE_BEGIN, Ordering::Release);
+        self.mark_slot_dirty(id.slot());
     }
 
     /// Signal the end of a parameter gesture (GUI drag stop).
     pub fn gesture_end(&self, id: ClapParamId) {
         self.inner.gesture_flags[id.raw() as usize].fetch_or(GESTURE_END, Ordering::Release);
+        self.mark_slot_dirty(id.slot());
     }
 
     /// Atomically read and clear gesture flags for a parameter.
@@ -255,6 +265,26 @@ impl ChainShared {
     pub fn set_bypassed(&self, slot: usize, bypassed: bool) {
         if let Some(flag) = self.inner.bypass_flags.get(slot) {
             flag.store(bypassed, Ordering::Release);
+        }
+    }
+
+    // ── Per-slot dirty flag ────────────────────────────────────────────────
+
+    /// Mark a slot as having pending parameter changes.
+    pub fn mark_slot_dirty(&self, slot: usize) {
+        if slot < MAX_SLOTS {
+            self.inner.param_dirty[slot].store(true, Ordering::Release);
+        }
+    }
+
+    /// Atomically check and clear the dirty flag for a slot.
+    ///
+    /// Returns `true` if the slot had pending changes since the last call.
+    pub fn take_slot_dirty(&self, slot: usize) -> bool {
+        if slot < MAX_SLOTS {
+            self.inner.param_dirty[slot].swap(false, Ordering::AcqRel)
+        } else {
+            false
         }
     }
 
