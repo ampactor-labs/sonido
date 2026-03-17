@@ -285,6 +285,43 @@ impl<const N: usize> ControlMapper<N> {
         false
     }
 
+    /// Applies a control change to an effect using a custom transform.
+    ///
+    /// Like [`apply()`](Self::apply), but instead of linear denormalization,
+    /// calls `map_fn` with the parameter descriptor and normalized value.
+    /// Use for biased mapping (e.g., noon presets on embedded hardware).
+    ///
+    /// Returns `true` if the parameter was set, `false` if the mapping
+    /// or parameter info was not found.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// mapper.apply_with_fn(ctrl_id, state.value, &mut effect, |desc, norm| {
+    ///     adc_to_param_biased(desc, noon_value, norm)
+    /// });
+    /// ```
+    pub fn apply_with_fn<E, F>(
+        &self,
+        control_id: ControlId,
+        normalized_value: f32,
+        effect: &mut E,
+        map_fn: F,
+    ) -> bool
+    where
+        E: ParameterInfo,
+        F: FnOnce(&ParamDescriptor, f32) -> f32,
+    {
+        if let Some(param_index) = self.get_param_index(control_id)
+            && let Some(descriptor) = effect.param_info(param_index)
+        {
+            let value = map_fn(&descriptor, normalized_value);
+            effect.set_param(param_index, value);
+            return true;
+        }
+        false
+    }
+
     /// Gets the parameter descriptor for a mapped control.
     ///
     /// Convenience method for getting the parameter info via control ID.
@@ -524,5 +561,27 @@ mod tests {
     fn test_mapper_default() {
         let mapper = ControlMapper::<8>::default();
         assert!(mapper.is_empty());
+    }
+
+    #[test]
+    fn test_apply_with_fn_uses_custom_transform() {
+        let mut mapper = ControlMapper::<8>::new();
+        let mut effect = TestEffect::new();
+
+        mapper.map(ControlId::hardware(0), 0); // Gain: -60 to 12 dB
+
+        // Custom transform that always returns 5.0 regardless of input
+        let applied =
+            mapper.apply_with_fn(ControlId::hardware(0), 0.5, &mut effect, |_desc, _norm| 5.0);
+        assert!(applied);
+        assert!((effect.gain - 5.0).abs() < 0.01);
+
+        // Unmapped control should return false
+        assert!(!mapper.apply_with_fn(
+            ControlId::hardware(99),
+            0.5,
+            &mut effect,
+            |_desc, _norm| 0.0,
+        ));
     }
 }
