@@ -15,7 +15,7 @@
 //! ## Platform Controller
 //!
 //! - [`PlatformController`] - Trait for hardware/software platform implementations
-//! - [`ControlMapper`] - Maps controls to effect parameters using [`ParameterInfo`]
+//! - [`ControlMapper`] - Maps controls to single-effect parameters using [`ParameterInfo`]
 //!
 //! # Control ID Namespaces
 //!
@@ -57,17 +57,13 @@
 
 extern crate alloc;
 
-pub mod control_context;
 pub mod control_mapper;
-pub mod graph_mapper;
 
 // Re-export sonido-core types for convenience
 pub use sonido_core::{ParamDescriptor, ParamUnit, ParameterInfo};
 
 // Re-export main types at crate root
-pub use control_context::ControlContext;
 pub use control_mapper::ControlMapper;
-pub use graph_mapper::GraphMapper;
 
 /// Namespace identifiers for control sources.
 pub mod namespace {

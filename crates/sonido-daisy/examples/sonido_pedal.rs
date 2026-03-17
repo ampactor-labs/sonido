@@ -1516,30 +1516,35 @@ async fn main(spawner: embassy_executor::Spawner) {
                     && let Some(nid) = node_ids[focused_node]
                 {
                     let entry = &EFFECT_LIST[eff_idx];
-                    // Read knob values from ControlBuffer.
-                    let norm_knobs: [f32; 6] = core::array::from_fn(|k| CONTROLS.read_knob(k));
 
+                    let platform = sonido_daisy::hothouse::HothousePlatform::new(&CONTROLS);
+                    use sonido_platform::PlatformController;
+                    
                     // Compute param values using descriptors (immutable borrow first).
                     let mut param_vals: [(u8, f32); 6] = [(NULL_KNOB, 0.0); 6];
                     if let Some(effect) = graph.effect_with_params_ref(nid) {
                         for k in 0..6 {
-                            let param_idx = entry.knobs[k];
-                            if param_idx != NULL_KNOB
-                                && let Some(desc) = effect.effect_param_info(param_idx as usize)
-                            {
-                                let noon = noon_presets::noon_value(entry.id, param_idx as usize)
-                                    .unwrap_or(desc.default);
-                                let val = adc_to_param_biased(&desc, noon, norm_knobs[k]);
-                                // Skip K1 (mode) for looper when FS override is active,
-                                // unless the user turned K1 to Stop (clears override).
-                                if looper_fs_override && eff_idx == 14 && param_idx == 0 {
-                                    if val < 0.5 {
-                                        looper_fs_override = false;
-                                    } else {
-                                        continue;
+                            let ctrl_id = sonido_platform::ControlId::hardware(k as u8);
+                            if let Some(state) = platform.read_control(ctrl_id) {
+                                // Since we poll continuously in A/B mode we act on the absolute value regardless 
+                                // of `state.changed` to ensure the snapshot perfectly matches hardware state.
+                                let param_idx = entry.knobs[k] as usize;
+                                if let Some(desc) = effect.effect_param_info(param_idx) {
+                                    let noon = noon_presets::noon_value(entry.id, param_idx)
+                                        .unwrap_or(desc.default);
+                                    let val = adc_to_param_biased(&desc, noon, state.value);
+                                    
+                                    // Skip K1 (mode) for looper when FS override is active,
+                                    // unless the user turned K1 to Stop (clears override).
+                                    if looper_fs_override && eff_idx == 14 && param_idx == 0 {
+                                        if val < 0.5 {
+                                            looper_fs_override = false;
+                                        } else {
+                                            continue;
+                                        }
                                     }
+                                    param_vals[k] = (param_idx as u8, val);
                                 }
-                                param_vals[k] = (param_idx, val);
                             }
                         }
                     }

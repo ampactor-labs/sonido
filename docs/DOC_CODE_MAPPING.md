@@ -38,7 +38,7 @@ Rows marked `<!-- PLANNED -->` are pre-reserved for v0.3+ features. Do not updat
 | `crates/sonido-analysis/src/filterbank.rs` | `docs/reference/biosignal.md` | EEG band definitions, filter bank design |
 | `crates/sonido-analysis/src/hilbert.rs` | `docs/reference/biosignal.md` | Analytic signal, instantaneous phase/amplitude |
 | `crates/sonido-analysis/src/lms.rs`, `xcorr.rs`, `ddc.rs`, `phase.rs`, `resample.rs` | CLAUDE.md (Key Files table), `docs/ARCHITECTURE.md` (sonido-analysis section) | LMS/NLMS API, xcorr functions, DDC struct, phase unwrapping, resampling |
-| `crates/sonido-platform/src/*.rs` | `docs/EMBEDDED.md`, `docs/DESIGN_DECISIONS.md` ADR-012 | PlatformController trait, ControlId namespaces, GraphMapper, ControlContext |
+| `crates/sonido-platform/src/*.rs` | `docs/EMBEDDED.md`, `docs/DESIGN_DECISIONS.md` ADR-012 | PlatformController trait, ControlId namespaces, ControlMapper |
 | `crates/sonido-io/src/backend.rs`, `cpal_backend.rs` | `docs/ARCHITECTURE.md` (sonido-io section), `docs/DESIGN_DECISIONS.md` ADR-023 | AudioBackend trait, CpalBackend, StreamHandle, BackendStreamConfig |
 | `crates/sonido-cli/src/commands/*.rs` | `docs/CLI_GUIDE.md` | Command syntax, flags, examples |
 | `crates/sonido-graph-dsl/src/*.rs` | `docs/CLI_GUIDE.md` (Graph Syntax section), CLAUDE.md (Crates table, Key Files) | DSL grammar, split/merge semantics, topology examples, effect alias resolution |
