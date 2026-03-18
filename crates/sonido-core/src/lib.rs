@@ -147,6 +147,8 @@ pub use envelope::{DetectionMode, EnvelopeFollower};
 pub use fast_math::{
     fast_db_to_linear, fast_exp2, fast_linear_to_db, fast_log2, fast_sin_turns, fast_tan,
 };
+#[cfg(feature = "spectral")]
+pub use graph::spectral_node::{SpectralConfig, SpectralEffect, SpectralNode, WindowType};
 pub use graph::{
     BufferPool, CompensationDelay, CompiledSchedule, EdgeId, GraphEngine, GraphError,
     GraphSnapshot, NodeId, NodeKind, NodeRate, ProcessStep, ProcessingGraph, SnapshotEntry,

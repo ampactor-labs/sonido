@@ -4176,6 +4176,7 @@ dependencies = [
  "criterion",
  "libm",
  "proptest",
+ "rustfft",
  "tracing",
 ]
 

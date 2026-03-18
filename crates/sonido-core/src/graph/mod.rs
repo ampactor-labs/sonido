@@ -70,6 +70,7 @@ pub mod engine;
 pub mod node;
 mod processing;
 pub mod schedule;
+#[cfg(feature = "spectral")]
 pub mod spectral_node;
 pub mod stereo_samples;
 
