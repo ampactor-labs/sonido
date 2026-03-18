@@ -21,7 +21,7 @@
 //!
 //! # Status
 //!
-//! Types and trait defined.  egui `AccessKit` integration is TODO.
+//! Types and trait defined. AccessKit integration planned for post-demo phase.
 
 /// Accessibility context passed to widgets during rendering.
 ///

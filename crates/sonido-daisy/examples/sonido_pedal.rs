@@ -882,8 +882,8 @@ unsafe fn write_boot_count(count: u8) {
 /// that mapping ships, the implementation below uses a direct register write
 /// to the IWDG key register (0x4000_3000) to pet the watchdog.
 ///
-/// TODO: replace raw pointer writes with `embassy_stm32::iwdg::IndependentWatchdog`
-///       once the HAL adds stm32h750ib support.
+/// Planned: Replace raw pointer writes with `embassy_stm32::iwdg::IndependentWatchdog`
+/// once the HAL adds stm32h750ib support.
 ///
 /// # Safety
 ///
@@ -1059,8 +1059,8 @@ async fn main(spawner: embassy_executor::Spawner) {
     let mut user_presets: [Option<PresetSlot>; MAX_USER_PRESETS] = [None; MAX_USER_PRESETS];
     // On boot: read QSPI flash into RAM buffer, then attempt to load user presets.
     //
-    // NOTE: QspiPresetStore hardware driver is not yet implemented (see
-    // qspi.rs TODO). When it ships, wire it in here:
+    // Planned: QspiPresetStore integration. See crates/sonido-daisy/src/qspi.rs
+    // for implementation status. When it ships, wire it in here:
     //
     //   if let Ok(mut qspi_store) = QspiPresetStore::new(qspi_peripheral) {
     //       if qspi_store.read_sector(&mut preset_buffer).is_ok() {

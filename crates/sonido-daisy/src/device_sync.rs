@@ -25,8 +25,8 @@
 //!
 //! # Status
 //!
-//! Frame layout and (de)serialization defined.  Embassy UART driver integration
-//! is TODO — see `audio.rs` for the pattern to follow.
+//! Frame layout and (de)serialization defined. UART-based device sync task
+//! planned for hardware integration phase — see `audio.rs` for the pattern to follow.
 
 /// Sync frame sent over UART at 100 Hz.
 ///

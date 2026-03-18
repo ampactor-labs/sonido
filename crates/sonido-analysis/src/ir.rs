@@ -1,6 +1,8 @@
 //! Impulse response capture via exponential sine sweep
 //!
-//! # Status: Scaffolded — sweep-based IR capture is implemented but not in the demo path.
+//! # Status
+//!
+//! Sweep-based IR capture is fully implemented but not in the demo path.
 
 use std::f32::consts::PI;
 
@@ -375,7 +377,7 @@ fn calculate_edc_correlation(edc: &[f32], start_db: f32, end_db: f32) -> f32 {
 }
 
 // ────────────────────────────────────────────────────────────────────────────
-// Environmental-audio / room-capture API  (Status: stubs — TODO: implement)
+// Environmental-audio / room-capture API
 // ────────────────────────────────────────────────────────────────────────────
 
 /// Configuration for an impulse-response measurement sweep.
@@ -425,13 +427,14 @@ impl Default for SweepConfig {
 /// A. Farina, "Simultaneous measurement of impulse response and distortion
 /// with a swept-sine technique," AES 108th Convention, 2000.
 ///
-/// # Status
-///
-/// TODO: implement.  Returns empty `Vec` until wired up.
 pub fn generate_sweep(config: &SweepConfig) -> Vec<f32> {
-    // TODO: replicate SineSweep::generate() logic using config fields
-    let _ = config;
-    Vec::new()
+    SineSweep::new(
+        config.sample_rate,
+        config.start_freq,
+        config.end_freq,
+        config.duration_secs,
+    )
+    .generate()
 }
 
 /// Compute an impulse response from a recorded sweep response.
@@ -450,14 +453,14 @@ pub fn generate_sweep(config: &SweepConfig) -> Vec<f32> {
 ///
 /// Impulse response samples at `config.sample_rate`.  Length equals
 /// `recorded.len() + sweep.len() - 1` (linear convolution length).
-///
-/// # Status
-///
-/// TODO: implement deconvolution.  Returns empty `Vec` until wired up.
-pub fn compute_ir(sweep: &[f32], recorded: &[f32], config: &SweepConfig) -> Vec<f32> {
-    // TODO: build SineSweep from config, call compute_ir, or replicate inline
-    let _ = (sweep, recorded, config);
-    Vec::new()
+pub fn compute_ir(_sweep: &[f32], recorded: &[f32], config: &SweepConfig) -> Vec<f32> {
+    SineSweep::new(
+        config.sample_rate,
+        config.start_freq,
+        config.end_freq,
+        config.duration_secs,
+    )
+    .compute_ir(recorded)
 }
 
 #[cfg(test)]
@@ -618,5 +621,50 @@ mod tests {
 
         // T30 should be approximately RT60/2
         assert!(result.t30_seconds > 0.0, "T30 should be positive");
+    }
+
+    #[test]
+    fn test_generate_sweep_matches_sine_sweep() {
+        let config = SweepConfig {
+            sample_rate: 48000.0,
+            start_freq: 20.0,
+            end_freq: 20000.0,
+            duration_secs: 1.0,
+        };
+        let from_fn = generate_sweep(&config);
+        let from_struct = SineSweep::new(
+            config.sample_rate,
+            config.start_freq,
+            config.end_freq,
+            config.duration_secs,
+        )
+        .generate();
+
+        assert_eq!(from_fn.len(), from_struct.len());
+        for (a, b) in from_fn.iter().zip(from_struct.iter()) {
+            assert!(
+                (a - b).abs() < f32::EPSILON,
+                "generate_sweep output must match SineSweep::generate()"
+            );
+        }
+    }
+
+    #[test]
+    fn test_compute_ir_nonempty() {
+        let config = SweepConfig {
+            sample_rate: 48000.0,
+            start_freq: 20.0,
+            end_freq: 20000.0,
+            duration_secs: 0.1,
+        };
+        let sweep = generate_sweep(&config);
+        // Use the sweep itself as the "recorded" signal — simulates a
+        // pass-through system whose IR is approximately an impulse.
+        let ir = compute_ir(&sweep, &sweep, &config);
+        assert!(!ir.is_empty(), "compute_ir should return non-empty IR");
+        assert!(
+            ir.iter().any(|&x| x.abs() > 1e-6),
+            "IR should contain non-trivial values"
+        );
     }
 }

@@ -273,7 +273,7 @@ impl<'a> PresetStore<'a> {
 }
 
 // ---------------------------------------------------------------------------
-// TODO: QspiPresetStore — hardware-backed variant
+// Planned: QspiPresetStore — awaiting Embassy QSPI driver for safe async flash access.
 // ---------------------------------------------------------------------------
 //
 // When the pedal-agent wires up Embassy QSPI, implement:
