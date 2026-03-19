@@ -991,6 +991,10 @@ async fn main(spawner: embassy_executor::Spawner) {
     // Looper footswitch override: true when FS has set mode, K1 skipped
     let mut looper_fs_override: bool = false;
 
+    // Soft takeover: lock knobs after morph/preset/scroll until the physical
+    // position matches the current parameter value (within 5% of range).
+    let mut pickup_locked: [bool; 6] = [false; 6];
+
     // Footswitch state machine
     let mut fs1_held: u32 = 0;
     let mut fs2_held: u32 = 0;
@@ -1135,11 +1139,13 @@ async fn main(spawner: embassy_executor::Spawner) {
                     }
                     (AbMode::Morph, AbMode::A) => {
                         apply_all_snapshots(&mut graph, &node_ids, &nodes, AbMode::A);
+                        pickup_locked = [true; 6];
                         defmt::info!("→ A mode (from morph)");
                     }
                     (AbMode::Morph, AbMode::B) => {
                         ensure_b_snapshots(&mut nodes);
                         apply_all_snapshots(&mut graph, &node_ids, &nodes, AbMode::B);
+                        pickup_locked = [true; 6];
                         defmt::info!("→ B mode (from morph)");
                     }
                     _ => {} // same mode
@@ -1246,6 +1252,7 @@ async fn main(spawner: embassy_executor::Spawner) {
                     scroll_effect(&mut nodes, focused_node, -1);
                     needs_rebuild = true;
                     looper_fs_override = false;
+                    pickup_locked = [true; 6];
                     defmt::info!(
                         "node {} ← {}",
                         focused_node + 1,
@@ -1263,6 +1270,7 @@ async fn main(spawner: embassy_executor::Spawner) {
                     load_factory_preset(&mut nodes, factory_cursor);
                     needs_rebuild = true;
                     looper_fs_override = false;
+                    pickup_locked = [true; 6];
                     led_blink_remaining = (factory_cursor as u8 + 1) * 2;
                     led_blink_timer = 0;
                     defmt::info!("factory preset {}", factory_cursor + 1);
@@ -1273,6 +1281,7 @@ async fn main(spawner: embassy_executor::Spawner) {
                     scroll_effect(&mut nodes, focused_node, 1);
                     needs_rebuild = true;
                     looper_fs_override = false;
+                    pickup_locked = [true; 6];
                     defmt::info!(
                         "node {} → {}",
                         focused_node + 1,
@@ -1377,6 +1386,19 @@ async fn main(spawner: embassy_executor::Spawner) {
                                             continue;
                                         }
                                     }
+                                    // Soft takeover: skip locked knobs until they
+                                    // "pick up" the current parameter value.
+                                    if pickup_locked[k] {
+                                        let current = effect.effect_get_param(idx);
+                                        let range = desc.max - desc.min;
+                                        let threshold = range * 0.05; // 5% of range
+                                        if (val - current).abs() < threshold {
+                                            pickup_locked[k] = false;
+                                        } else {
+                                            continue;
+                                        }
+                                    }
+
                                     param_vals[k] = (param_idx, val);
                                 }
                             }

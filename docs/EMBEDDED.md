@@ -173,6 +173,8 @@ Reference implementation: `crates/sonido-daisy/examples/single_effect.rs`
 
 All 6 knobs use uniform `blocking_read()` polling in a 50 Hz Embassy task (`hothouse_control_task`). At ~8 µs per channel (CYCLES387_5 sample time), 6 reads cost ~48 µs per 20 ms cycle (0.24% CPU). This matches libDaisy's own `AnalogControl` polling approach — no DMA channel, DMA buffer, or D2 SRAM allocation needed for the control path. GPIO reads (toggles, footswitches) are instant register accesses. Shared state flows through a lock-free `ControlBuffer` using `Relaxed` atomics.
 
+**Audio-side control decimation:** The audio callback checks controls every `CONTROL_POLL_EVERY` (15) blocks, not every block. At 48 kHz / 32-sample blocks = 1 500 blocks/s, this yields ~100 Hz control rate. This constant is coupled to `BLOCK_SIZE` and `SAMPLE_RATE` — changing either requires recalculating. Defined in `effect_slot.rs`.
+
 ```
 ┌─────────────────────┐              ┌──────────────────────┐
 │ hothouse_control_task│  ControlBuffer  │   Audio Callback     │
@@ -194,6 +196,7 @@ All 6 knobs use uniform `blocking_read()` polling in a 50 Hz Embassy task (`hoth
 | `hothouse.rs` | `HothouseControls` (knobs array + GPIO), `hothouse_control_task` (uniform polling), `hothouse_pins!` macro, `decode_toggle` | `controls.rs` + Embassy |
 | `embedded_adapter.rs` | `Adapter<K, DirectPolicy>` — zero-smoothing `Effect + ParameterInfo` for `DspKernel` | `sonido-core` (feature `alloc`) |
 | `param_map.rs` | `adc_to_param()` / `adc_to_param_biased()` — scale-aware ADC→parameter conversion with STEPPED rounding | `sonido-core` (feature `alloc`) |
+| `effect_slot.rs` | `EffectSlot` — click-free bypass ramp, NaN/Inf sanitization, knob mapping bridge; also exports `BypassCrossfade`, `sanitize_stereo`, `CONTROL_POLL_EVERY` | `sonido-core` (SmoothedParam), `sonido-platform` (knob_mapping) |
 | `noon_presets.rs` | Per-effect sweet-spot values for biased knob mapping | `sonido-platform` |
 
 ### Biased Knob Mapping (Noon = Sweet Spot)
@@ -368,6 +371,10 @@ remain appropriate.
 | `measure_cycles(\|\| { })` | — | DWT cycle counter wrapper |
 | `enable_cycle_counter()` | — | Call once at startup before measuring |
 | `ControlBuffer` | — | Re-export from `controls.rs` |
+| `EffectSlot` | — | Re-export from `effect_slot.rs` (feature `alloc`) |
+| `BypassCrossfade` | — | Re-export from `effect_slot.rs` (feature `alloc`) |
+| `sanitize_stereo` | — | Re-export from `effect_slot.rs` (feature `alloc`) |
+| `CONTROL_POLL_EVERY` | — | Re-export from `effect_slot.rs` |
 | `Adapter` (DirectPolicy) | — | Re-export from `embedded_adapter.rs` (feature `alloc`) |
 | `adc_to_param()` | — | Re-export from `param_map.rs` (feature `alloc`) |
 
@@ -619,14 +626,21 @@ dfu-util -a 0 -s 0x90040000:leave -D passthrough.bin
 
 *Requires Hothouse — uses knobs, toggle, footswitch, LED.*
 
-`examples/single_effect.rs` processes audio through a distortion kernel with 4
-ADC knobs mapped to Drive, Tone, Output, and Mix. Toggle 1 selects clipping
-mode (Overdrive / Distortion / Fuzz). Footswitch 1 toggles bypass.
+`examples/single_effect.rs` uses `EffectSlot` — the all-in-one wrapper that
+bundles click-free bypass (`BypassCrossfade`), NaN/Inf sanitization, and
+hardware knob mapping (`apply_knobs()`). Toggle 1 selects clipping mode
+(Overdrive / Distortion / Fuzz). Footswitch 1 toggles bypass.
 
-This is the canonical pattern for **direct kernel usage** on embedded:
-`from_knobs(adc_0..adc_3)` maps ADC readings to a `DistortionParams` struct,
-which is passed directly to `DspKernel::process_stereo()`. No adapter,
-no smoothing.
+```rust
+// EffectSlot pattern (single_effect.rs)
+let mut slot = EffectSlot::new(effect, "distortion", SAMPLE_RATE);
+slot.apply_knobs(&knob_values);           // noon-biased ADC→param
+let (l, r) = slot.process_stereo(in_l, in_r); // effect → NaN guard → bypass ramp
+```
+
+`sonido_pedal.rs` (Tier 5) uses the standalone utilities — `BypassCrossfade`
+and `sanitize_stereo` — alongside its DAG-based `GraphEngine` processing,
+since the graph owns the effects rather than individual `EffectSlot` wrappers.
 
 ```bash
 cd crates/sonido-daisy
@@ -838,8 +852,10 @@ slot selected by T1. Sound output reflects the A snapshot. Effect selection
 via footswitches: FS1 release = previous effect, FS2 release = next effect.
 Selecting a new effect resets both A and B states for that slot. Knobs set
 parameters via `adc_to_param()` with scale-aware mapping (log for frequencies,
-linear for dB). "Knob = truth" — the physical pot position is always the
-param value, no pickup logic.
+linear for dB). Normally "knob = truth" — the physical pot position is the
+param value. After exiting morph mode, loading a factory preset, or scrolling
+effects, **soft takeover** locks all 6 knobs until each physical position comes
+within 5% of the current parameter's range, preventing parameter jumps.
 
 **B mode** (T2=MID) — Knobs write to B-state parameters. On first entry, B is
 initialized as a copy of A. Sound output reflects the B snapshot. Same

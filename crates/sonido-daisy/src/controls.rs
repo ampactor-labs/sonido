@@ -176,7 +176,14 @@ impl<const KNOBS: usize, const TOGGLES: usize, const FOOTSWITCHES: usize, const 
     /// - `index`: Knob index (0-based). Panics if `>= KNOBS`.
     /// - `normalized`: Input value in 0.0–1.0 range.
     pub fn write_knob(&self, index: usize, normalized: f32) {
-        let smoothed = normalized;
+        // Edge snap: avoid dead zones at pot extremes.
+        let smoothed = if normalized < 0.005 {
+            0.0
+        } else if normalized > 0.995 {
+            1.0
+        } else {
+            normalized
+        };
 
         self.knobs[index].store(smoothed.to_bits(), Ordering::Relaxed);
 

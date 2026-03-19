@@ -12,6 +12,10 @@ use sonido_core::EffectWithParams;
 use sonido_platform::knob_mapping::{self, NULL_KNOB};
 
 /// Control poll decimation: every 15th block ≈ 100 Hz at 48 kHz / 32 samples.
+///
+/// Derivation: 48 000 Hz / 32 samples = 1 500 blocks/s. 1 500 / 15 = 100 Hz.
+/// Coupled to `BLOCK_SIZE` (32) and `SAMPLE_RATE` (48 kHz) in the audio task —
+/// changing either requires recalculating this constant.
 pub const CONTROL_POLL_EVERY: u16 = 15;
 
 /// Replace NaN/Infinity with silence.
