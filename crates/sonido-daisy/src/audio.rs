@@ -204,16 +204,30 @@ pub struct Interface<'a, S: InterfaceState> {
 }
 
 impl<'a> Interface<'a, Idle> {
-    /// Starts audio clocks and transitions to the Running state.
+    /// Transitions to the Running state without starting SAI clocks.
     ///
-    /// Must be called before [`Interface::start_callback`]. Call
-    /// `start_callback` immediately afterwards to avoid SAI overruns.
-    pub async fn start_interface(mut self) -> Result<Interface<'a, Running>, sai::Error> {
-        self.codec.start().await?;
+    /// SAI clocks are started lazily inside [`Interface::start_callback`]
+    /// to avoid TX FIFO underrun when large async futures delay the first
+    /// DMA write.
+    pub async fn start_interface(self) -> Result<Interface<'a, Running>, sai::Error> {
         Ok(Interface {
             codec: self.codec,
             _state: PhantomData,
         })
+    }
+}
+
+impl<S: InterfaceState> Interface<'_, S> {
+    /// Clear SAI1 overrun/underrun flags via direct register write.
+    ///
+    /// SAI1 base = 0x40015800. CLRFR offset: Block A = 0x1C, Block B = 0x3C.
+    /// Writing 0x77 clears all flags (COVRUDR, CMUTEDET, CWCKCFG, CNRDY, CAFSDET, CLFSDET).
+    fn clear_sai_errors() {
+        const SAI1_BASE: u32 = 0x4001_5800;
+        unsafe {
+            core::ptr::write_volatile((SAI1_BASE + 0x1C) as *mut u32, 0x77);
+            core::ptr::write_volatile((SAI1_BASE + 0x3C) as *mut u32, 0x77);
+        }
     }
 }
 
@@ -232,10 +246,45 @@ impl Interface<'_, Running> {
         info!("enter audio callback loop");
         let mut write_buf = [0u32; HALF_DMA_BUFFER_LENGTH];
         let mut read_buf = [0u32; HALF_DMA_BUFFER_LENGTH];
+
+        // Start SAI clocks inside the callback future.
+        self.codec.start().await?;
+
+        // The first few DMA transfers may overrun if preceding init
+        // (graph building, effect allocation) left the bus in a hot state.
+        // Absorb initial errors by retrying — once the DMA pipeline is
+        // primed, transfers are rock-solid.
+        let mut startup_retries: u8 = 0;
         loop {
-            self.codec.read(&mut read_buf).await?;
+            match self.codec.read(&mut read_buf).await {
+                Ok(()) => {}
+                Err(e) => {
+                    if startup_retries < 10 {
+                        startup_retries += 1;
+                        defmt::warn!("SAI read retry {}: {}", startup_retries, e);
+                        Self::clear_sai_errors();
+                        let _ = self.codec.start().await;
+                        continue;
+                    }
+                    return Err(e);
+                }
+            }
             callback(&read_buf, &mut write_buf);
-            self.codec.write(&write_buf).await?;
+            match self.codec.write(&write_buf).await {
+                Ok(()) => {
+                    startup_retries = 0; // Successful cycle — stop retrying.
+                }
+                Err(e) => {
+                    if startup_retries < 10 {
+                        startup_retries += 1;
+                        defmt::warn!("SAI write retry {}: {}", startup_retries, e);
+                        Self::clear_sai_errors();
+                        let _ = self.codec.start().await;
+                        continue;
+                    }
+                    return Err(e);
+                }
+            }
         }
     }
 }
@@ -309,7 +358,7 @@ impl<'a> Codec<'a> {
 
     async fn start(&mut self) -> Result<(), sai::Error> {
         info!("start PCM3060 SAI");
-        // PCM3060: TX is master. Must write once to start clocks, then
+        // PCM3060: TX is master. Write silence to start clocks, then
         // the slave RX can synchronize and begin receiving.
         let write_buf = [0u32; HALF_DMA_BUFFER_LENGTH];
         self.sai_tx.write(&write_buf).await?;

@@ -38,6 +38,7 @@ embassy-usb = "0.5"
 # Cortex-M
 cortex-m = { version = "0.7", features = ["critical-section-single-core"] }
 cortex-m-rt = "0.7"
+critical-section = "1"
 
 # Logging
 defmt = "1.0"
@@ -52,8 +53,13 @@ panic-probe = { version = "1.0", features = ["print-defmt"] }
 # ── Example feature requirements ─────────────────────────────────────
 
 [[example]]
+name = "graph_audio_test"
+required-features = ["alloc"]
+
+[[example]]
 name = "sonido_pedal"
 required-features = ["alloc", "platform"]
+
 
 [[example]]
 name = "single_reverb"
