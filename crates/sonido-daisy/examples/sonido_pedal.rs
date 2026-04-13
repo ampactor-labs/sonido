@@ -337,6 +337,8 @@ fn rebuild_graph_in_place(
     topology: Topology,
     sr: f32,
 ) -> Result<[Option<NodeId>; NUM_SLOTS], sonido_core::graph::GraphError> {
+    graph.set_spillover(false);
+    graph.set_spillover(true);
     graph.clear_topology();
 
     let inp = graph.input_id().unwrap();
