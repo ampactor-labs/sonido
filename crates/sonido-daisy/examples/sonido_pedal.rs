@@ -65,6 +65,8 @@ static CONTROLS: HothouseBuffer = HothouseBuffer::new();
 // ── Global bypass ───────────────────────────────────────────────────────────
 
 static BYPASSED: AtomicBool = AtomicBool::new(false);
+static GRAPH_UPDATING: AtomicBool = AtomicBool::new(false);
+static NEEDS_REBUILD: AtomicBool = AtomicBool::new(false);
 
 // ── Constants ───────────────────────────────────────────────────────────────
 
@@ -715,6 +717,14 @@ async fn main(spawner: embassy_executor::Spawner) {
     defmt::unwrap!(
         interface
             .start_callback(|input, output| {
+                if GRAPH_UPDATING.load(Ordering::Acquire) {
+                    for i in 0..BLOCK_SIZE {
+                        output[i * 2] = input[i * 2];
+                        output[i * 2 + 1] = input[i * 2 + 1];
+                    }
+                    return;
+                }
+                
                 let cb = unsafe { CB_STORAGE.as_mut().unwrap() };
 
                     // ── Hard bypass ──
@@ -930,23 +940,7 @@ async fn main(spawner: embassy_executor::Spawner) {
 
                     // ── Graph rebuild ──
                     if cb.needs_rebuild {
-                        let nodes = unsafe { NODES_STORAGE.as_mut().unwrap() };
-                        let graph = unsafe { GRAPH_STORAGE.as_mut().unwrap() };
-                        if let Ok(new_nids) = rebuild_graph_in_place(graph, nodes, cb.topology, SAMPLE_RATE) {
-                            unsafe { NODE_IDS_STORAGE = new_nids; }
-                            for slot in 0..NUM_SLOTS {
-                                if nodes[slot].effect_index.is_some() && nodes[slot].params_a.count == 0 {
-                                    if let Some(nid) = new_nids[slot] {
-                                        nodes[slot].params_a.capture_from(graph, nid);
-                                    }
-                                }
-                            }
-                            match cb.ab_mode {
-                                AbMode::A => apply_all_snapshots(graph, &new_nids, nodes, AbMode::A),
-                                AbMode::B => apply_all_snapshots(graph, &new_nids, nodes, AbMode::B),
-                                AbMode::Morph => interpolate_and_apply(graph, &new_nids, nodes, cb.morph_t),
-                            }
-                        }
+                        NEEDS_REBUILD.store(true, Ordering::Release);
                         cb.needs_rebuild = false;
                     }
 
@@ -984,4 +978,38 @@ async fn main(spawner: embassy_executor::Spawner) {
             })
             .await
     );
+
+    // Initial rebuild off-load
+    NEEDS_REBUILD.store(true, Ordering::Release);
+
+    loop {
+        embassy_time::Timer::after_millis(20).await;
+        if NEEDS_REBUILD.load(Ordering::Acquire) {
+            GRAPH_UPDATING.store(true, Ordering::Release);
+            // Wait to ensure audio thread enters the bypass state
+            embassy_time::Timer::after_millis(5).await;
+
+            let nodes = unsafe { NODES_STORAGE.as_mut().unwrap() };
+            let graph = unsafe { GRAPH_STORAGE.as_mut().unwrap() };
+            let cb = unsafe { CB_STORAGE.as_mut().unwrap() };
+            
+            if let Ok(new_nids) = rebuild_graph_in_place(graph, nodes, cb.topology, SAMPLE_RATE) {
+                unsafe { NODE_IDS_STORAGE = new_nids; }
+                for slot in 0..NUM_SLOTS {
+                    if nodes[slot].effect_index.is_some() && nodes[slot].params_a.count == 0 {
+                        if let Some(nid) = new_nids[slot] {
+                            nodes[slot].params_a.capture_from(graph, nid);
+                        }
+                    }
+                }
+                match cb.ab_mode {
+                    AbMode::A => apply_all_snapshots(graph, &new_nids, nodes, AbMode::A),
+                    AbMode::B => apply_all_snapshots(graph, &new_nids, nodes, AbMode::B),
+                    AbMode::Morph => interpolate_and_apply(graph, &new_nids, nodes, cb.morph_t),
+                }
+            }
+            NEEDS_REBUILD.store(false, Ordering::Release);
+            GRAPH_UPDATING.store(false, Ordering::Release);
+        }
+    }
 }

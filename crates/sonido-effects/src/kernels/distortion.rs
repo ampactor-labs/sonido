@@ -361,9 +361,12 @@ impl DspKernel for DistortionKernel {
             ),
         };
 
-        // ── Tone EQ ──
-        let toned_l = self.tone_filter.process(shaped_l);
-        let toned_r = self.tone_filter_r.process(shaped_r);
+        // ── Tone EQ & Makeup Gain ──
+        // High drive creates a square wave (0 dBFS RMS). We apply a 1/sqrt(drive)
+        // makeup gain to keep the perceived loudness roughly constant as clipping increases.
+        let makeup = 1.0 / libm::sqrtf(effective_drive.max(1.0));
+        let toned_l = self.tone_filter.process(shaped_l) * makeup;
+        let toned_r = self.tone_filter_r.process(shaped_r) * makeup;
 
         // ── Mix → Soft Limit → Output Level ──
         let (mixed_l, mixed_r) = wet_dry_mix_stereo(left, right, toned_l, toned_r, mix);

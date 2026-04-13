@@ -321,7 +321,7 @@ impl KernelParams for DelayParams {
 
     fn smoothing(index: usize) -> SmoothingStyle {
         match index {
-            0 => SmoothingStyle::Interpolated, // time_ms — 50 ms prevents pitch-shift clicks
+            0 => SmoothingStyle::Slow,         // time_ms — 20 ms, prevents zipper/pitch clicks
             1 => SmoothingStyle::Standard,     // feedback_pct — 10 ms
             2 => SmoothingStyle::Standard,     // mix_pct — 10 ms
             3 => SmoothingStyle::None,         // ping_pong — stepped toggle, snap
