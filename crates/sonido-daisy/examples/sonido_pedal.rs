@@ -714,6 +714,10 @@ async fn main(spawner: embassy_executor::Spawner) {
     // Zero-capture closure — ALL state accessed via statics.
     // SAFETY: CB_STORAGE is only accessed here (single-threaded audio callback).
     // No critical_section — interrupts must stay enabled for DMA completion.
+    
+    // Initial rebuild off-load
+    NEEDS_REBUILD.store(true, Ordering::Release);
+    spawner.spawn(graph_rebuild_task()).unwrap();
     defmt::unwrap!(
         interface
             .start_callback(|input, output| {
@@ -996,10 +1000,10 @@ async fn main(spawner: embassy_executor::Spawner) {
             })
             .await
     );
+}
 
-    // Initial rebuild off-load
-    NEEDS_REBUILD.store(true, Ordering::Release);
-
+#[embassy_executor::task]
+async fn graph_rebuild_task() {
     loop {
         embassy_time::Timer::after_millis(20).await;
         if NEEDS_REBUILD.load(Ordering::Acquire) {
