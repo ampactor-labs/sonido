@@ -45,9 +45,8 @@ use sonido_daisy::{
     BLOCK_SIZE, ClockProfile, SAMPLE_RATE, f32_to_u24, heartbeat, led::UserLed, u24_to_f32,
 };
 use sonido_effects::{
-    BitcrusherKernel, ChorusKernel, CompressorKernel, DelayKernel, DistortionKernel, FilterKernel,
-    FlangerKernel, LooperKernel, PhaserKernel, ReverbKernel, RingModKernel, TapeKernel,
-    TremoloKernel, VibratoKernel, WahKernel,
+    BitcrusherKernel, ChorusKernel, DelayKernel, DistortionKernel, FilterKernel,
+    PhaserKernel, ReverbKernel, RingModKernel,
 };
 use sonido_platform::knob_mapping::{self, NULL_KNOB};
 use sonido_registry::PEDAL_EFFECT_IDS;
@@ -74,7 +73,7 @@ const NUM_SLOTS: usize = 3;
 const TAP_LIMIT: u16 = 30;
 
 const EFFECT_IDS: &[&str] = PEDAL_EFFECT_IDS;
-const NUM_EFFECTS: usize = EFFECT_IDS.len();
+const NUM_EFFECTS: usize = EFFECT_IDS.len() + 1; // +1 for null/bypass at index 0
 
 // ── Shared mutable state (ALL callback state lives here, not in the closure) ─
 
@@ -245,23 +244,19 @@ fn toggle_to_topology(val: u8) -> Topology {
 
 // ── Effect factory ──────────────────────────────────────────────────────────
 
+/// Create an effect by its scroll index.
+/// Index 0 = null/bypass (returns None), 1–8 = EFFECT_IDS[0..8].
 fn create_effect(idx: usize, sr: f32) -> Option<Box<dyn EffectWithParams + Send>> {
     match idx {
-        0 => Some(Box::new(Adapter::new_direct(FilterKernel::new(sr), sr))),
-        1 => Some(Box::new(Adapter::new_direct(TremoloKernel::new(sr), sr))),
-        2 => Some(Box::new(Adapter::new_direct(VibratoKernel::new(sr), sr))),
-        3 => Some(Box::new(Adapter::new_direct(ChorusKernel::new(sr), sr))),
-        4 => Some(Box::new(Adapter::new_direct(PhaserKernel::new(sr), sr))),
-        5 => Some(Box::new(Adapter::new_direct(FlangerKernel::new(sr), sr))),
-        6 => Some(Box::new(Adapter::new_direct(DelayKernel::new(sr), sr))),
-        7 => Some(Box::new(Adapter::new_direct(ReverbKernel::new(sr), sr))),
-        8 => Some(Box::new(Adapter::new_direct(TapeKernel::new(sr), sr))),
-        9 => Some(Box::new(Adapter::new_direct(CompressorKernel::new(sr), sr))),
-        10 => Some(Box::new(Adapter::new_direct(WahKernel::new(sr), sr))),
-        11 => Some(Box::new(Adapter::new_direct(DistortionKernel::new(sr), sr))),
-        12 => Some(Box::new(Adapter::new_direct(BitcrusherKernel::new(sr), sr))),
-        13 => Some(Box::new(Adapter::new_direct(RingModKernel::new(sr), sr))),
-        14 => Some(Box::new(Adapter::new_direct(LooperKernel::new(sr), sr))),
+        0 => None, // null / bypass
+        1 => Some(Box::new(Adapter::new_direct(ChorusKernel::new(sr), sr))),
+        2 => Some(Box::new(Adapter::new_direct(PhaserKernel::new(sr), sr))),
+        3 => Some(Box::new(Adapter::new_direct(DistortionKernel::new(sr), sr))),
+        4 => Some(Box::new(Adapter::new_direct(BitcrusherKernel::new(sr), sr))),
+        5 => Some(Box::new(Adapter::new_direct(DelayKernel::new(sr), sr))),
+        6 => Some(Box::new(Adapter::new_direct(ReverbKernel::new(sr), sr))),
+        7 => Some(Box::new(Adapter::new_direct(RingModKernel::new(sr), sr))),
+        8 => Some(Box::new(Adapter::new_direct(FilterKernel::new(sr), sr))),
         _ => None,
     }
 }
@@ -511,7 +506,7 @@ const FACTORY_PRESETS: [FactoryPreset; 3] = [
     FactoryPreset {
         slots: [
             FactorySlot {
-                effect_idx: Some(7), // reverb
+                effect_idx: Some(6), // reverb
                 params_a: [
                     30.0, 40.0, 60.0, 5.0, 40.0, 80.0, 50.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
                     0.0, 0.0,
@@ -532,7 +527,7 @@ const FACTORY_PRESETS: [FactoryPreset; 3] = [
     FactoryPreset {
         slots: [
             FactorySlot {
-                effect_idx: Some(6), // delay
+                effect_idx: Some(5), // delay
                 params_a: [
                     80.0, 15.0, 25.0, 0.0, 20000.0, 20.0, 0.0, 0.0, 2.0, 0.0, 0.0, 0.0, 0.0, 0.0,
                     0.0, 0.0,
@@ -556,7 +551,7 @@ const FACTORY_PRESETS: [FactoryPreset; 3] = [
     FactoryPreset {
         slots: [
             FactorySlot {
-                effect_idx: Some(11), // distortion
+                effect_idx: Some(3), // distortion
                 params_a: [
                     0.0, 0.0, 0.0, 0.0, 100.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
                     0.0,
@@ -572,7 +567,7 @@ const FACTORY_PRESETS: [FactoryPreset; 3] = [
                 count: 6,
             },
             FactorySlot {
-                effect_idx: Some(7), // reverb
+                effect_idx: Some(6), // reverb
                 params_a: [
                     20.0, 30.0, 50.0, 5.0, 20.0, 60.0, 40.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
                     0.0, 0.0,
@@ -617,8 +612,8 @@ fn load_factory_preset(nodes: &mut [NodeState; NUM_SLOTS], cursor: usize) {
 // ── Static initialization (non-async to avoid inflating the future) ─────────
 
 fn init_statics(focused: usize, ab: AbMode, topo: Topology) {
-    let mut nodes: [NodeState; NUM_SLOTS] = core::array::from_fn(|_| NodeState::new());
-    load_factory_preset(&mut nodes, 0);
+    let nodes: [NodeState; NUM_SLOTS] = core::array::from_fn(|_| NodeState::new());
+    // Boot into null/bypass — factory presets available via FS1 long-press.
     let (mut graph, node_ids) = build_graph(&nodes, topo, SAMPLE_RATE, BLOCK_SIZE).unwrap();
     apply_all_snapshots(&mut graph, &node_ids, &nodes, AbMode::A);
 
@@ -888,9 +883,10 @@ async fn main(spawner: embassy_executor::Spawner) {
                         let nids = unsafe { NODE_IDS_STORAGE };
 
                         if let Some(eff_idx) = nodes[cb.focused_node].effect_index
+                            && eff_idx > 0
                             && let Some(nid) = nids[cb.focused_node]
                         {
-                            let effect_id = EFFECT_IDS[eff_idx];
+                            let effect_id = EFFECT_IDS[eff_idx - 1];
                             let knobs = knob_mapping::knob_map(effect_id).unwrap_or([NULL_KNOB; 6]);
                             let platform = sonido_daisy::hothouse::HothousePlatform::new(&CONTROLS);
                             use sonido_platform::PlatformController;

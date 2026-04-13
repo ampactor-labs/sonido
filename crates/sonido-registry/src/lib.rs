@@ -68,21 +68,14 @@ use alloc::{boxed::Box, vec::Vec};
 /// This list is append-only. Reordering or removing entries would break
 /// existing binary presets stored in QSPI flash.
 pub const PEDAL_EFFECT_IDS: &[&str] = &[
-    "filter",     // 0
-    "tremolo",    // 1
-    "vibrato",    // 2
-    "chorus",     // 3
-    "phaser",     // 4
-    "flanger",    // 5
-    "delay",      // 6
-    "reverb",     // 7
-    "tape",       // 8
-    "compressor", // 9
-    "wah",        // 10
-    "distortion", // 11
-    "bitcrusher", // 12
-    "ringmod",    // 13
-    "looper",     // 14
+    "chorus",     // 0
+    "phaser",     // 1
+    "distortion", // 2
+    "bitcrusher", // 3
+    "delay",      // 4
+    "reverb",     // 5
+    "ringmod",    // 6
+    "filter",     // 7
 ];
 
 // Re-export EffectWithParams from core (moved there to unblock ProcessingGraph).

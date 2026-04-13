@@ -70,21 +70,14 @@ mod tests {
     #[test]
     fn all_pedal_effects_have_knob_map() {
         let ids = [
-            "filter",
-            "tremolo",
-            "vibrato",
             "chorus",
             "phaser",
-            "flanger",
-            "delay",
-            "reverb",
-            "tape",
-            "compressor",
-            "wah",
             "distortion",
             "bitcrusher",
+            "delay",
+            "reverb",
             "ringmod",
-            "looper",
+            "filter",
         ];
         for id in &ids {
             assert!(knob_map(id).is_some(), "missing knob_map for {id}");
