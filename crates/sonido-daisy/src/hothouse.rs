@@ -57,8 +57,12 @@ use crate::controls::HothouseBuffer;
 /// the S&H capacitor doesn't fully settle.
 pub const KNOB_SAMPLE_TIME: SampleTime = SampleTime::CYCLES387_5;
 
-/// Control task poll interval in milliseconds (50 Hz).
-pub const POLL_INTERVAL_MS: u64 = 20;
+/// Control task poll interval in milliseconds (100 Hz).
+///
+/// Matches [`effect_slot::CONTROL_POLL_EVERY`](crate::effect_slot::CONTROL_POLL_EVERY)
+/// (every 15 audio blocks = 100 Hz) so the audio callback observes each shared-buffer
+/// update exactly once per tick.
+pub const POLL_INTERVAL_MS: u64 = 10;
 
 // ── Toggle decode ─────────────────────────────────────────────────────────
 

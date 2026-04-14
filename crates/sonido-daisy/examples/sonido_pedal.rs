@@ -73,11 +73,11 @@ const MAX_PARAMS: usize = 16;
 const NUM_SLOTS: usize = 3;
 
 /// Footswitch-hold threshold separating tap from long-press, in poll ticks
-/// (50 Hz effective poll rate → 30 ticks ≈ 600 ms).
+/// (100 Hz effective poll rate → 30 ticks = 300 ms).
 const TAP_LIMIT: u32 = 30;
 
 /// Dual-footswitch hold duration that triggers DFU bootloader entry, in poll ticks
-/// (50 Hz × 3 s = 150 ticks).
+/// (100 Hz × 1.5 s = 150 ticks).
 const BOOTLOADER_HOLD_TICKS: u16 = 150;
 
 /// Pickup threshold for soft-takeover: knob is unlocked once within 5% of range.
@@ -738,16 +738,8 @@ async fn main(spawner: embassy_executor::Spawner) {
                         if cb.poll_counter.is_multiple_of(effect_slot::CONTROL_POLL_EVERY) {
                             let fs1 = CONTROLS.read_footswitch(0);
                             let fs2 = CONTROLS.read_footswitch(1);
-                            if fs1 && fs2 {
-                                cb.both_held += 1;
-                                if cb.both_held > cb.both_held_peak { cb.both_held_peak = cb.both_held; }
-                            } else { cb.both_held = 0; }
-                            if cb.both_held_peak > 0 && !fs1 && !fs2 {
-                                BYPASSED.store(false, Ordering::Relaxed);
-                                CONTROLS.write_led(0, 1.0);
-                                cb.both_held_peak = 0;
-                            }
-                            if !fs1 && !fs2 { cb.both_held_peak = 0; }
+                            accumulate_both_held(cb, fs1, fs2);
+                            handle_both_release_toggle(cb, fs1, fs2);
                         }
                         return;
                     }
@@ -836,13 +828,7 @@ async fn main(spawner: embassy_executor::Spawner) {
                     let fs1_pressed = CONTROLS.read_footswitch(0);
                     let fs2_pressed = CONTROLS.read_footswitch(1);
                     let both_pressed = fs1_pressed && fs2_pressed;
-                    if both_pressed {
-                        cb.both_held += 1;
-                        if cb.both_held > cb.both_held_peak { cb.both_held_peak = cb.both_held; }
-                        if cb.both_held >= BOOTLOADER_HOLD_TICKS {
-                            enter_daisy_bootloader();
-                        }
-                    } else { cb.both_held = 0; }
+                    accumulate_both_held(cb, fs1_pressed, fs2_pressed);
                     if fs1_pressed { cb.fs1_held += 1; }
                     if fs2_pressed { cb.fs2_held += 1; }
 
@@ -856,13 +842,7 @@ async fn main(spawner: embassy_executor::Spawner) {
                     }
 
                     let was_both = cb.both_held_peak > 0;
-                    if was_both && !fs1_pressed && !fs2_pressed {
-                        let was_bypassed = BYPASSED.load(Ordering::Relaxed);
-                        BYPASSED.store(!was_bypassed, Ordering::Relaxed);
-                        CONTROLS.write_led(0, if was_bypassed { 1.0 } else { 0.0 });
-                        if !was_bypassed { CONTROLS.write_led(1, 0.0); }
-                    }
-                    if !fs1_pressed && !fs2_pressed { cb.both_held_peak = 0; }
+                    handle_both_release_toggle(cb, fs1_pressed, fs2_pressed);
 
                     if (cb.ab_mode == AbMode::A || cb.ab_mode == AbMode::B) && !was_both {
                         if cb.fs1_was_pressed && !fs1_pressed && cb.fs1_held < TAP_LIMIT {
@@ -939,14 +919,16 @@ async fn main(spawner: embassy_executor::Spawner) {
                     } else {
                         const SPEED_DESC: ParamDescriptor =
                             ParamDescriptor::custom("Morph Speed", "Morph Speed", 0.1, 5.0, 2.0);
+                        const MASTER_DESC: ParamDescriptor =
+                            ParamDescriptor::gain_db("Master", "Master", -60.0, 12.0, 0.0);
+
                         let new_speed = adc_to_param(&SPEED_DESC, CONTROLS.read_knob(4));
                         if new_speed != cb.morph_speed {
                             cb.morph_speed = new_speed;
                             cb.morph_delta = 1.0 / (new_speed * 100.0);
                         }
 
-                        let master_desc = ParamDescriptor::gain_db("Master", "Master", -60.0, 12.0, 0.0);
-                        let master_gain_db = adc_to_param(&master_desc, CONTROLS.read_knob(5));
+                        let master_gain_db = adc_to_param(&MASTER_DESC, CONTROLS.read_knob(5));
                         cb.master_gain = sonido_core::fast_db_to_linear(master_gain_db);
                     }
 
@@ -984,6 +966,39 @@ async fn main(spawner: embassy_executor::Spawner) {
             })
             .await
     );
+}
+
+/// Accumulate the both-footswitches-held counter and trigger the DFU bootloader
+/// once `BOOTLOADER_HOLD_TICKS` is reached. Resets to 0 when either switch is released.
+fn accumulate_both_held(cb: &mut CallbackState, fs1: bool, fs2: bool) {
+    if fs1 && fs2 {
+        cb.both_held = cb.both_held.saturating_add(1);
+        if cb.both_held > cb.both_held_peak {
+            cb.both_held_peak = cb.both_held;
+        }
+        if cb.both_held >= BOOTLOADER_HOLD_TICKS {
+            enter_daisy_bootloader();
+        }
+    } else {
+        cb.both_held = 0;
+    }
+}
+
+/// On release after a both-held gesture, toggle the global `BYPASSED` flag and
+/// update LED 0. LED 1 is cleared when bypass activates. Clears `both_held_peak`
+/// whenever both switches are released so a fresh gesture can start.
+fn handle_both_release_toggle(cb: &mut CallbackState, fs1: bool, fs2: bool) {
+    if cb.both_held_peak > 0 && !fs1 && !fs2 {
+        let was_bypassed = BYPASSED.load(Ordering::Relaxed);
+        BYPASSED.store(!was_bypassed, Ordering::Relaxed);
+        CONTROLS.write_led(0, if was_bypassed { 1.0 } else { 0.0 });
+        if !was_bypassed {
+            CONTROLS.write_led(1, 0.0);
+        }
+    }
+    if !fs1 && !fs2 {
+        cb.both_held_peak = 0;
+    }
 }
 
 /// Write the DFU-timeout magic into STM32H7 Backup SRAM and reset, which causes the

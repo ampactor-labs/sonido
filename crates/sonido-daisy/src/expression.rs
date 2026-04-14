@@ -80,14 +80,7 @@ impl ExpressionInput {
         let mapped = if range <= 0.0 {
             0.0
         } else {
-            let v = (after_deadzone - self.min_raw) / range;
-            if v < 0.0 {
-                0.0
-            } else if v > 1.0 {
-                1.0
-            } else {
-                v
-            }
+            ((after_deadzone - self.min_raw) / range).clamp(0.0, 1.0)
         };
 
         // 3. Slew limiting: cap rate of change per update call
@@ -131,6 +124,12 @@ impl ExpressionInput {
     pub fn set_range(&mut self, min: f32, max: f32) {
         self.min_raw = min;
         self.max_raw = max;
+    }
+}
+
+impl Default for ExpressionInput {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

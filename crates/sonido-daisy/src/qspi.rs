@@ -218,16 +218,16 @@ impl<'a> PresetStore<'a> {
     /// Returns `None` for empty slots (`valid == 0xFF`).
     pub fn load_all(&self) -> [Option<PresetSlot>; MAX_USER_PRESETS] {
         let mut result = [None; MAX_USER_PRESETS];
-        for i in 0..MAX_USER_PRESETS {
+        for (i, cell) in result.iter_mut().enumerate() {
             let start = SLOT_OFFSET + i * SLOT_SIZE;
             let end = start + SLOT_SIZE;
             if end > self.buffer.len() {
                 break;
             }
-            if let Some(slot) = PresetSlot::from_bytes(&self.buffer[start..end]) {
-                if slot.valid == 0x01 {
-                    result[i] = Some(slot);
-                }
+            if let Some(slot) = PresetSlot::from_bytes(&self.buffer[start..end])
+                && slot.valid == 0x01
+            {
+                *cell = Some(slot);
             }
         }
         result

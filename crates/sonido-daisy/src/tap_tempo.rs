@@ -134,6 +134,12 @@ impl TapTempo {
     }
 }
 
+impl Default for TapTempo {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

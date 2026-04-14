@@ -40,10 +40,6 @@ pub mod rcc;
 pub mod sdram;
 pub mod tap_tempo;
 
-/// Scale-aware ADC→parameter conversion — re-exported from `sonido-platform`.
-#[cfg(feature = "platform")]
-pub mod param_map;
-
 /// Per-effect "noon preset" sweet-spot values — re-exported from `sonido-platform`.
 #[cfg(feature = "platform")]
 pub mod noon_presets;
@@ -53,8 +49,6 @@ pub mod noon_presets;
 pub mod effect_slot;
 
 pub use controls::ControlBuffer;
-#[cfg(feature = "platform")]
-pub use param_map::{adc_to_param, adc_to_param_biased};
 pub use rcc::{ClockProfile, cycles_per_block, rcc_config};
 #[cfg(feature = "alloc")]
 pub use sonido_core::kernel::{Adapter, DirectPolicy};

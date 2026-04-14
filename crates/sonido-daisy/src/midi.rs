@@ -182,6 +182,12 @@ impl MidiHandler {
     }
 }
 
+impl Default for MidiHandler {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

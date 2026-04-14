@@ -102,26 +102,23 @@ pub type HothouseBuffer = ControlBuffer<6, 3, 2, 2>;
 
 /// Creates a const array of `AtomicU32::new(0)`.
 macro_rules! atomic_u32_array {
-    ($n:expr) => {{
-        const ZERO: AtomicU32 = AtomicU32::new(0);
-        [ZERO; $n]
-    }};
+    ($n:expr) => {
+        [const { AtomicU32::new(0) }; $n]
+    };
 }
 
 /// Creates a const array of `AtomicU8::new(0)`.
 macro_rules! atomic_u8_array {
-    ($n:expr) => {{
-        const ZERO: AtomicU8 = AtomicU8::new(0);
-        [ZERO; $n]
-    }};
+    ($n:expr) => {
+        [const { AtomicU8::new(0) }; $n]
+    };
 }
 
 /// Creates a const array of `AtomicBool::new(false)`.
 macro_rules! atomic_bool_array {
-    ($n:expr) => {{
-        const FALSE: AtomicBool = AtomicBool::new(false);
-        [FALSE; $n]
-    }};
+    ($n:expr) => {
+        [const { AtomicBool::new(false) }; $n]
+    };
 }
 
 impl<const KNOBS: usize, const TOGGLES: usize, const FOOTSWITCHES: usize, const LEDS: usize>
@@ -148,7 +145,7 @@ impl<const KNOBS: usize, const TOGGLES: usize, const FOOTSWITCHES: usize, const 
         }
     }
 
-    // ── Writer methods (control task, ~50 Hz) ─────────────────────────────
+    // ── Writer methods (control task, ~100 Hz) ────────────────────────────
 
     /// Writes a raw 16-bit ADC reading.
     ///
@@ -329,6 +326,14 @@ impl<const KNOBS: usize, const TOGGLES: usize, const FOOTSWITCHES: usize, const 
     /// LED brightness: 0.0 = off, 1.0 = on.
     pub fn read_led(&self, index: usize) -> f32 {
         f32::from_bits(self.leds[index].load(Ordering::Relaxed))
+    }
+}
+
+impl<const KNOBS: usize, const TOGGLES: usize, const FOOTSWITCHES: usize, const LEDS: usize> Default
+    for ControlBuffer<KNOBS, TOGGLES, FOOTSWITCHES, LEDS>
+{
+    fn default() -> Self {
+        Self::new()
     }
 }
 
