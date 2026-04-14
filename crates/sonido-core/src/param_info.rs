@@ -573,7 +573,7 @@ impl ParamDescriptor {
     /// Standard mix parameter (0–100%, default 50%).
     ///
     /// Used by most effects with a wet/dry blend control.
-    pub fn mix() -> Self {
+    pub const fn mix() -> Self {
         Self {
             name: "Mix",
             short_name: "Mix",
@@ -595,7 +595,7 @@ impl ParamDescriptor {
     /// Standard depth parameter (0–100%, default 50%).
     ///
     /// Used by modulation effects (chorus, flanger, phaser, vibrato).
-    pub fn depth() -> Self {
+    pub const fn depth() -> Self {
         Self {
             name: "Depth",
             short_name: "Depth",
@@ -618,7 +618,7 @@ impl ParamDescriptor {
     ///
     /// Used by delay-based effects (delay, flanger, chorus).
     /// Range 0–95%, capped at 95% to prevent runaway oscillation.
-    pub fn feedback() -> Self {
+    pub const fn feedback() -> Self {
         Self {
             name: "Feedback",
             short_name: "Fdbk",
@@ -646,7 +646,7 @@ impl ParamDescriptor {
     /// * `min` - Minimum time in ms
     /// * `max` - Maximum time in ms
     /// * `default` - Default time in ms
-    pub fn time_ms(
+    pub const fn time_ms(
         name: &'static str,
         short_name: &'static str,
         min: f32,
@@ -680,7 +680,7 @@ impl ParamDescriptor {
     /// * `min` - Minimum gain in dB
     /// * `max` - Maximum gain in dB
     /// * `default` - Default gain in dB
-    pub fn gain_db(
+    pub const fn gain_db(
         name: &'static str,
         short_name: &'static str,
         min: f32,
@@ -714,7 +714,7 @@ impl ParamDescriptor {
     /// * `min` - Minimum rate in Hz
     /// * `max` - Maximum rate in Hz
     /// * `default` - Default rate in Hz
-    pub fn rate_hz(min: f32, max: f32, default: f32) -> Self {
+    pub const fn rate_hz(min: f32, max: f32, default: f32) -> Self {
         Self {
             name: "Rate",
             short_name: "Rate",

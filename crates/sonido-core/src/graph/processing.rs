@@ -1575,16 +1575,15 @@ impl ProcessingGraph {
 
         let schedule = self
             .compiled
-            .as_ref()
-            .expect("process_block called before compile()")
-            .clone();
+            .as_deref()
+            .expect("process_block called before compile()");
 
         let is_crossfading = !self.swap_fade.is_settled();
 
         // Execute the current schedule (always — even during crossfade, only the new one runs).
         Self::run_schedule(
             &mut self.nodes,
-            &schedule,
+            schedule,
             &mut self.audio_pool,
             &mut self.audio_delay_lines,
             &mut self.feedback_delay_lines,
