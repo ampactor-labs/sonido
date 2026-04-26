@@ -42,6 +42,7 @@ extern crate alloc;
 
 use alloc::vec::Vec;
 use sonido_core::kernel::{DspKernel, KernelParams, SmoothingStyle};
+use sonido_core::kernel_params;
 use sonido_core::{ParamDescriptor, ParamId, ParamUnit, fast_db_to_linear, wet_dry_mix};
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -101,76 +102,48 @@ impl Default for TextureParams {
     }
 }
 
-impl KernelParams for TextureParams {
-    const COUNT: usize = 6;
+kernel_params! {
+    TextureParams, this {
+        [0] ParamDescriptor::custom("Density", "Density", 1.0, 20.0, 8.0)
+                .with_unit(ParamUnit::None)
+                .with_id(ParamId(3400), "tex_density"),
+            smoothing: SmoothingStyle::Slow,     // density — 20 ms
+            get: this.density,
+            set: |v| this.density = v;
 
-    fn descriptor(index: usize) -> Option<ParamDescriptor> {
-        match index {
-            0 => Some(
-                ParamDescriptor::custom("Density", "Density", 1.0, 20.0, 8.0)
-                    .with_unit(ParamUnit::None)
-                    .with_id(ParamId(3400), "tex_density"),
-            ),
-            1 => Some(
-                ParamDescriptor::time_ms("Size", "Size", 50.0, 500.0, 200.0)
-                    .with_id(ParamId(3401), "tex_size"),
-            ),
-            2 => Some(
-                ParamDescriptor {
-                    name: "Scatter",
-                    short_name: "Scatter",
-                    ..ParamDescriptor::mix()
-                }
-                .with_id(ParamId(3402), "tex_scatter"),
-            ),
-            3 => Some(
-                ParamDescriptor::custom("Pitch Var", "Pitch", 0.0, 24.0, 2.0)
-                    .with_unit(ParamUnit::None)
-                    .with_id(ParamId(3403), "tex_pitch_var"),
-            ),
-            4 => Some(ParamDescriptor::mix().with_id(ParamId(3404), "tex_mix")),
-            5 => Some(
-                ParamDescriptor::gain_db("Output", "Out", -60.0, 6.0, 0.0)
-                    .with_id(ParamId(3405), "tex_output"),
-            ),
-            _ => None,
-        }
-    }
+        [1] ParamDescriptor::time_ms("Size", "Size", 50.0, 500.0, 200.0)
+                .with_id(ParamId(3401), "tex_size"),
+            smoothing: SmoothingStyle::Slow,     // size_ms — 20 ms
+            get: this.size_ms,
+            set: |v| this.size_ms = v;
 
-    fn smoothing(index: usize) -> SmoothingStyle {
-        match index {
-            0 => SmoothingStyle::Slow,     // density — 20 ms
-            1 => SmoothingStyle::Slow,     // size_ms — 20 ms
-            2 => SmoothingStyle::Standard, // scatter — 10 ms
-            3 => SmoothingStyle::Slow,     // pitch_var — 20 ms
-            4 => SmoothingStyle::Standard, // mix_pct — 10 ms
-            5 => SmoothingStyle::Fast,     // output_db — 5 ms
-            _ => SmoothingStyle::Standard,
-        }
-    }
+        [2] ParamDescriptor {
+                name: "Scatter",
+                short_name: "Scatter",
+                ..ParamDescriptor::mix()
+            }
+            .with_id(ParamId(3402), "tex_scatter"),
+            smoothing: SmoothingStyle::Standard, // scatter — 10 ms
+            get: this.scatter,
+            set: |v| this.scatter = v;
 
-    fn get(&self, index: usize) -> f32 {
-        match index {
-            0 => self.density,
-            1 => self.size_ms,
-            2 => self.scatter,
-            3 => self.pitch_var,
-            4 => self.mix_pct,
-            5 => self.output_db,
-            _ => 0.0,
-        }
-    }
+        [3] ParamDescriptor::custom("Pitch Var", "Pitch", 0.0, 24.0, 2.0)
+                .with_unit(ParamUnit::None)
+                .with_id(ParamId(3403), "tex_pitch_var"),
+            smoothing: SmoothingStyle::Slow,     // pitch_var — 20 ms
+            get: this.pitch_var,
+            set: |v| this.pitch_var = v;
 
-    fn set(&mut self, index: usize, value: f32) {
-        match index {
-            0 => self.density = value,
-            1 => self.size_ms = value,
-            2 => self.scatter = value,
-            3 => self.pitch_var = value,
-            4 => self.mix_pct = value,
-            5 => self.output_db = value,
-            _ => {}
-        }
+        [4] ParamDescriptor::mix().with_id(ParamId(3404), "tex_mix"),
+            smoothing: SmoothingStyle::Standard, // mix_pct — 10 ms
+            get: this.mix_pct,
+            set: |v| this.mix_pct = v;
+
+        [5] ParamDescriptor::gain_db("Output", "Out", -60.0, 6.0, 0.0)
+                .with_id(ParamId(3405), "tex_output"),
+            smoothing: SmoothingStyle::Fast,     // output_db — 5 ms
+            get: this.output_db,
+            set: |v| this.output_db = v;
     }
 }
 

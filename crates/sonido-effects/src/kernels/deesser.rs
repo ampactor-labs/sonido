@@ -45,6 +45,7 @@
 //! ```
 
 use sonido_core::kernel::{DspKernel, KernelParams, SmoothingStyle};
+use sonido_core::kernel_params;
 use sonido_core::{
     Biquad, Cached, EnvelopeFollower, ParamDescriptor, ParamId, ParamScale, ParamUnit,
     fast_db_to_linear, fast_linear_to_db, highpass_coefficients, math::flush_denormal,
@@ -121,75 +122,46 @@ impl Default for DeesserParams {
     }
 }
 
-impl KernelParams for DeesserParams {
-    const COUNT: usize = 5;
+kernel_params! {
+    DeesserParams, this {
+        // ── [0] Detection frequency ───────────────────────────────────────
+        [0] ParamDescriptor::custom("Freq", "Freq", 2000.0, 16000.0, 6000.0)
+                .with_unit(ParamUnit::Hertz)
+                .with_step(10.0)
+                .with_id(ParamId(3000), "ds_freq")
+                .with_scale(ParamScale::Logarithmic),
+            smoothing: SmoothingStyle::Slow,     // freq — filter coeff recalc
+            get: this.freq_hz,
+            set: |v| this.freq_hz = v;
 
-    fn descriptor(index: usize) -> Option<ParamDescriptor> {
-        match index {
-            // ── [0] Detection frequency ───────────────────────────────────────
-            0 => Some(
-                ParamDescriptor::custom("Freq", "Freq", 2000.0, 16000.0, 6000.0)
-                    .with_unit(ParamUnit::Hertz)
-                    .with_step(10.0)
-                    .with_id(ParamId(3000), "ds_freq")
-                    .with_scale(ParamScale::Logarithmic),
-            ),
-            // ── [1] Threshold ─────────────────────────────────────────────────
-            1 => Some(
-                ParamDescriptor::gain_db("Threshold", "Thresh", -60.0, 0.0, -20.0)
-                    .with_id(ParamId(3001), "ds_thresh"),
-            ),
-            // ── [2] Ratio ─────────────────────────────────────────────────────
-            2 => Some(
-                ParamDescriptor::custom("Ratio", "Ratio", 1.0, 20.0, 8.0)
-                    .with_unit(ParamUnit::Ratio)
-                    .with_step(0.1)
-                    .with_id(ParamId(3002), "ds_ratio"),
-            ),
-            // ── [3] Range ─────────────────────────────────────────────────────
-            3 => Some(
-                ParamDescriptor::gain_db("Range", "Range", 0.0, 24.0, 12.0)
-                    .with_id(ParamId(3003), "ds_range"),
-            ),
-            // ── [4] Output level ──────────────────────────────────────────────
-            4 => Some(
-                sonido_core::gain::output_param_descriptor().with_id(ParamId(3004), "ds_output"),
-            ),
-            _ => None,
-        }
-    }
+        // ── [1] Threshold ─────────────────────────────────────────────────
+        [1] ParamDescriptor::gain_db("Threshold", "Thresh", -60.0, 0.0, -20.0)
+                .with_id(ParamId(3001), "ds_thresh"),
+            smoothing: SmoothingStyle::Standard, // threshold
+            get: this.thresh_db,
+            set: |v| this.thresh_db = v;
 
-    fn smoothing(index: usize) -> SmoothingStyle {
-        match index {
-            0 => SmoothingStyle::Slow,     // freq — filter coeff recalc
-            1 => SmoothingStyle::Standard, // threshold
-            2 => SmoothingStyle::Standard, // ratio
-            3 => SmoothingStyle::Standard, // range
-            4 => SmoothingStyle::Fast,     // output
-            _ => SmoothingStyle::Standard,
-        }
-    }
+        // ── [2] Ratio ─────────────────────────────────────────────────────
+        [2] ParamDescriptor::custom("Ratio", "Ratio", 1.0, 20.0, 8.0)
+                .with_unit(ParamUnit::Ratio)
+                .with_step(0.1)
+                .with_id(ParamId(3002), "ds_ratio"),
+            smoothing: SmoothingStyle::Standard, // ratio
+            get: this.ratio,
+            set: |v| this.ratio = v;
 
-    fn get(&self, index: usize) -> f32 {
-        match index {
-            0 => self.freq_hz,
-            1 => self.thresh_db,
-            2 => self.ratio,
-            3 => self.range_db,
-            4 => self.output_db,
-            _ => 0.0,
-        }
-    }
+        // ── [3] Range ─────────────────────────────────────────────────────
+        [3] ParamDescriptor::gain_db("Range", "Range", 0.0, 24.0, 12.0)
+                .with_id(ParamId(3003), "ds_range"),
+            smoothing: SmoothingStyle::Standard, // range
+            get: this.range_db,
+            set: |v| this.range_db = v;
 
-    fn set(&mut self, index: usize, value: f32) {
-        match index {
-            0 => self.freq_hz = value,
-            1 => self.thresh_db = value,
-            2 => self.ratio = value,
-            3 => self.range_db = value,
-            4 => self.output_db = value,
-            _ => {}
-        }
+        // ── [4] Output level ──────────────────────────────────────────────
+        [4] sonido_core::gain::output_param_descriptor().with_id(ParamId(3004), "ds_output"),
+            smoothing: SmoothingStyle::Fast,     // output
+            get: this.output_db,
+            set: |v| this.output_db = v;
     }
 }
 

@@ -32,6 +32,7 @@
 
 use sonido_core::Effect;
 use sonido_core::kernel::{DspKernel, KernelParams, SmoothingStyle};
+use sonido_core::kernel_params;
 use sonido_core::math::soft_limit;
 use sonido_core::{
     EnvelopeFollower, ParamDescriptor, ParamFlags, ParamId, ParamUnit, StateVariableFilter,
@@ -170,104 +171,75 @@ impl WahParams {
     }
 }
 
-impl KernelParams for WahParams {
-    const COUNT: usize = 5;
+kernel_params! {
+    WahParams, this {
+        [0] ParamDescriptor {
+                name: "Frequency",
+                short_name: "Freq",
+                unit: ParamUnit::Hertz,
+                min: 200.0,
+                max: 2000.0,
+                default: 800.0,
+                step: 10.0,
+                ..ParamDescriptor::mix()
+            }
+            .with_id(ParamId(600), "wah_freq")
+            .with_scale(sonido_core::ParamScale::Logarithmic),
+            smoothing: SmoothingStyle::Fast, // frequency — fast for expressive feel
+            get: this.freq_hz,
+            set: |v| this.freq_hz = v;
 
-    fn descriptor(index: usize) -> Option<ParamDescriptor> {
-        match index {
-            0 => Some(
-                ParamDescriptor {
-                    name: "Frequency",
-                    short_name: "Freq",
-                    unit: ParamUnit::Hertz,
-                    min: 200.0,
-                    max: 2000.0,
-                    default: 800.0,
-                    step: 10.0,
-                    ..ParamDescriptor::mix()
-                }
-                .with_id(ParamId(600), "wah_freq")
-                .with_scale(sonido_core::ParamScale::Logarithmic),
-            ),
-            1 => Some(
-                ParamDescriptor {
-                    name: "Resonance",
-                    short_name: "Reso",
-                    unit: ParamUnit::None,
-                    min: 1.0,
-                    max: 10.0,
-                    default: 5.0,
-                    step: 0.1,
-                    ..ParamDescriptor::mix()
-                }
-                .with_id(ParamId(601), "wah_reso"),
-            ),
-            2 => Some(
-                ParamDescriptor {
-                    name: "Sensitivity",
-                    short_name: "Sens",
-                    unit: ParamUnit::Percent,
-                    min: 0.0,
-                    max: 100.0,
-                    default: 50.0,
-                    step: 1.0,
-                    ..ParamDescriptor::mix()
-                }
-                .with_id(ParamId(602), "wah_sens"),
-            ),
-            3 => Some(
-                ParamDescriptor {
-                    name: "Mode",
-                    short_name: "Mode",
-                    unit: ParamUnit::None,
-                    min: 0.0,
-                    max: 1.0,
-                    default: 0.0,
-                    step: 1.0,
-                    ..ParamDescriptor::mix()
-                }
-                .with_id(ParamId(603), "wah_mode")
-                .with_flags(ParamFlags::AUTOMATABLE.union(ParamFlags::STEPPED))
-                .with_step_labels(&["Auto", "Manual"]),
-            ),
-            4 => Some(
-                sonido_core::gain::output_param_descriptor().with_id(ParamId(604), "wah_output"),
-            ),
-            _ => None,
-        }
-    }
+        [1] ParamDescriptor {
+                name: "Resonance",
+                short_name: "Reso",
+                unit: ParamUnit::None,
+                min: 1.0,
+                max: 10.0,
+                default: 5.0,
+                step: 0.1,
+                ..ParamDescriptor::mix()
+            }
+            .with_id(ParamId(601), "wah_reso"),
+            smoothing: SmoothingStyle::Slow, // resonance — SVF coefficient, avoid zipper
+            get: this.resonance,
+            set: |v| this.resonance = v;
 
-    fn smoothing(index: usize) -> SmoothingStyle {
-        match index {
-            0 => SmoothingStyle::Fast,     // frequency — fast for expressive feel
-            1 => SmoothingStyle::Slow,     // resonance — SVF coefficient, avoid zipper
-            2 => SmoothingStyle::Standard, // sensitivity
-            3 => SmoothingStyle::None,     // mode — discrete, snap immediately
-            4 => SmoothingStyle::Standard, // output level
-            _ => SmoothingStyle::Standard,
-        }
-    }
+        [2] ParamDescriptor {
+                name: "Sensitivity",
+                short_name: "Sens",
+                unit: ParamUnit::Percent,
+                min: 0.0,
+                max: 100.0,
+                default: 50.0,
+                step: 1.0,
+                ..ParamDescriptor::mix()
+            }
+            .with_id(ParamId(602), "wah_sens"),
+            smoothing: SmoothingStyle::Standard, // sensitivity
+            get: this.sensitivity_pct,
+            set: |v| this.sensitivity_pct = v;
 
-    fn get(&self, index: usize) -> f32 {
-        match index {
-            0 => self.freq_hz,
-            1 => self.resonance,
-            2 => self.sensitivity_pct,
-            3 => self.mode,
-            4 => self.output_db,
-            _ => 0.0,
-        }
-    }
+        [3] ParamDescriptor {
+                name: "Mode",
+                short_name: "Mode",
+                unit: ParamUnit::None,
+                min: 0.0,
+                max: 1.0,
+                default: 0.0,
+                step: 1.0,
+                ..ParamDescriptor::mix()
+            }
+            .with_id(ParamId(603), "wah_mode")
+            .with_flags(ParamFlags::AUTOMATABLE.union(ParamFlags::STEPPED))
+            .with_step_labels(&["Auto", "Manual"]),
+            smoothing: SmoothingStyle::None, // mode — discrete, snap immediately
+            get: this.mode,
+            set: |v| this.mode = v;
 
-    fn set(&mut self, index: usize, value: f32) {
-        match index {
-            0 => self.freq_hz = value,
-            1 => self.resonance = value,
-            2 => self.sensitivity_pct = value,
-            3 => self.mode = value,
-            4 => self.output_db = value,
-            _ => {}
-        }
+        [4] sonido_core::gain::output_param_descriptor().with_id(ParamId(604), "wah_output"),
+            smoothing: SmoothingStyle::Standard, // output level
+            get: this.output_db,
+            set: |v| this.output_db = v;
     }
 }
 

@@ -42,6 +42,7 @@
 extern crate alloc;
 
 use sonido_core::kernel::{DspKernel, KernelParams, SmoothingStyle};
+use sonido_core::kernel_params;
 use sonido_core::{ParamDescriptor, ParamId, ParamUnit, fast_db_to_linear};
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -87,91 +88,61 @@ impl Default for DroneParams {
     }
 }
 
-impl KernelParams for DroneParams {
-    const COUNT: usize = 6;
+kernel_params! {
+    DroneParams, this {
+        [0] ParamDescriptor {
+                name: "Root Mix",
+                short_name: "Root",
+                default: 30.0,
+                ..ParamDescriptor::mix()
+            }
+            .with_id(ParamId(3300), "drone_root"),
+            smoothing: SmoothingStyle::Standard, // root_mix — 10 ms
+            get: this.root_mix,
+            set: |v| this.root_mix = v;
 
-    fn descriptor(index: usize) -> Option<ParamDescriptor> {
-        match index {
-            0 => Some(
-                ParamDescriptor {
-                    name: "Root Mix",
-                    short_name: "Root",
-                    default: 30.0,
-                    ..ParamDescriptor::mix()
-                }
-                .with_id(ParamId(3300), "drone_root"),
-            ),
-            1 => Some(
-                ParamDescriptor {
-                    name: "Fifth Mix",
-                    short_name: "Fifth",
-                    default: 20.0,
-                    ..ParamDescriptor::mix()
-                }
-                .with_id(ParamId(3301), "drone_fifth"),
-            ),
-            2 => Some(
-                ParamDescriptor {
-                    name: "Octave Mix",
-                    short_name: "Octave",
-                    default: 25.0,
-                    ..ParamDescriptor::mix()
-                }
-                .with_id(ParamId(3302), "drone_octave"),
-            ),
-            3 => Some(
-                ParamDescriptor::custom("Detune", "Detune", 0.0, 50.0, 5.0)
-                    .with_unit(ParamUnit::None)
-                    .with_id(ParamId(3303), "drone_detune"),
-            ),
-            4 => Some(
-                // Decay stored internally in seconds; display as plain value (no Seconds unit)
-                ParamDescriptor::custom("Decay", "Decay", 0.1, 10.0, 3.0)
-                    .with_unit(ParamUnit::None)
-                    .with_id(ParamId(3304), "drone_decay"),
-            ),
-            5 => Some(
-                ParamDescriptor::gain_db("Output", "Out", -60.0, 6.0, 0.0)
-                    .with_id(ParamId(3305), "drone_output"),
-            ),
-            _ => None,
-        }
-    }
+        [1] ParamDescriptor {
+                name: "Fifth Mix",
+                short_name: "Fifth",
+                default: 20.0,
+                ..ParamDescriptor::mix()
+            }
+            .with_id(ParamId(3301), "drone_fifth"),
+            smoothing: SmoothingStyle::Standard, // fifth_mix — 10 ms
+            get: this.fifth_mix,
+            set: |v| this.fifth_mix = v;
 
-    fn smoothing(index: usize) -> SmoothingStyle {
-        match index {
-            0 => SmoothingStyle::Standard, // root_mix — 10 ms
-            1 => SmoothingStyle::Standard, // fifth_mix — 10 ms
-            2 => SmoothingStyle::Standard, // octave_mix — 10 ms
-            3 => SmoothingStyle::Slow,     // detune — 20 ms
-            4 => SmoothingStyle::Slow,     // decay — 20 ms
-            5 => SmoothingStyle::Fast,     // output_db — 5 ms
-            _ => SmoothingStyle::Standard,
-        }
-    }
+        [2] ParamDescriptor {
+                name: "Octave Mix",
+                short_name: "Octave",
+                default: 25.0,
+                ..ParamDescriptor::mix()
+            }
+            .with_id(ParamId(3302), "drone_octave"),
+            smoothing: SmoothingStyle::Standard, // octave_mix — 10 ms
+            get: this.octave_mix,
+            set: |v| this.octave_mix = v;
 
-    fn get(&self, index: usize) -> f32 {
-        match index {
-            0 => self.root_mix,
-            1 => self.fifth_mix,
-            2 => self.octave_mix,
-            3 => self.detune,
-            4 => self.decay,
-            5 => self.output_db,
-            _ => 0.0,
-        }
-    }
+        [3] ParamDescriptor::custom("Detune", "Detune", 0.0, 50.0, 5.0)
+                .with_unit(ParamUnit::None)
+                .with_id(ParamId(3303), "drone_detune"),
+            smoothing: SmoothingStyle::Slow,     // detune — 20 ms
+            get: this.detune,
+            set: |v| this.detune = v;
 
-    fn set(&mut self, index: usize, value: f32) {
-        match index {
-            0 => self.root_mix = value,
-            1 => self.fifth_mix = value,
-            2 => self.octave_mix = value,
-            3 => self.detune = value,
-            4 => self.decay = value,
-            5 => self.output_db = value,
-            _ => {}
-        }
+        // Decay stored internally in seconds; display as plain value (no Seconds unit)
+        [4] ParamDescriptor::custom("Decay", "Decay", 0.1, 10.0, 3.0)
+                .with_unit(ParamUnit::None)
+                .with_id(ParamId(3304), "drone_decay"),
+            smoothing: SmoothingStyle::Slow,     // decay — 20 ms
+            get: this.decay,
+            set: |v| this.decay = v;
+
+        [5] ParamDescriptor::gain_db("Output", "Out", -60.0, 6.0, 0.0)
+                .with_id(ParamId(3305), "drone_output"),
+            smoothing: SmoothingStyle::Fast,     // output_db — 5 ms
+            get: this.output_db,
+            set: |v| this.output_db = v;
     }
 }
 

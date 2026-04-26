@@ -46,6 +46,7 @@
 
 use libm::{expf, powf};
 use sonido_core::kernel::{DspKernel, KernelParams, SmoothingStyle};
+use sonido_core::kernel_params;
 use sonido_core::math::soft_limit;
 use sonido_core::{
     AllpassFilter, InterpolatedDelay, OnePole, ParamDescriptor, ParamId, ParamUnit, db_to_linear,
@@ -229,98 +230,70 @@ impl SpringReverbParams {
     }
 }
 
-impl KernelParams for SpringReverbParams {
-    const COUNT: usize = 6;
+kernel_params! {
+    SpringReverbParams, this {
+        [0] ParamDescriptor::custom("Decay", "Decay", 0.5, 5.0, 2.0)
+                .with_unit(ParamUnit::None)
+                .with_id(ParamId(2800), "spring_decay"),
+            smoothing: SmoothingStyle::Slow, // decay_s — feedback length/gain
+            get: this.decay_s,
+            set: |v| this.decay_s = v;
 
-    fn descriptor(index: usize) -> Option<ParamDescriptor> {
-        match index {
-            0 => Some(
-                ParamDescriptor::custom("Decay", "Decay", 0.5, 5.0, 2.0)
-                    .with_unit(ParamUnit::None)
-                    .with_id(ParamId(2800), "spring_decay"),
-            ),
-            1 => Some(
-                ParamDescriptor {
-                    name: "Tension",
-                    short_name: "Tens",
-                    unit: ParamUnit::Percent,
-                    min: 0.0,
-                    max: 100.0,
-                    default: 50.0,
-                    step: 1.0,
-                    ..ParamDescriptor::mix()
-                }
-                .with_id(ParamId(2801), "spring_tension"),
-            ),
-            2 => Some(
-                ParamDescriptor {
-                    name: "Drip",
-                    short_name: "Drip",
-                    unit: ParamUnit::Percent,
-                    min: 0.0,
-                    max: 100.0,
-                    default: 40.0,
-                    step: 1.0,
-                    ..ParamDescriptor::mix()
-                }
-                .with_id(ParamId(2802), "spring_drip"),
-            ),
-            3 => Some(
-                ParamDescriptor {
-                    name: "Damping",
-                    short_name: "Damp",
-                    unit: ParamUnit::Percent,
-                    min: 0.0,
-                    max: 100.0,
-                    default: 50.0,
-                    step: 1.0,
-                    ..ParamDescriptor::mix()
-                }
-                .with_id(ParamId(2803), "spring_damping"),
-            ),
-            4 => Some(ParamDescriptor::mix().with_id(ParamId(2804), "spring_mix")),
-            5 => Some(
-                sonido_core::gain::output_param_descriptor()
-                    .with_id(ParamId(2805), "spring_output"),
-            ),
-            _ => None,
-        }
-    }
+        [1] ParamDescriptor {
+                name: "Tension",
+                short_name: "Tens",
+                unit: ParamUnit::Percent,
+                min: 0.0,
+                max: 100.0,
+                default: 50.0,
+                step: 1.0,
+                ..ParamDescriptor::mix()
+            }
+            .with_id(ParamId(2801), "spring_tension"),
+            smoothing: SmoothingStyle::Standard, // tension_pct — allpass lengths
+            get: this.tension_pct,
+            set: |v| this.tension_pct = v;
 
-    fn smoothing(index: usize) -> SmoothingStyle {
-        match index {
-            0 => SmoothingStyle::Slow,     // decay_s — feedback length/gain
-            1 => SmoothingStyle::Standard, // tension_pct — allpass lengths
-            2 => SmoothingStyle::Standard, // drip_pct — clipping amount
-            3 => SmoothingStyle::Slow,     // damping_pct — one-pole coeff
-            4 => SmoothingStyle::Standard, // mix_pct
-            5 => SmoothingStyle::Fast,     // output_db
-            _ => SmoothingStyle::Standard,
-        }
-    }
+        [2] ParamDescriptor {
+                name: "Drip",
+                short_name: "Drip",
+                unit: ParamUnit::Percent,
+                min: 0.0,
+                max: 100.0,
+                default: 40.0,
+                step: 1.0,
+                ..ParamDescriptor::mix()
+            }
+            .with_id(ParamId(2802), "spring_drip"),
+            smoothing: SmoothingStyle::Standard, // drip_pct — clipping amount
+            get: this.drip_pct,
+            set: |v| this.drip_pct = v;
 
-    fn get(&self, index: usize) -> f32 {
-        match index {
-            0 => self.decay_s,
-            1 => self.tension_pct,
-            2 => self.drip_pct,
-            3 => self.damping_pct,
-            4 => self.mix_pct,
-            5 => self.output_db,
-            _ => 0.0,
-        }
-    }
+        [3] ParamDescriptor {
+                name: "Damping",
+                short_name: "Damp",
+                unit: ParamUnit::Percent,
+                min: 0.0,
+                max: 100.0,
+                default: 50.0,
+                step: 1.0,
+                ..ParamDescriptor::mix()
+            }
+            .with_id(ParamId(2803), "spring_damping"),
+            smoothing: SmoothingStyle::Slow, // damping_pct — one-pole coeff
+            get: this.damping_pct,
+            set: |v| this.damping_pct = v;
 
-    fn set(&mut self, index: usize, value: f32) {
-        match index {
-            0 => self.decay_s = value,
-            1 => self.tension_pct = value,
-            2 => self.drip_pct = value,
-            3 => self.damping_pct = value,
-            4 => self.mix_pct = value,
-            5 => self.output_db = value,
-            _ => {}
-        }
+        [4] ParamDescriptor::mix().with_id(ParamId(2804), "spring_mix"),
+            smoothing: SmoothingStyle::Standard, // mix_pct
+            get: this.mix_pct,
+            set: |v| this.mix_pct = v;
+
+        [5] sonido_core::gain::output_param_descriptor()
+                .with_id(ParamId(2805), "spring_output"),
+            smoothing: SmoothingStyle::Fast, // output_db
+            get: this.output_db,
+            set: |v| this.output_db = v;
     }
 }
 

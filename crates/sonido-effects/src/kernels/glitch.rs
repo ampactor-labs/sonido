@@ -36,6 +36,7 @@ extern crate alloc;
 
 use alloc::vec::Vec;
 use sonido_core::kernel::{DspKernel, KernelParams, SmoothingStyle};
+use sonido_core::kernel_params;
 use sonido_core::{
     ParamDescriptor, ParamFlags, ParamId, ParamScale, ParamUnit, fast_db_to_linear, wet_dry_mix,
 };
@@ -106,84 +107,56 @@ impl Default for GlitchParams {
     }
 }
 
-impl KernelParams for GlitchParams {
-    const COUNT: usize = 6;
+kernel_params! {
+    GlitchParams, this {
+        [0] ParamDescriptor::custom("Mode", "Mode", 0.0, 3.0, 0.0)
+                .with_unit(ParamUnit::None)
+                .with_step(1.0)
+                .with_id(ParamId(3500), "gl_mode")
+                .with_flags(ParamFlags::AUTOMATABLE.union(ParamFlags::STEPPED))
+                .with_step_labels(MODE_LABELS),
+            smoothing: SmoothingStyle::None,     // mode — stepped
+            get: this.mode,
+            set: |v| this.mode = v;
 
-    fn descriptor(index: usize) -> Option<ParamDescriptor> {
-        match index {
-            0 => Some(
-                ParamDescriptor::custom("Mode", "Mode", 0.0, 3.0, 0.0)
-                    .with_unit(ParamUnit::None)
-                    .with_step(1.0)
-                    .with_id(ParamId(3500), "gl_mode")
-                    .with_flags(ParamFlags::AUTOMATABLE.union(ParamFlags::STEPPED))
-                    .with_step_labels(MODE_LABELS),
-            ),
-            1 => Some(
-                ParamDescriptor::custom("Rate", "Rate", 1.0, 32.0, 4.0)
-                    .with_unit(ParamUnit::Hertz)
-                    .with_scale(ParamScale::Logarithmic)
-                    .with_id(ParamId(3501), "gl_rate"),
-            ),
-            2 => Some(
-                ParamDescriptor {
-                    name: "Depth",
-                    short_name: "Depth",
-                    ..ParamDescriptor::mix()
-                }
-                .with_id(ParamId(3502), "gl_depth"),
-            ),
-            3 => Some(
-                ParamDescriptor {
-                    name: "Probability",
-                    short_name: "Prob",
-                    ..ParamDescriptor::mix()
-                }
-                .with_id(ParamId(3503), "gl_probability"),
-            ),
-            4 => Some(ParamDescriptor::mix().with_id(ParamId(3504), "gl_mix")),
-            5 => Some(
-                ParamDescriptor::gain_db("Output", "Out", -60.0, 6.0, 0.0)
-                    .with_id(ParamId(3505), "gl_output"),
-            ),
-            _ => None,
-        }
-    }
+        [1] ParamDescriptor::custom("Rate", "Rate", 1.0, 32.0, 4.0)
+                .with_unit(ParamUnit::Hertz)
+                .with_scale(ParamScale::Logarithmic)
+                .with_id(ParamId(3501), "gl_rate"),
+            smoothing: SmoothingStyle::Slow,     // rate — 20 ms
+            get: this.rate,
+            set: |v| this.rate = v;
 
-    fn smoothing(index: usize) -> SmoothingStyle {
-        match index {
-            0 => SmoothingStyle::None,     // mode — stepped
-            1 => SmoothingStyle::Slow,     // rate — 20 ms
-            2 => SmoothingStyle::Standard, // depth — 10 ms
-            3 => SmoothingStyle::Standard, // probability — 10 ms
-            4 => SmoothingStyle::Standard, // mix_pct — 10 ms
-            5 => SmoothingStyle::Fast,     // output_db — 5 ms
-            _ => SmoothingStyle::Standard,
-        }
-    }
+        [2] ParamDescriptor {
+                name: "Depth",
+                short_name: "Depth",
+                ..ParamDescriptor::mix()
+            }
+            .with_id(ParamId(3502), "gl_depth"),
+            smoothing: SmoothingStyle::Standard, // depth — 10 ms
+            get: this.depth,
+            set: |v| this.depth = v;
 
-    fn get(&self, index: usize) -> f32 {
-        match index {
-            0 => self.mode,
-            1 => self.rate,
-            2 => self.depth,
-            3 => self.probability,
-            4 => self.mix_pct,
-            5 => self.output_db,
-            _ => 0.0,
-        }
-    }
+        [3] ParamDescriptor {
+                name: "Probability",
+                short_name: "Prob",
+                ..ParamDescriptor::mix()
+            }
+            .with_id(ParamId(3503), "gl_probability"),
+            smoothing: SmoothingStyle::Standard, // probability — 10 ms
+            get: this.probability,
+            set: |v| this.probability = v;
 
-    fn set(&mut self, index: usize, value: f32) {
-        match index {
-            0 => self.mode = value,
-            1 => self.rate = value,
-            2 => self.depth = value,
-            3 => self.probability = value,
-            4 => self.mix_pct = value,
-            5 => self.output_db = value,
-            _ => {}
-        }
+        [4] ParamDescriptor::mix().with_id(ParamId(3504), "gl_mix"),
+            smoothing: SmoothingStyle::Standard, // mix_pct — 10 ms
+            get: this.mix_pct,
+            set: |v| this.mix_pct = v;
+
+        [5] ParamDescriptor::gain_db("Output", "Out", -60.0, 6.0, 0.0)
+                .with_id(ParamId(3505), "gl_output"),
+            smoothing: SmoothingStyle::Fast,     // output_db — 5 ms
+            get: this.output_db,
+            set: |v| this.output_db = v;
     }
 }
 

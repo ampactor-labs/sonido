@@ -46,6 +46,7 @@
 //! ```
 
 use sonido_core::kernel::{DspKernel, KernelParams, SmoothingStyle};
+use sonido_core::kernel_params;
 use sonido_core::{
     EnvelopeFollower, ParamDescriptor, ParamId, ParamUnit,
     gain::output_param_descriptor,
@@ -151,76 +152,51 @@ impl TransientShaperParams {
     }
 }
 
-impl KernelParams for TransientShaperParams {
-    const COUNT: usize = 5;
+kernel_params! {
+    TransientShaperParams, this {
+        // ── [0] Attack ───────────────────────────────────────────────────
+        // ParamId(2900), "ts_attack" — transient boost/cut
+        [0] ParamDescriptor::custom("Attack", "Attack", -100.0, 100.0, 0.0)
+                .with_unit(ParamUnit::Percent)
+                .with_step(0.1)
+                .with_id(ParamId(2900), "ts_attack"),
+            smoothing: SmoothingStyle::Fast, // attack_pct — shaping param, quick response
+            get: this.attack_pct,
+            set: |v| this.attack_pct = v;
 
-    fn descriptor(index: usize) -> Option<ParamDescriptor> {
-        match index {
-            // ── [0] Attack ───────────────────────────────────────────────────
-            // ParamId(2900), "ts_attack" — transient boost/cut
-            0 => Some(
-                ParamDescriptor::custom("Attack", "Attack", -100.0, 100.0, 0.0)
-                    .with_unit(ParamUnit::Percent)
-                    .with_step(0.1)
-                    .with_id(ParamId(2900), "ts_attack"),
-            ),
-            // ── [1] Sustain ──────────────────────────────────────────────────
-            // ParamId(2901), "ts_sustain" — sustained body boost/cut
-            1 => Some(
-                ParamDescriptor::custom("Sustain", "Sustain", -100.0, 100.0, 0.0)
-                    .with_unit(ParamUnit::Percent)
-                    .with_step(0.1)
-                    .with_id(ParamId(2901), "ts_sustain"),
-            ),
-            // ── [2] Sensitivity ──────────────────────────────────────────────
-            // ParamId(2902), "ts_sensitivity" — detection pre-gain
-            2 => Some(
-                ParamDescriptor::custom("Sensitivity", "Sens", 0.0, 100.0, 50.0)
-                    .with_unit(ParamUnit::Percent)
-                    .with_step(0.1)
-                    .with_id(ParamId(2902), "ts_sensitivity"),
-            ),
-            // ── [3] Mix ──────────────────────────────────────────────────────
-            // ParamId(2903), "ts_mix" — wet/dry blend
-            3 => Some(ParamDescriptor::mix().with_id(ParamId(2903), "ts_mix")),
-            // ── [4] Output ───────────────────────────────────────────────────
-            // ParamId(2904), "ts_output" — final output trim
-            4 => Some(output_param_descriptor().with_id(ParamId(2904), "ts_output")),
-            _ => None,
-        }
-    }
+        // ── [1] Sustain ──────────────────────────────────────────────────
+        // ParamId(2901), "ts_sustain" — sustained body boost/cut
+        [1] ParamDescriptor::custom("Sustain", "Sustain", -100.0, 100.0, 0.0)
+                .with_unit(ParamUnit::Percent)
+                .with_step(0.1)
+                .with_id(ParamId(2901), "ts_sustain"),
+            smoothing: SmoothingStyle::Fast, // sustain_pct — shaping param, quick response
+            get: this.sustain_pct,
+            set: |v| this.sustain_pct = v;
 
-    fn smoothing(index: usize) -> SmoothingStyle {
-        match index {
-            0 => SmoothingStyle::Fast, // attack_pct — shaping param, quick response
-            1 => SmoothingStyle::Fast, // sustain_pct — shaping param, quick response
-            2 => SmoothingStyle::Standard, // sensitivity_pct — detection blend
-            3 => SmoothingStyle::Standard, // mix_pct — wet/dry blend
-            4 => SmoothingStyle::Fast, // output_db — level trim
-            _ => SmoothingStyle::Standard,
-        }
-    }
+        // ── [2] Sensitivity ──────────────────────────────────────────────
+        // ParamId(2902), "ts_sensitivity" — detection pre-gain
+        [2] ParamDescriptor::custom("Sensitivity", "Sens", 0.0, 100.0, 50.0)
+                .with_unit(ParamUnit::Percent)
+                .with_step(0.1)
+                .with_id(ParamId(2902), "ts_sensitivity"),
+            smoothing: SmoothingStyle::Standard, // sensitivity_pct — detection blend
+            get: this.sensitivity_pct,
+            set: |v| this.sensitivity_pct = v;
 
-    fn get(&self, index: usize) -> f32 {
-        match index {
-            0 => self.attack_pct,
-            1 => self.sustain_pct,
-            2 => self.sensitivity_pct,
-            3 => self.mix_pct,
-            4 => self.output_db,
-            _ => 0.0,
-        }
-    }
+        // ── [3] Mix ──────────────────────────────────────────────────────
+        // ParamId(2903), "ts_mix" — wet/dry blend
+        [3] ParamDescriptor::mix().with_id(ParamId(2903), "ts_mix"),
+            smoothing: SmoothingStyle::Standard, // mix_pct — wet/dry blend
+            get: this.mix_pct,
+            set: |v| this.mix_pct = v;
 
-    fn set(&mut self, index: usize, value: f32) {
-        match index {
-            0 => self.attack_pct = value,
-            1 => self.sustain_pct = value,
-            2 => self.sensitivity_pct = value,
-            3 => self.mix_pct = value,
-            4 => self.output_db = value,
-            _ => {}
-        }
+        // ── [4] Output ───────────────────────────────────────────────────
+        // ParamId(2904), "ts_output" — final output trim
+        [4] output_param_descriptor().with_id(ParamId(2904), "ts_output"),
+            smoothing: SmoothingStyle::Fast, // output_db — level trim
+            get: this.output_db,
+            set: |v| this.output_db = v;
     }
 }
 

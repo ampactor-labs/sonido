@@ -44,6 +44,7 @@ extern crate alloc;
 
 use alloc::vec::Vec;
 use sonido_core::kernel::{DspKernel, KernelParams, SmoothingStyle};
+use sonido_core::kernel_params;
 use sonido_core::{
     ParamDescriptor, ParamFlags, ParamId, ParamUnit, fast_db_to_linear, wet_dry_mix,
 };
@@ -111,77 +112,49 @@ impl Default for PitchShiftParams {
     }
 }
 
-impl KernelParams for PitchShiftParams {
-    const COUNT: usize = 6;
+kernel_params! {
+    PitchShiftParams, this {
+        [0] ParamDescriptor::custom("Semitones", "Semi", -24.0, 24.0, 0.0)
+                .with_unit(ParamUnit::None)
+                .with_step(1.0)
+                .with_id(ParamId(2400), "ps_semitones"),
+            smoothing: SmoothingStyle::Interpolated, // semitones — 50 ms (avoids pitch jump artifacts)
+            get: this.semitones,
+            set: |v| this.semitones = v;
 
-    fn descriptor(index: usize) -> Option<ParamDescriptor> {
-        match index {
-            0 => Some(
-                ParamDescriptor::custom("Semitones", "Semi", -24.0, 24.0, 0.0)
-                    .with_unit(ParamUnit::None)
-                    .with_step(1.0)
-                    .with_id(ParamId(2400), "ps_semitones"),
-            ),
-            1 => Some(
-                ParamDescriptor::custom("Cents", "Cents", -50.0, 50.0, 0.0)
-                    .with_unit(ParamUnit::None)
-                    .with_id(ParamId(2401), "ps_cents"),
-            ),
-            2 => Some(
-                ParamDescriptor::custom("Grain Size", "Grain", 10.0, 50.0, 20.0)
-                    .with_unit(ParamUnit::Milliseconds)
-                    .with_id(ParamId(2402), "ps_grain_size"),
-            ),
-            3 => Some(ParamDescriptor::mix().with_id(ParamId(2403), "ps_mix")),
-            4 => Some(
-                ParamDescriptor::custom("Quality", "Quality", 0.0, 1.0, 0.0)
-                    .with_unit(ParamUnit::None)
-                    .with_step(1.0)
-                    .with_id(ParamId(2404), "ps_quality")
-                    .with_flags(ParamFlags::AUTOMATABLE.union(ParamFlags::STEPPED))
-                    .with_step_labels(&["Standard", "High"]),
-            ),
-            5 => Some(
-                sonido_core::gain::output_param_descriptor().with_id(ParamId(2405), "ps_output"),
-            ),
-            _ => None,
-        }
-    }
+        [1] ParamDescriptor::custom("Cents", "Cents", -50.0, 50.0, 0.0)
+                .with_unit(ParamUnit::None)
+                .with_id(ParamId(2401), "ps_cents"),
+            smoothing: SmoothingStyle::Interpolated, // cents — 50 ms
+            get: this.cents,
+            set: |v| this.cents = v;
 
-    fn smoothing(index: usize) -> SmoothingStyle {
-        match index {
-            0 => SmoothingStyle::Interpolated, // semitones — 50 ms (avoids pitch jump artifacts)
-            1 => SmoothingStyle::Interpolated, // cents — 50 ms
-            2 => SmoothingStyle::Slow,         // grain_ms — 20 ms
-            3 => SmoothingStyle::Standard,     // mix_pct — 10 ms
-            4 => SmoothingStyle::None,         // quality — stepped, snap
-            5 => SmoothingStyle::Fast,         // output_db — 5 ms
-            _ => SmoothingStyle::Standard,
-        }
-    }
+        [2] ParamDescriptor::custom("Grain Size", "Grain", 10.0, 50.0, 20.0)
+                .with_unit(ParamUnit::Milliseconds)
+                .with_id(ParamId(2402), "ps_grain_size"),
+            smoothing: SmoothingStyle::Slow,         // grain_ms — 20 ms
+            get: this.grain_ms,
+            set: |v| this.grain_ms = v;
 
-    fn get(&self, index: usize) -> f32 {
-        match index {
-            0 => self.semitones,
-            1 => self.cents,
-            2 => self.grain_ms,
-            3 => self.mix_pct,
-            4 => self.quality,
-            5 => self.output_db,
-            _ => 0.0,
-        }
-    }
+        [3] ParamDescriptor::mix().with_id(ParamId(2403), "ps_mix"),
+            smoothing: SmoothingStyle::Standard,     // mix_pct — 10 ms
+            get: this.mix_pct,
+            set: |v| this.mix_pct = v;
 
-    fn set(&mut self, index: usize, value: f32) {
-        match index {
-            0 => self.semitones = value,
-            1 => self.cents = value,
-            2 => self.grain_ms = value,
-            3 => self.mix_pct = value,
-            4 => self.quality = value,
-            5 => self.output_db = value,
-            _ => {}
-        }
+        [4] ParamDescriptor::custom("Quality", "Quality", 0.0, 1.0, 0.0)
+                .with_unit(ParamUnit::None)
+                .with_step(1.0)
+                .with_id(ParamId(2404), "ps_quality")
+                .with_flags(ParamFlags::AUTOMATABLE.union(ParamFlags::STEPPED))
+                .with_step_labels(&["Standard", "High"]),
+            smoothing: SmoothingStyle::None,         // quality — stepped, snap
+            get: this.quality,
+            set: |v| this.quality = v;
+
+        [5] sonido_core::gain::output_param_descriptor().with_id(ParamId(2405), "ps_output"),
+            smoothing: SmoothingStyle::Fast,         // output_db — 5 ms
+            get: this.output_db,
+            set: |v| this.output_db = v;
     }
 }
 

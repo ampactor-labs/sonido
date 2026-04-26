@@ -42,6 +42,7 @@
 
 use libm::ceilf;
 use sonido_core::kernel::{DspKernel, KernelParams, SmoothingStyle};
+use sonido_core::kernel_params;
 use sonido_core::{
     DIVISION_LABELS, InterpolatedDelay, Lfo, NoteDivision, ParamDescriptor, ParamFlags, ParamId,
     ParamUnit, TempoContext, TempoManager, fast_db_to_linear, flush_denormal, index_to_division,
@@ -170,102 +171,73 @@ impl FlangerParams {
     }
 }
 
-impl KernelParams for FlangerParams {
-    const COUNT: usize = 9;
+kernel_params! {
+    FlangerParams, this {
+        [0] ParamDescriptor::rate_hz(0.05, 5.0, 0.5).with_id(ParamId(800), "flgr_rate"),
+            smoothing: SmoothingStyle::Standard, // rate — LFO frequency, smooth transitions
+            get: this.rate,
+            set: |v| this.rate = v;
 
-    fn descriptor(index: usize) -> Option<ParamDescriptor> {
-        match index {
-            0 => Some(ParamDescriptor::rate_hz(0.05, 5.0, 0.5).with_id(ParamId(800), "flgr_rate")),
-            1 => Some(
-                ParamDescriptor {
-                    default: 35.0,
-                    ..ParamDescriptor::depth()
-                }
-                .with_id(ParamId(801), "flgr_depth"),
-            ),
-            2 => Some(
-                ParamDescriptor::custom("Feedback", "Fdbk", -95.0, 95.0, 50.0)
-                    .with_unit(ParamUnit::Percent)
-                    .with_step(1.0)
-                    .with_id(ParamId(802), "flgr_fdbk"),
-            ),
-            3 => Some(ParamDescriptor::mix().with_id(ParamId(803), "flgr_mix")),
-            4 => Some(
-                ParamDescriptor::custom("TZF", "TZF", 0.0, 1.0, 0.0)
-                    .with_step(1.0)
-                    .with_id(ParamId(805), "flgr_tzf")
-                    .with_flags(ParamFlags::AUTOMATABLE.union(ParamFlags::STEPPED))
-                    .with_step_labels(&["Off", "On"]),
-            ),
-            5 => Some(
-                ParamDescriptor::custom("Sync", "Sync", 0.0, 1.0, 0.0)
-                    .with_step(1.0)
-                    .with_id(ParamId(806), "flgr_sync")
-                    .with_flags(ParamFlags::AUTOMATABLE.union(ParamFlags::STEPPED))
-                    .with_step_labels(&["Off", "On"]),
-            ),
-            6 => Some(
-                ParamDescriptor::custom("Division", "Div", 0.0, 11.0, 3.0)
-                    .with_step(1.0)
-                    .with_id(ParamId(807), "flgr_division")
-                    .with_flags(ParamFlags::AUTOMATABLE.union(ParamFlags::STEPPED))
-                    .with_step_labels(DIVISION_LABELS),
-            ),
-            7 => Some(
-                sonido_core::gain::output_param_descriptor().with_id(ParamId(804), "flgr_output"),
-            ),
-            8 => Some(
-                ParamDescriptor::custom("LFO Phase", "Phase", 0.0, 1.0, 0.0)
-                    .with_id(ParamId(809), "flgr_lfo_phase")
-                    .with_flags(ParamFlags::READ_ONLY.union(ParamFlags::HIDDEN)),
-            ),
-            _ => None,
-        }
-    }
+        [1] ParamDescriptor {
+                default: 35.0,
+                ..ParamDescriptor::depth()
+            }
+            .with_id(ParamId(801), "flgr_depth"),
+            smoothing: SmoothingStyle::Standard, // depth — modulation amount
+            get: this.depth_pct,
+            set: |v| this.depth_pct = v;
 
-    fn smoothing(index: usize) -> SmoothingStyle {
-        match index {
-            0 => SmoothingStyle::Standard, // rate — LFO frequency, smooth transitions
-            1 => SmoothingStyle::Standard, // depth — modulation amount
-            2 => SmoothingStyle::Standard, // feedback — regeneration level
-            3 => SmoothingStyle::Standard, // mix — wet/dry balance
-            4 => SmoothingStyle::None,     // tzf — discrete toggle, snap
-            5 => SmoothingStyle::None,     // sync — discrete toggle, snap
-            6 => SmoothingStyle::None,     // division — stepped enum, snap
-            7 => SmoothingStyle::Standard, // output level
-            8 => SmoothingStyle::None,     // lfo_phase — READ_ONLY diagnostic, no smoothing
-            _ => SmoothingStyle::Standard,
-        }
-    }
+        [2] ParamDescriptor::custom("Feedback", "Fdbk", -95.0, 95.0, 50.0)
+                .with_unit(ParamUnit::Percent)
+                .with_step(1.0)
+                .with_id(ParamId(802), "flgr_fdbk"),
+            smoothing: SmoothingStyle::Standard, // feedback — regeneration level
+            get: this.feedback_pct,
+            set: |v| this.feedback_pct = v;
 
-    fn get(&self, index: usize) -> f32 {
-        match index {
-            0 => self.rate,
-            1 => self.depth_pct,
-            2 => self.feedback_pct,
-            3 => self.mix_pct,
-            4 => self.tzf,
-            5 => self.sync,
-            6 => self.division,
-            7 => self.output_db,
-            8 => self.lfo_phase,
-            _ => 0.0,
-        }
-    }
+        [3] ParamDescriptor::mix().with_id(ParamId(803), "flgr_mix"),
+            smoothing: SmoothingStyle::Standard, // mix — wet/dry balance
+            get: this.mix_pct,
+            set: |v| this.mix_pct = v;
 
-    fn set(&mut self, index: usize, value: f32) {
-        match index {
-            0 => self.rate = value,
-            1 => self.depth_pct = value,
-            2 => self.feedback_pct = value,
-            3 => self.mix_pct = value,
-            4 => self.tzf = value,
-            5 => self.sync = value,
-            6 => self.division = value,
-            7 => self.output_db = value,
-            8 => self.lfo_phase = value,
-            _ => {}
-        }
+        [4] ParamDescriptor::custom("TZF", "TZF", 0.0, 1.0, 0.0)
+                .with_step(1.0)
+                .with_id(ParamId(805), "flgr_tzf")
+                .with_flags(ParamFlags::AUTOMATABLE.union(ParamFlags::STEPPED))
+                .with_step_labels(&["Off", "On"]),
+            smoothing: SmoothingStyle::None, // tzf — discrete toggle, snap
+            get: this.tzf,
+            set: |v| this.tzf = v;
+
+        [5] ParamDescriptor::custom("Sync", "Sync", 0.0, 1.0, 0.0)
+                .with_step(1.0)
+                .with_id(ParamId(806), "flgr_sync")
+                .with_flags(ParamFlags::AUTOMATABLE.union(ParamFlags::STEPPED))
+                .with_step_labels(&["Off", "On"]),
+            smoothing: SmoothingStyle::None, // sync — discrete toggle, snap
+            get: this.sync,
+            set: |v| this.sync = v;
+
+        [6] ParamDescriptor::custom("Division", "Div", 0.0, 11.0, 3.0)
+                .with_step(1.0)
+                .with_id(ParamId(807), "flgr_division")
+                .with_flags(ParamFlags::AUTOMATABLE.union(ParamFlags::STEPPED))
+                .with_step_labels(DIVISION_LABELS),
+            smoothing: SmoothingStyle::None, // division — stepped enum, snap
+            get: this.division,
+            set: |v| this.division = v;
+
+        [7] sonido_core::gain::output_param_descriptor().with_id(ParamId(804), "flgr_output"),
+            smoothing: SmoothingStyle::Standard, // output level
+            get: this.output_db,
+            set: |v| this.output_db = v;
+
+        [8] ParamDescriptor::custom("LFO Phase", "Phase", 0.0, 1.0, 0.0)
+                .with_id(ParamId(809), "flgr_lfo_phase")
+                .with_flags(ParamFlags::READ_ONLY.union(ParamFlags::HIDDEN)),
+            smoothing: SmoothingStyle::None, // lfo_phase — READ_ONLY diagnostic, no smoothing
+            get: this.lfo_phase,
+            set: |v| this.lfo_phase = v;
     }
 }
 

@@ -40,6 +40,7 @@
 
 use libm::{floorf, powf};
 use sonido_core::kernel::{DspKernel, KernelParams, SmoothingStyle};
+use sonido_core::kernel_params;
 use sonido_core::{
     ParamDescriptor, ParamFlags, ParamId, ParamUnit, fast_db_to_linear, wet_dry_mix_stereo,
 };
@@ -102,73 +103,44 @@ impl BitcrusherParams {
     }
 }
 
-impl KernelParams for BitcrusherParams {
-    const COUNT: usize = 5;
+kernel_params! {
+    BitcrusherParams, this {
+        [0] ParamDescriptor::custom("Bit Depth", "Bits", 2.0, 16.0, 8.0)
+                .with_step(1.0)
+                .with_id(ParamId(1700), "crush_bits")
+                .with_flags(ParamFlags::AUTOMATABLE.union(ParamFlags::STEPPED)),
+            smoothing: SmoothingStyle::Standard,
+            get: this.bits,
+            set: |v| this.bits = v;
 
-    fn descriptor(index: usize) -> Option<ParamDescriptor> {
-        match index {
-            0 => Some(
-                ParamDescriptor::custom("Bit Depth", "Bits", 2.0, 16.0, 8.0)
-                    .with_step(1.0)
-                    .with_id(ParamId(1700), "crush_bits")
-                    .with_flags(ParamFlags::AUTOMATABLE.union(ParamFlags::STEPPED)),
-            ),
-            1 => Some(
-                ParamDescriptor::custom("Downsample", "Down", 1.0, 64.0, 1.0)
-                    .with_step(1.0)
-                    .with_id(ParamId(1701), "crush_down")
-                    .with_flags(ParamFlags::AUTOMATABLE.union(ParamFlags::STEPPED)),
-            ),
-            2 => Some(
-                ParamDescriptor::custom("Jitter", "Jitter", 0.0, 100.0, 0.0)
-                    .with_unit(ParamUnit::Percent)
-                    .with_id(ParamId(1702), "crush_jitter"),
-            ),
-            3 => Some(
-                ParamDescriptor {
-                    default: 100.0,
-                    ..ParamDescriptor::mix()
-                }
-                .with_id(ParamId(1703), "crush_mix"),
-            ),
-            4 => Some(
-                sonido_core::gain::output_param_descriptor().with_id(ParamId(1704), "crush_output"),
-            ),
-            _ => None,
-        }
-    }
+        [1] ParamDescriptor::custom("Downsample", "Down", 1.0, 64.0, 1.0)
+                .with_step(1.0)
+                .with_id(ParamId(1701), "crush_down")
+                .with_flags(ParamFlags::AUTOMATABLE.union(ParamFlags::STEPPED)),
+            smoothing: SmoothingStyle::Standard,
+            get: this.rate,
+            set: |v| this.rate = v;
 
-    fn smoothing(index: usize) -> SmoothingStyle {
-        match index {
-            0 => SmoothingStyle::Standard, // bit depth — smoothed for automation
-            1 => SmoothingStyle::Standard, // downsample — smoothed for automation
-            2 => SmoothingStyle::None,     // jitter — stochastic, no smoothing needed
-            3 => SmoothingStyle::Standard, // mix
-            4 => SmoothingStyle::Standard, // output level
-            _ => SmoothingStyle::Standard,
-        }
-    }
+        [2] ParamDescriptor::custom("Jitter", "Jitter", 0.0, 100.0, 0.0)
+                .with_unit(ParamUnit::Percent)
+                .with_id(ParamId(1702), "crush_jitter"),
+            smoothing: SmoothingStyle::None,
+            get: this.jitter_pct,
+            set: |v| this.jitter_pct = v;
 
-    fn get(&self, index: usize) -> f32 {
-        match index {
-            0 => self.bits,
-            1 => self.rate,
-            2 => self.jitter_pct,
-            3 => self.mix_pct,
-            4 => self.output_db,
-            _ => 0.0,
-        }
-    }
+        [3] ParamDescriptor {
+                default: 100.0,
+                ..ParamDescriptor::mix()
+            }
+            .with_id(ParamId(1703), "crush_mix"),
+            smoothing: SmoothingStyle::Standard,
+            get: this.mix_pct,
+            set: |v| this.mix_pct = v;
 
-    fn set(&mut self, index: usize, value: f32) {
-        match index {
-            0 => self.bits = value,
-            1 => self.rate = value,
-            2 => self.jitter_pct = value,
-            3 => self.mix_pct = value,
-            4 => self.output_db = value,
-            _ => {}
-        }
+        [4] sonido_core::gain::output_param_descriptor().with_id(ParamId(1704), "crush_output"),
+            smoothing: SmoothingStyle::Standard,
+            get: this.output_db,
+            set: |v| this.output_db = v;
     }
 }
 

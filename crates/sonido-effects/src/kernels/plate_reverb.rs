@@ -48,6 +48,7 @@
 use libm::{ceilf, expf, powf};
 use sonido_core::fast_math::fast_sin_turns;
 use sonido_core::kernel::{DspKernel, KernelParams, SmoothingStyle};
+use sonido_core::kernel_params;
 use sonido_core::{
     AllpassFilter, InterpolatedDelay, Interpolation, OnePole, ParamDescriptor, ParamId, ParamUnit,
     flush_denormal, wet_dry_mix_stereo,
@@ -219,122 +220,92 @@ impl PlateReverbParams {
     }
 }
 
-impl KernelParams for PlateReverbParams {
-    const COUNT: usize = 8;
+kernel_params! {
+    PlateReverbParams, this {
+        [0] ParamDescriptor::custom("Decay", "Decay", 0.1, 10.0, 2.0)
+                .with_unit(ParamUnit::None)
+                .with_id(ParamId(2700), "plate_decay"),
+            smoothing: SmoothingStyle::Slow, // decay_s — feedback coeff changes
+            get: this.decay_s,
+            set: |v| this.decay_s = v;
 
-    fn descriptor(index: usize) -> Option<ParamDescriptor> {
-        match index {
-            0 => Some(
-                ParamDescriptor::custom("Decay", "Decay", 0.1, 10.0, 2.0)
-                    .with_unit(ParamUnit::None)
-                    .with_id(ParamId(2700), "plate_decay"),
-            ),
-            1 => Some(
-                ParamDescriptor {
-                    name: "Damping",
-                    short_name: "Damp",
-                    unit: ParamUnit::Percent,
-                    min: 0.0,
-                    max: 100.0,
-                    default: 50.0,
-                    step: 1.0,
-                    ..ParamDescriptor::mix()
-                }
-                .with_id(ParamId(2701), "plate_damping"),
-            ),
-            2 => Some(
-                ParamDescriptor::custom("Pre-Delay", "PreDly", 0.0, 100.0, 20.0)
-                    .with_unit(ParamUnit::Milliseconds)
-                    .with_step(1.0)
-                    .with_id(ParamId(2702), "plate_predelay"),
-            ),
-            3 => Some(
-                ParamDescriptor {
-                    name: "Bandwidth",
-                    short_name: "BW",
-                    unit: ParamUnit::Percent,
-                    min: 0.0,
-                    max: 100.0,
-                    default: 80.0,
-                    step: 1.0,
-                    ..ParamDescriptor::mix()
-                }
-                .with_id(ParamId(2703), "plate_bandwidth"),
-            ),
-            4 => Some(
-                ParamDescriptor {
-                    name: "Diffusion",
-                    short_name: "Diff",
-                    unit: ParamUnit::Percent,
-                    min: 0.0,
-                    max: 100.0,
-                    default: 70.0,
-                    step: 1.0,
-                    ..ParamDescriptor::mix()
-                }
-                .with_id(ParamId(2704), "plate_diffusion"),
-            ),
-            5 => Some(
-                ParamDescriptor {
-                    name: "Size",
-                    short_name: "Size",
-                    unit: ParamUnit::Percent,
-                    min: 0.0,
-                    max: 100.0,
-                    default: 50.0,
-                    step: 1.0,
-                    ..ParamDescriptor::mix()
-                }
-                .with_id(ParamId(2705), "plate_size"),
-            ),
-            6 => Some(ParamDescriptor::mix().with_id(ParamId(2706), "plate_mix")),
-            7 => Some(
-                sonido_core::gain::output_param_descriptor().with_id(ParamId(2707), "plate_output"),
-            ),
-            _ => None,
-        }
-    }
+        [1] ParamDescriptor {
+                name: "Damping",
+                short_name: "Damp",
+                unit: ParamUnit::Percent,
+                min: 0.0,
+                max: 100.0,
+                default: 50.0,
+                step: 1.0,
+                ..ParamDescriptor::mix()
+            }
+            .with_id(ParamId(2701), "plate_damping"),
+            smoothing: SmoothingStyle::Slow, // damping_pct — one-pole coeff
+            get: this.damping_pct,
+            set: |v| this.damping_pct = v;
 
-    fn smoothing(index: usize) -> SmoothingStyle {
-        match index {
-            0 => SmoothingStyle::Slow,         // decay_s — feedback coeff changes
-            1 => SmoothingStyle::Slow,         // damping_pct — one-pole coeff
-            2 => SmoothingStyle::Interpolated, // predelay_ms — prevent pitch artifacts
-            3 => SmoothingStyle::Slow,         // bandwidth_pct — input filter
-            4 => SmoothingStyle::Standard,     // diffusion_pct
-            5 => SmoothingStyle::Slow,         // size_pct — changes allpass lengths
-            6 => SmoothingStyle::Standard,     // mix_pct
-            7 => SmoothingStyle::Fast,         // output_db
-            _ => SmoothingStyle::Standard,
-        }
-    }
+        [2] ParamDescriptor::custom("Pre-Delay", "PreDly", 0.0, 100.0, 20.0)
+                .with_unit(ParamUnit::Milliseconds)
+                .with_step(1.0)
+                .with_id(ParamId(2702), "plate_predelay"),
+            smoothing: SmoothingStyle::Interpolated, // predelay_ms — prevent pitch artifacts
+            get: this.predelay_ms,
+            set: |v| this.predelay_ms = v;
 
-    fn get(&self, index: usize) -> f32 {
-        match index {
-            0 => self.decay_s,
-            1 => self.damping_pct,
-            2 => self.predelay_ms,
-            3 => self.bandwidth_pct,
-            4 => self.diffusion_pct,
-            5 => self.size_pct,
-            6 => self.mix_pct,
-            7 => self.output_db,
-            _ => 0.0,
-        }
-    }
+        [3] ParamDescriptor {
+                name: "Bandwidth",
+                short_name: "BW",
+                unit: ParamUnit::Percent,
+                min: 0.0,
+                max: 100.0,
+                default: 80.0,
+                step: 1.0,
+                ..ParamDescriptor::mix()
+            }
+            .with_id(ParamId(2703), "plate_bandwidth"),
+            smoothing: SmoothingStyle::Slow, // bandwidth_pct — input filter
+            get: this.bandwidth_pct,
+            set: |v| this.bandwidth_pct = v;
 
-    fn set(&mut self, index: usize, value: f32) {
-        match index {
-            0 => self.decay_s = value,
-            1 => self.damping_pct = value,
-            2 => self.predelay_ms = value,
-            3 => self.bandwidth_pct = value,
-            4 => self.diffusion_pct = value,
-            5 => self.size_pct = value,
-            6 => self.mix_pct = value,
-            7 => self.output_db = value,
-            _ => {}
-        }
+        [4] ParamDescriptor {
+                name: "Diffusion",
+                short_name: "Diff",
+                unit: ParamUnit::Percent,
+                min: 0.0,
+                max: 100.0,
+                default: 70.0,
+                step: 1.0,
+                ..ParamDescriptor::mix()
+            }
+            .with_id(ParamId(2704), "plate_diffusion"),
+            smoothing: SmoothingStyle::Standard, // diffusion_pct
+            get: this.diffusion_pct,
+            set: |v| this.diffusion_pct = v;
+
+        [5] ParamDescriptor {
+                name: "Size",
+                short_name: "Size",
+                unit: ParamUnit::Percent,
+                min: 0.0,
+                max: 100.0,
+                default: 50.0,
+                step: 1.0,
+                ..ParamDescriptor::mix()
+            }
+            .with_id(ParamId(2705), "plate_size"),
+            smoothing: SmoothingStyle::Slow, // size_pct — changes allpass lengths
+            get: this.size_pct,
+            set: |v| this.size_pct = v;
+
+        [6] ParamDescriptor::mix().with_id(ParamId(2706), "plate_mix"),
+            smoothing: SmoothingStyle::Standard, // mix_pct
+            get: this.mix_pct,
+            set: |v| this.mix_pct = v;
+
+        [7] sonido_core::gain::output_param_descriptor().with_id(ParamId(2707), "plate_output"),
+            smoothing: SmoothingStyle::Fast, // output_db
+            get: this.output_db,
+            set: |v| this.output_db = v;
     }
 }
 

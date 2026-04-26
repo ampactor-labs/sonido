@@ -52,6 +52,7 @@
 //! ```
 
 use sonido_core::kernel::{DspKernel, KernelParams, SmoothingStyle};
+use sonido_core::kernel_params;
 use sonido_core::math::soft_limit;
 use sonido_core::{
     Biquad, Cached, ParamDescriptor, ParamFlags, ParamId, ParamScale, ParamUnit,
@@ -113,80 +114,52 @@ impl FilterParams {
     }
 }
 
-impl KernelParams for FilterParams {
-    const COUNT: usize = 4;
+kernel_params! {
+    FilterParams, this {
+        [0] ParamDescriptor {
+                name: "Cutoff",
+                short_name: "Cutoff",
+                unit: ParamUnit::Hertz,
+                min: 20.0,
+                max: 20000.0,
+                default: 1000.0,
+                step: 1.0,
+                ..ParamDescriptor::mix()
+            }
+            .with_id(ParamId(1200), "flt_cutoff")
+            .with_scale(ParamScale::Logarithmic),
+            smoothing: SmoothingStyle::Slow, // cutoff — filter coefficient, avoid zipper
+            get: this.cutoff_hz,
+            set: |v| this.cutoff_hz = v;
 
-    fn descriptor(index: usize) -> Option<ParamDescriptor> {
-        match index {
-            0 => Some(
-                ParamDescriptor {
-                    name: "Cutoff",
-                    short_name: "Cutoff",
-                    unit: ParamUnit::Hertz,
-                    min: 20.0,
-                    max: 20000.0,
-                    default: 1000.0,
-                    step: 1.0,
-                    ..ParamDescriptor::mix()
-                }
-                .with_id(ParamId(1200), "flt_cutoff")
-                .with_scale(ParamScale::Logarithmic),
-            ),
-            1 => Some(
-                ParamDescriptor {
-                    name: "Resonance",
-                    short_name: "Reso",
-                    unit: ParamUnit::Ratio,
-                    min: 0.1,
-                    max: 20.0,
-                    default: 0.707,
-                    step: 0.01,
-                    ..ParamDescriptor::mix()
-                }
-                .with_id(ParamId(1201), "flt_resonance"),
-            ),
-            2 => Some(
-                sonido_core::gain::output_param_descriptor().with_id(ParamId(1202), "flt_output"),
-            ),
-            3 => Some(
-                ParamDescriptor::custom("Type", "Type", 0.0, 3.0, 0.0)
-                    .with_step(1.0)
-                    .with_id(ParamId(1203), "flt_type")
-                    .with_flags(ParamFlags::AUTOMATABLE.union(ParamFlags::STEPPED))
-                    .with_step_labels(&["LPF", "HPF", "BPF", "Notch"]),
-            ),
-            _ => None,
-        }
-    }
+        [1] ParamDescriptor {
+                name: "Resonance",
+                short_name: "Reso",
+                unit: ParamUnit::Ratio,
+                min: 0.1,
+                max: 20.0,
+                default: 0.707,
+                step: 0.01,
+                ..ParamDescriptor::mix()
+            }
+            .with_id(ParamId(1201), "flt_resonance"),
+            smoothing: SmoothingStyle::Slow, // resonance — filter coefficient, avoid zipper
+            get: this.resonance,
+            set: |v| this.resonance = v;
 
-    fn smoothing(index: usize) -> SmoothingStyle {
-        match index {
-            0 => SmoothingStyle::Slow,     // cutoff — filter coefficient, avoid zipper
-            1 => SmoothingStyle::Slow,     // resonance — filter coefficient, avoid zipper
-            2 => SmoothingStyle::Standard, // output level
-            3 => SmoothingStyle::None,     // filter_type — stepped, snap immediately
-            _ => SmoothingStyle::Standard,
-        }
-    }
+        [2] sonido_core::gain::output_param_descriptor().with_id(ParamId(1202), "flt_output"),
+            smoothing: SmoothingStyle::Standard, // output level
+            get: this.output_db,
+            set: |v| this.output_db = v;
 
-    fn get(&self, index: usize) -> f32 {
-        match index {
-            0 => self.cutoff_hz,
-            1 => self.resonance,
-            2 => self.output_db,
-            3 => self.filter_type,
-            _ => 0.0,
-        }
-    }
-
-    fn set(&mut self, index: usize, value: f32) {
-        match index {
-            0 => self.cutoff_hz = value,
-            1 => self.resonance = value,
-            2 => self.output_db = value,
-            3 => self.filter_type = value,
-            _ => {}
-        }
+        [3] ParamDescriptor::custom("Type", "Type", 0.0, 3.0, 0.0)
+                .with_step(1.0)
+                .with_id(ParamId(1203), "flt_type")
+                .with_flags(ParamFlags::AUTOMATABLE.union(ParamFlags::STEPPED))
+                .with_step_labels(&["LPF", "HPF", "BPF", "Notch"]),
+            smoothing: SmoothingStyle::None, // filter_type — stepped, snap immediately
+            get: this.filter_type,
+            set: |v| this.filter_type = v;
     }
 }
 

@@ -49,6 +49,7 @@
 
 use libm::{ceilf, logf};
 use sonido_core::kernel::{DspKernel, KernelParams, SmoothingStyle};
+use sonido_core::kernel_params;
 use sonido_core::{
     AllpassFilter, Biquad, DIVISION_LABELS, InterpolatedDelay, NoteDivision, OnePole,
     ParamDescriptor, ParamFlags, ParamId, ParamScale, ParamUnit, TempoContext, TempoManager,
@@ -218,153 +219,121 @@ impl DelayParams {
     }
 }
 
-impl KernelParams for DelayParams {
-    const COUNT: usize = 10;
+kernel_params! {
+    DelayParams, this {
+        [0] ParamDescriptor::time_ms("Delay Time", "Time", 1.0, 2000.0, 300.0)
+                .with_id(ParamId(1100), "dly_time")
+                .with_scale(ParamScale::Logarithmic),
+            smoothing: SmoothingStyle::Slow, // time_ms — 20 ms, prevents zipper/pitch clicks
+            get: this.time_ms,
+            set: |v| this.time_ms = v;
 
-    fn descriptor(index: usize) -> Option<ParamDescriptor> {
-        match index {
-            0 => Some(
-                ParamDescriptor::time_ms("Delay Time", "Time", 1.0, 2000.0, 300.0)
-                    .with_id(ParamId(1100), "dly_time")
-                    .with_scale(ParamScale::Logarithmic),
-            ),
-            1 => Some(
-                ParamDescriptor {
-                    name: "Feedback",
-                    short_name: "Feedback",
-                    unit: ParamUnit::Percent,
-                    min: 0.0,
-                    max: 95.0,
-                    default: 40.0,
-                    step: 1.0,
-                    ..ParamDescriptor::mix()
-                }
-                .with_id(ParamId(1101), "dly_feedback"),
-            ),
-            2 => Some(ParamDescriptor::mix().with_id(ParamId(1102), "dly_mix")),
-            3 => Some(
-                ParamDescriptor {
-                    name: "Ping Pong",
-                    short_name: "PngPng",
-                    unit: ParamUnit::None,
-                    min: 0.0,
-                    max: 1.0,
-                    default: 0.0,
-                    step: 1.0,
-                    ..ParamDescriptor::mix()
-                }
-                .with_id(ParamId(1103), "dly_ping_pong")
-                .with_flags(ParamFlags::AUTOMATABLE.union(ParamFlags::STEPPED))
-                .with_step_labels(&["Off", "On"]),
-            ),
-            4 => Some(
-                ParamDescriptor::custom("Feedback LP", "Fb LP", 200.0, 20000.0, 20000.0)
-                    .with_id(ParamId(1105), "dly_fb_lp")
-                    .with_unit(ParamUnit::Hertz)
-                    .with_scale(ParamScale::Logarithmic),
-            ),
-            5 => Some(
-                ParamDescriptor::custom("Feedback HP", "Fb HP", 20.0, 2000.0, 20.0)
-                    .with_id(ParamId(1106), "dly_fb_hp")
-                    .with_unit(ParamUnit::Hertz)
-                    .with_scale(ParamScale::Logarithmic),
-            ),
-            6 => Some(
-                ParamDescriptor {
-                    name: "Diffusion",
-                    short_name: "Diff",
-                    unit: ParamUnit::Percent,
-                    min: 0.0,
-                    max: 100.0,
-                    default: 0.0,
-                    step: 1.0,
-                    ..ParamDescriptor::mix()
-                }
-                .with_id(ParamId(1107), "dly_diffusion"),
-            ),
-            7 => Some(
-                ParamDescriptor {
-                    name: "Sync",
-                    short_name: "Sync",
-                    unit: ParamUnit::None,
-                    min: 0.0,
-                    max: 1.0,
-                    default: 0.0,
-                    step: 1.0,
-                    ..ParamDescriptor::mix()
-                }
-                .with_id(ParamId(1108), "dly_sync")
-                .with_flags(ParamFlags::AUTOMATABLE.union(ParamFlags::STEPPED))
-                .with_step_labels(&["Off", "On"]),
-            ),
-            8 => Some(
-                ParamDescriptor {
-                    name: "Division",
-                    short_name: "Div",
-                    unit: ParamUnit::None,
-                    min: 0.0,
-                    max: 11.0,
-                    default: 2.0,
-                    step: 1.0,
-                    ..ParamDescriptor::mix()
-                }
-                .with_id(ParamId(1109), "dly_division")
-                .with_flags(ParamFlags::AUTOMATABLE.union(ParamFlags::STEPPED))
-                .with_step_labels(DIVISION_LABELS),
-            ),
-            9 => Some(
-                sonido_core::gain::output_param_descriptor().with_id(ParamId(1104), "dly_output"),
-            ),
-            _ => None,
-        }
-    }
+        [1] ParamDescriptor {
+                name: "Feedback",
+                short_name: "Feedback",
+                unit: ParamUnit::Percent,
+                min: 0.0,
+                max: 95.0,
+                default: 40.0,
+                step: 1.0,
+                ..ParamDescriptor::mix()
+            }
+            .with_id(ParamId(1101), "dly_feedback"),
+            smoothing: SmoothingStyle::Standard, // feedback_pct — 10 ms
+            get: this.feedback_pct,
+            set: |v| this.feedback_pct = v;
 
-    fn smoothing(index: usize) -> SmoothingStyle {
-        match index {
-            0 => SmoothingStyle::Slow,         // time_ms — 20 ms, prevents zipper/pitch clicks
-            1 => SmoothingStyle::Standard,     // feedback_pct — 10 ms
-            2 => SmoothingStyle::Standard,     // mix_pct — 10 ms
-            3 => SmoothingStyle::None,         // ping_pong — stepped toggle, snap
-            4 => SmoothingStyle::Slow,         // fb_lp_hz — 20 ms, filter coefficients
-            5 => SmoothingStyle::Slow,         // fb_hp_hz — 20 ms, filter coefficients
-            6 => SmoothingStyle::Standard,     // diffusion_pct — 10 ms
-            7 => SmoothingStyle::None,         // sync — stepped toggle, snap
-            8 => SmoothingStyle::None,         // division — stepped enum, snap
-            9 => SmoothingStyle::Standard,     // output_db — 10 ms
-            _ => SmoothingStyle::Standard,
-        }
-    }
+        [2] ParamDescriptor::mix().with_id(ParamId(1102), "dly_mix"),
+            smoothing: SmoothingStyle::Standard, // mix_pct — 10 ms
+            get: this.mix_pct,
+            set: |v| this.mix_pct = v;
 
-    fn get(&self, index: usize) -> f32 {
-        match index {
-            0 => self.time_ms,
-            1 => self.feedback_pct,
-            2 => self.mix_pct,
-            3 => self.ping_pong,
-            4 => self.fb_lp_hz,
-            5 => self.fb_hp_hz,
-            6 => self.diffusion_pct,
-            7 => self.sync,
-            8 => self.division,
-            9 => self.output_db,
-            _ => 0.0,
-        }
-    }
+        [3] ParamDescriptor {
+                name: "Ping Pong",
+                short_name: "PngPng",
+                unit: ParamUnit::None,
+                min: 0.0,
+                max: 1.0,
+                default: 0.0,
+                step: 1.0,
+                ..ParamDescriptor::mix()
+            }
+            .with_id(ParamId(1103), "dly_ping_pong")
+            .with_flags(ParamFlags::AUTOMATABLE.union(ParamFlags::STEPPED))
+            .with_step_labels(&["Off", "On"]),
+            smoothing: SmoothingStyle::None, // ping_pong — stepped toggle, snap
+            get: this.ping_pong,
+            set: |v| this.ping_pong = v;
 
-    fn set(&mut self, index: usize, value: f32) {
-        match index {
-            0 => self.time_ms = value,
-            1 => self.feedback_pct = value,
-            2 => self.mix_pct = value,
-            3 => self.ping_pong = value,
-            4 => self.fb_lp_hz = value,
-            5 => self.fb_hp_hz = value,
-            6 => self.diffusion_pct = value,
-            7 => self.sync = value,
-            8 => self.division = value,
-            9 => self.output_db = value,
-            _ => {}
-        }
+        [4] ParamDescriptor::custom("Feedback LP", "Fb LP", 200.0, 20000.0, 20000.0)
+                .with_id(ParamId(1105), "dly_fb_lp")
+                .with_unit(ParamUnit::Hertz)
+                .with_scale(ParamScale::Logarithmic),
+            smoothing: SmoothingStyle::Slow, // fb_lp_hz — 20 ms, filter coefficients
+            get: this.fb_lp_hz,
+            set: |v| this.fb_lp_hz = v;
+
+        [5] ParamDescriptor::custom("Feedback HP", "Fb HP", 20.0, 2000.0, 20.0)
+                .with_id(ParamId(1106), "dly_fb_hp")
+                .with_unit(ParamUnit::Hertz)
+                .with_scale(ParamScale::Logarithmic),
+            smoothing: SmoothingStyle::Slow, // fb_hp_hz — 20 ms, filter coefficients
+            get: this.fb_hp_hz,
+            set: |v| this.fb_hp_hz = v;
+
+        [6] ParamDescriptor {
+                name: "Diffusion",
+                short_name: "Diff",
+                unit: ParamUnit::Percent,
+                min: 0.0,
+                max: 100.0,
+                default: 0.0,
+                step: 1.0,
+                ..ParamDescriptor::mix()
+            }
+            .with_id(ParamId(1107), "dly_diffusion"),
+            smoothing: SmoothingStyle::Standard, // diffusion_pct — 10 ms
+            get: this.diffusion_pct,
+            set: |v| this.diffusion_pct = v;
+
+        [7] ParamDescriptor {
+                name: "Sync",
+                short_name: "Sync",
+                unit: ParamUnit::None,
+                min: 0.0,
+                max: 1.0,
+                default: 0.0,
+                step: 1.0,
+                ..ParamDescriptor::mix()
+            }
+            .with_id(ParamId(1108), "dly_sync")
+            .with_flags(ParamFlags::AUTOMATABLE.union(ParamFlags::STEPPED))
+            .with_step_labels(&["Off", "On"]),
+            smoothing: SmoothingStyle::None, // sync — stepped toggle, snap
+            get: this.sync,
+            set: |v| this.sync = v;
+
+        [8] ParamDescriptor {
+                name: "Division",
+                short_name: "Div",
+                unit: ParamUnit::None,
+                min: 0.0,
+                max: 11.0,
+                default: 2.0,
+                step: 1.0,
+                ..ParamDescriptor::mix()
+            }
+            .with_id(ParamId(1109), "dly_division")
+            .with_flags(ParamFlags::AUTOMATABLE.union(ParamFlags::STEPPED))
+            .with_step_labels(DIVISION_LABELS),
+            smoothing: SmoothingStyle::None, // division — stepped enum, snap
+            get: this.division,
+            set: |v| this.division = v;
+
+        [9] sonido_core::gain::output_param_descriptor().with_id(ParamId(1104), "dly_output"),
+            smoothing: SmoothingStyle::Standard, // output_db — 10 ms
+            get: this.output_db,
+            set: |v| this.output_db = v;
     }
 }
 

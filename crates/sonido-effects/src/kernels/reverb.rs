@@ -56,6 +56,7 @@
 use libm::{ceilf, powf, roundf, sqrtf};
 use sonido_core::fast_math::fast_sin_turns;
 use sonido_core::kernel::{DspKernel, KernelParams, SmoothingStyle};
+use sonido_core::kernel_params;
 use sonido_core::{
     InterpolatedDelay, Interpolation, ModulatedAllpass, OnePole, ParamDescriptor, ParamId,
     ParamUnit, fast_db_to_linear, flush_denormal, wet_dry_mix_stereo,
@@ -297,130 +298,100 @@ impl ReverbParams {
     }
 }
 
-impl KernelParams for ReverbParams {
-    const COUNT: usize = 8;
+kernel_params! {
+    ReverbParams, this {
+        [0] ParamDescriptor {
+                name: "Room Size",
+                short_name: "Room",
+                unit: ParamUnit::Percent,
+                min: 0.0,
+                max: 100.0,
+                default: 50.0,
+                step: 1.0,
+                ..ParamDescriptor::mix()
+            }
+            .with_id(ParamId(1500), "rev_room_size"),
+            smoothing: SmoothingStyle::Slow, // room_size_pct — affects FDN feedback coeffs
+            get: this.room_size_pct,
+            set: |v| this.room_size_pct = v;
 
-    fn descriptor(index: usize) -> Option<ParamDescriptor> {
-        match index {
-            0 => Some(
-                ParamDescriptor {
-                    name: "Room Size",
-                    short_name: "Room",
-                    unit: ParamUnit::Percent,
-                    min: 0.0,
-                    max: 100.0,
-                    default: 50.0,
-                    step: 1.0,
-                    ..ParamDescriptor::mix()
-                }
-                .with_id(ParamId(1500), "rev_room_size"),
-            ),
-            1 => Some(
-                ParamDescriptor {
-                    name: "Decay",
-                    short_name: "Decay",
-                    unit: ParamUnit::Percent,
-                    min: 0.0,
-                    max: 100.0,
-                    default: 50.0,
-                    step: 1.0,
-                    ..ParamDescriptor::mix()
-                }
-                .with_id(ParamId(1501), "rev_decay"),
-            ),
-            2 => Some(
-                ParamDescriptor {
-                    name: "Damping",
-                    short_name: "Damping",
-                    unit: ParamUnit::Percent,
-                    min: 0.0,
-                    max: 100.0,
-                    default: 50.0,
-                    step: 1.0,
-                    ..ParamDescriptor::mix()
-                }
-                .with_id(ParamId(1502), "rev_damping"),
-            ),
-            3 => Some(
-                ParamDescriptor::custom("Pre-Delay", "PreDly", 0.0, 100.0, 10.0)
-                    .with_unit(ParamUnit::Milliseconds)
-                    .with_step(1.0)
-                    .with_id(ParamId(1503), "rev_predelay"),
-            ),
-            4 => Some(ParamDescriptor::mix().with_id(ParamId(1504), "rev_mix")),
-            5 => Some(
-                ParamDescriptor {
-                    name: "Stereo Width",
-                    short_name: "Width",
-                    unit: ParamUnit::Percent,
-                    min: 0.0,
-                    max: 100.0,
-                    default: 100.0,
-                    step: 1.0,
-                    ..ParamDescriptor::mix()
-                }
-                .with_id(ParamId(1505), "rev_width"),
-            ),
-            6 => Some(
-                ParamDescriptor {
-                    name: "ER Level",
-                    short_name: "ER Lvl",
-                    unit: ParamUnit::Percent,
-                    min: 0.0,
-                    max: 100.0,
-                    default: 50.0,
-                    step: 1.0,
-                    ..ParamDescriptor::mix()
-                }
-                .with_id(ParamId(1508), "rev_er_level"),
-            ),
-            7 => Some(
-                sonido_core::gain::output_param_descriptor().with_id(ParamId(1507), "rev_output"),
-            ),
-            _ => None,
-        }
-    }
+        [1] ParamDescriptor {
+                name: "Decay",
+                short_name: "Decay",
+                unit: ParamUnit::Percent,
+                min: 0.0,
+                max: 100.0,
+                default: 50.0,
+                step: 1.0,
+                ..ParamDescriptor::mix()
+            }
+            .with_id(ParamId(1501), "rev_decay"),
+            smoothing: SmoothingStyle::Slow, // decay_pct — affects FDN feedback coeffs
+            get: this.decay_pct,
+            set: |v| this.decay_pct = v;
 
-    fn smoothing(index: usize) -> SmoothingStyle {
-        match index {
-            0 => SmoothingStyle::Slow, // room_size_pct — affects FDN feedback coeffs
-            1 => SmoothingStyle::Slow, // decay_pct — affects FDN feedback coeffs
-            2 => SmoothingStyle::Slow, // damping_pct — affects one-pole cutoff
-            3 => SmoothingStyle::Interpolated, // predelay_ms — prevent pitch-shift artifacts
-            4 => SmoothingStyle::Standard, // mix_pct — 10ms crossfade
-            5 => SmoothingStyle::Standard, // width_pct — 10ms
-            6 => SmoothingStyle::Standard, // er_level_pct — 10ms
-            7 => SmoothingStyle::Standard, // output_db — 10ms
-            _ => SmoothingStyle::Standard,
-        }
-    }
+        [2] ParamDescriptor {
+                name: "Damping",
+                short_name: "Damping",
+                unit: ParamUnit::Percent,
+                min: 0.0,
+                max: 100.0,
+                default: 50.0,
+                step: 1.0,
+                ..ParamDescriptor::mix()
+            }
+            .with_id(ParamId(1502), "rev_damping"),
+            smoothing: SmoothingStyle::Slow, // damping_pct — affects one-pole cutoff
+            get: this.damping_pct,
+            set: |v| this.damping_pct = v;
 
-    fn get(&self, index: usize) -> f32 {
-        match index {
-            0 => self.room_size_pct,
-            1 => self.decay_pct,
-            2 => self.damping_pct,
-            3 => self.predelay_ms,
-            4 => self.mix_pct,
-            5 => self.width_pct,
-            6 => self.er_level_pct,
-            7 => self.output_db,
-            _ => 0.0,
-        }
-    }
+        [3] ParamDescriptor::custom("Pre-Delay", "PreDly", 0.0, 100.0, 10.0)
+                .with_unit(ParamUnit::Milliseconds)
+                .with_step(1.0)
+                .with_id(ParamId(1503), "rev_predelay"),
+            smoothing: SmoothingStyle::Interpolated, // predelay_ms — prevent pitch-shift artifacts
+            get: this.predelay_ms,
+            set: |v| this.predelay_ms = v;
 
-    fn set(&mut self, index: usize, value: f32) {
-        match index {
-            0 => self.room_size_pct = value,
-            1 => self.decay_pct = value,
-            2 => self.damping_pct = value,
-            3 => self.predelay_ms = value,
-            4 => self.mix_pct = value,
-            5 => self.width_pct = value,
-            6 => self.er_level_pct = value,
-            7 => self.output_db = value,
-            _ => {}
-        }
+        [4] ParamDescriptor::mix().with_id(ParamId(1504), "rev_mix"),
+            smoothing: SmoothingStyle::Standard, // mix_pct — 10ms crossfade
+            get: this.mix_pct,
+            set: |v| this.mix_pct = v;
+
+        [5] ParamDescriptor {
+                name: "Stereo Width",
+                short_name: "Width",
+                unit: ParamUnit::Percent,
+                min: 0.0,
+                max: 100.0,
+                default: 100.0,
+                step: 1.0,
+                ..ParamDescriptor::mix()
+            }
+            .with_id(ParamId(1505), "rev_width"),
+            smoothing: SmoothingStyle::Standard, // width_pct — 10ms
+            get: this.width_pct,
+            set: |v| this.width_pct = v;
+
+        [6] ParamDescriptor {
+                name: "ER Level",
+                short_name: "ER Lvl",
+                unit: ParamUnit::Percent,
+                min: 0.0,
+                max: 100.0,
+                default: 50.0,
+                step: 1.0,
+                ..ParamDescriptor::mix()
+            }
+            .with_id(ParamId(1508), "rev_er_level"),
+            smoothing: SmoothingStyle::Standard, // er_level_pct — 10ms
+            get: this.er_level_pct,
+            set: |v| this.er_level_pct = v;
+
+        [7] sonido_core::gain::output_param_descriptor().with_id(ParamId(1507), "rev_output"),
+            smoothing: SmoothingStyle::Standard, // output_db — 10ms
+            get: this.output_db,
+            set: |v| this.output_db = v;
     }
 }
 

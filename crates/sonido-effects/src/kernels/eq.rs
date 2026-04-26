@@ -64,6 +64,7 @@
 //! ```
 
 use sonido_core::kernel::{DspKernel, KernelParams, SmoothingStyle};
+use sonido_core::kernel_params;
 use sonido_core::math::soft_limit;
 use sonido_core::{
     Biquad, Cached, ParamDescriptor, ParamId, ParamScale, ParamUnit, fast_db_to_linear,
@@ -215,161 +216,127 @@ impl EqParams {
     }
 }
 
-impl KernelParams for EqParams {
-    const COUNT: usize = 10;
+kernel_params! {
+    EqParams, this {
+        // Low band
+        [0] ParamDescriptor {
+                name: "Low Frequency",
+                short_name: "LowFreq",
+                unit: ParamUnit::Hertz,
+                min: 20.0,
+                max: 500.0,
+                default: 100.0,
+                step: 1.0,
+                ..ParamDescriptor::mix()
+            }
+            .with_id(ParamId(500), "eq_low_freq")
+            .with_scale(ParamScale::Logarithmic),
+            smoothing: SmoothingStyle::Slow, // low_freq_hz — filter coefficient, avoid zipper
+            get: this.low_freq_hz,
+            set: |v| this.low_freq_hz = v;
 
-    fn descriptor(index: usize) -> Option<ParamDescriptor> {
-        match index {
-            // Low band
-            0 => Some(
-                ParamDescriptor {
-                    name: "Low Frequency",
-                    short_name: "LowFreq",
-                    unit: ParamUnit::Hertz,
-                    min: 20.0,
-                    max: 500.0,
-                    default: 100.0,
-                    step: 1.0,
-                    ..ParamDescriptor::mix()
-                }
-                .with_id(ParamId(500), "eq_low_freq")
-                .with_scale(ParamScale::Logarithmic),
-            ),
-            1 => Some(
-                ParamDescriptor::gain_db("Low Gain", "LowGain", -12.0, 12.0, 0.0)
-                    .with_id(ParamId(501), "eq_low_gain"),
-            ),
-            2 => Some(
-                ParamDescriptor {
-                    name: "Low Q",
-                    short_name: "LowQ",
-                    unit: ParamUnit::None,
-                    min: 0.5,
-                    max: 5.0,
-                    default: 1.0,
-                    step: 0.1,
-                    ..ParamDescriptor::mix()
-                }
-                .with_id(ParamId(502), "eq_low_q"),
-            ),
-            // Mid band
-            3 => Some(
-                ParamDescriptor {
-                    name: "Mid Frequency",
-                    short_name: "MidFreq",
-                    unit: ParamUnit::Hertz,
-                    min: 200.0,
-                    max: 5000.0,
-                    default: 1000.0,
-                    step: 10.0,
-                    ..ParamDescriptor::mix()
-                }
-                .with_id(ParamId(503), "eq_mid_freq")
-                .with_scale(ParamScale::Logarithmic),
-            ),
-            4 => Some(
-                ParamDescriptor::gain_db("Mid Gain", "MidGain", -12.0, 12.0, 0.0)
-                    .with_id(ParamId(504), "eq_mid_gain"),
-            ),
-            5 => Some(
-                ParamDescriptor {
-                    name: "Mid Q",
-                    short_name: "MidQ",
-                    unit: ParamUnit::None,
-                    min: 0.5,
-                    max: 5.0,
-                    default: 1.0,
-                    step: 0.1,
-                    ..ParamDescriptor::mix()
-                }
-                .with_id(ParamId(505), "eq_mid_q"),
-            ),
-            // High band
-            6 => Some(
-                ParamDescriptor {
-                    name: "High Frequency",
-                    short_name: "HighFreq",
-                    unit: ParamUnit::Hertz,
-                    min: 1000.0,
-                    max: 15000.0,
-                    default: 5000.0,
-                    step: 100.0,
-                    ..ParamDescriptor::mix()
-                }
-                .with_id(ParamId(506), "eq_high_freq")
-                .with_scale(ParamScale::Logarithmic),
-            ),
-            7 => Some(
-                ParamDescriptor::gain_db("High Gain", "HighGain", -12.0, 12.0, 0.0)
-                    .with_id(ParamId(507), "eq_high_gain"),
-            ),
-            8 => Some(
-                ParamDescriptor {
-                    name: "High Q",
-                    short_name: "HighQ",
-                    unit: ParamUnit::None,
-                    min: 0.5,
-                    max: 5.0,
-                    default: 1.0,
-                    step: 0.1,
-                    ..ParamDescriptor::mix()
-                }
-                .with_id(ParamId(508), "eq_high_q"),
-            ),
-            // Output
-            9 => Some(
-                sonido_core::gain::output_param_descriptor().with_id(ParamId(509), "eq_output"),
-            ),
-            _ => None,
-        }
-    }
+        [1] ParamDescriptor::gain_db("Low Gain", "LowGain", -12.0, 12.0, 0.0)
+                .with_id(ParamId(501), "eq_low_gain"),
+            smoothing: SmoothingStyle::Standard, // low_gain_db — gain, moderate smoothing
+            get: this.low_gain_db,
+            set: |v| this.low_gain_db = v;
 
-    fn smoothing(index: usize) -> SmoothingStyle {
-        match index {
-            0 => SmoothingStyle::Slow, // low_freq_hz — filter coefficient, avoid zipper
-            1 => SmoothingStyle::Standard, // low_gain_db — gain, moderate smoothing
-            2 => SmoothingStyle::Slow, // low_q — filter coefficient, avoid zipper
-            3 => SmoothingStyle::Slow, // mid_freq_hz — filter coefficient
-            4 => SmoothingStyle::Standard, // mid_gain_db
-            5 => SmoothingStyle::Slow, // mid_q — filter coefficient
-            6 => SmoothingStyle::Slow, // high_freq_hz — filter coefficient
-            7 => SmoothingStyle::Standard, // high_gain_db
-            8 => SmoothingStyle::Slow, // high_q — filter coefficient
-            9 => SmoothingStyle::Standard, // output_db — level control
-            _ => SmoothingStyle::Standard,
-        }
-    }
+        [2] ParamDescriptor {
+                name: "Low Q",
+                short_name: "LowQ",
+                unit: ParamUnit::None,
+                min: 0.5,
+                max: 5.0,
+                default: 1.0,
+                step: 0.1,
+                ..ParamDescriptor::mix()
+            }
+            .with_id(ParamId(502), "eq_low_q"),
+            smoothing: SmoothingStyle::Slow, // low_q — filter coefficient, avoid zipper
+            get: this.low_q,
+            set: |v| this.low_q = v;
 
-    fn get(&self, index: usize) -> f32 {
-        match index {
-            0 => self.low_freq_hz,
-            1 => self.low_gain_db,
-            2 => self.low_q,
-            3 => self.mid_freq_hz,
-            4 => self.mid_gain_db,
-            5 => self.mid_q,
-            6 => self.high_freq_hz,
-            7 => self.high_gain_db,
-            8 => self.high_q,
-            9 => self.output_db,
-            _ => 0.0,
-        }
-    }
+        // Mid band
+        [3] ParamDescriptor {
+                name: "Mid Frequency",
+                short_name: "MidFreq",
+                unit: ParamUnit::Hertz,
+                min: 200.0,
+                max: 5000.0,
+                default: 1000.0,
+                step: 10.0,
+                ..ParamDescriptor::mix()
+            }
+            .with_id(ParamId(503), "eq_mid_freq")
+            .with_scale(ParamScale::Logarithmic),
+            smoothing: SmoothingStyle::Slow, // mid_freq_hz — filter coefficient
+            get: this.mid_freq_hz,
+            set: |v| this.mid_freq_hz = v;
 
-    fn set(&mut self, index: usize, value: f32) {
-        match index {
-            0 => self.low_freq_hz = value,
-            1 => self.low_gain_db = value,
-            2 => self.low_q = value,
-            3 => self.mid_freq_hz = value,
-            4 => self.mid_gain_db = value,
-            5 => self.mid_q = value,
-            6 => self.high_freq_hz = value,
-            7 => self.high_gain_db = value,
-            8 => self.high_q = value,
-            9 => self.output_db = value,
-            _ => {}
-        }
+        [4] ParamDescriptor::gain_db("Mid Gain", "MidGain", -12.0, 12.0, 0.0)
+                .with_id(ParamId(504), "eq_mid_gain"),
+            smoothing: SmoothingStyle::Standard, // mid_gain_db
+            get: this.mid_gain_db,
+            set: |v| this.mid_gain_db = v;
+
+        [5] ParamDescriptor {
+                name: "Mid Q",
+                short_name: "MidQ",
+                unit: ParamUnit::None,
+                min: 0.5,
+                max: 5.0,
+                default: 1.0,
+                step: 0.1,
+                ..ParamDescriptor::mix()
+            }
+            .with_id(ParamId(505), "eq_mid_q"),
+            smoothing: SmoothingStyle::Slow, // mid_q — filter coefficient
+            get: this.mid_q,
+            set: |v| this.mid_q = v;
+
+        // High band
+        [6] ParamDescriptor {
+                name: "High Frequency",
+                short_name: "HighFreq",
+                unit: ParamUnit::Hertz,
+                min: 1000.0,
+                max: 15000.0,
+                default: 5000.0,
+                step: 100.0,
+                ..ParamDescriptor::mix()
+            }
+            .with_id(ParamId(506), "eq_high_freq")
+            .with_scale(ParamScale::Logarithmic),
+            smoothing: SmoothingStyle::Slow, // high_freq_hz — filter coefficient
+            get: this.high_freq_hz,
+            set: |v| this.high_freq_hz = v;
+
+        [7] ParamDescriptor::gain_db("High Gain", "HighGain", -12.0, 12.0, 0.0)
+                .with_id(ParamId(507), "eq_high_gain"),
+            smoothing: SmoothingStyle::Standard, // high_gain_db
+            get: this.high_gain_db,
+            set: |v| this.high_gain_db = v;
+
+        [8] ParamDescriptor {
+                name: "High Q",
+                short_name: "HighQ",
+                unit: ParamUnit::None,
+                min: 0.5,
+                max: 5.0,
+                default: 1.0,
+                step: 0.1,
+                ..ParamDescriptor::mix()
+            }
+            .with_id(ParamId(508), "eq_high_q"),
+            smoothing: SmoothingStyle::Slow, // high_q — filter coefficient
+            get: this.high_q,
+            set: |v| this.high_q = v;
+
+        // Output
+        [9] sonido_core::gain::output_param_descriptor().with_id(ParamId(509), "eq_output"),
+            smoothing: SmoothingStyle::Standard, // output_db — level control
+            get: this.output_db,
+            set: |v| this.output_db = v;
     }
 }
 

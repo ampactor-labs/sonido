@@ -68,6 +68,7 @@
 extern crate alloc;
 
 use sonido_core::kernel::{DspKernel, KernelParams, SmoothingStyle};
+use sonido_core::kernel_params;
 use sonido_core::{
     LoopBuffer, ParamDescriptor, ParamFlags, ParamId, ParamUnit, fast_db_to_linear, flush_denormal,
     wet_dry_mix_stereo,
@@ -192,91 +193,63 @@ impl LooperParams {
     }
 }
 
-impl KernelParams for LooperParams {
-    const COUNT: usize = 6;
+kernel_params! {
+    LooperParams, this {
+        [0] ParamDescriptor::custom("Mode", "Mode", 0.0, 3.0, 0.0)
+                .with_unit(ParamUnit::None)
+                .with_step(1.0)
+                .with_id(ParamId(2000), "looper_mode")
+                .with_flags(ParamFlags::AUTOMATABLE.union(ParamFlags::STEPPED))
+                .with_step_labels(MODE_LABELS),
+            smoothing: SmoothingStyle::None, // mode — stepped enum, snap immediately
+            get: this.mode,
+            set: |v| this.mode = v;
 
-    fn descriptor(index: usize) -> Option<ParamDescriptor> {
-        match index {
-            0 => Some(
-                ParamDescriptor::custom("Mode", "Mode", 0.0, 3.0, 0.0)
-                    .with_unit(ParamUnit::None)
-                    .with_step(1.0)
-                    .with_id(ParamId(2000), "looper_mode")
-                    .with_flags(ParamFlags::AUTOMATABLE.union(ParamFlags::STEPPED))
-                    .with_step_labels(MODE_LABELS),
-            ),
-            1 => Some(
-                ParamDescriptor {
-                    name: "Feedback",
-                    short_name: "Feedback",
-                    unit: ParamUnit::Percent,
-                    min: 0.0,
-                    max: 100.0,
-                    default: 80.0,
-                    step: 1.0,
-                    ..ParamDescriptor::mix()
-                }
-                .with_id(ParamId(2001), "looper_feedback"),
-            ),
-            2 => Some(
-                ParamDescriptor::custom("Half Speed", "Half Spd", 0.0, 1.0, 0.0)
-                    .with_unit(ParamUnit::None)
-                    .with_step(1.0)
-                    .with_id(ParamId(2002), "looper_half_speed")
-                    .with_flags(ParamFlags::AUTOMATABLE.union(ParamFlags::STEPPED))
-                    .with_step_labels(&["Off", "On"]),
-            ),
-            3 => Some(
-                ParamDescriptor::custom("Reverse", "Reverse", 0.0, 1.0, 0.0)
-                    .with_unit(ParamUnit::None)
-                    .with_step(1.0)
-                    .with_id(ParamId(2003), "looper_reverse")
-                    .with_flags(ParamFlags::AUTOMATABLE.union(ParamFlags::STEPPED))
-                    .with_step_labels(&["Off", "On"]),
-            ),
-            4 => Some(ParamDescriptor::mix().with_id(ParamId(2004), "looper_mix")),
-            5 => Some(
-                sonido_core::gain::output_param_descriptor()
-                    .with_id(ParamId(2005), "looper_output"),
-            ),
-            _ => None,
-        }
-    }
+        [1] ParamDescriptor {
+                name: "Feedback",
+                short_name: "Feedback",
+                unit: ParamUnit::Percent,
+                min: 0.0,
+                max: 100.0,
+                default: 80.0,
+                step: 1.0,
+                ..ParamDescriptor::mix()
+            }
+            .with_id(ParamId(2001), "looper_feedback"),
+            smoothing: SmoothingStyle::Standard, // feedback_pct — 10 ms
+            get: this.feedback_pct,
+            set: |v| this.feedback_pct = v;
 
-    fn smoothing(index: usize) -> SmoothingStyle {
-        match index {
-            0 => SmoothingStyle::None,     // mode — stepped enum, snap immediately
-            1 => SmoothingStyle::Standard, // feedback_pct — 10 ms
-            2 => SmoothingStyle::None,     // half_speed — stepped toggle, snap
-            3 => SmoothingStyle::None,     // reverse — stepped toggle, snap
-            4 => SmoothingStyle::Standard, // mix_pct — 10 ms
-            5 => SmoothingStyle::Standard, // output_db — 10 ms
-            _ => SmoothingStyle::Standard,
-        }
-    }
+        [2] ParamDescriptor::custom("Half Speed", "Half Spd", 0.0, 1.0, 0.0)
+                .with_unit(ParamUnit::None)
+                .with_step(1.0)
+                .with_id(ParamId(2002), "looper_half_speed")
+                .with_flags(ParamFlags::AUTOMATABLE.union(ParamFlags::STEPPED))
+                .with_step_labels(&["Off", "On"]),
+            smoothing: SmoothingStyle::None, // half_speed — stepped toggle, snap
+            get: this.half_speed,
+            set: |v| this.half_speed = v;
 
-    fn get(&self, index: usize) -> f32 {
-        match index {
-            0 => self.mode,
-            1 => self.feedback_pct,
-            2 => self.half_speed,
-            3 => self.reverse,
-            4 => self.mix_pct,
-            5 => self.output_db,
-            _ => 0.0,
-        }
-    }
+        [3] ParamDescriptor::custom("Reverse", "Reverse", 0.0, 1.0, 0.0)
+                .with_unit(ParamUnit::None)
+                .with_step(1.0)
+                .with_id(ParamId(2003), "looper_reverse")
+                .with_flags(ParamFlags::AUTOMATABLE.union(ParamFlags::STEPPED))
+                .with_step_labels(&["Off", "On"]),
+            smoothing: SmoothingStyle::None, // reverse — stepped toggle, snap
+            get: this.reverse,
+            set: |v| this.reverse = v;
 
-    fn set(&mut self, index: usize, value: f32) {
-        match index {
-            0 => self.mode = value,
-            1 => self.feedback_pct = value,
-            2 => self.half_speed = value,
-            3 => self.reverse = value,
-            4 => self.mix_pct = value,
-            5 => self.output_db = value,
-            _ => {}
-        }
+        [4] ParamDescriptor::mix().with_id(ParamId(2004), "looper_mix"),
+            smoothing: SmoothingStyle::Standard, // mix_pct — 10 ms
+            get: this.mix_pct,
+            set: |v| this.mix_pct = v;
+
+        [5] sonido_core::gain::output_param_descriptor()
+                .with_id(ParamId(2005), "looper_output"),
+            smoothing: SmoothingStyle::Standard, // output_db — 10 ms
+            get: this.output_db,
+            set: |v| this.output_db = v;
     }
 }
 

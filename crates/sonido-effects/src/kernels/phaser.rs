@@ -50,6 +50,7 @@
 
 use core::f32::consts::PI;
 use sonido_core::kernel::{DspKernel, KernelParams, SmoothingStyle};
+use sonido_core::kernel_params;
 use sonido_core::{
     DIVISION_LABELS, Lfo, ParamDescriptor, ParamFlags, ParamId, ParamScale, ParamUnit,
     TempoContext, TempoManager, fast_db_to_linear, fast_exp2, fast_log2, fast_tan, flush_denormal,
@@ -261,127 +262,100 @@ impl PhaserParams {
     }
 }
 
-impl KernelParams for PhaserParams {
-    const COUNT: usize = 11;
+kernel_params! {
+    PhaserParams, this {
+        // Index 0: Rate — must match classic Phaser impl_params! ParamId(900)
+        [0] ParamDescriptor::rate_hz(0.05, 5.0, 0.3).with_id(ParamId(900), "phsr_rate"),
+            smoothing: SmoothingStyle::Standard, // rate — LFO frequency, gradual feel
+            get: this.rate,
+            set: |v| this.rate = v;
 
-    fn descriptor(index: usize) -> Option<ParamDescriptor> {
-        match index {
-            // Index 0: Rate — must match classic Phaser impl_params! ParamId(900)
-            0 => Some(ParamDescriptor::rate_hz(0.05, 5.0, 0.3).with_id(ParamId(900), "phsr_rate")),
-            // Index 1: Depth — ParamId(901)
-            1 => Some(ParamDescriptor::depth().with_id(ParamId(901), "phsr_depth")),
-            // Index 2: Stages — ParamId(902), STEPPED, step=2
-            2 => Some(
-                ParamDescriptor {
-                    name: "Stages",
-                    short_name: "Stg",
-                    unit: ParamUnit::None,
-                    min: 2.0,
-                    max: 12.0,
-                    default: 6.0,
-                    step: 2.0,
-                    ..ParamDescriptor::mix()
-                }
-                .with_id(ParamId(902), "phsr_stages")
-                .with_flags(ParamFlags::AUTOMATABLE.union(ParamFlags::STEPPED)),
-            ),
-            // Index 3: Feedback — ParamId(903)
-            3 => Some(ParamDescriptor::feedback().with_id(ParamId(903), "phsr_feedback")),
-            // Index 4: Mix — ParamId(904)
-            4 => Some(ParamDescriptor::mix().with_id(ParamId(904), "phsr_mix")),
-            // Index 5: Min Freq — ParamId(906) (note: output is 905, min/max come before it)
-            5 => Some(
-                ParamDescriptor::custom("Min Freq", "MinF", 20.0, 2000.0, 200.0)
-                    .with_id(ParamId(906), "phsr_min_freq")
-                    .with_unit(ParamUnit::Hertz)
-                    .with_scale(ParamScale::Logarithmic),
-            ),
-            // Index 6: Max Freq — ParamId(907)
-            6 => Some(
-                ParamDescriptor::custom("Max Freq", "MaxF", 200.0, 20000.0, 4000.0)
-                    .with_id(ParamId(907), "phsr_max_freq")
-                    .with_unit(ParamUnit::Hertz)
-                    .with_scale(ParamScale::Logarithmic),
-            ),
-            // Index 7: Sync — ParamId(908), STEPPED
-            7 => Some(
-                ParamDescriptor::custom("Sync", "Sync", 0.0, 1.0, 0.0)
-                    .with_step(1.0)
-                    .with_id(ParamId(908), "phsr_sync")
-                    .with_flags(ParamFlags::AUTOMATABLE.union(ParamFlags::STEPPED))
-                    .with_step_labels(&["Off", "On"]),
-            ),
-            // Index 8: Division — ParamId(909), STEPPED
-            8 => Some(
-                ParamDescriptor::custom("Division", "Div", 0.0, 11.0, 3.0)
-                    .with_step(1.0)
-                    .with_id(ParamId(909), "phsr_division")
-                    .with_flags(ParamFlags::AUTOMATABLE.union(ParamFlags::STEPPED))
-                    .with_step_labels(DIVISION_LABELS),
-            ),
-            // Index 9: Output — ParamId(905)
-            9 => Some(
-                sonido_core::gain::output_param_descriptor().with_id(ParamId(905), "phsr_output"),
-            ),
-            // Index 10: LFO phase diagnostic — READ_ONLY
-            10 => Some(
-                ParamDescriptor::custom("LFO Phase", "Phase", 0.0, 1.0, 0.0)
-                    .with_id(ParamId(910), "phsr_lfo_phase")
-                    .with_flags(ParamFlags::READ_ONLY.union(ParamFlags::HIDDEN)),
-            ),
-            _ => None,
-        }
-    }
+        // Index 1: Depth — ParamId(901)
+        [1] ParamDescriptor::depth().with_id(ParamId(901), "phsr_depth"),
+            smoothing: SmoothingStyle::Standard, // depth
+            get: this.depth_pct,
+            set: |v| this.depth_pct = v;
 
-    fn smoothing(index: usize) -> SmoothingStyle {
-        match index {
-            0 => SmoothingStyle::Standard, // rate — LFO frequency, gradual feel
-            1 => SmoothingStyle::Standard, // depth
-            2 => SmoothingStyle::None,     // stages — discrete/stepped, snap
-            3 => SmoothingStyle::Standard, // feedback
-            4 => SmoothingStyle::Standard, // mix
-            5 => SmoothingStyle::Slow,     // min_freq_hz — filter coefficient, avoid zipper
-            6 => SmoothingStyle::Slow,     // max_freq_hz — filter coefficient, avoid zipper
-            7 => SmoothingStyle::None,     // sync — on/off toggle, snap
-            8 => SmoothingStyle::None,     // division — stepped, snap
-            9 => SmoothingStyle::Standard, // output level
-            10 => SmoothingStyle::None,    // lfo_phase — READ_ONLY diagnostic, no smoothing
-            _ => SmoothingStyle::Standard,
-        }
-    }
+        // Index 2: Stages — ParamId(902), STEPPED, step=2
+        [2] ParamDescriptor {
+                name: "Stages",
+                short_name: "Stg",
+                unit: ParamUnit::None,
+                min: 2.0,
+                max: 12.0,
+                default: 6.0,
+                step: 2.0,
+                ..ParamDescriptor::mix()
+            }
+            .with_id(ParamId(902), "phsr_stages")
+            .with_flags(ParamFlags::AUTOMATABLE.union(ParamFlags::STEPPED)),
+            smoothing: SmoothingStyle::None, // stages — discrete/stepped, snap
+            get: this.stages,
+            set: |v| this.stages = v;
 
-    fn get(&self, index: usize) -> f32 {
-        match index {
-            0 => self.rate,
-            1 => self.depth_pct,
-            2 => self.stages,
-            3 => self.feedback_pct,
-            4 => self.mix_pct,
-            5 => self.min_freq_hz,
-            6 => self.max_freq_hz,
-            7 => self.sync,
-            8 => self.division,
-            9 => self.output_db,
-            10 => self.lfo_phase,
-            _ => 0.0,
-        }
-    }
+        // Index 3: Feedback — ParamId(903)
+        [3] ParamDescriptor::feedback().with_id(ParamId(903), "phsr_feedback"),
+            smoothing: SmoothingStyle::Standard, // feedback
+            get: this.feedback_pct,
+            set: |v| this.feedback_pct = v;
 
-    fn set(&mut self, index: usize, value: f32) {
-        match index {
-            0 => self.rate = value,
-            1 => self.depth_pct = value,
-            2 => self.stages = value,
-            3 => self.feedback_pct = value,
-            4 => self.mix_pct = value,
-            5 => self.min_freq_hz = value,
-            6 => self.max_freq_hz = value,
-            7 => self.sync = value,
-            8 => self.division = value,
-            9 => self.output_db = value,
-            10 => self.lfo_phase = value,
-            _ => {}
-        }
+        // Index 4: Mix — ParamId(904)
+        [4] ParamDescriptor::mix().with_id(ParamId(904), "phsr_mix"),
+            smoothing: SmoothingStyle::Standard, // mix
+            get: this.mix_pct,
+            set: |v| this.mix_pct = v;
+
+        // Index 5: Min Freq — ParamId(906) (note: output is 905, min/max come before it)
+        [5] ParamDescriptor::custom("Min Freq", "MinF", 20.0, 2000.0, 200.0)
+                .with_id(ParamId(906), "phsr_min_freq")
+                .with_unit(ParamUnit::Hertz)
+                .with_scale(ParamScale::Logarithmic),
+            smoothing: SmoothingStyle::Slow, // min_freq_hz — filter coefficient, avoid zipper
+            get: this.min_freq_hz,
+            set: |v| this.min_freq_hz = v;
+
+        // Index 6: Max Freq — ParamId(907)
+        [6] ParamDescriptor::custom("Max Freq", "MaxF", 200.0, 20000.0, 4000.0)
+                .with_id(ParamId(907), "phsr_max_freq")
+                .with_unit(ParamUnit::Hertz)
+                .with_scale(ParamScale::Logarithmic),
+            smoothing: SmoothingStyle::Slow, // max_freq_hz — filter coefficient, avoid zipper
+            get: this.max_freq_hz,
+            set: |v| this.max_freq_hz = v;
+
+        // Index 7: Sync — ParamId(908), STEPPED
+        [7] ParamDescriptor::custom("Sync", "Sync", 0.0, 1.0, 0.0)
+                .with_step(1.0)
+                .with_id(ParamId(908), "phsr_sync")
+                .with_flags(ParamFlags::AUTOMATABLE.union(ParamFlags::STEPPED))
+                .with_step_labels(&["Off", "On"]),
+            smoothing: SmoothingStyle::None, // sync — on/off toggle, snap
+            get: this.sync,
+            set: |v| this.sync = v;
+
+        // Index 8: Division — ParamId(909), STEPPED
+        [8] ParamDescriptor::custom("Division", "Div", 0.0, 11.0, 3.0)
+                .with_step(1.0)
+                .with_id(ParamId(909), "phsr_division")
+                .with_flags(ParamFlags::AUTOMATABLE.union(ParamFlags::STEPPED))
+                .with_step_labels(DIVISION_LABELS),
+            smoothing: SmoothingStyle::None, // division — stepped, snap
+            get: this.division,
+            set: |v| this.division = v;
+
+        // Index 9: Output — ParamId(905)
+        [9] sonido_core::gain::output_param_descriptor().with_id(ParamId(905), "phsr_output"),
+            smoothing: SmoothingStyle::Standard, // output level
+            get: this.output_db,
+            set: |v| this.output_db = v;
+
+        // Index 10: LFO phase diagnostic — READ_ONLY
+        [10] ParamDescriptor::custom("LFO Phase", "Phase", 0.0, 1.0, 0.0)
+                .with_id(ParamId(910), "phsr_lfo_phase")
+                .with_flags(ParamFlags::READ_ONLY.union(ParamFlags::HIDDEN)),
+            smoothing: SmoothingStyle::None, // lfo_phase — READ_ONLY diagnostic, no smoothing
+            get: this.lfo_phase,
+            set: |v| this.lfo_phase = v;
     }
 }
 

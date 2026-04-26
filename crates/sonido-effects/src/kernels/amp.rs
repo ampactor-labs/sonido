@@ -84,6 +84,7 @@ use libm::{cosf, powf, sinf, sqrtf};
 use sonido_core::biquad::Biquad;
 use sonido_core::dsp::{GainStage, ToneStack};
 use sonido_core::kernel::{DspKernel, KernelParams, SmoothingStyle};
+use sonido_core::kernel_params;
 use sonido_core::math::{
     asymmetric_clip, asymmetric_clip_ad, db_to_linear, soft_clip, soft_clip_ad,
 };
@@ -263,108 +264,75 @@ impl AmpParams {
     }
 }
 
-impl KernelParams for AmpParams {
-    const COUNT: usize = 9;
+kernel_params! {
+    AmpParams, this {
+        [0] ParamDescriptor::custom("Gain", "Gain", 0.0, 100.0, 50.0)
+                .with_unit(ParamUnit::Percent)
+                .with_step(1.0)
+                .with_id(ParamId(2100), "amp_gain"),
+            smoothing: SmoothingStyle::Fast, // gain — fast response for pick feel
+            get: this.gain_pct,
+            set: |v| this.gain_pct = v;
 
-    fn descriptor(index: usize) -> Option<ParamDescriptor> {
-        match index {
-            0 => Some(
-                ParamDescriptor::custom("Gain", "Gain", 0.0, 100.0, 50.0)
-                    .with_unit(ParamUnit::Percent)
-                    .with_step(1.0)
-                    .with_id(ParamId(2100), "amp_gain"),
-            ),
-            1 => Some(
-                ParamDescriptor::custom("Bass", "Bass", 0.0, 100.0, 50.0)
-                    .with_unit(ParamUnit::Percent)
-                    .with_step(1.0)
-                    .with_id(ParamId(2101), "amp_bass"),
-            ),
-            2 => Some(
-                ParamDescriptor::custom("Mid", "Mid", 0.0, 100.0, 50.0)
-                    .with_unit(ParamUnit::Percent)
-                    .with_step(1.0)
-                    .with_id(ParamId(2102), "amp_mid"),
-            ),
-            3 => Some(
-                ParamDescriptor::custom("Treble", "Treble", 0.0, 100.0, 50.0)
-                    .with_unit(ParamUnit::Percent)
-                    .with_step(1.0)
-                    .with_id(ParamId(2103), "amp_treble"),
-            ),
-            4 => Some(
-                ParamDescriptor::custom("Presence", "Pres", 0.0, 100.0, 50.0)
-                    .with_unit(ParamUnit::Percent)
-                    .with_step(1.0)
-                    .with_id(ParamId(2104), "amp_presence"),
-            ),
-            5 => Some(
-                ParamDescriptor::custom("Sag", "Sag", 0.0, 100.0, 30.0)
-                    .with_unit(ParamUnit::Percent)
-                    .with_step(1.0)
-                    .with_id(ParamId(2105), "amp_sag"),
-            ),
-            6 => Some(
-                ParamDescriptor::custom("Bright", "Bright", 0.0, 1.0, 0.0)
-                    .with_flags(ParamFlags::AUTOMATABLE.union(ParamFlags::STEPPED))
-                    .with_step(1.0)
-                    .with_step_labels(&["Off", "On"])
-                    .with_id(ParamId(2106), "amp_bright"),
-            ),
-            7 => Some(
-                ParamDescriptor::gain_db("Master", "Master", -60.0, 0.0, -6.0)
-                    .with_id(ParamId(2107), "amp_master"),
-            ),
-            8 => Some(
-                sonido_core::gain::output_param_descriptor().with_id(ParamId(2108), "amp_output"),
-            ),
-            _ => None,
-        }
-    }
+        [1] ParamDescriptor::custom("Bass", "Bass", 0.0, 100.0, 50.0)
+                .with_unit(ParamUnit::Percent)
+                .with_step(1.0)
+                .with_id(ParamId(2101), "amp_bass"),
+            smoothing: SmoothingStyle::Slow, // bass — filter coefficient
+            get: this.bass_pct,
+            set: |v| this.bass_pct = v;
 
-    fn smoothing(index: usize) -> SmoothingStyle {
-        match index {
-            0 => SmoothingStyle::Fast,     // gain — fast response for pick feel
-            1 => SmoothingStyle::Slow,     // bass — filter coefficient
-            2 => SmoothingStyle::Slow,     // mid — filter coefficient
-            3 => SmoothingStyle::Slow,     // treble — filter coefficient
-            4 => SmoothingStyle::Slow,     // presence — filter coefficient
-            5 => SmoothingStyle::Standard, // sag
-            6 => SmoothingStyle::None,     // bright — discrete switch, snap
-            7 => SmoothingStyle::Fast,     // master
-            8 => SmoothingStyle::Fast,     // output
-            _ => SmoothingStyle::Standard,
-        }
-    }
+        [2] ParamDescriptor::custom("Mid", "Mid", 0.0, 100.0, 50.0)
+                .with_unit(ParamUnit::Percent)
+                .with_step(1.0)
+                .with_id(ParamId(2102), "amp_mid"),
+            smoothing: SmoothingStyle::Slow, // mid — filter coefficient
+            get: this.mid_pct,
+            set: |v| this.mid_pct = v;
 
-    fn get(&self, index: usize) -> f32 {
-        match index {
-            0 => self.gain_pct,
-            1 => self.bass_pct,
-            2 => self.mid_pct,
-            3 => self.treble_pct,
-            4 => self.presence_pct,
-            5 => self.sag_pct,
-            6 => self.bright,
-            7 => self.master_db,
-            8 => self.output_db,
-            _ => 0.0,
-        }
-    }
+        [3] ParamDescriptor::custom("Treble", "Treble", 0.0, 100.0, 50.0)
+                .with_unit(ParamUnit::Percent)
+                .with_step(1.0)
+                .with_id(ParamId(2103), "amp_treble"),
+            smoothing: SmoothingStyle::Slow, // treble — filter coefficient
+            get: this.treble_pct,
+            set: |v| this.treble_pct = v;
 
-    fn set(&mut self, index: usize, value: f32) {
-        match index {
-            0 => self.gain_pct = value,
-            1 => self.bass_pct = value,
-            2 => self.mid_pct = value,
-            3 => self.treble_pct = value,
-            4 => self.presence_pct = value,
-            5 => self.sag_pct = value,
-            6 => self.bright = value,
-            7 => self.master_db = value,
-            8 => self.output_db = value,
-            _ => {}
-        }
+        [4] ParamDescriptor::custom("Presence", "Pres", 0.0, 100.0, 50.0)
+                .with_unit(ParamUnit::Percent)
+                .with_step(1.0)
+                .with_id(ParamId(2104), "amp_presence"),
+            smoothing: SmoothingStyle::Slow, // presence — filter coefficient
+            get: this.presence_pct,
+            set: |v| this.presence_pct = v;
+
+        [5] ParamDescriptor::custom("Sag", "Sag", 0.0, 100.0, 30.0)
+                .with_unit(ParamUnit::Percent)
+                .with_step(1.0)
+                .with_id(ParamId(2105), "amp_sag"),
+            smoothing: SmoothingStyle::Standard,
+            get: this.sag_pct,
+            set: |v| this.sag_pct = v;
+
+        [6] ParamDescriptor::custom("Bright", "Bright", 0.0, 1.0, 0.0)
+                .with_flags(ParamFlags::AUTOMATABLE.union(ParamFlags::STEPPED))
+                .with_step(1.0)
+                .with_step_labels(&["Off", "On"])
+                .with_id(ParamId(2106), "amp_bright"),
+            smoothing: SmoothingStyle::None, // bright — discrete switch, snap
+            get: this.bright,
+            set: |v| this.bright = v;
+
+        [7] ParamDescriptor::gain_db("Master", "Master", -60.0, 0.0, -6.0)
+                .with_id(ParamId(2107), "amp_master"),
+            smoothing: SmoothingStyle::Fast,
+            get: this.master_db,
+            set: |v| this.master_db = v;
+
+        [8] sonido_core::gain::output_param_descriptor().with_id(ParamId(2108), "amp_output"),
+            smoothing: SmoothingStyle::Fast,
+            get: this.output_db,
+            set: |v| this.output_db = v;
     }
 }
 

@@ -65,6 +65,7 @@
 
 use sonido_core::biquad::{highpass_coefficients, lowpass_coefficients};
 use sonido_core::kernel::{DspKernel, KernelParams, SmoothingStyle};
+use sonido_core::kernel_params;
 use sonido_core::math::ms_to_samples;
 use sonido_core::{
     Biquad, Cached, InterpolatedDelay, ParamDescriptor, ParamId, ParamUnit, fast_db_to_linear,
@@ -146,71 +147,43 @@ impl StereoWidenerParams {
     }
 }
 
-impl KernelParams for StereoWidenerParams {
-    const COUNT: usize = 4;
+kernel_params! {
+    StereoWidenerParams, this {
+        [0] ParamDescriptor::custom("Width", "Width", 0.0, 200.0, 100.0)
+                .with_unit(ParamUnit::Percent)
+                .with_step(1.0)
+                .with_id(ParamId(3100), "sw_width"),
+            smoothing: SmoothingStyle::Standard, // width_pct — 10 ms
+            get: this.width_pct,
+            set: |v| this.width_pct = v;
 
-    fn descriptor(index: usize) -> Option<ParamDescriptor> {
-        match index {
-            0 => Some(
-                ParamDescriptor::custom("Width", "Width", 0.0, 200.0, 100.0)
-                    .with_unit(ParamUnit::Percent)
-                    .with_step(1.0)
-                    .with_id(ParamId(3100), "sw_width"),
-            ),
-            1 => Some(
-                ParamDescriptor::custom("Haas Delay", "Haas", 0.0, 30.0, 0.0)
-                    .with_unit(ParamUnit::Milliseconds)
-                    .with_step(0.1)
-                    .with_id(ParamId(3101), "sw_haas_delay"),
-            ),
-            2 => Some(
-                ParamDescriptor {
-                    name: "Bass Mono",
-                    short_name: "BassMn",
-                    unit: ParamUnit::Hertz,
-                    min: 0.0,
-                    max: 500.0,
-                    default: 0.0,
-                    step: 1.0,
-                    ..ParamDescriptor::mix()
-                }
-                .with_id(ParamId(3102), "sw_bass_mono"),
-            ),
-            3 => Some(
-                sonido_core::gain::output_param_descriptor().with_id(ParamId(3103), "sw_output"),
-            ),
-            _ => None,
-        }
-    }
+        [1] ParamDescriptor::custom("Haas Delay", "Haas", 0.0, 30.0, 0.0)
+                .with_unit(ParamUnit::Milliseconds)
+                .with_step(0.1)
+                .with_id(ParamId(3101), "sw_haas_delay"),
+            smoothing: SmoothingStyle::Interpolated, // haas_delay_ms — 50 ms, smooth delay change
+            get: this.haas_delay_ms,
+            set: |v| this.haas_delay_ms = v;
 
-    fn smoothing(index: usize) -> SmoothingStyle {
-        match index {
-            0 => SmoothingStyle::Standard,     // width_pct — 10 ms
-            1 => SmoothingStyle::Interpolated, // haas_delay_ms — 50 ms, smooth delay change
-            2 => SmoothingStyle::Slow,         // bass_mono_hz — filter coefficient, 20 ms
-            3 => SmoothingStyle::Fast,         // output_db — 5 ms
-            _ => SmoothingStyle::Standard,
-        }
-    }
+        [2] ParamDescriptor {
+                name: "Bass Mono",
+                short_name: "BassMn",
+                unit: ParamUnit::Hertz,
+                min: 0.0,
+                max: 500.0,
+                default: 0.0,
+                step: 1.0,
+                ..ParamDescriptor::mix()
+            }
+            .with_id(ParamId(3102), "sw_bass_mono"),
+            smoothing: SmoothingStyle::Slow, // bass_mono_hz — filter coefficient, 20 ms
+            get: this.bass_mono_hz,
+            set: |v| this.bass_mono_hz = v;
 
-    fn get(&self, index: usize) -> f32 {
-        match index {
-            0 => self.width_pct,
-            1 => self.haas_delay_ms,
-            2 => self.bass_mono_hz,
-            3 => self.output_db,
-            _ => 0.0,
-        }
-    }
-
-    fn set(&mut self, index: usize, value: f32) {
-        match index {
-            0 => self.width_pct = value,
-            1 => self.haas_delay_ms = value,
-            2 => self.bass_mono_hz = value,
-            3 => self.output_db = value,
-            _ => {}
-        }
+        [3] sonido_core::gain::output_param_descriptor().with_id(ParamId(3103), "sw_output"),
+            smoothing: SmoothingStyle::Fast, // output_db — 5 ms
+            get: this.output_db,
+            set: |v| this.output_db = v;
     }
 }
 

@@ -51,6 +51,7 @@
 //! ```
 
 use sonido_core::kernel::{DspKernel, KernelParams, SmoothingStyle};
+use sonido_core::kernel_params;
 use sonido_core::{
     FixedDelayLine, Lfo, LfoWaveform, ParamDescriptor, ParamId, ParamUnit, fast_db_to_linear,
     wet_dry_mix, wet_dry_mix_stereo,
@@ -212,69 +213,42 @@ impl VibratoParams {
     }
 }
 
-impl KernelParams for VibratoParams {
-    const COUNT: usize = 3;
+kernel_params! {
+    VibratoParams, this {
+        [0] ParamDescriptor {
+                name: "Depth",
+                short_name: "Depth",
+                unit: ParamUnit::Percent,
+                min: 0.0,
+                max: 400.0,
+                default: 100.0,
+                step: 1.0,
+                ..ParamDescriptor::mix()
+            }
+            .with_id(ParamId(1300), "vib_depth"),
+            smoothing: SmoothingStyle::Standard, // depth_pct — 10 ms, click-free depth sweeps
+            get: this.depth_pct,
+            set: |v| this.depth_pct = v;
 
-    fn descriptor(index: usize) -> Option<ParamDescriptor> {
-        match index {
-            0 => Some(
-                ParamDescriptor {
-                    name: "Depth",
-                    short_name: "Depth",
-                    unit: ParamUnit::Percent,
-                    min: 0.0,
-                    max: 400.0,
-                    default: 100.0,
-                    step: 1.0,
-                    ..ParamDescriptor::mix()
-                }
-                .with_id(ParamId(1300), "vib_depth"),
-            ),
-            1 => Some(
-                ParamDescriptor {
-                    name: "Mix",
-                    short_name: "Mix",
-                    unit: ParamUnit::Percent,
-                    min: 0.0,
-                    max: 100.0,
-                    default: 100.0,
-                    step: 1.0,
-                    ..ParamDescriptor::mix()
-                }
-                .with_id(ParamId(1301), "vib_mix"),
-            ),
-            2 => Some(
-                sonido_core::gain::output_param_descriptor().with_id(ParamId(1302), "vib_output"),
-            ),
-            _ => None,
-        }
-    }
+        [1] ParamDescriptor {
+                name: "Mix",
+                short_name: "Mix",
+                unit: ParamUnit::Percent,
+                min: 0.0,
+                max: 100.0,
+                default: 100.0,
+                step: 1.0,
+                ..ParamDescriptor::mix()
+            }
+            .with_id(ParamId(1301), "vib_mix"),
+            smoothing: SmoothingStyle::Standard, // mix_pct — 10 ms, click-free wet/dry transitions
+            get: this.mix_pct,
+            set: |v| this.mix_pct = v;
 
-    fn smoothing(index: usize) -> SmoothingStyle {
-        match index {
-            0 => SmoothingStyle::Standard, // depth_pct — 10 ms, click-free depth sweeps
-            1 => SmoothingStyle::Standard, // mix_pct — 10 ms, click-free wet/dry transitions
-            2 => SmoothingStyle::Standard, // output_db — 10 ms, click-free level changes
-            _ => SmoothingStyle::Standard,
-        }
-    }
-
-    fn get(&self, index: usize) -> f32 {
-        match index {
-            0 => self.depth_pct,
-            1 => self.mix_pct,
-            2 => self.output_db,
-            _ => 0.0,
-        }
-    }
-
-    fn set(&mut self, index: usize, value: f32) {
-        match index {
-            0 => self.depth_pct = value,
-            1 => self.mix_pct = value,
-            2 => self.output_db = value,
-            _ => {}
-        }
+        [2] sonido_core::gain::output_param_descriptor().with_id(ParamId(1302), "vib_output"),
+            smoothing: SmoothingStyle::Standard, // output_db — 10 ms, click-free level changes
+            get: this.output_db,
+            set: |v| this.output_db = v;
     }
 }
 

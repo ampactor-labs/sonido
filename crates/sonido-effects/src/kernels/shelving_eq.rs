@@ -58,6 +58,7 @@
 //! ```
 
 use sonido_core::kernel::{DspKernel, KernelParams, SmoothingStyle};
+use sonido_core::kernel_params;
 use sonido_core::{
     Biquad, Cached, ParamDescriptor, ParamId, ParamScale, ParamUnit, fast_db_to_linear,
 };
@@ -222,85 +223,56 @@ impl ShelvingEqParams {
     }
 }
 
-impl KernelParams for ShelvingEqParams {
-    const COUNT: usize = 5;
+kernel_params! {
+    ShelvingEqParams, this {
+        [0] ParamDescriptor {
+                name: "Low Freq",
+                short_name: "LowFrq",
+                unit: ParamUnit::Hertz,
+                min: 20.0,
+                max: 500.0,
+                default: 100.0,
+                step: 1.0,
+                ..ParamDescriptor::mix()
+            }
+            .with_id(ParamId(2500), "shelf_low_freq")
+            .with_scale(ParamScale::Logarithmic),
+            smoothing: SmoothingStyle::Slow, // low_freq_hz — filter coefficient
+            get: this.low_freq_hz,
+            set: |v| this.low_freq_hz = v;
 
-    fn descriptor(index: usize) -> Option<ParamDescriptor> {
-        match index {
-            0 => Some(
-                ParamDescriptor {
-                    name: "Low Freq",
-                    short_name: "LowFrq",
-                    unit: ParamUnit::Hertz,
-                    min: 20.0,
-                    max: 500.0,
-                    default: 100.0,
-                    step: 1.0,
-                    ..ParamDescriptor::mix()
-                }
-                .with_id(ParamId(2500), "shelf_low_freq")
-                .with_scale(ParamScale::Logarithmic),
-            ),
-            1 => Some(
-                ParamDescriptor::gain_db("Low Gain", "LowGn", -15.0, 15.0, 0.0)
-                    .with_id(ParamId(2501), "shelf_low_gain"),
-            ),
-            2 => Some(
-                ParamDescriptor {
-                    name: "High Freq",
-                    short_name: "HiFrq",
-                    unit: ParamUnit::Hertz,
-                    min: 1000.0,
-                    max: 20000.0,
-                    default: 8000.0,
-                    step: 100.0,
-                    ..ParamDescriptor::mix()
-                }
-                .with_id(ParamId(2502), "shelf_high_freq")
-                .with_scale(ParamScale::Logarithmic),
-            ),
-            3 => Some(
-                ParamDescriptor::gain_db("High Gain", "HiGn", -15.0, 15.0, 0.0)
-                    .with_id(ParamId(2503), "shelf_high_gain"),
-            ),
-            4 => Some(
-                sonido_core::gain::output_param_descriptor().with_id(ParamId(2504), "shelf_output"),
-            ),
-            _ => None,
-        }
-    }
+        [1] ParamDescriptor::gain_db("Low Gain", "LowGn", -15.0, 15.0, 0.0)
+                .with_id(ParamId(2501), "shelf_low_gain"),
+            smoothing: SmoothingStyle::Slow, // low_gain_db — shelf gain, avoid zipper
+            get: this.low_gain_db,
+            set: |v| this.low_gain_db = v;
 
-    fn smoothing(index: usize) -> SmoothingStyle {
-        match index {
-            0 => SmoothingStyle::Slow, // low_freq_hz — filter coefficient
-            1 => SmoothingStyle::Slow, // low_gain_db — shelf gain, avoid zipper
-            2 => SmoothingStyle::Slow, // high_freq_hz — filter coefficient
-            3 => SmoothingStyle::Slow, // high_gain_db — shelf gain, avoid zipper
-            4 => SmoothingStyle::Fast, // output_db — level control, 5 ms
-            _ => SmoothingStyle::Standard,
-        }
-    }
+        [2] ParamDescriptor {
+                name: "High Freq",
+                short_name: "HiFrq",
+                unit: ParamUnit::Hertz,
+                min: 1000.0,
+                max: 20000.0,
+                default: 8000.0,
+                step: 100.0,
+                ..ParamDescriptor::mix()
+            }
+            .with_id(ParamId(2502), "shelf_high_freq")
+            .with_scale(ParamScale::Logarithmic),
+            smoothing: SmoothingStyle::Slow, // high_freq_hz — filter coefficient
+            get: this.high_freq_hz,
+            set: |v| this.high_freq_hz = v;
 
-    fn get(&self, index: usize) -> f32 {
-        match index {
-            0 => self.low_freq_hz,
-            1 => self.low_gain_db,
-            2 => self.high_freq_hz,
-            3 => self.high_gain_db,
-            4 => self.output_db,
-            _ => 0.0,
-        }
-    }
+        [3] ParamDescriptor::gain_db("High Gain", "HiGn", -15.0, 15.0, 0.0)
+                .with_id(ParamId(2503), "shelf_high_gain"),
+            smoothing: SmoothingStyle::Slow, // high_gain_db — shelf gain, avoid zipper
+            get: this.high_gain_db,
+            set: |v| this.high_gain_db = v;
 
-    fn set(&mut self, index: usize, value: f32) {
-        match index {
-            0 => self.low_freq_hz = value,
-            1 => self.low_gain_db = value,
-            2 => self.high_freq_hz = value,
-            3 => self.high_gain_db = value,
-            4 => self.output_db = value,
-            _ => {}
-        }
+        [4] sonido_core::gain::output_param_descriptor().with_id(ParamId(2504), "shelf_output"),
+            smoothing: SmoothingStyle::Fast, // output_db — level control, 5 ms
+            get: this.output_db,
+            set: |v| this.output_db = v;
     }
 }
 

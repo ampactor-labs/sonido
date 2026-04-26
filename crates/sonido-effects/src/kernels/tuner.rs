@@ -47,6 +47,7 @@ extern crate alloc;
 
 use alloc::vec::Vec;
 use sonido_core::kernel::{DspKernel, KernelParams, SmoothingStyle};
+use sonido_core::kernel_params;
 use sonido_core::{ParamDescriptor, ParamFlags, ParamId, ParamScale, ParamUnit, fast_db_to_linear};
 
 /// YIN threshold: lower = more accurate but more misses; 0.15 is a good balance.
@@ -109,75 +110,46 @@ impl Default for TunerParams {
     }
 }
 
-impl KernelParams for TunerParams {
-    const COUNT: usize = 5;
+kernel_params! {
+    TunerParams, this {
+        [0] ParamDescriptor::custom("Reference", "Ref", 415.0, 465.0, 440.0)
+                .with_unit(ParamUnit::Hertz)
+                .with_scale(ParamScale::Logarithmic)
+                .with_id(ParamId(2300), "tuner_reference"),
+            smoothing: SmoothingStyle::None, // reference_hz — snap
+            get: this.reference_hz,
+            set: |v| this.reference_hz = v;
 
-    fn descriptor(index: usize) -> Option<ParamDescriptor> {
-        match index {
-            0 => Some(
-                ParamDescriptor::custom("Reference", "Ref", 415.0, 465.0, 440.0)
-                    .with_unit(ParamUnit::Hertz)
-                    .with_scale(ParamScale::Logarithmic)
-                    .with_id(ParamId(2300), "tuner_reference"),
-            ),
-            1 => Some(
-                ParamDescriptor::custom("Mute", "Mute", 0.0, 1.0, 0.0)
-                    .with_unit(ParamUnit::None)
-                    .with_step(1.0)
-                    .with_id(ParamId(2301), "tuner_mute")
-                    .with_flags(ParamFlags::AUTOMATABLE.union(ParamFlags::STEPPED))
-                    .with_step_labels(&["Off", "On"]),
-            ),
-            2 => Some(
-                sonido_core::gain::output_param_descriptor().with_id(ParamId(2302), "tuner_output"),
-            ),
-            3 => Some(
-                ParamDescriptor::custom("Detected Hz", "Det Hz", 0.0, 5000.0, 0.0)
-                    .with_unit(ParamUnit::Hertz)
-                    .with_id(ParamId(2303), "tuner_detected_hz")
-                    .with_flags(ParamFlags::READ_ONLY.union(ParamFlags::HIDDEN)),
-            ),
-            4 => Some(
-                ParamDescriptor::custom("Cents", "Cents", -50.0, 50.0, 0.0)
-                    .with_unit(ParamUnit::None)
-                    .with_id(ParamId(2304), "tuner_cents")
-                    .with_flags(ParamFlags::READ_ONLY.union(ParamFlags::HIDDEN)),
-            ),
-            _ => None,
-        }
-    }
+        [1] ParamDescriptor::custom("Mute", "Mute", 0.0, 1.0, 0.0)
+                .with_unit(ParamUnit::None)
+                .with_step(1.0)
+                .with_id(ParamId(2301), "tuner_mute")
+                .with_flags(ParamFlags::AUTOMATABLE.union(ParamFlags::STEPPED))
+                .with_step_labels(&["Off", "On"]),
+            smoothing: SmoothingStyle::None, // stepped, snap
+            get: this.mute,
+            set: |v| this.mute = v;
 
-    fn smoothing(index: usize) -> SmoothingStyle {
-        match index {
-            0 => SmoothingStyle::None, // reference_hz — snap
-            1 => SmoothingStyle::None, // mute — stepped, snap
-            2 => SmoothingStyle::Fast, // output_db — 5 ms
-            3 => SmoothingStyle::None, // detected_hz — READ_ONLY diagnostic
-            4 => SmoothingStyle::None, // cents — READ_ONLY diagnostic
-            _ => SmoothingStyle::Standard,
-        }
-    }
+        [2] sonido_core::gain::output_param_descriptor().with_id(ParamId(2302), "tuner_output"),
+            smoothing: SmoothingStyle::Fast, // output_db — 5 ms
+            get: this.output_db,
+            set: |v| this.output_db = v;
 
-    fn get(&self, index: usize) -> f32 {
-        match index {
-            0 => self.reference_hz,
-            1 => self.mute,
-            2 => self.output_db,
-            3 => self.detected_hz,
-            4 => self.cents,
-            _ => 0.0,
-        }
-    }
+        [3] ParamDescriptor::custom("Detected Hz", "Det Hz", 0.0, 5000.0, 0.0)
+                .with_unit(ParamUnit::Hertz)
+                .with_id(ParamId(2303), "tuner_detected_hz")
+                .with_flags(ParamFlags::READ_ONLY.union(ParamFlags::HIDDEN)),
+            smoothing: SmoothingStyle::None, // READ_ONLY diagnostic
+            get: this.detected_hz,
+            set: |v| this.detected_hz = v;
 
-    fn set(&mut self, index: usize, value: f32) {
-        match index {
-            0 => self.reference_hz = value,
-            1 => self.mute = value,
-            2 => self.output_db = value,
-            3 => self.detected_hz = value,
-            4 => self.cents = value,
-            _ => {}
-        }
+        [4] ParamDescriptor::custom("Cents", "Cents", -50.0, 50.0, 0.0)
+                .with_unit(ParamUnit::None)
+                .with_id(ParamId(2304), "tuner_cents")
+                .with_flags(ParamFlags::READ_ONLY.union(ParamFlags::HIDDEN)),
+            smoothing: SmoothingStyle::None, // READ_ONLY diagnostic
+            get: this.cents,
+            set: |v| this.cents = v;
     }
 }
 

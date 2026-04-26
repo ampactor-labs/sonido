@@ -72,6 +72,7 @@
 
 use sonido_core::biquad::{highpass_coefficients, lowpass_coefficients};
 use sonido_core::kernel::{DspKernel, KernelParams, SmoothingStyle};
+use sonido_core::kernel_params;
 use sonido_core::math::ms_to_samples;
 use sonido_core::{
     Biquad, Cached, DcBlocker, InterpolatedDelay, ParamDescriptor, ParamFlags, ParamId, ParamScale,
@@ -247,141 +248,105 @@ impl StageParams {
     }
 }
 
-impl KernelParams for StageParams {
-    const COUNT: usize = 12;
+kernel_params! {
+    StageParams, this {
+        [0] ParamDescriptor::gain_db("Gain", "Gain", -40.0, 12.0, 0.0)
+                .with_id(ParamId(1900), "stage_gain"),
+            smoothing: SmoothingStyle::Standard, // gain_db — 10 ms
+            get: this.gain_db,
+            set: |v| this.gain_db = v;
 
-    fn descriptor(index: usize) -> Option<ParamDescriptor> {
-        match index {
-            0 => Some(
-                ParamDescriptor::gain_db("Gain", "Gain", -40.0, 12.0, 0.0)
-                    .with_id(ParamId(1900), "stage_gain"),
-            ),
-            1 => Some(
-                ParamDescriptor::custom("Width", "Width", 0.0, 200.0, 100.0)
-                    .with_unit(ParamUnit::Percent)
-                    .with_step(1.0)
-                    .with_id(ParamId(1901), "stage_width"),
-            ),
-            2 => Some(
-                ParamDescriptor::custom("Balance", "Bal", -100.0, 100.0, 0.0)
-                    .with_unit(ParamUnit::Percent)
-                    .with_step(1.0)
-                    .with_id(ParamId(1902), "stage_balance"),
-            ),
-            3 => Some(
-                ParamDescriptor::custom("Phase L", "PhL", 0.0, 1.0, 0.0)
-                    .with_step(1.0)
-                    .with_id(ParamId(1903), "stage_phase_l")
-                    .with_flags(ParamFlags::AUTOMATABLE.union(ParamFlags::STEPPED))
-                    .with_step_labels(&["Off", "On"]),
-            ),
-            4 => Some(
-                ParamDescriptor::custom("Phase R", "PhR", 0.0, 1.0, 0.0)
-                    .with_step(1.0)
-                    .with_id(ParamId(1904), "stage_phase_r")
-                    .with_flags(ParamFlags::AUTOMATABLE.union(ParamFlags::STEPPED))
-                    .with_step_labels(&["Off", "On"]),
-            ),
-            5 => Some(
-                ParamDescriptor::custom("Channel", "Chan", 0.0, 3.0, 0.0)
-                    .with_step(1.0)
-                    .with_id(ParamId(1905), "stage_channel")
-                    .with_flags(ParamFlags::AUTOMATABLE.union(ParamFlags::STEPPED))
-                    .with_step_labels(&["Normal", "Swap", "Mono L", "Mono R"]),
-            ),
-            6 => Some(
-                ParamDescriptor::custom("DC Block", "DC", 0.0, 1.0, 0.0)
-                    .with_step(1.0)
-                    .with_id(ParamId(1906), "stage_dc_block")
-                    .with_flags(ParamFlags::AUTOMATABLE.union(ParamFlags::STEPPED))
-                    .with_step_labels(&["Off", "On"]),
-            ),
-            7 => Some(
-                ParamDescriptor::custom("Bass Mono", "BMon", 0.0, 1.0, 0.0)
-                    .with_step(1.0)
-                    .with_id(ParamId(1907), "stage_bass_mono")
-                    .with_flags(ParamFlags::AUTOMATABLE.union(ParamFlags::STEPPED))
-                    .with_step_labels(&["Off", "On"]),
-            ),
-            8 => Some(
-                ParamDescriptor::custom("Bass Freq", "BFrq", 20.0, 500.0, 120.0)
-                    .with_unit(ParamUnit::Hertz)
-                    .with_step(1.0)
-                    .with_id(ParamId(1908), "stage_bass_freq")
-                    .with_scale(ParamScale::Logarithmic),
-            ),
-            9 => Some(
-                ParamDescriptor::custom("Haas", "Haas", 0.0, 30.0, 0.0)
-                    .with_unit(ParamUnit::Milliseconds)
-                    .with_step(0.1)
-                    .with_id(ParamId(1909), "stage_haas"),
-            ),
-            10 => Some(
-                ParamDescriptor::custom("Haas Side", "HSde", 0.0, 1.0, 1.0)
-                    .with_step(1.0)
-                    .with_id(ParamId(1910), "stage_haas_side")
-                    .with_flags(ParamFlags::AUTOMATABLE.union(ParamFlags::STEPPED))
-                    .with_step_labels(&["L", "R"]),
-            ),
-            11 => Some(
-                sonido_core::gain::output_param_descriptor().with_id(ParamId(1911), "stage_output"),
-            ),
-            _ => None,
-        }
-    }
+        [1] ParamDescriptor::custom("Width", "Width", 0.0, 200.0, 100.0)
+                .with_unit(ParamUnit::Percent)
+                .with_step(1.0)
+                .with_id(ParamId(1901), "stage_width"),
+            smoothing: SmoothingStyle::Standard, // width_pct — 10 ms
+            get: this.width_pct,
+            set: |v| this.width_pct = v;
 
-    fn smoothing(index: usize) -> SmoothingStyle {
-        match index {
-            0 => SmoothingStyle::Standard,  // gain_db — 10 ms
-            1 => SmoothingStyle::Standard,  // width_pct — 10 ms
-            2 => SmoothingStyle::Standard,  // balance_pct — 10 ms
-            3 => SmoothingStyle::None,      // phase_l — stepped, snap immediately
-            4 => SmoothingStyle::None,      // phase_r — stepped, snap immediately
-            5 => SmoothingStyle::None,      // channel — stepped, snap immediately
-            6 => SmoothingStyle::None,      // dc_block — stepped, snap immediately
-            7 => SmoothingStyle::None,      // bass_mono — stepped, snap immediately
-            8 => SmoothingStyle::Slow,      // bass_freq_hz — filter coefficient, 20 ms
-            9 => SmoothingStyle::Fast,      // haas_ms — delay time, 5 ms
-            10 => SmoothingStyle::None,     // haas_side — stepped, snap immediately
-            11 => SmoothingStyle::Standard, // output_db — 10 ms
-            _ => SmoothingStyle::Standard,
-        }
-    }
+        [2] ParamDescriptor::custom("Balance", "Bal", -100.0, 100.0, 0.0)
+                .with_unit(ParamUnit::Percent)
+                .with_step(1.0)
+                .with_id(ParamId(1902), "stage_balance"),
+            smoothing: SmoothingStyle::Standard, // balance_pct — 10 ms
+            get: this.balance_pct,
+            set: |v| this.balance_pct = v;
 
-    fn get(&self, index: usize) -> f32 {
-        match index {
-            0 => self.gain_db,
-            1 => self.width_pct,
-            2 => self.balance_pct,
-            3 => self.phase_l,
-            4 => self.phase_r,
-            5 => self.channel,
-            6 => self.dc_block,
-            7 => self.bass_mono,
-            8 => self.bass_freq_hz,
-            9 => self.haas_ms,
-            10 => self.haas_side,
-            11 => self.output_db,
-            _ => 0.0,
-        }
-    }
+        [3] ParamDescriptor::custom("Phase L", "PhL", 0.0, 1.0, 0.0)
+                .with_step(1.0)
+                .with_id(ParamId(1903), "stage_phase_l")
+                .with_flags(ParamFlags::AUTOMATABLE.union(ParamFlags::STEPPED))
+                .with_step_labels(&["Off", "On"]),
+            smoothing: SmoothingStyle::None, // phase_l — stepped, snap immediately
+            get: this.phase_l,
+            set: |v| this.phase_l = v;
 
-    fn set(&mut self, index: usize, value: f32) {
-        match index {
-            0 => self.gain_db = value,
-            1 => self.width_pct = value,
-            2 => self.balance_pct = value,
-            3 => self.phase_l = value,
-            4 => self.phase_r = value,
-            5 => self.channel = value,
-            6 => self.dc_block = value,
-            7 => self.bass_mono = value,
-            8 => self.bass_freq_hz = value,
-            9 => self.haas_ms = value,
-            10 => self.haas_side = value,
-            11 => self.output_db = value,
-            _ => {}
-        }
+        [4] ParamDescriptor::custom("Phase R", "PhR", 0.0, 1.0, 0.0)
+                .with_step(1.0)
+                .with_id(ParamId(1904), "stage_phase_r")
+                .with_flags(ParamFlags::AUTOMATABLE.union(ParamFlags::STEPPED))
+                .with_step_labels(&["Off", "On"]),
+            smoothing: SmoothingStyle::None, // phase_r — stepped, snap immediately
+            get: this.phase_r,
+            set: |v| this.phase_r = v;
+
+        [5] ParamDescriptor::custom("Channel", "Chan", 0.0, 3.0, 0.0)
+                .with_step(1.0)
+                .with_id(ParamId(1905), "stage_channel")
+                .with_flags(ParamFlags::AUTOMATABLE.union(ParamFlags::STEPPED))
+                .with_step_labels(&["Normal", "Swap", "Mono L", "Mono R"]),
+            smoothing: SmoothingStyle::None, // channel — stepped, snap immediately
+            get: this.channel,
+            set: |v| this.channel = v;
+
+        [6] ParamDescriptor::custom("DC Block", "DC", 0.0, 1.0, 0.0)
+                .with_step(1.0)
+                .with_id(ParamId(1906), "stage_dc_block")
+                .with_flags(ParamFlags::AUTOMATABLE.union(ParamFlags::STEPPED))
+                .with_step_labels(&["Off", "On"]),
+            smoothing: SmoothingStyle::None, // dc_block — stepped, snap immediately
+            get: this.dc_block,
+            set: |v| this.dc_block = v;
+
+        [7] ParamDescriptor::custom("Bass Mono", "BMon", 0.0, 1.0, 0.0)
+                .with_step(1.0)
+                .with_id(ParamId(1907), "stage_bass_mono")
+                .with_flags(ParamFlags::AUTOMATABLE.union(ParamFlags::STEPPED))
+                .with_step_labels(&["Off", "On"]),
+            smoothing: SmoothingStyle::None, // bass_mono — stepped, snap immediately
+            get: this.bass_mono,
+            set: |v| this.bass_mono = v;
+
+        [8] ParamDescriptor::custom("Bass Freq", "BFrq", 20.0, 500.0, 120.0)
+                .with_unit(ParamUnit::Hertz)
+                .with_step(1.0)
+                .with_id(ParamId(1908), "stage_bass_freq")
+                .with_scale(ParamScale::Logarithmic),
+            smoothing: SmoothingStyle::Slow, // bass_freq_hz — filter coefficient, 20 ms
+            get: this.bass_freq_hz,
+            set: |v| this.bass_freq_hz = v;
+
+        [9] ParamDescriptor::custom("Haas", "Haas", 0.0, 30.0, 0.0)
+                .with_unit(ParamUnit::Milliseconds)
+                .with_step(0.1)
+                .with_id(ParamId(1909), "stage_haas"),
+            smoothing: SmoothingStyle::Fast, // haas_ms — delay time, 5 ms
+            get: this.haas_ms,
+            set: |v| this.haas_ms = v;
+
+        [10] ParamDescriptor::custom("Haas Side", "HSde", 0.0, 1.0, 1.0)
+                .with_step(1.0)
+                .with_id(ParamId(1910), "stage_haas_side")
+                .with_flags(ParamFlags::AUTOMATABLE.union(ParamFlags::STEPPED))
+                .with_step_labels(&["L", "R"]),
+            smoothing: SmoothingStyle::None, // haas_side — stepped, snap immediately
+            get: this.haas_side,
+            set: |v| this.haas_side = v;
+
+        [11] sonido_core::gain::output_param_descriptor().with_id(ParamId(1911), "stage_output"),
+            smoothing: SmoothingStyle::Standard, // output_db — 10 ms
+            get: this.output_db,
+            set: |v| this.output_db = v;
     }
 }
 

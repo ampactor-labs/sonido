@@ -27,6 +27,7 @@
 //! ```
 
 use sonido_core::kernel::{DspKernel, KernelParams, SmoothingStyle};
+use sonido_core::kernel_params;
 use sonido_core::math::soft_limit;
 use sonido_core::{
     Adaa1, Biquad, Cached, EnvelopeFollower, ParamDescriptor, ParamFlags, ParamId, ParamUnit,
@@ -130,81 +131,51 @@ impl DistortionParams {
     }
 }
 
-impl KernelParams for DistortionParams {
-    const COUNT: usize = 6;
+kernel_params! {
+    DistortionParams, this {
+        [0] ParamDescriptor::gain_db("Drive", "Drive", 0.0, 40.0, 8.0)
+                .with_id(ParamId(200), "dist_drive"),
+            smoothing: SmoothingStyle::Fast, // drive — fast response for feel
+            get: this.drive_db,
+            set: |v| this.drive_db = v;
 
-    fn descriptor(index: usize) -> Option<ParamDescriptor> {
-        match index {
-            0 => Some(
-                ParamDescriptor::gain_db("Drive", "Drive", 0.0, 40.0, 8.0)
-                    .with_id(ParamId(200), "dist_drive"),
-            ),
-            1 => Some(
-                ParamDescriptor::custom("Tone", "Tone", -12.0, 12.0, 0.0)
-                    .with_unit(ParamUnit::Decibels)
-                    .with_step(0.5)
-                    .with_id(ParamId(201), "dist_tone"),
-            ),
-            2 => Some(
-                sonido_core::gain::output_param_descriptor().with_id(ParamId(202), "dist_output"),
-            ),
-            3 => Some(
-                ParamDescriptor::custom("Waveshape", "Shape", 0.0, 3.0, 0.0)
-                    .with_step(1.0)
-                    .with_id(ParamId(203), "dist_shape")
-                    .with_flags(ParamFlags::AUTOMATABLE.union(ParamFlags::STEPPED))
-                    .with_step_labels(&["Soft Clip", "Hard Clip", "Foldback", "Asymmetric"]),
-            ),
-            4 => Some(
-                ParamDescriptor::custom("Mix", "Mix", 0.0, 100.0, 100.0)
-                    .with_unit(ParamUnit::Percent)
-                    .with_step(1.0)
-                    .with_id(ParamId(204), "dist_mix"),
-            ),
-            5 => Some(
-                ParamDescriptor::custom("Dynamics", "Dyn", 0.0, 100.0, 0.0)
-                    .with_unit(ParamUnit::Percent)
-                    .with_step(1.0)
-                    .with_id(ParamId(205), "dist_dynamics"),
-            ),
-            _ => None,
-        }
-    }
+        [1] ParamDescriptor::custom("Tone", "Tone", -12.0, 12.0, 0.0)
+                .with_unit(ParamUnit::Decibels)
+                .with_step(0.5)
+                .with_id(ParamId(201), "dist_tone"),
+            smoothing: SmoothingStyle::Slow, // tone — filter coefficient, avoid zipper
+            get: this.tone_db,
+            set: |v| this.tone_db = v;
 
-    fn smoothing(index: usize) -> SmoothingStyle {
-        match index {
-            0 => SmoothingStyle::Fast,     // drive — fast response for feel
-            1 => SmoothingStyle::Slow,     // tone — filter coefficient, avoid zipper
-            2 => SmoothingStyle::Standard, // output level
-            3 => SmoothingStyle::None,     // waveshape — discrete, snap
-            4 => SmoothingStyle::Standard, // mix
-            5 => SmoothingStyle::Standard, // dynamics
-            _ => SmoothingStyle::Standard,
-        }
-    }
+        [2] sonido_core::gain::output_param_descriptor().with_id(ParamId(202), "dist_output"),
+            smoothing: SmoothingStyle::Standard, // output level
+            get: this.output_db,
+            set: |v| this.output_db = v;
 
-    fn get(&self, index: usize) -> f32 {
-        match index {
-            0 => self.drive_db,
-            1 => self.tone_db,
-            2 => self.output_db,
-            3 => self.shape,
-            4 => self.mix_pct,
-            5 => self.dynamics_pct,
-            _ => 0.0,
-        }
-    }
+        [3] ParamDescriptor::custom("Waveshape", "Shape", 0.0, 3.0, 0.0)
+                .with_step(1.0)
+                .with_id(ParamId(203), "dist_shape")
+                .with_flags(ParamFlags::AUTOMATABLE.union(ParamFlags::STEPPED))
+                .with_step_labels(&["Soft Clip", "Hard Clip", "Foldback", "Asymmetric"]),
+            smoothing: SmoothingStyle::None, // waveshape — discrete, snap
+            get: this.shape,
+            set: |v| this.shape = v;
 
-    fn set(&mut self, index: usize, value: f32) {
-        match index {
-            0 => self.drive_db = value,
-            1 => self.tone_db = value,
-            2 => self.output_db = value,
-            3 => self.shape = value,
-            4 => self.mix_pct = value,
-            5 => self.dynamics_pct = value,
-            _ => {}
-        }
+        [4] ParamDescriptor::custom("Mix", "Mix", 0.0, 100.0, 100.0)
+                .with_unit(ParamUnit::Percent)
+                .with_step(1.0)
+                .with_id(ParamId(204), "dist_mix"),
+            smoothing: SmoothingStyle::Standard, // mix
+            get: this.mix_pct,
+            set: |v| this.mix_pct = v;
+
+        [5] ParamDescriptor::custom("Dynamics", "Dyn", 0.0, 100.0, 0.0)
+                .with_unit(ParamUnit::Percent)
+                .with_step(1.0)
+                .with_id(ParamId(205), "dist_dynamics"),
+            smoothing: SmoothingStyle::Standard, // dynamics
+            get: this.dynamics_pct,
+            set: |v| this.dynamics_pct = v;
     }
 }
 

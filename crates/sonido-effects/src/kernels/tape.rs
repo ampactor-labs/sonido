@@ -70,6 +70,7 @@
 //! ```
 
 use sonido_core::kernel::{DspKernel, KernelParams, SmoothingStyle};
+use sonido_core::kernel_params;
 use sonido_core::math::soft_limit;
 use sonido_core::{
     Adaa1, Biquad, Cached, EnvelopeFollower, InterpolatedDelay, Lfo, LfoWaveform, OnePole,
@@ -268,184 +269,150 @@ impl TapeParams {
     }
 }
 
-impl KernelParams for TapeParams {
-    const COUNT: usize = 10;
+kernel_params! {
+    TapeParams, this {
+        [0] ParamDescriptor {
+                name: "Drive",
+                short_name: "Drive",
+                unit: ParamUnit::Decibels,
+                min: 0.0,
+                max: 24.0,
+                default: 6.0,
+                step: 0.5,
+                ..ParamDescriptor::mix()
+            }
+            .with_id(ParamId(1400), "tape_drive"),
+            smoothing: SmoothingStyle::Fast, // drive
+            get: this.drive_db,
+            set: |v| this.drive_db = v;
 
-    fn descriptor(index: usize) -> Option<ParamDescriptor> {
-        match index {
-            0 => Some(
-                ParamDescriptor {
-                    name: "Drive",
-                    short_name: "Drive",
-                    unit: ParamUnit::Decibels,
-                    min: 0.0,
-                    max: 24.0,
-                    default: 6.0,
-                    step: 0.5,
-                    ..ParamDescriptor::mix()
-                }
-                .with_id(ParamId(1400), "tape_drive"),
-            ),
-            1 => Some(
-                ParamDescriptor {
-                    name: "Saturation",
-                    short_name: "Sat",
-                    unit: ParamUnit::Percent,
-                    min: 0.0,
-                    max: 100.0,
-                    default: 30.0,
-                    step: 1.0,
-                    ..ParamDescriptor::mix()
-                }
-                .with_id(ParamId(1401), "tape_saturation"),
-            ),
-            2 => Some(
-                ParamDescriptor {
-                    name: "HF Rolloff",
-                    short_name: "HFRoll",
-                    unit: ParamUnit::Hertz,
-                    min: 1000.0,
-                    max: 20000.0,
-                    default: 12000.0,
-                    step: 100.0,
-                    ..ParamDescriptor::mix()
-                }
-                .with_id(ParamId(1403), "tape_hf_rolloff")
-                .with_scale(ParamScale::Logarithmic),
-            ),
-            3 => Some(
-                ParamDescriptor {
-                    name: "Bias",
-                    short_name: "Bias",
-                    unit: ParamUnit::None,
-                    min: -0.2,
-                    max: 0.2,
-                    default: 0.0,
-                    step: 0.01,
-                    ..ParamDescriptor::mix()
-                }
-                .with_id(ParamId(1404), "tape_bias"),
-            ),
-            4 => Some(
-                ParamDescriptor {
-                    name: "Wow",
-                    short_name: "Wow",
-                    unit: ParamUnit::None,
-                    min: 0.0,
-                    max: 1.0,
-                    default: 0.3,
-                    step: 0.01,
-                    ..ParamDescriptor::mix()
-                }
-                .with_id(ParamId(1405), "tape_wow"),
-            ),
-            5 => Some(
-                ParamDescriptor {
-                    name: "Flutter",
-                    short_name: "Flut",
-                    unit: ParamUnit::None,
-                    min: 0.0,
-                    max: 1.0,
-                    default: 0.2,
-                    step: 0.01,
-                    ..ParamDescriptor::mix()
-                }
-                .with_id(ParamId(1406), "tape_flutter"),
-            ),
-            6 => Some(
-                ParamDescriptor {
-                    name: "Hysteresis",
-                    short_name: "Hyst",
-                    unit: ParamUnit::None,
-                    min: 0.0,
-                    max: 0.5,
-                    default: 0.15,
-                    step: 0.01,
-                    ..ParamDescriptor::mix()
-                }
-                .with_id(ParamId(1407), "tape_hysteresis"),
-            ),
-            7 => Some(
-                ParamDescriptor {
-                    name: "Head Bump",
-                    short_name: "Bump",
-                    unit: ParamUnit::None,
-                    min: 0.0,
-                    max: 1.0,
-                    default: 0.3,
-                    step: 0.01,
-                    ..ParamDescriptor::mix()
-                }
-                .with_id(ParamId(1408), "tape_head_bump"),
-            ),
-            8 => Some(
-                ParamDescriptor {
-                    name: "Bump Freq",
-                    short_name: "BmpHz",
-                    unit: ParamUnit::Hertz,
-                    min: 40.0,
-                    max: 200.0,
-                    default: 80.0,
-                    step: 1.0,
-                    ..ParamDescriptor::mix()
-                }
-                .with_id(ParamId(1409), "tape_bump_freq")
-                .with_scale(ParamScale::Logarithmic),
-            ),
-            9 => Some(
-                ParamDescriptor::gain_db("Output", "Out", -12.0, 12.0, -6.0)
-                    .with_id(ParamId(1402), "tape_output"),
-            ),
-            _ => None,
-        }
-    }
+        [1] ParamDescriptor {
+                name: "Saturation",
+                short_name: "Sat",
+                unit: ParamUnit::Percent,
+                min: 0.0,
+                max: 100.0,
+                default: 30.0,
+                step: 1.0,
+                ..ParamDescriptor::mix()
+            }
+            .with_id(ParamId(1401), "tape_saturation"),
+            smoothing: SmoothingStyle::Standard, // saturation
+            get: this.saturation_pct,
+            set: |v| this.saturation_pct = v;
 
-    fn smoothing(index: usize) -> SmoothingStyle {
-        match index {
-            0 => SmoothingStyle::Fast,     // drive
-            1 => SmoothingStyle::Standard, // saturation
-            2 => SmoothingStyle::Slow,     // hf_rolloff (filter coefficient)
-            3 => SmoothingStyle::Standard, // bias
-            4 => SmoothingStyle::Standard, // wow
-            5 => SmoothingStyle::Standard, // flutter
-            6 => SmoothingStyle::Standard, // hysteresis
-            7 => SmoothingStyle::Standard, // head_bump
-            8 => SmoothingStyle::Slow,     // bump_freq (filter coefficient)
-            9 => SmoothingStyle::Standard, // output
-            _ => SmoothingStyle::Standard,
-        }
-    }
+        [2] ParamDescriptor {
+                name: "HF Rolloff",
+                short_name: "HFRoll",
+                unit: ParamUnit::Hertz,
+                min: 1000.0,
+                max: 20000.0,
+                default: 12000.0,
+                step: 100.0,
+                ..ParamDescriptor::mix()
+            }
+            .with_id(ParamId(1403), "tape_hf_rolloff")
+            .with_scale(ParamScale::Logarithmic),
+            smoothing: SmoothingStyle::Slow, // hf_rolloff (filter coefficient)
+            get: this.hf_rolloff_hz,
+            set: |v| this.hf_rolloff_hz = v;
 
-    fn get(&self, index: usize) -> f32 {
-        match index {
-            0 => self.drive_db,
-            1 => self.saturation_pct,
-            2 => self.hf_rolloff_hz,
-            3 => self.bias,
-            4 => self.wow,
-            5 => self.flutter,
-            6 => self.hysteresis,
-            7 => self.head_bump,
-            8 => self.bump_freq_hz,
-            9 => self.output_db,
-            _ => 0.0,
-        }
-    }
+        [3] ParamDescriptor {
+                name: "Bias",
+                short_name: "Bias",
+                unit: ParamUnit::None,
+                min: -0.2,
+                max: 0.2,
+                default: 0.0,
+                step: 0.01,
+                ..ParamDescriptor::mix()
+            }
+            .with_id(ParamId(1404), "tape_bias"),
+            smoothing: SmoothingStyle::Standard, // bias
+            get: this.bias,
+            set: |v| this.bias = v;
 
-    fn set(&mut self, index: usize, value: f32) {
-        match index {
-            0 => self.drive_db = value,
-            1 => self.saturation_pct = value,
-            2 => self.hf_rolloff_hz = value,
-            3 => self.bias = value,
-            4 => self.wow = value,
-            5 => self.flutter = value,
-            6 => self.hysteresis = value,
-            7 => self.head_bump = value,
-            8 => self.bump_freq_hz = value,
-            9 => self.output_db = value,
-            _ => {}
-        }
+        [4] ParamDescriptor {
+                name: "Wow",
+                short_name: "Wow",
+                unit: ParamUnit::None,
+                min: 0.0,
+                max: 1.0,
+                default: 0.3,
+                step: 0.01,
+                ..ParamDescriptor::mix()
+            }
+            .with_id(ParamId(1405), "tape_wow"),
+            smoothing: SmoothingStyle::Standard, // wow
+            get: this.wow,
+            set: |v| this.wow = v;
+
+        [5] ParamDescriptor {
+                name: "Flutter",
+                short_name: "Flut",
+                unit: ParamUnit::None,
+                min: 0.0,
+                max: 1.0,
+                default: 0.2,
+                step: 0.01,
+                ..ParamDescriptor::mix()
+            }
+            .with_id(ParamId(1406), "tape_flutter"),
+            smoothing: SmoothingStyle::Standard, // flutter
+            get: this.flutter,
+            set: |v| this.flutter = v;
+
+        [6] ParamDescriptor {
+                name: "Hysteresis",
+                short_name: "Hyst",
+                unit: ParamUnit::None,
+                min: 0.0,
+                max: 0.5,
+                default: 0.15,
+                step: 0.01,
+                ..ParamDescriptor::mix()
+            }
+            .with_id(ParamId(1407), "tape_hysteresis"),
+            smoothing: SmoothingStyle::Standard, // hysteresis
+            get: this.hysteresis,
+            set: |v| this.hysteresis = v;
+
+        [7] ParamDescriptor {
+                name: "Head Bump",
+                short_name: "Bump",
+                unit: ParamUnit::None,
+                min: 0.0,
+                max: 1.0,
+                default: 0.3,
+                step: 0.01,
+                ..ParamDescriptor::mix()
+            }
+            .with_id(ParamId(1408), "tape_head_bump"),
+            smoothing: SmoothingStyle::Standard, // head_bump
+            get: this.head_bump,
+            set: |v| this.head_bump = v;
+
+        [8] ParamDescriptor {
+                name: "Bump Freq",
+                short_name: "BmpHz",
+                unit: ParamUnit::Hertz,
+                min: 40.0,
+                max: 200.0,
+                default: 80.0,
+                step: 1.0,
+                ..ParamDescriptor::mix()
+            }
+            .with_id(ParamId(1409), "tape_bump_freq")
+            .with_scale(ParamScale::Logarithmic),
+            smoothing: SmoothingStyle::Slow, // bump_freq (filter coefficient)
+            get: this.bump_freq_hz,
+            set: |v| this.bump_freq_hz = v;
+
+        [9] ParamDescriptor::gain_db("Output", "Out", -12.0, 12.0, -6.0)
+                .with_id(ParamId(1402), "tape_output"),
+            smoothing: SmoothingStyle::Standard, // output
+            get: this.output_db,
+            set: |v| this.output_db = v;
     }
 }
 

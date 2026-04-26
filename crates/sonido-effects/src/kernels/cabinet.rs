@@ -35,6 +35,7 @@
 //! ```
 
 use sonido_core::kernel::{DspKernel, KernelParams, SmoothingStyle};
+use sonido_core::kernel_params;
 use sonido_core::{
     Biquad, ParamDescriptor, ParamFlags, ParamId, ParamScale, ParamUnit, fast_db_to_linear,
     highpass_coefficients, wet_dry_mix,
@@ -90,61 +91,35 @@ impl Default for CabinetParams {
 /// IR type labels for the `ir_select` parameter.
 const IR_LABELS: &[&str] = &["Clean Combo", "British Stack", "Modern High-Gain"];
 
-impl KernelParams for CabinetParams {
-    const COUNT: usize = 4;
+kernel_params! {
+    CabinetParams, this {
+        [0] ParamDescriptor::custom("IR Select", "IR", 0.0, 2.0, 0.0)
+                .with_unit(ParamUnit::None)
+                .with_step(1.0)
+                .with_id(ParamId(2200), "cab_ir")
+                .with_flags(ParamFlags::AUTOMATABLE.union(ParamFlags::STEPPED))
+                .with_step_labels(IR_LABELS),
+            smoothing: SmoothingStyle::None,     // ir_select — stepped enum, snap
+            get: this.ir_select,
+            set: |v| this.ir_select = v;
 
-    fn descriptor(index: usize) -> Option<ParamDescriptor> {
-        match index {
-            0 => Some(
-                ParamDescriptor::custom("IR Select", "IR", 0.0, 2.0, 0.0)
-                    .with_unit(ParamUnit::None)
-                    .with_step(1.0)
-                    .with_id(ParamId(2200), "cab_ir")
-                    .with_flags(ParamFlags::AUTOMATABLE.union(ParamFlags::STEPPED))
-                    .with_step_labels(IR_LABELS),
-            ),
-            1 => Some(ParamDescriptor::mix().with_id(ParamId(2201), "cab_mix")),
-            2 => Some(
-                ParamDescriptor::custom("Low Cut", "Low Cut", 20.0, 500.0, 80.0)
-                    .with_unit(ParamUnit::Hertz)
-                    .with_scale(ParamScale::Logarithmic)
-                    .with_id(ParamId(2202), "cab_low_cut"),
-            ),
-            3 => Some(
-                sonido_core::gain::output_param_descriptor().with_id(ParamId(2203), "cab_output"),
-            ),
-            _ => None,
-        }
-    }
+        [1] ParamDescriptor::mix().with_id(ParamId(2201), "cab_mix"),
+            smoothing: SmoothingStyle::Standard, // mix_pct — 10 ms
+            get: this.mix_pct,
+            set: |v| this.mix_pct = v;
 
-    fn smoothing(index: usize) -> SmoothingStyle {
-        match index {
-            0 => SmoothingStyle::None,     // ir_select — stepped enum, snap
-            1 => SmoothingStyle::Standard, // mix_pct — 10 ms
-            2 => SmoothingStyle::Slow,     // low_cut_hz — filter coeff, 20 ms
-            3 => SmoothingStyle::Fast,     // output_db — 5 ms
-            _ => SmoothingStyle::Standard,
-        }
-    }
+        [2] ParamDescriptor::custom("Low Cut", "Low Cut", 20.0, 500.0, 80.0)
+                .with_unit(ParamUnit::Hertz)
+                .with_scale(ParamScale::Logarithmic)
+                .with_id(ParamId(2202), "cab_low_cut"),
+            smoothing: SmoothingStyle::Slow,     // low_cut_hz — filter coeff, 20 ms
+            get: this.low_cut_hz,
+            set: |v| this.low_cut_hz = v;
 
-    fn get(&self, index: usize) -> f32 {
-        match index {
-            0 => self.ir_select,
-            1 => self.mix_pct,
-            2 => self.low_cut_hz,
-            3 => self.output_db,
-            _ => 0.0,
-        }
-    }
-
-    fn set(&mut self, index: usize, value: f32) {
-        match index {
-            0 => self.ir_select = value,
-            1 => self.mix_pct = value,
-            2 => self.low_cut_hz = value,
-            3 => self.output_db = value,
-            _ => {}
-        }
+        [3] sonido_core::gain::output_param_descriptor().with_id(ParamId(2203), "cab_output"),
+            smoothing: SmoothingStyle::Fast,     // output_db — 5 ms
+            get: this.output_db,
+            set: |v| this.output_db = v;
     }
 }
 

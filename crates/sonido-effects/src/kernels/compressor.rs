@@ -56,6 +56,7 @@
 //! ```
 
 use sonido_core::kernel::{DspKernel, KernelParams, SmoothingStyle};
+use sonido_core::kernel_params;
 use sonido_core::{
     Biquad, Cached, DetectionMode, EnvelopeFollower, ParamDescriptor, ParamFlags, ParamId,
     ParamScale, ParamUnit, fast_db_to_linear, fast_linear_to_db, highpass_coefficients,
@@ -244,157 +245,121 @@ impl CompressorParams {
     }
 }
 
-impl KernelParams for CompressorParams {
-    const COUNT: usize = 12;
+kernel_params! {
+    CompressorParams, this {
+        // ── [0] Threshold ────────────────────────────────────────────────
+        // ParamId(300), "comp_thresh" — matches classic compressor.rs [0]
+        [0] ParamDescriptor::gain_db("Threshold", "Thresh", -60.0, 0.0, -18.0)
+                .with_id(ParamId(300), "comp_thresh"),
+            smoothing: SmoothingStyle::Standard, // threshold — avoid zipper on automation
+            get: this.threshold_db,
+            set: |v| this.threshold_db = v;
 
-    fn descriptor(index: usize) -> Option<ParamDescriptor> {
-        match index {
-            // ── [0] Threshold ────────────────────────────────────────────────
-            // ParamId(300), "comp_thresh" — matches classic compressor.rs [0]
-            0 => Some(
-                ParamDescriptor::gain_db("Threshold", "Thresh", -60.0, 0.0, -18.0)
-                    .with_id(ParamId(300), "comp_thresh"),
-            ),
-            // ── [1] Ratio ────────────────────────────────────────────────────
-            // ParamId(301), "comp_ratio" — matches classic compressor.rs [1]
-            1 => Some(
-                ParamDescriptor::custom("Ratio", "Ratio", 1.0, 20.0, 4.0)
-                    .with_unit(ParamUnit::Ratio)
-                    .with_step(0.1)
-                    .with_id(ParamId(301), "comp_ratio"),
-            ),
-            // ── [2] Attack ───────────────────────────────────────────────────
-            // ParamId(302), "comp_attack" — matches classic compressor.rs [2]
-            2 => Some(
-                ParamDescriptor::custom("Attack", "Attack", 0.1, 100.0, 10.0)
-                    .with_unit(ParamUnit::Milliseconds)
-                    .with_step(0.1)
-                    .with_id(ParamId(302), "comp_attack")
-                    .with_scale(ParamScale::Power(2.0)),
-            ),
-            // ── [3] Release ──────────────────────────────────────────────────
-            // ParamId(303), "comp_release" — matches classic compressor.rs [3]
-            3 => Some(
-                ParamDescriptor::time_ms("Release", "Release", 10.0, 1000.0, 100.0)
-                    .with_id(ParamId(303), "comp_release")
-                    .with_scale(ParamScale::Power(2.0)),
-            ),
-            // ── [4] Makeup Gain ──────────────────────────────────────────────
-            // ParamId(304), "comp_makeup" — matches classic compressor.rs [4]
-            4 => Some(
-                ParamDescriptor::gain_db("Makeup Gain", "Makeup", 0.0, 24.0, 0.0)
-                    .with_id(ParamId(304), "comp_makeup"),
-            ),
-            // ── [5] Knee ─────────────────────────────────────────────────────
-            // ParamId(305), "comp_knee" — matches classic compressor.rs [5]
-            5 => Some(
-                ParamDescriptor::gain_db("Knee", "Knee", 0.0, 12.0, 6.0)
-                    .with_id(ParamId(305), "comp_knee"),
-            ),
-            // ── [6] Detection mode ───────────────────────────────────────────
-            // ParamId(306), "comp_detect" — matches classic compressor.rs [6]
-            6 => Some(
-                ParamDescriptor::custom("Detection", "Detect", 0.0, 1.0, 0.0)
-                    .with_step(1.0)
-                    .with_id(ParamId(306), "comp_detect")
-                    .with_flags(ParamFlags::AUTOMATABLE.union(ParamFlags::STEPPED))
-                    .with_step_labels(&["Peak", "RMS"]),
-            ),
-            // ── [7] Sidechain HPF frequency ──────────────────────────────────
-            // ParamId(307), "comp_sc_freq" — matches classic compressor.rs [7]
-            7 => Some(
-                ParamDescriptor::custom("SC HPF Freq", "SC HPF", 20.0, 500.0, 80.0)
-                    .with_unit(ParamUnit::Hertz)
-                    .with_step(1.0)
-                    .with_id(ParamId(307), "comp_sc_freq")
-                    .with_scale(ParamScale::Logarithmic),
-            ),
-            // ── [8] Auto makeup ──────────────────────────────────────────────
-            // ParamId(308), "comp_auto_makeup" — matches classic compressor.rs [8]
-            8 => Some(
-                ParamDescriptor::custom("Auto Makeup", "AutoMU", 0.0, 1.0, 0.0)
-                    .with_step(1.0)
-                    .with_id(ParamId(308), "comp_auto_makeup")
-                    .with_flags(ParamFlags::AUTOMATABLE.union(ParamFlags::STEPPED))
-                    .with_step_labels(&["Off", "On"]),
-            ),
-            // ── [9] Output level ─────────────────────────────────────────────
-            // ParamId(309), "comp_output" — matches classic compressor.rs [9]
-            9 => Some(
-                sonido_core::gain::output_param_descriptor().with_id(ParamId(309), "comp_output"),
-            ),
-            // ── [10] Mix ─────────────────────────────────────────────────────
-            // ParamId(310), "comp_mix" — matches classic compressor.rs [10]
-            10 => Some(
-                ParamDescriptor::custom("Mix", "Mix", 0.0, 100.0, 100.0)
-                    .with_unit(ParamUnit::Percent)
-                    .with_step(1.0)
-                    .with_id(ParamId(310), "comp_mix"),
-            ),
-            // ── [11] Gain Reduction (READ_ONLY diagnostic) ───────────────────
-            // ParamId(311), "comp_gain_reduction" — current GR in dB (always ≤ 0).
-            // Written by CompressorKernel each sample; not user-settable.
-            11 => Some(
-                ParamDescriptor::gain_db("Gain Reduction", "GR", -60.0, 0.0, 0.0)
-                    .with_id(ParamId(311), "comp_gain_reduction")
-                    .with_flags(ParamFlags::READ_ONLY.union(ParamFlags::HIDDEN)),
-            ),
-            _ => None,
-        }
-    }
+        // ── [1] Ratio ────────────────────────────────────────────────────
+        // ParamId(301), "comp_ratio" — matches classic compressor.rs [1]
+        [1] ParamDescriptor::custom("Ratio", "Ratio", 1.0, 20.0, 4.0)
+                .with_unit(ParamUnit::Ratio)
+                .with_step(0.1)
+                .with_id(ParamId(301), "comp_ratio"),
+            smoothing: SmoothingStyle::Standard, // ratio — gain computer parameter
+            get: this.ratio,
+            set: |v| this.ratio = v;
 
-    fn smoothing(index: usize) -> SmoothingStyle {
-        match index {
-            0 => SmoothingStyle::Standard, // threshold — avoid zipper on automation
-            1 => SmoothingStyle::Standard, // ratio — gain computer parameter
-            2 => SmoothingStyle::Standard, // attack — timing param, smooth transitions
-            3 => SmoothingStyle::Standard, // release — timing param, smooth transitions
-            4 => SmoothingStyle::Standard, // makeup — level fader
-            5 => SmoothingStyle::Standard, // knee — gain computer width
-            6 => SmoothingStyle::None,     // detection — stepped/discrete, snap immediately
-            7 => SmoothingStyle::Slow,     // sidechain freq — filter coeff, avoid zipper
-            8 => SmoothingStyle::None,     // auto_makeup — stepped/discrete, snap immediately
-            9 => SmoothingStyle::Standard, // output level — level fader
-            10 => SmoothingStyle::Standard, // mix — wet/dry blend
-            11 => SmoothingStyle::None,    // gain_reduction_db — READ_ONLY diagnostic
-            _ => SmoothingStyle::Standard,
-        }
-    }
+        // ── [2] Attack ───────────────────────────────────────────────────
+        // ParamId(302), "comp_attack" — matches classic compressor.rs [2]
+        [2] ParamDescriptor::custom("Attack", "Attack", 0.1, 100.0, 10.0)
+                .with_unit(ParamUnit::Milliseconds)
+                .with_step(0.1)
+                .with_id(ParamId(302), "comp_attack")
+                .with_scale(ParamScale::Power(2.0)),
+            smoothing: SmoothingStyle::Standard, // attack — timing param, smooth transitions
+            get: this.attack_ms,
+            set: |v| this.attack_ms = v;
 
-    fn get(&self, index: usize) -> f32 {
-        match index {
-            0 => self.threshold_db,
-            1 => self.ratio,
-            2 => self.attack_ms,
-            3 => self.release_ms,
-            4 => self.makeup_db,
-            5 => self.knee_db,
-            6 => self.detection,
-            7 => self.sidechain_freq_hz,
-            8 => self.auto_makeup,
-            9 => self.output_db,
-            10 => self.mix_pct,
-            11 => self.gain_reduction_db,
-            _ => 0.0,
-        }
-    }
+        // ── [3] Release ──────────────────────────────────────────────────
+        // ParamId(303), "comp_release" — matches classic compressor.rs [3]
+        [3] ParamDescriptor::time_ms("Release", "Release", 10.0, 1000.0, 100.0)
+                .with_id(ParamId(303), "comp_release")
+                .with_scale(ParamScale::Power(2.0)),
+            smoothing: SmoothingStyle::Standard, // release — timing param, smooth transitions
+            get: this.release_ms,
+            set: |v| this.release_ms = v;
 
-    fn set(&mut self, index: usize, value: f32) {
-        match index {
-            0 => self.threshold_db = value,
-            1 => self.ratio = value,
-            2 => self.attack_ms = value,
-            3 => self.release_ms = value,
-            4 => self.makeup_db = value,
-            5 => self.knee_db = value,
-            6 => self.detection = value,
-            7 => self.sidechain_freq_hz = value,
-            8 => self.auto_makeup = value,
-            9 => self.output_db = value,
-            10 => self.mix_pct = value,
-            11 => self.gain_reduction_db = value, // READ_ONLY: kernel writes this
-            _ => {}
-        }
+        // ── [4] Makeup Gain ──────────────────────────────────────────────
+        // ParamId(304), "comp_makeup" — matches classic compressor.rs [4]
+        [4] ParamDescriptor::gain_db("Makeup Gain", "Makeup", 0.0, 24.0, 0.0)
+                .with_id(ParamId(304), "comp_makeup"),
+            smoothing: SmoothingStyle::Standard, // makeup — level fader
+            get: this.makeup_db,
+            set: |v| this.makeup_db = v;
+
+        // ── [5] Knee ─────────────────────────────────────────────────────
+        // ParamId(305), "comp_knee" — matches classic compressor.rs [5]
+        [5] ParamDescriptor::gain_db("Knee", "Knee", 0.0, 12.0, 6.0)
+                .with_id(ParamId(305), "comp_knee"),
+            smoothing: SmoothingStyle::Standard, // knee — gain computer width
+            get: this.knee_db,
+            set: |v| this.knee_db = v;
+
+        // ── [6] Detection mode ───────────────────────────────────────────
+        // ParamId(306), "comp_detect" — matches classic compressor.rs [6]
+        [6] ParamDescriptor::custom("Detection", "Detect", 0.0, 1.0, 0.0)
+                .with_step(1.0)
+                .with_id(ParamId(306), "comp_detect")
+                .with_flags(ParamFlags::AUTOMATABLE.union(ParamFlags::STEPPED))
+                .with_step_labels(&["Peak", "RMS"]),
+            smoothing: SmoothingStyle::None, // detection — stepped/discrete, snap immediately
+            get: this.detection,
+            set: |v| this.detection = v;
+
+        // ── [7] Sidechain HPF frequency ──────────────────────────────────
+        // ParamId(307), "comp_sc_freq" — matches classic compressor.rs [7]
+        [7] ParamDescriptor::custom("SC HPF Freq", "SC HPF", 20.0, 500.0, 80.0)
+                .with_unit(ParamUnit::Hertz)
+                .with_step(1.0)
+                .with_id(ParamId(307), "comp_sc_freq")
+                .with_scale(ParamScale::Logarithmic),
+            smoothing: SmoothingStyle::Slow, // sidechain freq — filter coeff, avoid zipper
+            get: this.sidechain_freq_hz,
+            set: |v| this.sidechain_freq_hz = v;
+
+        // ── [8] Auto makeup ──────────────────────────────────────────────
+        // ParamId(308), "comp_auto_makeup" — matches classic compressor.rs [8]
+        [8] ParamDescriptor::custom("Auto Makeup", "AutoMU", 0.0, 1.0, 0.0)
+                .with_step(1.0)
+                .with_id(ParamId(308), "comp_auto_makeup")
+                .with_flags(ParamFlags::AUTOMATABLE.union(ParamFlags::STEPPED))
+                .with_step_labels(&["Off", "On"]),
+            smoothing: SmoothingStyle::None, // auto_makeup — stepped/discrete, snap immediately
+            get: this.auto_makeup,
+            set: |v| this.auto_makeup = v;
+
+        // ── [9] Output level ─────────────────────────────────────────────
+        // ParamId(309), "comp_output" — matches classic compressor.rs [9]
+        [9] sonido_core::gain::output_param_descriptor().with_id(ParamId(309), "comp_output"),
+            smoothing: SmoothingStyle::Standard, // output level — level fader
+            get: this.output_db,
+            set: |v| this.output_db = v;
+
+        // ── [10] Mix ─────────────────────────────────────────────────────
+        // ParamId(310), "comp_mix" — matches classic compressor.rs [10]
+        [10] ParamDescriptor::custom("Mix", "Mix", 0.0, 100.0, 100.0)
+                .with_unit(ParamUnit::Percent)
+                .with_step(1.0)
+                .with_id(ParamId(310), "comp_mix"),
+            smoothing: SmoothingStyle::Standard, // mix — wet/dry blend
+            get: this.mix_pct,
+            set: |v| this.mix_pct = v;
+
+        // ── [11] Gain Reduction (READ_ONLY diagnostic) ───────────────────
+        // ParamId(311), "comp_gain_reduction" — current GR in dB (always ≤ 0).
+        // Written by CompressorKernel each sample; not user-settable.
+        [11] ParamDescriptor::gain_db("Gain Reduction", "GR", -60.0, 0.0, 0.0)
+                .with_id(ParamId(311), "comp_gain_reduction")
+                .with_flags(ParamFlags::READ_ONLY.union(ParamFlags::HIDDEN)),
+            smoothing: SmoothingStyle::None, // gain_reduction_db — READ_ONLY diagnostic
+            get: this.gain_reduction_db,
+            set: |v| this.gain_reduction_db = v; // READ_ONLY: kernel writes this
     }
 }
 

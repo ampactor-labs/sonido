@@ -70,6 +70,7 @@ use std::collections::VecDeque;
 
 use libm::{expf, fabsf};
 use sonido_core::kernel::{DspKernel, KernelParams, SmoothingStyle};
+use sonido_core::kernel_params;
 use sonido_core::{ParamDescriptor, ParamId, ParamScale, fast_db_to_linear, math::db_to_linear};
 
 /// Maximum lookahead in milliseconds — sizes the fixed delay buffers at construction.
@@ -183,66 +184,37 @@ impl LimiterParams {
     }
 }
 
-impl KernelParams for LimiterParams {
-    const COUNT: usize = 5;
+kernel_params! {
+    LimiterParams, this {
+        [0] ParamDescriptor::gain_db("Threshold", "Thresh", -30.0, 0.0, -6.0)
+                .with_id(ParamId(1600), "lim_thresh"),
+            smoothing: SmoothingStyle::Fast, // threshold — fast for responsive feel
+            get: this.threshold_db,
+            set: |v| this.threshold_db = v;
 
-    fn descriptor(index: usize) -> Option<ParamDescriptor> {
-        match index {
-            0 => Some(
-                ParamDescriptor::gain_db("Threshold", "Thresh", -30.0, 0.0, -6.0)
-                    .with_id(ParamId(1600), "lim_thresh"),
-            ),
-            1 => Some(
-                ParamDescriptor::gain_db("Ceiling", "Ceil", -30.0, 0.0, -0.3)
-                    .with_id(ParamId(1601), "lim_ceil"),
-            ),
-            2 => Some(
-                ParamDescriptor::time_ms("Release", "Rel", 10.0, 500.0, 100.0)
-                    .with_id(ParamId(1602), "lim_release")
-                    .with_scale(ParamScale::Power(2.0)),
-            ),
-            3 => Some(
-                ParamDescriptor::time_ms("Lookahead", "Look", 0.0, 10.0, 5.0)
-                    .with_id(ParamId(1603), "lim_look"),
-            ),
-            4 => Some(
-                sonido_core::gain::output_param_descriptor().with_id(ParamId(1604), "lim_output"),
-            ),
-            _ => None,
-        }
-    }
+        [1] ParamDescriptor::gain_db("Ceiling", "Ceil", -30.0, 0.0, -0.3)
+                .with_id(ParamId(1601), "lim_ceil"),
+            smoothing: SmoothingStyle::Slow, // ceiling — avoid audible steps in brickwall
+            get: this.ceiling_db,
+            set: |v| this.ceiling_db = v;
 
-    fn smoothing(index: usize) -> SmoothingStyle {
-        match index {
-            0 => SmoothingStyle::Fast,     // threshold — fast for responsive feel
-            1 => SmoothingStyle::Slow,     // ceiling — avoid audible steps in brickwall
-            2 => SmoothingStyle::Slow,     // release — coefficient recalc, avoid zipper
-            3 => SmoothingStyle::None,     // lookahead — buffer resize, snap only
-            4 => SmoothingStyle::Standard, // output level
-            _ => SmoothingStyle::Standard,
-        }
-    }
+        [2] ParamDescriptor::time_ms("Release", "Rel", 10.0, 500.0, 100.0)
+                .with_id(ParamId(1602), "lim_release")
+                .with_scale(ParamScale::Power(2.0)),
+            smoothing: SmoothingStyle::Slow, // release — coefficient recalc, avoid zipper
+            get: this.release_ms,
+            set: |v| this.release_ms = v;
 
-    fn get(&self, index: usize) -> f32 {
-        match index {
-            0 => self.threshold_db,
-            1 => self.ceiling_db,
-            2 => self.release_ms,
-            3 => self.lookahead_ms,
-            4 => self.output_db,
-            _ => 0.0,
-        }
-    }
+        [3] ParamDescriptor::time_ms("Lookahead", "Look", 0.0, 10.0, 5.0)
+                .with_id(ParamId(1603), "lim_look"),
+            smoothing: SmoothingStyle::None, // lookahead — buffer resize, snap only
+            get: this.lookahead_ms,
+            set: |v| this.lookahead_ms = v;
 
-    fn set(&mut self, index: usize, value: f32) {
-        match index {
-            0 => self.threshold_db = value,
-            1 => self.ceiling_db = value,
-            2 => self.release_ms = value,
-            3 => self.lookahead_ms = value,
-            4 => self.output_db = value,
-            _ => {}
-        }
+        [4] sonido_core::gain::output_param_descriptor().with_id(ParamId(1604), "lim_output"),
+            smoothing: SmoothingStyle::Standard, // output level
+            get: this.output_db,
+            set: |v| this.output_db = v;
     }
 }
 

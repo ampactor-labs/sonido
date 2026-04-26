@@ -45,6 +45,7 @@
 use libm::fabsf;
 use sonido_core::fast_math::fast_sin_turns;
 use sonido_core::kernel::{DspKernel, KernelParams, SmoothingStyle};
+use sonido_core::kernel_params;
 use sonido_core::{
     ParamDescriptor, ParamFlags, ParamId, ParamScale, ParamUnit, fast_db_to_linear,
     wet_dry_mix_stereo,
@@ -126,68 +127,41 @@ impl RingModParams {
     }
 }
 
-impl KernelParams for RingModParams {
-    const COUNT: usize = 5;
+kernel_params! {
+    RingModParams, this {
+        [0] ParamDescriptor::custom("Frequency", "Freq", 20.0, 2000.0, 220.0)
+                .with_unit(ParamUnit::Hertz)
+                .with_scale(ParamScale::Logarithmic)
+                .with_id(ParamId(1800), "ring_freq"),
+            smoothing: SmoothingStyle::Fast, // frequency — fast for carrier pitch feel
+            get: this.freq_hz,
+            set: |v| this.freq_hz = v;
 
-    fn descriptor(index: usize) -> Option<ParamDescriptor> {
-        match index {
-            0 => Some(
-                ParamDescriptor::custom("Frequency", "Freq", 20.0, 2000.0, 220.0)
-                    .with_unit(ParamUnit::Hertz)
-                    .with_scale(ParamScale::Logarithmic)
-                    .with_id(ParamId(1800), "ring_freq"),
-            ),
-            1 => Some(
-                // Matches classic: ParamDescriptor::depth() with id 1801.
-                // depth() factory: custom "Depth"/"Depth", 0–100 %, default 100.0
-                ParamDescriptor::depth().with_id(ParamId(1801), "ring_depth"),
-            ),
-            2 => Some(
-                ParamDescriptor::custom("Waveform", "Wave", 0.0, 2.0, 0.0)
-                    .with_step(1.0)
-                    .with_id(ParamId(1802), "ring_wave")
-                    .with_flags(ParamFlags::AUTOMATABLE.union(ParamFlags::STEPPED))
-                    .with_step_labels(&["Sine", "Triangle", "Square"]),
-            ),
-            3 => Some(ParamDescriptor::mix().with_id(ParamId(1803), "ring_mix")),
-            4 => Some(
-                sonido_core::gain::output_param_descriptor().with_id(ParamId(1804), "ring_output"),
-            ),
-            _ => None,
-        }
-    }
+        // Matches classic: ParamDescriptor::depth() with id 1801.
+        // depth() factory: custom "Depth"/"Depth", 0–100 %, default 100.0
+        [1] ParamDescriptor::depth().with_id(ParamId(1801), "ring_depth"),
+            smoothing: SmoothingStyle::Standard, // depth — standard AM depth transitions
+            get: this.depth_pct,
+            set: |v| this.depth_pct = v;
 
-    fn smoothing(index: usize) -> SmoothingStyle {
-        match index {
-            0 => SmoothingStyle::Fast,     // frequency — fast for carrier pitch feel
-            1 => SmoothingStyle::Standard, // depth — standard AM depth transitions
-            2 => SmoothingStyle::None,     // waveform — stepped/discrete, snap immediately
-            3 => SmoothingStyle::Standard, // mix
-            4 => SmoothingStyle::Standard, // output level
-            _ => SmoothingStyle::Standard,
-        }
-    }
+        [2] ParamDescriptor::custom("Waveform", "Wave", 0.0, 2.0, 0.0)
+                .with_step(1.0)
+                .with_id(ParamId(1802), "ring_wave")
+                .with_flags(ParamFlags::AUTOMATABLE.union(ParamFlags::STEPPED))
+                .with_step_labels(&["Sine", "Triangle", "Square"]),
+            smoothing: SmoothingStyle::None, // waveform — stepped/discrete, snap immediately
+            get: this.waveform,
+            set: |v| this.waveform = v;
 
-    fn get(&self, index: usize) -> f32 {
-        match index {
-            0 => self.freq_hz,
-            1 => self.depth_pct,
-            2 => self.waveform,
-            3 => self.mix_pct,
-            4 => self.output_db,
-            _ => 0.0,
-        }
-    }
+        [3] ParamDescriptor::mix().with_id(ParamId(1803), "ring_mix"),
+            smoothing: SmoothingStyle::Standard, // mix
+            get: this.mix_pct,
+            set: |v| this.mix_pct = v;
 
-    fn set(&mut self, index: usize, value: f32) {
-        match index {
-            0 => self.freq_hz = value,
-            1 => self.depth_pct = value,
-            2 => self.waveform = value,
-            3 => self.mix_pct = value,
-            4 => self.output_db = value,
-            _ => {}
-        }
+        [4] sonido_core::gain::output_param_descriptor().with_id(ParamId(1804), "ring_output"),
+            smoothing: SmoothingStyle::Standard, // output level
+            get: this.output_db,
+            set: |v| this.output_db = v;
     }
 }
 

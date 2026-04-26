@@ -48,6 +48,7 @@
 //! let (left, right) = kernel.process_stereo(input_l, input_r, &params);
 //! ```
 
+use sonido_core::kernel_params;
 use sonido_core::{
     DIVISION_LABELS, Lfo, LfoWaveform, ParamDescriptor, ParamFlags, ParamId, ParamUnit,
     TempoManager, fast_db_to_linear, index_to_division,
@@ -140,92 +141,64 @@ impl TremoloParams {
     }
 }
 
-impl KernelParams for TremoloParams {
-    const COUNT: usize = 8;
+kernel_params! {
+    TremoloParams, this {
+        [0] ParamDescriptor::rate_hz(0.5, 20.0, 5.0).with_id(ParamId(1000), "trem_rate"),
+            smoothing: SmoothingStyle::Standard, // rate — 10ms, smooth tempo feel
+            get: this.rate,
+            set: |v| this.rate = v;
 
-    fn descriptor(index: usize) -> Option<ParamDescriptor> {
-        match index {
-            0 => Some(ParamDescriptor::rate_hz(0.5, 20.0, 5.0).with_id(ParamId(1000), "trem_rate")),
-            1 => Some(ParamDescriptor::depth().with_id(ParamId(1001), "trem_depth")),
-            2 => Some(
-                ParamDescriptor::custom("Waveform", "Wave", 0.0, 3.0, 0.0)
-                    .with_unit(ParamUnit::None)
-                    .with_step(1.0)
-                    .with_id(ParamId(1002), "trem_waveform")
-                    .with_flags(ParamFlags::AUTOMATABLE.union(ParamFlags::STEPPED))
-                    .with_step_labels(&["Sine", "Triangle", "Square", "SampleHold"]),
-            ),
-            3 => Some(
-                ParamDescriptor::custom("Stereo Spread", "Spread", 0.0, 100.0, 0.0)
-                    .with_unit(ParamUnit::Percent)
-                    .with_id(ParamId(1004), "trem_stereo_spread"),
-            ),
-            4 => Some(
-                ParamDescriptor::custom("Sync", "Sync", 0.0, 1.0, 0.0)
-                    .with_step(1.0)
-                    .with_id(ParamId(1005), "trem_sync")
-                    .with_flags(ParamFlags::AUTOMATABLE.union(ParamFlags::STEPPED))
-                    .with_step_labels(&["Off", "On"]),
-            ),
-            5 => Some(
-                ParamDescriptor::custom("Division", "Div", 0.0, 11.0, 3.0)
-                    .with_step(1.0)
-                    .with_id(ParamId(1006), "trem_division")
-                    .with_flags(ParamFlags::AUTOMATABLE.union(ParamFlags::STEPPED))
-                    .with_step_labels(DIVISION_LABELS),
-            ),
-            6 => Some(
-                sonido_core::gain::output_param_descriptor().with_id(ParamId(1003), "trem_output"),
-            ),
-            7 => Some(
-                ParamDescriptor::custom("LFO Phase", "Phase", 0.0, 1.0, 0.0)
-                    .with_id(ParamId(1007), "trem_lfo_phase")
-                    .with_flags(ParamFlags::READ_ONLY.union(ParamFlags::HIDDEN)),
-            ),
-            _ => None,
-        }
-    }
+        [1] ParamDescriptor::depth().with_id(ParamId(1001), "trem_depth"),
+            smoothing: SmoothingStyle::Standard, // depth — 10ms, click-free depth changes
+            get: this.depth_pct,
+            set: |v| this.depth_pct = v;
 
-    fn smoothing(index: usize) -> SmoothingStyle {
-        match index {
-            0 => SmoothingStyle::Standard, // rate — 10ms, smooth tempo feel
-            1 => SmoothingStyle::Standard, // depth — 10ms, click-free depth changes
-            2 => SmoothingStyle::None,     // waveform — discrete, snap immediately
-            3 => SmoothingStyle::Standard, // stereo spread — 10ms
-            4 => SmoothingStyle::None,     // sync — discrete on/off, snap
-            5 => SmoothingStyle::None,     // division — discrete, snap
-            6 => SmoothingStyle::Standard, // output level — 10ms
-            7 => SmoothingStyle::None,     // lfo_phase — READ_ONLY diagnostic, no smoothing
-            _ => SmoothingStyle::Standard,
-        }
-    }
+        [2] ParamDescriptor::custom("Waveform", "Wave", 0.0, 3.0, 0.0)
+                .with_unit(ParamUnit::None)
+                .with_step(1.0)
+                .with_id(ParamId(1002), "trem_waveform")
+                .with_flags(ParamFlags::AUTOMATABLE.union(ParamFlags::STEPPED))
+                .with_step_labels(&["Sine", "Triangle", "Square", "SampleHold"]),
+            smoothing: SmoothingStyle::None, // waveform — discrete, snap immediately
+            get: this.waveform,
+            set: |v| this.waveform = v;
 
-    fn get(&self, index: usize) -> f32 {
-        match index {
-            0 => self.rate,
-            1 => self.depth_pct,
-            2 => self.waveform,
-            3 => self.stereo_spread_pct,
-            4 => self.sync,
-            5 => self.division,
-            6 => self.output_db,
-            7 => self.lfo_phase,
-            _ => 0.0,
-        }
-    }
+        [3] ParamDescriptor::custom("Stereo Spread", "Spread", 0.0, 100.0, 0.0)
+                .with_unit(ParamUnit::Percent)
+                .with_id(ParamId(1004), "trem_stereo_spread"),
+            smoothing: SmoothingStyle::Standard, // stereo spread — 10ms
+            get: this.stereo_spread_pct,
+            set: |v| this.stereo_spread_pct = v;
 
-    fn set(&mut self, index: usize, value: f32) {
-        match index {
-            0 => self.rate = value,
-            1 => self.depth_pct = value,
-            2 => self.waveform = value,
-            3 => self.stereo_spread_pct = value,
-            4 => self.sync = value,
-            5 => self.division = value,
-            6 => self.output_db = value,
-            7 => self.lfo_phase = value,
-            _ => {}
-        }
+        [4] ParamDescriptor::custom("Sync", "Sync", 0.0, 1.0, 0.0)
+                .with_step(1.0)
+                .with_id(ParamId(1005), "trem_sync")
+                .with_flags(ParamFlags::AUTOMATABLE.union(ParamFlags::STEPPED))
+                .with_step_labels(&["Off", "On"]),
+            smoothing: SmoothingStyle::None, // sync — discrete on/off, snap
+            get: this.sync,
+            set: |v| this.sync = v;
+
+        [5] ParamDescriptor::custom("Division", "Div", 0.0, 11.0, 3.0)
+                .with_step(1.0)
+                .with_id(ParamId(1006), "trem_division")
+                .with_flags(ParamFlags::AUTOMATABLE.union(ParamFlags::STEPPED))
+                .with_step_labels(DIVISION_LABELS),
+            smoothing: SmoothingStyle::None, // division — discrete, snap
+            get: this.division,
+            set: |v| this.division = v;
+
+        [6] sonido_core::gain::output_param_descriptor().with_id(ParamId(1003), "trem_output"),
+            smoothing: SmoothingStyle::Standard, // output level — 10ms
+            get: this.output_db,
+            set: |v| this.output_db = v;
+
+        [7] ParamDescriptor::custom("LFO Phase", "Phase", 0.0, 1.0, 0.0)
+                .with_id(ParamId(1007), "trem_lfo_phase")
+                .with_flags(ParamFlags::READ_ONLY.union(ParamFlags::HIDDEN)),
+            smoothing: SmoothingStyle::None, // lfo_phase — READ_ONLY diagnostic, no smoothing
+            get: this.lfo_phase,
+            set: |v| this.lfo_phase = v;
     }
 }
 

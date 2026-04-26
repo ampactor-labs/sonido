@@ -54,6 +54,7 @@
 
 use libm::ceilf;
 use sonido_core::kernel::{DspKernel, KernelParams, SmoothingStyle};
+use sonido_core::kernel_params;
 use sonido_core::math::soft_limit;
 use sonido_core::{
     DIVISION_LABELS, InterpolatedDelay, Lfo, LfoWaveform, ParamDescriptor, ParamFlags, ParamId,
@@ -210,105 +211,77 @@ impl ChorusParams {
     }
 }
 
-impl KernelParams for ChorusParams {
-    const COUNT: usize = 10;
+kernel_params! {
+    ChorusParams, this {
+        [0] ParamDescriptor::rate_hz(0.1, 10.0, 1.0).with_id(ParamId(700), "chor_rate"),
+            smoothing: SmoothingStyle::Standard, // rate — 10ms, avoid abrupt pitch jumps
+            get: this.rate,
+            set: |v| this.rate = v;
 
-    fn descriptor(index: usize) -> Option<ParamDescriptor> {
-        match index {
-            0 => Some(ParamDescriptor::rate_hz(0.1, 10.0, 1.0).with_id(ParamId(700), "chor_rate")),
-            1 => Some(ParamDescriptor::depth().with_id(ParamId(701), "chor_depth")),
-            2 => Some(ParamDescriptor::mix().with_id(ParamId(702), "chor_mix")),
-            3 => Some(
-                ParamDescriptor::custom("Voices", "Voices", 2.0, 4.0, 2.0)
-                    .with_step(1.0)
-                    .with_id(ParamId(704), "chor_voices")
-                    .with_flags(ParamFlags::AUTOMATABLE.union(ParamFlags::STEPPED))
-                    .with_step_labels(&["2", "3", "4"]),
-            ),
-            4 => Some(
-                ParamDescriptor::custom("Feedback", "Fdbk", 0.0, 70.0, 0.0)
-                    .with_unit(ParamUnit::Percent)
-                    .with_step(1.0)
-                    .with_id(ParamId(705), "chor_feedback"),
-            ),
-            5 => Some(
-                ParamDescriptor::custom("Base Delay", "BDly", 5.0, 25.0, 15.0)
-                    .with_unit(ParamUnit::Milliseconds)
-                    .with_step(0.5)
-                    .with_id(ParamId(706), "chor_base_delay"),
-            ),
-            6 => Some(
-                ParamDescriptor::custom("Sync", "Sync", 0.0, 1.0, 0.0)
-                    .with_step(1.0)
-                    .with_id(ParamId(707), "chor_sync")
-                    .with_flags(ParamFlags::AUTOMATABLE.union(ParamFlags::STEPPED))
-                    .with_step_labels(&["Off", "On"]),
-            ),
-            7 => Some(
-                ParamDescriptor::custom("Division", "Div", 0.0, 11.0, 3.0)
-                    .with_step(1.0)
-                    .with_id(ParamId(708), "chor_division")
-                    .with_flags(ParamFlags::AUTOMATABLE.union(ParamFlags::STEPPED))
-                    .with_step_labels(DIVISION_LABELS),
-            ),
-            8 => Some(
-                sonido_core::gain::output_param_descriptor().with_id(ParamId(703), "chor_output"),
-            ),
-            9 => Some(
-                ParamDescriptor::custom("LFO Phase", "Phase", 0.0, 1.0, 0.0)
-                    .with_id(ParamId(709), "chor_lfo_phase")
-                    .with_flags(ParamFlags::READ_ONLY.union(ParamFlags::HIDDEN)),
-            ),
-            _ => None,
-        }
-    }
+        [1] ParamDescriptor::depth().with_id(ParamId(701), "chor_depth"),
+            smoothing: SmoothingStyle::Standard, // depth_pct — 10ms
+            get: this.depth_pct,
+            set: |v| this.depth_pct = v;
 
-    fn smoothing(index: usize) -> SmoothingStyle {
-        match index {
-            0 => SmoothingStyle::Standard, // rate — 10ms, avoid abrupt pitch jumps
-            1 => SmoothingStyle::Standard, // depth_pct — 10ms
-            2 => SmoothingStyle::Standard, // mix_pct — 10ms
-            3 => SmoothingStyle::None,     // voices — discrete, snap immediately
-            4 => SmoothingStyle::Standard, // feedback_pct — 10ms
-            5 => SmoothingStyle::Interpolated, // base_delay_ms — 50ms, prevent pitch artifacts
-            6 => SmoothingStyle::None,     // sync — discrete toggle
-            7 => SmoothingStyle::None,     // division — discrete
-            8 => SmoothingStyle::Standard, // output_db — 10ms
-            9 => SmoothingStyle::None,     // lfo_phase — READ_ONLY diagnostic, no smoothing
-            _ => SmoothingStyle::Standard,
-        }
-    }
+        [2] ParamDescriptor::mix().with_id(ParamId(702), "chor_mix"),
+            smoothing: SmoothingStyle::Standard, // mix_pct — 10ms
+            get: this.mix_pct,
+            set: |v| this.mix_pct = v;
 
-    fn get(&self, index: usize) -> f32 {
-        match index {
-            0 => self.rate,
-            1 => self.depth_pct,
-            2 => self.mix_pct,
-            3 => self.voices,
-            4 => self.feedback_pct,
-            5 => self.base_delay_ms,
-            6 => self.sync,
-            7 => self.division,
-            8 => self.output_db,
-            9 => self.lfo_phase,
-            _ => 0.0,
-        }
-    }
+        [3] ParamDescriptor::custom("Voices", "Voices", 2.0, 4.0, 2.0)
+                .with_step(1.0)
+                .with_id(ParamId(704), "chor_voices")
+                .with_flags(ParamFlags::AUTOMATABLE.union(ParamFlags::STEPPED))
+                .with_step_labels(&["2", "3", "4"]),
+            smoothing: SmoothingStyle::None, // voices — discrete, snap immediately
+            get: this.voices,
+            set: |v| this.voices = v;
 
-    fn set(&mut self, index: usize, value: f32) {
-        match index {
-            0 => self.rate = value,
-            1 => self.depth_pct = value,
-            2 => self.mix_pct = value,
-            3 => self.voices = value,
-            4 => self.feedback_pct = value,
-            5 => self.base_delay_ms = value,
-            6 => self.sync = value,
-            7 => self.division = value,
-            8 => self.output_db = value,
-            9 => self.lfo_phase = value,
-            _ => {}
-        }
+        [4] ParamDescriptor::custom("Feedback", "Fdbk", 0.0, 70.0, 0.0)
+                .with_unit(ParamUnit::Percent)
+                .with_step(1.0)
+                .with_id(ParamId(705), "chor_feedback"),
+            smoothing: SmoothingStyle::Standard, // feedback_pct — 10ms
+            get: this.feedback_pct,
+            set: |v| this.feedback_pct = v;
+
+        [5] ParamDescriptor::custom("Base Delay", "BDly", 5.0, 25.0, 15.0)
+                .with_unit(ParamUnit::Milliseconds)
+                .with_step(0.5)
+                .with_id(ParamId(706), "chor_base_delay"),
+            smoothing: SmoothingStyle::Interpolated, // base_delay_ms — 50ms, prevent pitch artifacts
+            get: this.base_delay_ms,
+            set: |v| this.base_delay_ms = v;
+
+        [6] ParamDescriptor::custom("Sync", "Sync", 0.0, 1.0, 0.0)
+                .with_step(1.0)
+                .with_id(ParamId(707), "chor_sync")
+                .with_flags(ParamFlags::AUTOMATABLE.union(ParamFlags::STEPPED))
+                .with_step_labels(&["Off", "On"]),
+            smoothing: SmoothingStyle::None, // sync — discrete toggle
+            get: this.sync,
+            set: |v| this.sync = v;
+
+        [7] ParamDescriptor::custom("Division", "Div", 0.0, 11.0, 3.0)
+                .with_step(1.0)
+                .with_id(ParamId(708), "chor_division")
+                .with_flags(ParamFlags::AUTOMATABLE.union(ParamFlags::STEPPED))
+                .with_step_labels(DIVISION_LABELS),
+            smoothing: SmoothingStyle::None, // division — discrete
+            get: this.division,
+            set: |v| this.division = v;
+
+        [8] sonido_core::gain::output_param_descriptor().with_id(ParamId(703), "chor_output"),
+            smoothing: SmoothingStyle::Standard, // output_db — 10ms
+            get: this.output_db,
+            set: |v| this.output_db = v;
+
+        [9] ParamDescriptor::custom("LFO Phase", "Phase", 0.0, 1.0, 0.0)
+                .with_id(ParamId(709), "chor_lfo_phase")
+                .with_flags(ParamFlags::READ_ONLY.union(ParamFlags::HIDDEN)),
+            smoothing: SmoothingStyle::None, // lfo_phase — READ_ONLY diagnostic, no smoothing
+            get: this.lfo_phase,
+            set: |v| this.lfo_phase = v;
     }
 }
 

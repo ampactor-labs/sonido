@@ -50,6 +50,7 @@
 //! - Zolzer, "DAFX" (2011), Ch. 4 — gate design with hold time.
 
 use sonido_core::kernel::{DspKernel, KernelParams, SmoothingStyle};
+use sonido_core::kernel_params;
 use sonido_core::{
     Biquad, Cached, EnvelopeFollower, ParamDescriptor, ParamFlags, ParamId, ParamScale, ParamUnit,
     fast_db_to_linear, highpass_coefficients, math::db_to_linear,
@@ -214,161 +215,128 @@ impl GateParams {
     }
 }
 
-impl KernelParams for GateParams {
-    const COUNT: usize = 9;
+kernel_params! {
+    GateParams, this {
+        // ── [0] Threshold ───────────────────────────────────────────────
+        // ParamId(400), "gate_thresh" — matches classic gate.rs [0]
+        [0] ParamDescriptor {
+                name: "Threshold",
+                short_name: "Thresh",
+                unit: ParamUnit::Decibels,
+                min: -80.0,
+                max: 0.0,
+                default: -40.0,
+                step: 1.0,
+                ..ParamDescriptor::mix()
+            }
+            .with_id(ParamId(400), "gate_thresh"),
+            smoothing: SmoothingStyle::Standard, // threshold — avoid zipper noise on automation
+            get: this.threshold_db,
+            set: |v| this.threshold_db = v;
 
-    fn descriptor(index: usize) -> Option<ParamDescriptor> {
-        match index {
-            // ── [0] Threshold ───────────────────────────────────────────────
-            // ParamId(400), "gate_thresh" — matches classic gate.rs [0]
-            0 => Some(
-                ParamDescriptor {
-                    name: "Threshold",
-                    short_name: "Thresh",
-                    unit: ParamUnit::Decibels,
-                    min: -80.0,
-                    max: 0.0,
-                    default: -40.0,
-                    step: 1.0,
-                    ..ParamDescriptor::mix()
-                }
-                .with_id(ParamId(400), "gate_thresh"),
-            ),
-            // ── [1] Attack ──────────────────────────────────────────────────
-            // ParamId(401), "gate_attack" — matches classic gate.rs [1]
-            1 => Some(
-                ParamDescriptor {
-                    name: "Attack",
-                    short_name: "Atk",
-                    unit: ParamUnit::Milliseconds,
-                    min: 0.1,
-                    max: 50.0,
-                    default: 1.0,
-                    step: 0.1,
-                    ..ParamDescriptor::mix()
-                }
-                .with_id(ParamId(401), "gate_attack"),
-            ),
-            // ── [2] Release ─────────────────────────────────────────────────
-            // ParamId(402), "gate_release" — matches classic gate.rs [2]
-            2 => Some(
-                ParamDescriptor::time_ms("Release", "Rel", 10.0, 1000.0, 100.0)
-                    .with_id(ParamId(402), "gate_release"),
-            ),
-            // ── [3] Hold ────────────────────────────────────────────────────
-            // ParamId(403), "gate_hold" — matches classic gate.rs [3]
-            3 => Some(
-                ParamDescriptor::time_ms("Hold", "Hold", 0.0, 500.0, 50.0)
-                    .with_id(ParamId(403), "gate_hold"),
-            ),
-            // ── [4] Range (floor) ───────────────────────────────────────────
-            // ParamId(405), "gate_range" — NOTE: 405 not 404; matches classic gate.rs [4]
-            4 => Some(
-                ParamDescriptor {
-                    name: "Range",
-                    short_name: "Range",
-                    unit: ParamUnit::Decibels,
-                    min: -80.0,
-                    max: 0.0,
-                    default: -80.0,
-                    step: 1.0,
-                    ..ParamDescriptor::mix()
-                }
-                .with_id(ParamId(405), "gate_range"),
-            ),
-            // ── [5] Hysteresis ──────────────────────────────────────────────
-            // ParamId(406), "gate_hysteresis" — matches classic gate.rs [5]
-            5 => Some(
-                ParamDescriptor {
-                    name: "Hysteresis",
-                    short_name: "Hyst",
-                    unit: ParamUnit::Decibels,
-                    min: 0.0,
-                    max: 12.0,
-                    default: 3.0,
-                    step: 0.1,
-                    ..ParamDescriptor::mix()
-                }
-                .with_id(ParamId(406), "gate_hysteresis"),
-            ),
-            // ── [6] SC HPF Freq ─────────────────────────────────────────────
-            // ParamId(407), "gate_sc_hpf", Logarithmic — matches classic gate.rs [6]
-            6 => Some(
-                ParamDescriptor {
-                    name: "SC HPF Freq",
-                    short_name: "SC HPF",
-                    unit: ParamUnit::Hertz,
-                    min: 20.0,
-                    max: 500.0,
-                    default: 80.0,
-                    step: 1.0,
-                    ..ParamDescriptor::mix()
-                }
-                .with_id(ParamId(407), "gate_sc_hpf")
-                .with_scale(ParamScale::Logarithmic),
-            ),
-            // ── [7] Output ──────────────────────────────────────────────────
-            // ParamId(404), "gate_output" — NOTE: 404 not 408; matches classic gate.rs [7]
-            7 => Some(
-                sonido_core::gain::output_param_descriptor().with_id(ParamId(404), "gate_output"),
-            ),
-            // ── [8] Gate Open (READ_ONLY diagnostic) ────────────────────────
-            // ParamId(408), "gate_open" — 1.0 = gate open, 0.0 = gate closed.
-            // Written by GateKernel each sample; not user-settable.
-            8 => Some(
-                ParamDescriptor::custom("Gate Open", "Open", 0.0, 1.0, 0.0)
-                    .with_id(ParamId(408), "gate_open")
-                    .with_flags(ParamFlags::READ_ONLY.union(ParamFlags::HIDDEN)),
-            ),
-            _ => None,
-        }
-    }
+        // ── [1] Attack ──────────────────────────────────────────────────
+        // ParamId(401), "gate_attack" — matches classic gate.rs [1]
+        [1] ParamDescriptor {
+                name: "Attack",
+                short_name: "Atk",
+                unit: ParamUnit::Milliseconds,
+                min: 0.1,
+                max: 50.0,
+                default: 1.0,
+                step: 0.1,
+                ..ParamDescriptor::mix()
+            }
+            .with_id(ParamId(401), "gate_attack"),
+            smoothing: SmoothingStyle::Standard, // attack — timing param
+            get: this.attack_ms,
+            set: |v| this.attack_ms = v;
 
-    fn smoothing(index: usize) -> SmoothingStyle {
-        match index {
-            0 => SmoothingStyle::Standard, // threshold — avoid zipper noise on automation
-            1 => SmoothingStyle::Standard, // attack — timing param
-            2 => SmoothingStyle::Standard, // release — timing param
-            3 => SmoothingStyle::Standard, // hold — timing param
-            4 => SmoothingStyle::Standard, // range — gain floor
-            5 => SmoothingStyle::Standard, // hysteresis — threshold offset
-            6 => SmoothingStyle::Slow,     // sidechain HPF — filter coefficient, avoid zipper
-            7 => SmoothingStyle::Standard, // output level
-            8 => SmoothingStyle::None,     // gate_open — READ_ONLY diagnostic, no smoothing
-            _ => SmoothingStyle::Standard,
-        }
-    }
+        // ── [2] Release ─────────────────────────────────────────────────
+        // ParamId(402), "gate_release" — matches classic gate.rs [2]
+        [2] ParamDescriptor::time_ms("Release", "Rel", 10.0, 1000.0, 100.0)
+                .with_id(ParamId(402), "gate_release"),
+            smoothing: SmoothingStyle::Standard, // release — timing param
+            get: this.release_ms,
+            set: |v| this.release_ms = v;
 
-    fn get(&self, index: usize) -> f32 {
-        match index {
-            0 => self.threshold_db,
-            1 => self.attack_ms,
-            2 => self.release_ms,
-            3 => self.hold_ms,
-            4 => self.range_db,
-            5 => self.hysteresis_db,
-            6 => self.sidechain_freq_hz,
-            7 => self.output_db,
-            // Index 8 (gate_open): actual value stored on GateKernel, not GateParams.
-            // Returns 0.0 placeholder here; consumers read gate_open_diagnostic directly.
-            8 => self.gate_open,
-            _ => 0.0,
-        }
-    }
+        // ── [3] Hold ────────────────────────────────────────────────────
+        // ParamId(403), "gate_hold" — matches classic gate.rs [3]
+        [3] ParamDescriptor::time_ms("Hold", "Hold", 0.0, 500.0, 50.0)
+                .with_id(ParamId(403), "gate_hold"),
+            smoothing: SmoothingStyle::Standard, // hold — timing param
+            get: this.hold_ms,
+            set: |v| this.hold_ms = v;
 
-    fn set(&mut self, index: usize, value: f32) {
-        match index {
-            0 => self.threshold_db = value,
-            1 => self.attack_ms = value,
-            2 => self.release_ms = value,
-            3 => self.hold_ms = value,
-            4 => self.range_db = value,
-            5 => self.hysteresis_db = value,
-            6 => self.sidechain_freq_hz = value,
-            7 => self.output_db = value,
-            8 => self.gate_open = value, // READ_ONLY: kernel writes this, not user
-            _ => {}
-        }
+        // ── [4] Range (floor) ───────────────────────────────────────────
+        // ParamId(405), "gate_range" — NOTE: 405 not 404; matches classic gate.rs [4]
+        [4] ParamDescriptor {
+                name: "Range",
+                short_name: "Range",
+                unit: ParamUnit::Decibels,
+                min: -80.0,
+                max: 0.0,
+                default: -80.0,
+                step: 1.0,
+                ..ParamDescriptor::mix()
+            }
+            .with_id(ParamId(405), "gate_range"),
+            smoothing: SmoothingStyle::Standard, // range — gain floor
+            get: this.range_db,
+            set: |v| this.range_db = v;
+
+        // ── [5] Hysteresis ──────────────────────────────────────────────
+        // ParamId(406), "gate_hysteresis" — matches classic gate.rs [5]
+        [5] ParamDescriptor {
+                name: "Hysteresis",
+                short_name: "Hyst",
+                unit: ParamUnit::Decibels,
+                min: 0.0,
+                max: 12.0,
+                default: 3.0,
+                step: 0.1,
+                ..ParamDescriptor::mix()
+            }
+            .with_id(ParamId(406), "gate_hysteresis"),
+            smoothing: SmoothingStyle::Standard, // hysteresis — threshold offset
+            get: this.hysteresis_db,
+            set: |v| this.hysteresis_db = v;
+
+        // ── [6] SC HPF Freq ─────────────────────────────────────────────
+        // ParamId(407), "gate_sc_hpf", Logarithmic — matches classic gate.rs [6]
+        [6] ParamDescriptor {
+                name: "SC HPF Freq",
+                short_name: "SC HPF",
+                unit: ParamUnit::Hertz,
+                min: 20.0,
+                max: 500.0,
+                default: 80.0,
+                step: 1.0,
+                ..ParamDescriptor::mix()
+            }
+            .with_id(ParamId(407), "gate_sc_hpf")
+            .with_scale(ParamScale::Logarithmic),
+            smoothing: SmoothingStyle::Slow, // sidechain HPF — filter coefficient, avoid zipper
+            get: this.sidechain_freq_hz,
+            set: |v| this.sidechain_freq_hz = v;
+
+        // ── [7] Output ──────────────────────────────────────────────────
+        // ParamId(404), "gate_output" — NOTE: 404 not 408; matches classic gate.rs [7]
+        [7] sonido_core::gain::output_param_descriptor().with_id(ParamId(404), "gate_output"),
+            smoothing: SmoothingStyle::Standard, // output level
+            get: this.output_db,
+            set: |v| this.output_db = v;
+
+        // ── [8] Gate Open (READ_ONLY diagnostic) ────────────────────────
+        // ParamId(408), "gate_open" — 1.0 = gate open, 0.0 = gate closed.
+        // Written by GateKernel each sample; not user-settable.
+        // Index 8 (gate_open): actual value stored on GateKernel, not GateParams.
+        // Returns 0.0 placeholder here; consumers read gate_open_diagnostic directly.
+        [8] ParamDescriptor::custom("Gate Open", "Open", 0.0, 1.0, 0.0)
+                .with_id(ParamId(408), "gate_open")
+                .with_flags(ParamFlags::READ_ONLY.union(ParamFlags::HIDDEN)),
+            smoothing: SmoothingStyle::None, // gate_open — READ_ONLY diagnostic, no smoothing
+            get: this.gate_open,
+            set: |v| this.gate_open = v; // READ_ONLY: kernel writes this, not user
     }
 }
 

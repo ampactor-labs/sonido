@@ -65,6 +65,7 @@
 use libm::tanhf;
 
 use sonido_core::kernel::{DspKernel, KernelParams, SmoothingStyle};
+use sonido_core::kernel_params;
 use sonido_core::math::soft_limit;
 use sonido_core::{
     Biquad, Cached, ParamDescriptor, ParamId, ParamUnit, fast_db_to_linear, peaking_eq_coefficients,
@@ -138,53 +139,26 @@ impl PreampParams {
     }
 }
 
-impl KernelParams for PreampParams {
-    const COUNT: usize = 3;
+kernel_params! {
+    PreampParams, this {
+        [0] ParamDescriptor::gain_db("Gain", "Gain", 0.0, 40.0, 0.0)
+                .with_id(ParamId(100), "pre_gain"),
+            smoothing: SmoothingStyle::Standard, // gain — 10 ms, responsive but click-free
+            get: this.gain_db,
+            set: |v| this.gain_db = v;
 
-    fn descriptor(index: usize) -> Option<ParamDescriptor> {
-        match index {
-            0 => Some(
-                ParamDescriptor::gain_db("Gain", "Gain", 0.0, 40.0, 0.0)
-                    .with_id(ParamId(100), "pre_gain"),
-            ),
-            1 => Some(
-                ParamDescriptor::custom("Tone", "Tone", -12.0, 12.0, 0.0)
-                    .with_unit(ParamUnit::Decibels)
-                    .with_step(0.5)
-                    .with_id(ParamId(101), "pre_tone"),
-            ),
-            2 => Some(
-                sonido_core::gain::output_param_descriptor().with_id(ParamId(102), "pre_output"),
-            ),
-            _ => None,
-        }
-    }
+        [1] ParamDescriptor::custom("Tone", "Tone", -12.0, 12.0, 0.0)
+                .with_unit(ParamUnit::Decibels)
+                .with_step(0.5)
+                .with_id(ParamId(101), "pre_tone"),
+            smoothing: SmoothingStyle::Slow, // tone — filter coefficient, avoid zipper
+            get: this.tone_db,
+            set: |v| this.tone_db = v;
 
-    fn smoothing(index: usize) -> SmoothingStyle {
-        match index {
-            0 => SmoothingStyle::Standard, // gain — 10 ms, responsive but click-free
-            1 => SmoothingStyle::Slow,     // tone — filter coefficient, avoid zipper
-            2 => SmoothingStyle::Standard, // output level
-            _ => SmoothingStyle::Standard,
-        }
-    }
-
-    fn get(&self, index: usize) -> f32 {
-        match index {
-            0 => self.gain_db,
-            1 => self.tone_db,
-            2 => self.output_db,
-            _ => 0.0,
-        }
-    }
-
-    fn set(&mut self, index: usize, value: f32) {
-        match index {
-            0 => self.gain_db = value,
-            1 => self.tone_db = value,
-            2 => self.output_db = value,
-            _ => {}
-        }
+        [2] sonido_core::gain::output_param_descriptor().with_id(ParamId(102), "pre_output"),
+            smoothing: SmoothingStyle::Standard, // output level
+            get: this.output_db,
+            set: |v| this.output_db = v;
     }
 }
 

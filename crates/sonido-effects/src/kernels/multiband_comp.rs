@@ -56,6 +56,7 @@
 //! ```
 
 use sonido_core::kernel::{DspKernel, KernelParams, SmoothingStyle};
+use sonido_core::kernel_params;
 use sonido_core::{
     Biquad, Cached, EnvelopeFollower, ParamDescriptor, ParamId, ParamScale, ParamUnit,
     fast_db_to_linear, fast_linear_to_db, highpass_coefficients, lowpass_coefficients,
@@ -183,130 +184,102 @@ impl Default for MultibandCompParams {
     }
 }
 
-impl KernelParams for MultibandCompParams {
-    const COUNT: usize = 12;
+kernel_params! {
+    MultibandCompParams, this {
+        // ── [0] Low/mid crossover ─────────────────────────────────────────
+        [0] ParamDescriptor::custom("Low Xover", "Lo Xvr", 100.0, 1000.0, 250.0)
+                .with_unit(ParamUnit::Hertz)
+                .with_step(1.0)
+                .with_id(ParamId(2600), "mbc_xover_low")
+                .with_scale(ParamScale::Logarithmic),
+            smoothing: SmoothingStyle::Slow, // crossover freqs — filter coeff recalc
+            get: this.xover_low_hz,
+            set: |v| this.xover_low_hz = v;
 
-    fn descriptor(index: usize) -> Option<ParamDescriptor> {
-        match index {
-            // ── [0] Low/mid crossover ─────────────────────────────────────────
-            0 => Some(
-                ParamDescriptor::custom("Low Xover", "Lo Xvr", 100.0, 1000.0, 250.0)
-                    .with_unit(ParamUnit::Hertz)
-                    .with_step(1.0)
-                    .with_id(ParamId(2600), "mbc_xover_low")
-                    .with_scale(ParamScale::Logarithmic),
-            ),
-            // ── [1] Mid/high crossover ────────────────────────────────────────
-            1 => Some(
-                ParamDescriptor::custom("High Xover", "Hi Xvr", 1000.0, 10000.0, 3000.0)
-                    .with_unit(ParamUnit::Hertz)
-                    .with_step(1.0)
-                    .with_id(ParamId(2601), "mbc_xover_high")
-                    .with_scale(ParamScale::Logarithmic),
-            ),
-            // ── [2] Low threshold ─────────────────────────────────────────────
-            2 => Some(
-                ParamDescriptor::gain_db("Low Thresh", "Lo Thr", -60.0, 0.0, -20.0)
-                    .with_id(ParamId(2602), "mbc_low_thresh"),
-            ),
-            // ── [3] Low ratio ─────────────────────────────────────────────────
-            3 => Some(
-                ParamDescriptor::custom("Low Ratio", "Lo Rat", 1.0, 20.0, 4.0)
-                    .with_unit(ParamUnit::Ratio)
-                    .with_step(0.1)
-                    .with_id(ParamId(2603), "mbc_low_ratio"),
-            ),
-            // ── [4] Mid threshold ─────────────────────────────────────────────
-            4 => Some(
-                ParamDescriptor::gain_db("Mid Thresh", "Md Thr", -60.0, 0.0, -20.0)
-                    .with_id(ParamId(2604), "mbc_mid_thresh"),
-            ),
-            // ── [5] Mid ratio ─────────────────────────────────────────────────
-            5 => Some(
-                ParamDescriptor::custom("Mid Ratio", "Md Rat", 1.0, 20.0, 4.0)
-                    .with_unit(ParamUnit::Ratio)
-                    .with_step(0.1)
-                    .with_id(ParamId(2605), "mbc_mid_ratio"),
-            ),
-            // ── [6] High threshold ────────────────────────────────────────────
-            6 => Some(
-                ParamDescriptor::gain_db("High Thresh", "Hi Thr", -60.0, 0.0, -20.0)
-                    .with_id(ParamId(2606), "mbc_high_thresh"),
-            ),
-            // ── [7] High ratio ────────────────────────────────────────────────
-            7 => Some(
-                ParamDescriptor::custom("High Ratio", "Hi Rat", 1.0, 20.0, 4.0)
-                    .with_unit(ParamUnit::Ratio)
-                    .with_step(0.1)
-                    .with_id(ParamId(2607), "mbc_high_ratio"),
-            ),
-            // ── [8] Low makeup gain ───────────────────────────────────────────
-            8 => Some(
-                ParamDescriptor::gain_db("Low Gain", "Lo Gain", -12.0, 12.0, 0.0)
-                    .with_id(ParamId(2608), "mbc_low_gain"),
-            ),
-            // ── [9] Mid makeup gain ───────────────────────────────────────────
-            9 => Some(
-                ParamDescriptor::gain_db("Mid Gain", "Md Gain", -12.0, 12.0, 0.0)
-                    .with_id(ParamId(2609), "mbc_mid_gain"),
-            ),
-            // ── [10] High makeup gain ─────────────────────────────────────────
-            10 => Some(
-                ParamDescriptor::gain_db("High Gain", "Hi Gain", -12.0, 12.0, 0.0)
-                    .with_id(ParamId(2610), "mbc_high_gain"),
-            ),
-            // ── [11] Output level ─────────────────────────────────────────────
-            11 => Some(
-                sonido_core::gain::output_param_descriptor().with_id(ParamId(2611), "mbc_output"),
-            ),
-            _ => None,
-        }
-    }
+        // ── [1] Mid/high crossover ────────────────────────────────────────
+        [1] ParamDescriptor::custom("High Xover", "Hi Xvr", 1000.0, 10000.0, 3000.0)
+                .with_unit(ParamUnit::Hertz)
+                .with_step(1.0)
+                .with_id(ParamId(2601), "mbc_xover_high")
+                .with_scale(ParamScale::Logarithmic),
+            smoothing: SmoothingStyle::Slow, // crossover freqs — filter coeff recalc
+            get: this.xover_high_hz,
+            set: |v| this.xover_high_hz = v;
 
-    fn smoothing(index: usize) -> SmoothingStyle {
-        match index {
-            0 | 1 => SmoothingStyle::Slow, // crossover freqs — filter coeff recalc
-            2..=7 => SmoothingStyle::Standard, // thresholds + ratios
-            8..=10 => SmoothingStyle::Standard, // makeup gains
-            11 => SmoothingStyle::Fast,    // output
-            _ => SmoothingStyle::Standard,
-        }
-    }
+        // ── [2] Low threshold ─────────────────────────────────────────────
+        [2] ParamDescriptor::gain_db("Low Thresh", "Lo Thr", -60.0, 0.0, -20.0)
+                .with_id(ParamId(2602), "mbc_low_thresh"),
+            smoothing: SmoothingStyle::Standard, // thresholds + ratios
+            get: this.low_thresh_db,
+            set: |v| this.low_thresh_db = v;
 
-    fn get(&self, index: usize) -> f32 {
-        match index {
-            0 => self.xover_low_hz,
-            1 => self.xover_high_hz,
-            2 => self.low_thresh_db,
-            3 => self.low_ratio,
-            4 => self.mid_thresh_db,
-            5 => self.mid_ratio,
-            6 => self.high_thresh_db,
-            7 => self.high_ratio,
-            8 => self.low_gain_db,
-            9 => self.mid_gain_db,
-            10 => self.high_gain_db,
-            11 => self.output_db,
-            _ => 0.0,
-        }
-    }
+        // ── [3] Low ratio ─────────────────────────────────────────────────
+        [3] ParamDescriptor::custom("Low Ratio", "Lo Rat", 1.0, 20.0, 4.0)
+                .with_unit(ParamUnit::Ratio)
+                .with_step(0.1)
+                .with_id(ParamId(2603), "mbc_low_ratio"),
+            smoothing: SmoothingStyle::Standard, // thresholds + ratios
+            get: this.low_ratio,
+            set: |v| this.low_ratio = v;
 
-    fn set(&mut self, index: usize, value: f32) {
-        match index {
-            0 => self.xover_low_hz = value,
-            1 => self.xover_high_hz = value,
-            2 => self.low_thresh_db = value,
-            3 => self.low_ratio = value,
-            4 => self.mid_thresh_db = value,
-            5 => self.mid_ratio = value,
-            6 => self.high_thresh_db = value,
-            7 => self.high_ratio = value,
-            8 => self.low_gain_db = value,
-            9 => self.mid_gain_db = value,
-            10 => self.high_gain_db = value,
-            11 => self.output_db = value,
-            _ => {}
-        }
+        // ── [4] Mid threshold ─────────────────────────────────────────────
+        [4] ParamDescriptor::gain_db("Mid Thresh", "Md Thr", -60.0, 0.0, -20.0)
+                .with_id(ParamId(2604), "mbc_mid_thresh"),
+            smoothing: SmoothingStyle::Standard, // thresholds + ratios
+            get: this.mid_thresh_db,
+            set: |v| this.mid_thresh_db = v;
+
+        // ── [5] Mid ratio ─────────────────────────────────────────────────
+        [5] ParamDescriptor::custom("Mid Ratio", "Md Rat", 1.0, 20.0, 4.0)
+                .with_unit(ParamUnit::Ratio)
+                .with_step(0.1)
+                .with_id(ParamId(2605), "mbc_mid_ratio"),
+            smoothing: SmoothingStyle::Standard, // thresholds + ratios
+            get: this.mid_ratio,
+            set: |v| this.mid_ratio = v;
+
+        // ── [6] High threshold ────────────────────────────────────────────
+        [6] ParamDescriptor::gain_db("High Thresh", "Hi Thr", -60.0, 0.0, -20.0)
+                .with_id(ParamId(2606), "mbc_high_thresh"),
+            smoothing: SmoothingStyle::Standard, // thresholds + ratios
+            get: this.high_thresh_db,
+            set: |v| this.high_thresh_db = v;
+
+        // ── [7] High ratio ────────────────────────────────────────────────
+        [7] ParamDescriptor::custom("High Ratio", "Hi Rat", 1.0, 20.0, 4.0)
+                .with_unit(ParamUnit::Ratio)
+                .with_step(0.1)
+                .with_id(ParamId(2607), "mbc_high_ratio"),
+            smoothing: SmoothingStyle::Standard, // thresholds + ratios
+            get: this.high_ratio,
+            set: |v| this.high_ratio = v;
+
+        // ── [8] Low makeup gain ───────────────────────────────────────────
+        [8] ParamDescriptor::gain_db("Low Gain", "Lo Gain", -12.0, 12.0, 0.0)
+                .with_id(ParamId(2608), "mbc_low_gain"),
+            smoothing: SmoothingStyle::Standard, // makeup gains
+            get: this.low_gain_db,
+            set: |v| this.low_gain_db = v;
+
+        // ── [9] Mid makeup gain ───────────────────────────────────────────
+        [9] ParamDescriptor::gain_db("Mid Gain", "Md Gain", -12.0, 12.0, 0.0)
+                .with_id(ParamId(2609), "mbc_mid_gain"),
+            smoothing: SmoothingStyle::Standard, // makeup gains
+            get: this.mid_gain_db,
+            set: |v| this.mid_gain_db = v;
+
+        // ── [10] High makeup gain ─────────────────────────────────────────
+        [10] ParamDescriptor::gain_db("High Gain", "Hi Gain", -12.0, 12.0, 0.0)
+                .with_id(ParamId(2610), "mbc_high_gain"),
+            smoothing: SmoothingStyle::Standard, // makeup gains
+            get: this.high_gain_db,
+            set: |v| this.high_gain_db = v;
+
+        // ── [11] Output level ─────────────────────────────────────────────
+        [11] sonido_core::gain::output_param_descriptor().with_id(ParamId(2611), "mbc_output"),
+            smoothing: SmoothingStyle::Fast,    // output
+            get: this.output_db,
+            set: |v| this.output_db = v;
     }
 }
 

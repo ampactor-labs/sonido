@@ -45,6 +45,7 @@ extern crate alloc;
 
 use alloc::vec::Vec;
 use sonido_core::kernel::{DspKernel, KernelParams, SmoothingStyle};
+use sonido_core::kernel_params;
 use sonido_core::{ParamDescriptor, ParamFlags, ParamId, ParamUnit, fast_db_to_linear};
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -124,106 +125,74 @@ impl Default for TimeStretchParams {
     }
 }
 
-impl KernelParams for TimeStretchParams {
-    const COUNT: usize = 8;
+kernel_params! {
+    TimeStretchParams, this {
+        [0] ParamDescriptor::custom("Time Ratio", "Time", 0.25, 4.0, 1.0)
+                .with_unit(ParamUnit::None)
+                .with_id(ParamId(3600), "ts_time_ratio"),
+            smoothing: SmoothingStyle::Interpolated, // 50 ms (avoids artifacts)
+            get: this.time_ratio,
+            set: |v| this.time_ratio = v;
 
-    fn descriptor(index: usize) -> Option<ParamDescriptor> {
-        match index {
-            0 => Some(
-                ParamDescriptor::custom("Time Ratio", "Time", 0.25, 4.0, 1.0)
-                    .with_unit(ParamUnit::None)
-                    .with_id(ParamId(3600), "ts_time_ratio"),
-            ),
-            1 => Some(
-                ParamDescriptor::custom("Pitch Ratio", "Pitch", 0.25, 4.0, 1.0)
-                    .with_unit(ParamUnit::None)
-                    .with_id(ParamId(3601), "ts_pitch_ratio"),
-            ),
-            2 => Some(
-                ParamDescriptor::time_ms("Grain Size", "Grain", 10.0, 100.0, 50.0)
-                    .with_id(ParamId(3602), "ts_grain_size"),
-            ),
-            3 => Some(
-                ParamDescriptor {
-                    name: "Density",
-                    short_name: "Density",
-                    ..ParamDescriptor::mix()
-                }
-                .with_id(ParamId(3603), "ts_density"),
-            ),
-            4 => Some(
-                ParamDescriptor {
-                    name: "Randomize",
-                    short_name: "Random",
-                    default: 20.0,
-                    ..ParamDescriptor::mix()
-                }
-                .with_id(ParamId(3604), "ts_randomize"),
-            ),
-            5 => Some(
-                ParamDescriptor::custom("Freeze", "Freeze", 0.0, 1.0, 0.0)
-                    .with_unit(ParamUnit::None)
-                    .with_step(1.0)
-                    .with_id(ParamId(3605), "ts_freeze")
-                    .with_flags(ParamFlags::AUTOMATABLE.union(ParamFlags::STEPPED))
-                    .with_step_labels(&["Off", "On"]),
-            ),
-            6 => Some(
-                ParamDescriptor::custom("Sync", "Sync", 0.0, 1.0, 0.0)
-                    .with_unit(ParamUnit::None)
-                    .with_step(1.0)
-                    .with_id(ParamId(3606), "ts_sync")
-                    .with_flags(ParamFlags::AUTOMATABLE.union(ParamFlags::STEPPED))
-                    .with_step_labels(&["Off", "On"]),
-            ),
-            7 => Some(
-                ParamDescriptor::gain_db("Output", "Out", -60.0, 6.0, 0.0)
-                    .with_id(ParamId(3607), "ts_output"),
-            ),
-            _ => None,
-        }
-    }
+        [1] ParamDescriptor::custom("Pitch Ratio", "Pitch", 0.25, 4.0, 1.0)
+                .with_unit(ParamUnit::None)
+                .with_id(ParamId(3601), "ts_pitch_ratio"),
+            smoothing: SmoothingStyle::Interpolated, // 50 ms
+            get: this.pitch_ratio,
+            set: |v| this.pitch_ratio = v;
 
-    fn smoothing(index: usize) -> SmoothingStyle {
-        match index {
-            0 => SmoothingStyle::Interpolated, // time_ratio — 50 ms (avoids artifacts)
-            1 => SmoothingStyle::Interpolated, // pitch_ratio — 50 ms
-            2 => SmoothingStyle::Slow,         // grain_size — 20 ms
-            3 => SmoothingStyle::Standard,     // density — 10 ms
-            4 => SmoothingStyle::Standard,     // randomize — 10 ms
-            5 => SmoothingStyle::None,         // freeze — stepped
-            6 => SmoothingStyle::None,         // sync — stepped
-            7 => SmoothingStyle::Fast,         // output_db — 5 ms
-            _ => SmoothingStyle::Standard,
-        }
-    }
+        [2] ParamDescriptor::time_ms("Grain Size", "Grain", 10.0, 100.0, 50.0)
+                .with_id(ParamId(3602), "ts_grain_size"),
+            smoothing: SmoothingStyle::Slow, // 20 ms
+            get: this.grain_size,
+            set: |v| this.grain_size = v;
 
-    fn get(&self, index: usize) -> f32 {
-        match index {
-            0 => self.time_ratio,
-            1 => self.pitch_ratio,
-            2 => self.grain_size,
-            3 => self.density,
-            4 => self.randomize,
-            5 => self.freeze,
-            6 => self.sync,
-            7 => self.output_db,
-            _ => 0.0,
-        }
-    }
+        [3] ParamDescriptor {
+                name: "Density",
+                short_name: "Density",
+                ..ParamDescriptor::mix()
+            }
+            .with_id(ParamId(3603), "ts_density"),
+            smoothing: SmoothingStyle::Standard, // 10 ms
+            get: this.density,
+            set: |v| this.density = v;
 
-    fn set(&mut self, index: usize, value: f32) {
-        match index {
-            0 => self.time_ratio = value,
-            1 => self.pitch_ratio = value,
-            2 => self.grain_size = value,
-            3 => self.density = value,
-            4 => self.randomize = value,
-            5 => self.freeze = value,
-            6 => self.sync = value,
-            7 => self.output_db = value,
-            _ => {}
-        }
+        [4] ParamDescriptor {
+                name: "Randomize",
+                short_name: "Random",
+                default: 20.0,
+                ..ParamDescriptor::mix()
+            }
+            .with_id(ParamId(3604), "ts_randomize"),
+            smoothing: SmoothingStyle::Standard, // 10 ms
+            get: this.randomize,
+            set: |v| this.randomize = v;
+
+        [5] ParamDescriptor::custom("Freeze", "Freeze", 0.0, 1.0, 0.0)
+                .with_unit(ParamUnit::None)
+                .with_step(1.0)
+                .with_id(ParamId(3605), "ts_freeze")
+                .with_flags(ParamFlags::AUTOMATABLE.union(ParamFlags::STEPPED))
+                .with_step_labels(&["Off", "On"]),
+            smoothing: SmoothingStyle::None, // stepped
+            get: this.freeze,
+            set: |v| this.freeze = v;
+
+        [6] ParamDescriptor::custom("Sync", "Sync", 0.0, 1.0, 0.0)
+                .with_unit(ParamUnit::None)
+                .with_step(1.0)
+                .with_id(ParamId(3606), "ts_sync")
+                .with_flags(ParamFlags::AUTOMATABLE.union(ParamFlags::STEPPED))
+                .with_step_labels(&["Off", "On"]),
+            smoothing: SmoothingStyle::None, // stepped
+            get: this.sync,
+            set: |v| this.sync = v;
+
+        [7] ParamDescriptor::gain_db("Output", "Out", -60.0, 6.0, 0.0)
+                .with_id(ParamId(3607), "ts_output"),
+            smoothing: SmoothingStyle::Fast, // 5 ms
+            get: this.output_db,
+            set: |v| this.output_db = v;
     }
 }
 

@@ -76,6 +76,99 @@ impl SmoothingStyle {
     }
 }
 
+/// Generates a [`KernelParams`] implementation from a declarative parameter table.
+///
+/// Mirrors [`impl_params!`](crate::impl_params) in shape — same row layout, same
+/// hygienic `this` binding — but adds a `smoothing:` row and emits the four
+/// `KernelParams` methods (`descriptor`, `smoothing`, `get`, `set`) plus the
+/// `COUNT` associated constant. Setters do **not** auto-clamp; the
+/// [`Adapter`](super::Adapter) clamps via the descriptor before calling `set`,
+/// so per-kernel clamping would be redundant and contradicts the trait contract.
+///
+/// # Syntax
+///
+/// ```rust
+/// use sonido_core::{kernel_params, KernelParams, ParamDescriptor, ParamId, SmoothingStyle};
+///
+/// #[derive(Default, Clone)]
+/// struct GainParams { gain_db: f32, mix_pct: f32 }
+///
+/// kernel_params! {
+///     GainParams, this {
+///         [0] ParamDescriptor::gain_db("Gain", "Gain", -60.0, 12.0, 0.0)
+///                 .with_id(ParamId(100), "gain"),
+///             smoothing: SmoothingStyle::Standard,
+///             get: this.gain_db,
+///             set: |v| this.gain_db = v;
+///
+///         [1] ParamDescriptor::mix()
+///                 .with_id(ParamId(101), "mix"),
+///             smoothing: SmoothingStyle::Standard,
+///             get: this.mix_pct,
+///             set: |v| this.mix_pct = v;
+///     }
+/// }
+///
+/// let mut p = GainParams::default();
+/// assert_eq!(<GainParams as KernelParams>::COUNT, 2);
+/// p.set(0, 6.0);
+/// assert_eq!(p.get(0), 6.0);
+/// ```
+///
+/// - `this` — binding name for `self` (required due to Rust 2024 macro hygiene)
+/// - `[index]` — stable parameter index (0-based, explicit, not auto-numbered)
+/// - `descriptor_expr` — expression returning [`ParamDescriptor`]
+/// - `smoothing: <SmoothingStyle>` — preferred smoothing for the platform adapter
+/// - `getter_expr` — expression evaluating to `f32` (use the binding name, not `self`)
+/// - `|val| setter_expr` — `val` receives the value; use the binding name
+#[macro_export]
+macro_rules! kernel_params {
+    (
+        $params:ty, $this:ident {
+            $(
+                [$idx:literal] $desc:expr,
+                    smoothing: $smoothing:expr,
+                    get: $getter:expr,
+                    set: |$val:ident| $setter:expr ;
+            )*
+        }
+    ) => {
+        impl $crate::KernelParams for $params {
+            const COUNT: usize = 0usize $( + { let _ = $idx; 1usize } )*;
+
+            fn descriptor(index: usize) -> ::core::option::Option<$crate::ParamDescriptor> {
+                match index {
+                    $( $idx => ::core::option::Option::Some($desc), )*
+                    _ => ::core::option::Option::None,
+                }
+            }
+
+            fn smoothing(index: usize) -> $crate::SmoothingStyle {
+                match index {
+                    $( $idx => $smoothing, )*
+                    _ => $crate::SmoothingStyle::Standard,
+                }
+            }
+
+            fn get(&self, index: usize) -> f32 {
+                let $this = self;
+                match index {
+                    $( $idx => $getter, )*
+                    _ => 0.0,
+                }
+            }
+
+            fn set(&mut self, index: usize, value: f32) {
+                let $this = self;
+                match index {
+                    $( $idx => { let $val = value; $setter; } )*
+                    _ => {}
+                }
+            }
+        }
+    };
+}
+
 /// Typed parameter struct with metadata for a [`DspKernel`].
 ///
 /// Implementors define a concrete struct (e.g., `DistortionParams`) whose fields
