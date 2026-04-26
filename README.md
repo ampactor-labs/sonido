@@ -297,7 +297,7 @@ graph TD
 | `sonido-registry` | Effect factory and discovery by name/category | Yes |
 | `sonido-platform` | Hardware abstraction: PlatformController, ControlMapper | Yes |
 | `sonido-analysis` | FFT, spectral analysis, adaptive filters, resampling | No |
-| `sonido-config` | Preset and chain configuration management | Partial |
+| `sonido-config` | Preset and chain configuration management | No |
 | `sonido-io` | WAV I/O, real-time audio streaming via cpal | No |
 | `sonido-gui-core` | Shared GUI widgets, theme, ParamBridge trait | No |
 | `sonido-gui` | egui-based real-time effects GUI with preset management | No |
@@ -393,7 +393,7 @@ CPU % = `ns_per_sample / (1e9 / 48000) × 100`. Measured on x86_64. Embedded ARM
 
 ## Testing
 
-1,369 tests across the workspace:
+1,800+ tests across the workspace:
 
 - **Golden file regression**: Effect output compared against reference WAV files (MSE < 1e-6, SNR > 60 dB, spectral correlation > 0.9999)
 - **Property-based testing**: Proptest verifies bounded output and reset behavior for all 35 effects

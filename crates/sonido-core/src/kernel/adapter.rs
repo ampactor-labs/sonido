@@ -422,6 +422,16 @@ impl<K: DspKernel, S: SmoothingPolicy> Adapter<K, S> {
     }
 }
 
+#[inline]
+fn track_peaks(peaks: &mut (f32, f32), abs_l: f32, abs_r: f32) {
+    if abs_l > peaks.0 {
+        peaks.0 = abs_l;
+    }
+    if abs_r > peaks.1 {
+        peaks.1 = abs_r;
+    }
+}
+
 // ── Effect impl ──────────────────────────────────────────────────────────────
 
 impl<K: DspKernel, S: SmoothingPolicy> Effect for Adapter<K, S> {
@@ -429,12 +439,7 @@ impl<K: DspKernel, S: SmoothingPolicy> Effect for Adapter<K, S> {
     fn process(&mut self, input: f32) -> f32 {
         if S::tracks_peaks() {
             let abs_in = input.abs();
-            if abs_in > self.peak_in.0 {
-                self.peak_in.0 = abs_in;
-            }
-            if abs_in > self.peak_in.1 {
-                self.peak_in.1 = abs_in;
-            }
+            track_peaks(&mut self.peak_in, abs_in, abs_in);
         }
 
         self.advance_params();
@@ -443,12 +448,7 @@ impl<K: DspKernel, S: SmoothingPolicy> Effect for Adapter<K, S> {
 
         if S::tracks_peaks() {
             let abs_out = out.abs();
-            if abs_out > self.peak_out.0 {
-                self.peak_out.0 = abs_out;
-            }
-            if abs_out > self.peak_out.1 {
-                self.peak_out.1 = abs_out;
-            }
+            track_peaks(&mut self.peak_out, abs_out, abs_out);
         }
 
         out
@@ -457,14 +457,7 @@ impl<K: DspKernel, S: SmoothingPolicy> Effect for Adapter<K, S> {
     #[inline]
     fn process_stereo(&mut self, left: f32, right: f32) -> (f32, f32) {
         if S::tracks_peaks() {
-            let abs_l = left.abs();
-            let abs_r = right.abs();
-            if abs_l > self.peak_in.0 {
-                self.peak_in.0 = abs_l;
-            }
-            if abs_r > self.peak_in.1 {
-                self.peak_in.1 = abs_r;
-            }
+            track_peaks(&mut self.peak_in, left.abs(), right.abs());
         }
 
         self.advance_params();
@@ -474,14 +467,7 @@ impl<K: DspKernel, S: SmoothingPolicy> Effect for Adapter<K, S> {
         self.kernel.update_diagnostics(&mut self.snapshot);
 
         if S::tracks_peaks() {
-            let abs_l_out = l.abs();
-            let abs_r_out = r.abs();
-            if abs_l_out > self.peak_out.0 {
-                self.peak_out.0 = abs_l_out;
-            }
-            if abs_r_out > self.peak_out.1 {
-                self.peak_out.1 = abs_r_out;
-            }
+            track_peaks(&mut self.peak_out, l.abs(), r.abs());
         }
 
         (l, r)
@@ -492,12 +478,7 @@ impl<K: DspKernel, S: SmoothingPolicy> Effect for Adapter<K, S> {
         for (inp, out) in input.iter().zip(output.iter_mut()) {
             if S::tracks_peaks() {
                 let abs_in = inp.abs();
-                if abs_in > self.peak_in.0 {
-                    self.peak_in.0 = abs_in;
-                }
-                if abs_in > self.peak_in.1 {
-                    self.peak_in.1 = abs_in;
-                }
+                track_peaks(&mut self.peak_in, abs_in, abs_in);
             }
 
             self.advance_params();
@@ -506,12 +487,7 @@ impl<K: DspKernel, S: SmoothingPolicy> Effect for Adapter<K, S> {
 
             if S::tracks_peaks() {
                 let abs_out = out.abs();
-                if abs_out > self.peak_out.0 {
-                    self.peak_out.0 = abs_out;
-                }
-                if abs_out > self.peak_out.1 {
-                    self.peak_out.1 = abs_out;
-                }
+                track_peaks(&mut self.peak_out, abs_out, abs_out);
             }
         }
     }
@@ -529,14 +505,7 @@ impl<K: DspKernel, S: SmoothingPolicy> Effect for Adapter<K, S> {
 
         for i in 0..left_in.len() {
             if S::tracks_peaks() {
-                let abs_l = left_in[i].abs();
-                let abs_r = right_in[i].abs();
-                if abs_l > self.peak_in.0 {
-                    self.peak_in.0 = abs_l;
-                }
-                if abs_r > self.peak_in.1 {
-                    self.peak_in.1 = abs_r;
-                }
+                track_peaks(&mut self.peak_in, left_in[i].abs(), right_in[i].abs());
             }
 
             self.advance_params();
@@ -548,14 +517,7 @@ impl<K: DspKernel, S: SmoothingPolicy> Effect for Adapter<K, S> {
             right_out[i] = r;
 
             if S::tracks_peaks() {
-                let abs_l_out = l.abs();
-                let abs_r_out = r.abs();
-                if abs_l_out > self.peak_out.0 {
-                    self.peak_out.0 = abs_l_out;
-                }
-                if abs_r_out > self.peak_out.1 {
-                    self.peak_out.1 = abs_r_out;
-                }
+                track_peaks(&mut self.peak_out, l.abs(), r.abs());
             }
         }
     }
