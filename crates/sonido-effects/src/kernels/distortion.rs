@@ -147,7 +147,10 @@ kernel_params! {
             get: this.tone_db,
             set: |v| this.tone_db = v;
 
-        [2] sonido_core::gain::output_param_descriptor().with_id(ParamId(202), "dist_output"),
+        // Wider negative trim than the shared output_param_descriptor (-6..+6) so the
+        // user can fully attenuate the saturator's makeup-gain boost when drive is high.
+        [2] ParamDescriptor::gain_db("Output", "Out", -24.0, 6.0, 0.0)
+                .with_id(ParamId(202), "dist_output"),
             smoothing: SmoothingStyle::Standard, // output level
             get: this.output_db,
             set: |v| this.output_db = v;
@@ -524,13 +527,13 @@ mod tests {
         // Boundary checks: 0.0 → min, 1.0 → max
         let p_min = DistortionParams::from_knobs(0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
         assert!((p_min.drive_db - 0.0).abs() < 0.01, "drive min");
-        assert!((p_min.output_db - (-6.0)).abs() < 0.01, "output min"); // output range [-6, 6]
+        assert!((p_min.output_db - (-24.0)).abs() < 0.01, "output min"); // output range [-24, 6]
 
         let p_max = DistortionParams::from_knobs(1.0, 1.0, 1.0, 1.0, 1.0, 1.0);
         assert!((p_max.drive_db - 40.0).abs() < 0.01, "drive max");
         assert!(
             (p_max.output_db - 6.0).abs() < 0.01,
-            "output max (OUTPUT_MAX_DB=6)"
+            "output max (distortion-specific: -24..+6)"
         );
         assert!((p_max.mix_pct - 100.0).abs() < 0.01, "mix max");
         assert!((p_max.dynamics_pct - 100.0).abs() < 0.01, "dynamics max");

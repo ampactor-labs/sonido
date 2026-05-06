@@ -42,10 +42,31 @@ pub fn knob_map(effect_id: &str) -> Option<[u8; 6]> {
     }
 }
 
+/// Per-effect knob floor override: tightens the descriptor's `min` for hardware
+/// knob travel only. The kernel's full descriptor range is preserved for host /
+/// CLI use; this only affects how a 0.0–1.0 ADC reading maps to a native value.
+///
+/// Returned floor must satisfy `desc.min <= floor <= desc.max`. Returning `None`
+/// means "use the descriptor's `min` unchanged."
+///
+/// Use cases: clamp out musically inaudible regions (e.g. delay times below
+/// ~30 ms read as comb filtering, not discrete echo, on guitar) so all of the
+/// physical knob travel sits in the useful range.
+fn knob_min_override(effect_id: &str, param_idx: usize) -> Option<f32> {
+    match (effect_id, param_idx) {
+        // Delay time: skip the sub-Haas (1-30 ms) zone where echoes aren't
+        // perceived as discrete repeats — that range is for sound design, not
+        // pedal performance.
+        ("delay", 0) => Some(30.0),
+        _ => None,
+    }
+}
+
 /// Combined noon + biased ADC conversion: normalized knob → native param value.
 ///
 /// Looks up the noon preset for `effect_id` at `param_idx`, falls back to the
-/// descriptor's default if no noon preset is defined.
+/// descriptor's default if no noon preset is defined. Applies a per-effect
+/// knob floor override (see [`knob_min_override`]) when one is defined.
 ///
 /// # Parameters
 ///
@@ -60,6 +81,13 @@ pub fn knob_to_param(
     normalized: f32,
 ) -> f32 {
     let noon = noon::noon_value(effect_id, param_idx).unwrap_or(desc.default);
+    if let Some(floor) = knob_min_override(effect_id, param_idx) {
+        let floor = floor.clamp(desc.min, desc.max);
+        let mut shifted = *desc;
+        shifted.min = floor;
+        let noon = noon.clamp(floor, desc.max);
+        return adc_to_param_biased(&shifted, noon, normalized);
+    }
     adc_to_param_biased(desc, noon, normalized)
 }
 

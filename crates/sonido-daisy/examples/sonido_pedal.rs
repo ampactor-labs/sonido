@@ -721,15 +721,25 @@ async fn main(spawner: embassy_executor::Spawner) {
     defmt::unwrap!(
         interface
             .start_callback(|input, output| {
+                let cb = unsafe { CB_STORAGE.as_mut().unwrap() };
+
                 if GRAPH_UPDATING.load(Ordering::Acquire) {
+                    // Audio callback can't run process_block while the graph is being
+                    // rebuilt. Ramp the bypass crossfade toward dry so the wet→dry
+                    // transition is smooth; set_active(true) on exit will ramp it
+                    // back up. Without this, every topology / scroll / preset rebuild
+                    // produces an audible click.
+                    cb.bypass_xfade.set_active(false);
                     for i in 0..BLOCK_SIZE {
-                        output[i * 2] = input[i * 2];
-                        output[i * 2 + 1] = input[i * 2 + 1];
+                        let l = u24_to_f32(input[i * 2]);
+                        let r = u24_to_f32(input[i * 2 + 1]);
+                        let mono = (l + r) * 0.5;
+                        let (out_l, out_r) = cb.bypass_xfade.advance(mono, mono, 0.0, 0.0);
+                        output[i * 2] = f32_to_u24(out_l);
+                        output[i * 2 + 1] = f32_to_u24(out_r);
                     }
                     return;
                 }
-                
-                let cb = unsafe { CB_STORAGE.as_mut().unwrap() };
 
                     // ── Hard bypass ──
                     if BYPASSED.load(Ordering::Relaxed) {
@@ -788,7 +798,12 @@ async fn main(spawner: embassy_executor::Spawner) {
                         NEEDS_REBUILD.store(true, Ordering::Release);
                     }
                     let new_focused = toggle_to_node(t1);
-                    if new_focused != cb.focused_node { cb.focused_node = new_focused; }
+                    if new_focused != cb.focused_node {
+                        cb.focused_node = new_focused;
+                        // Knobs were tracking the previous node's params; require a
+                        // soft-takeover gesture before they overwrite the new node's state.
+                        cb.pickup_locked = [true; 6];
+                    }
 
                     let new_ab = toggle_to_ab_mode(t2);
                     if new_ab != cb.ab_mode {
@@ -797,6 +812,10 @@ async fn main(spawner: embassy_executor::Spawner) {
                         let nodes = unsafe { NODES_STORAGE.as_mut().unwrap() };
                         let graph = unsafe { GRAPH_STORAGE.as_mut().unwrap() };
                         let nids = unsafe { NODE_IDS_STORAGE };
+                        // Any A/B/Morph transition repaints params on the graph; the
+                        // physical knobs were tracking the previous mode's snapshot, so
+                        // re-arm pickup_locked across the board to prevent immediate clobber.
+                        cb.pickup_locked = [true; 6];
                         match (old_mode, cb.ab_mode) {
                             (AbMode::A, AbMode::B) => {
                                 ensure_b_snapshots(nodes);
