@@ -29,7 +29,7 @@ A commercial license is required if you want to:
 - Use Sonido in a proprietary desktop or mobile application
 - Offer Sonido as part of a closed-source SaaS product
 
-For licensing inquiries, contact: **morgan@ampactor.com**
+For licensing inquiries, contact: **ampactorlabs@gmail.com**
 
 ## FAQ
 
@@ -41,7 +41,7 @@ source code. That's why it's public.
 Yes, as long as your project is also licensed under AGPL-3.0-or-later.
 
 **Can I use Sonido in my closed-source DAW plugin?**
-You need a commercial license. Contact morgan@ampactor.com.
+You need a commercial license. Contact ampactorlabs@gmail.com.
 
 **Can I use Sonido in my open-source DAW plugin?**
 Yes, if your plugin is also released under AGPL-3.0-or-later.
