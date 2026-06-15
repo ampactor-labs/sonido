@@ -63,6 +63,7 @@ sonido-config = { path = "crates/sonido-config", default-features = false }
 sonido-synth = { path = "crates/sonido-synth", default-features = false }
 sonido-gui-core = { path = "crates/sonido-gui-core" }
 sonido-graph-dsl = { path = "crates/sonido-graph-dsl" }
+sonido-patch = { path = "crates/sonido-patch", default-features = false }
 
 # GUI framework
 egui = "0.31"

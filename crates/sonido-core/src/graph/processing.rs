@@ -1637,7 +1637,7 @@ impl ProcessingGraph {
                 right_out[j] += tail.right_buf[j] * fade;
             }
             tail.remaining = tail.remaining.saturating_sub(buf_len);
-            
+
             if tail.remaining == 0 && tail.fade.is_settled() {
                 let tail = self.spillover_tails.swap_remove(i);
                 self.dead_effects.push(tail.effect);

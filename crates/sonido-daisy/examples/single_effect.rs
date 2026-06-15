@@ -44,13 +44,13 @@ use embassy_stm32 as hal;
 use embedded_alloc::LlffHeap as Heap;
 use panic_probe as _;
 
-use sonido_core::kernel::{Adapter, DirectPolicy};
 use sonido_core::ParameterInfo;
+use sonido_core::kernel::{Adapter, DirectPolicy};
 use sonido_daisy::controls::HothouseBuffer;
-use sonido_daisy::effect_slot::{EffectSlot, CONTROL_POLL_EVERY};
+use sonido_daisy::effect_slot::{CONTROL_POLL_EVERY, EffectSlot};
 use sonido_daisy::hothouse::hothouse_control_task;
 use sonido_daisy::{ClockProfile, SAMPLE_RATE, f32_to_u24, heartbeat, led::UserLed, u24_to_f32};
-use sonido_platform::knob_mapping::{knob_map, NULL_KNOB};
+use sonido_platform::knob_mapping::{NULL_KNOB, knob_map};
 
 // ═══════════════════════════════════════════════════════════════════════════
 //  CHANGE THESE 3 LINES to test a different effect:
@@ -118,7 +118,14 @@ async fn main(spawner: embassy_executor::Spawner) {
         if pidx == NULL_KNOB {
             defmt::info!("  K{}: --", k + 1);
         } else if let Some(d) = effect.param_info(pidx as usize) {
-            defmt::info!("  K{}: [{}] {} ({} .. {})", k + 1, pidx, d.name, d.min, d.max);
+            defmt::info!(
+                "  K{}: [{}] {} ({} .. {})",
+                k + 1,
+                pidx,
+                d.name,
+                d.min,
+                d.max
+            );
         }
     }
 

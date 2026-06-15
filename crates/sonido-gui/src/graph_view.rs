@@ -448,6 +448,9 @@ impl GraphView {
                     EffectState {
                         effect_id: effect_id.clone(),
                         params: param_values,
+                        // B snapshot stays empty here (mirrors A); the A/B morph
+                        // panel (Workstream C) populates it when the user captures B.
+                        params_b: Vec::new(),
                         bypassed: bridge.is_bypassed(slot),
                     },
                 );
@@ -462,6 +465,10 @@ impl GraphView {
             params,
             input_gain,
             master_volume,
+            // Macro and morph state are authored in their own panels (Workstreams
+            // B/C); a freshly captured session starts with neither configured.
+            macros: core::array::from_fn(|_| sonido_patch::MacroDef::default()),
+            morph: sonido_patch::MorphConfig::default(),
         }
     }
 

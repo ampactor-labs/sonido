@@ -7,8 +7,8 @@
 extern crate alloc;
 
 use alloc::boxed::Box;
-use sonido_core::param::SmoothedParam;
 use sonido_core::EffectWithParams;
+use sonido_core::param::SmoothedParam;
 use sonido_platform::knob_mapping::{self, NULL_KNOB};
 
 /// Control poll decimation: every 15th block ≈ 100 Hz at 48 kHz / 32 samples.
@@ -62,10 +62,7 @@ impl BypassCrossfade {
     #[inline]
     pub fn advance(&mut self, dry_l: f32, dry_r: f32, wet_l: f32, wet_r: f32) -> (f32, f32) {
         let m = self.mix.advance();
-        (
-            dry_l + (wet_l - dry_l) * m,
-            dry_r + (wet_r - dry_r) * m,
-        )
+        (dry_l + (wet_l - dry_l) * m, dry_r + (wet_r - dry_r) * m)
     }
 }
 

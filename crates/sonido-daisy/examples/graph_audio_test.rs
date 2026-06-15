@@ -71,7 +71,10 @@ async fn main(spawner: embassy_executor::Spawner) {
     let mut graph = ProcessingGraph::new(SAMPLE_RATE, BLOCK_SIZE);
     let inp = graph.add_input();
     let out = graph.add_output();
-    let effect = Box::new(Adapter::new_direct(DistortionKernel::new(SAMPLE_RATE), SAMPLE_RATE));
+    let effect = Box::new(Adapter::new_direct(
+        DistortionKernel::new(SAMPLE_RATE),
+        SAMPLE_RATE,
+    ));
     let eid = graph.add_effect(effect);
     graph.connect(inp, eid).unwrap();
     graph.connect(eid, out).unwrap();

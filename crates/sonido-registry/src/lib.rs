@@ -877,7 +877,10 @@ mod tests {
 
         // No stray UID entries beyond the registered set, and UID 0 is reserved.
         assert_eq!(EFFECT_UIDS.len(), registry.all_effects().len());
-        assert!(EFFECT_UIDS.iter().all(|(_, uid)| *uid != 0), "UID 0 is reserved");
+        assert!(
+            EFFECT_UIDS.iter().all(|(_, uid)| *uid != 0),
+            "UID 0 is reserved"
+        );
 
         // All UIDs are distinct.
         let mut uids: Vec<u16> = EFFECT_UIDS.iter().map(|(_, u)| *u).collect();
