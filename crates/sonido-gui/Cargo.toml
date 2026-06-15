@@ -25,6 +25,7 @@ sonido-gui-core = { workspace = true }
 sonido-registry = { workspace = true, features = ["std"] }
 sonido-graph-dsl = { workspace = true }
 sonido-patch = { workspace = true, features = ["std"] }
+sonido-platform = { workspace = true, features = ["std"] }
 
 # Thread-safety
 arc-swap = "1.8"

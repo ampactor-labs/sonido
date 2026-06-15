@@ -4231,6 +4231,7 @@ dependencies = [
  "sonido-gui-core",
  "sonido-io",
  "sonido-patch",
+ "sonido-platform",
  "sonido-registry",
  "thiserror 2.0.18",
  "tracing",

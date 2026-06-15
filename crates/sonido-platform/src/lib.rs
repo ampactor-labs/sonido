@@ -58,6 +58,7 @@
 extern crate alloc;
 
 pub mod control_mapper;
+pub mod cycle_table;
 pub mod knob_mapping;
 pub mod noon;
 pub mod param_map;
