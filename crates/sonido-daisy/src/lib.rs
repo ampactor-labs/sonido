@@ -36,6 +36,8 @@ pub mod hothouse;
 pub mod led;
 pub mod midi;
 pub mod qspi;
+/// Blocking QSPI read driver for the on-board W25Q64 flash.
+pub mod qspi_flash;
 pub mod rcc;
 pub mod sdram;
 pub mod tap_tempo;
@@ -47,6 +49,10 @@ pub mod noon_presets;
 /// Runtime effect slot with knob mapping, bypass crossfade, and output sanitization.
 #[cfg(feature = "platform")]
 pub mod effect_slot;
+
+/// Load a patch from QSPI flash and build it into a runnable graph.
+#[cfg(feature = "alloc")]
+pub mod patch_loader;
 
 pub use controls::ControlBuffer;
 pub use rcc::{ClockProfile, cycles_per_block, rcc_config};

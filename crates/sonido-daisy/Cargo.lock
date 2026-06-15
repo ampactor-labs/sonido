@@ -918,6 +918,7 @@ dependencies = [
  "panic-probe",
  "sonido-core",
  "sonido-effects",
+ "sonido-patch",
  "sonido-platform",
  "sonido-registry",
  "static_cell",
@@ -929,6 +930,13 @@ name = "sonido-effects"
 version = "0.1.0"
 dependencies = [
  "libm",
+ "sonido-core",
+]
+
+[[package]]
+name = "sonido-patch"
+version = "0.1.0"
+dependencies = [
  "sonido-core",
 ]
 

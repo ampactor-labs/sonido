@@ -20,6 +20,7 @@ sonido-core = { path = "../sonido-core", default-features = false }
 sonido-effects = { path = "../sonido-effects", default-features = false }
 sonido-platform = { path = "../sonido-platform", default-features = false, optional = true }
 sonido-registry = { path = "../sonido-registry", default-features = false }
+sonido-patch = { path = "../sonido-patch", default-features = false }
 libm = "0.2"
 static_cell = "2"
 
@@ -59,6 +60,10 @@ required-features = ["alloc"]
 [[example]]
 name = "sonido_pedal"
 required-features = ["alloc", "platform"]
+
+[[example]]
+name = "qspi_read_test"
+required-features = ["alloc"]
 
 
 [[example]]
