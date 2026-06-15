@@ -25,6 +25,10 @@ serde = { version = "1.0", default-features = false, features = [
 [dev-dependencies]
 serde_json = { workspace = true }
 proptest = { workspace = true }
+# Test-only: the registry provides effect constructors to exercise the graph
+# builder end to end. Not a runtime dependency (and registry does not depend on
+# this crate, so there is no cycle).
+sonido-registry = { workspace = true, features = ["std"] }
 
 [lints]
 workspace = true
