@@ -41,7 +41,9 @@
 
 extern crate alloc;
 
-use sonido_core::kernel::{DspKernel, KernelParams, SmoothingStyle};
+#[cfg(test)]
+use sonido_core::kernel::KernelParams;
+use sonido_core::kernel::{DspKernel, SmoothingStyle};
 use sonido_core::kernel_params;
 use sonido_core::{ParamDescriptor, ParamId, ParamUnit, fast_db_to_linear};
 

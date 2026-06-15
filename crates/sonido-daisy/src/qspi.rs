@@ -63,7 +63,11 @@ pub struct PresetHeader {
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct EffectSlotData {
-    /// Index into the effect list (0–14 for current 15 curated effects).
+    /// Index into [`PEDAL_EFFECT_IDS`](sonido_registry::PEDAL_EFFECT_IDS).
+    ///
+    /// Positional and therefore version-fragile; the canonical `sonido-patch`
+    /// format uses stable effect UIDs instead. Retained only for the legacy
+    /// preset sector during the transition to the patch bank.
     pub effect_idx: u8,
     /// Number of valid parameters.
     pub param_count: u8,

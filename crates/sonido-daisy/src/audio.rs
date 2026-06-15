@@ -441,6 +441,11 @@ const fn mclk_div_from_u8(v: u8) -> MasterClockDivider {
         61 => MasterClockDivider::DIV61,
         62 => MasterClockDivider::DIV62,
         63 => MasterClockDivider::DIV63,
-        _ => panic!(),
+        // Dividers are computed from the `Fs` sample-rate enum and always land in
+        // 1..=63, so this arm is unreachable in practice. Clamp to the maximum
+        // divider rather than `panic!()` — a panic on the audio path locks the
+        // pedal (no unwind on Cortex-M7), whereas a wrong-but-bounded MCLK simply
+        // mistunes the codec clock, which is recoverable and audible.
+        _ => MasterClockDivider::DIV63,
     }
 }

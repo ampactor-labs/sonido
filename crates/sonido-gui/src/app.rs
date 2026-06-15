@@ -397,7 +397,7 @@ impl SonidoApp {
 
             ui.separator();
 
-            // Save / Load (placeholder — Task 12 fills in)
+            // Session save / load.
             #[cfg(not(target_arch = "wasm32"))]
             {
                 if ui

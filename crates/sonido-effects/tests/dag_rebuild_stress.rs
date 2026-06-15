@@ -477,5 +477,9 @@ fn clear_garbage_actually_clears() {
     // count depends on whether tails moved through spillover first; we only
     // care that `clear_garbage` empties whatever is there.)
     graph.clear_garbage();
-    assert_eq!(graph.dead_effects.len(), 0, "clear_garbage left effects behind");
+    assert_eq!(
+        graph.dead_effects.len(),
+        0,
+        "clear_garbage left effects behind"
+    );
 }

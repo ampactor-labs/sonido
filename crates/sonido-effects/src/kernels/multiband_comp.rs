@@ -55,7 +55,9 @@
 //! let (left, right) = kernel.process_stereo(input_l, input_r, &params);
 //! ```
 
-use sonido_core::kernel::{DspKernel, KernelParams, SmoothingStyle};
+#[cfg(test)]
+use sonido_core::kernel::KernelParams;
+use sonido_core::kernel::{DspKernel, SmoothingStyle};
 use sonido_core::kernel_params;
 use sonido_core::{
     Biquad, Cached, EnvelopeFollower, ParamDescriptor, ParamId, ParamScale, ParamUnit,

@@ -569,7 +569,7 @@ mod tests {
             _pad: 0,
             effects: [
                 DaisyEffectSlot {
-                    effect_idx: 11, // distortion
+                    effect_idx: 11, // arbitrary index — this test checks byte roundtrip only
                     param_count: 3,
                     _pad: [0; 2],
                     params_a,
@@ -673,7 +673,7 @@ mod tests {
         let ps = read_preset_slot(&data[8..]);
         assert_eq!(ps.valid, 1);
         assert_eq!(ps.num_slots, 1);
-        assert_eq!(ps.effects[0].effect_idx, 11); // "distortion" is index 11
+        assert_eq!(ps.effects[0].effect_idx, pedal_idx("distortion"));
     }
 
     #[test]
@@ -711,10 +711,19 @@ mod tests {
         assert_eq!(ps.valid, 1);
         assert_eq!(ps.num_slots, 2);
 
-        // distortion = index 11, reverb = index 7.
-        assert_eq!(ps.effects[0].effect_idx, 11);
-        assert_eq!(ps.effects[1].effect_idx, 7);
+        // Indices are positions within PEDAL_EFFECT_IDS; derive them so the
+        // assertion tracks the list instead of hard-coding stale positions.
+        assert_eq!(ps.effects[0].effect_idx, pedal_idx("distortion"));
+        assert_eq!(ps.effects[1].effect_idx, pedal_idx("reverb"));
 
         let _ = std::fs::remove_file(&output);
+    }
+
+    /// Position of an effect id within `PEDAL_EFFECT_IDS`, as the exporter encodes it.
+    fn pedal_idx(id: &str) -> u8 {
+        PEDAL_EFFECT_IDS
+            .iter()
+            .position(|&e| e == id)
+            .unwrap_or_else(|| panic!("'{id}' missing from PEDAL_EFFECT_IDS")) as u8
     }
 }
