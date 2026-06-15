@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc b9ed7d6371175f1e2bbdd01336087a1ea891042e7429286b2cccc23245a06674 # shrinks to p = Patch { name: " a0A   A0 00aA00  0aaA000", format_version: 1, nodes: [], edges: [PatchEdge { from: Input, to: Output }], macros: [MacroDef { name: "", mappings: [] }, MacroDef { name: "", mappings: [] }, MacroDef { name: "", mappings: [] }, MacroDef { name: "", mappings: [] }, MacroDef { name: "", mappings: [] }, MacroDef { name: "", mappings: [] }], morph: MorphConfig { speed: 0.1, mode: Ramp, slot_locks: 0 }, globals: GlobalControls { input_gain_db: 0.0, master_volume_db: 0.0 } }

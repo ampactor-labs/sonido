@@ -77,5 +77,5 @@ pub mod morph;
 mod traits;
 
 pub use adapter::{Adapter, DirectPolicy, SmoothedPolicy, SmoothingPolicy};
-pub use morph::{MorphCurve, MorphSpace};
+pub use morph::{MorphCurve, MorphMode, MorphSpace};
 pub use traits::{DspKernel, KernelParams, SmoothingStyle};

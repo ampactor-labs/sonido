@@ -43,6 +43,46 @@ use alloc::vec::Vec;
 
 use crate::graph::engine::GraphEngine;
 
+// ─── Macro targets ────────────────────────────────────────────────────────────
+
+/// A graph-level control that lives *outside* an effect slot.
+///
+/// Macros (and the A/B morph) can drive these in addition to per-slot
+/// parameters, so they need an address that the slot/param pair cannot express.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[non_exhaustive]
+pub enum GlobalParam {
+    /// Pre-graph input gain (dB).
+    InputGain,
+    /// Post-graph master volume (dB).
+    MasterVolume,
+    /// A/B morph position in `[0.0, 1.0]`.
+    MorphPosition,
+    /// A/B morph ramp speed.
+    MorphSpeed,
+}
+
+/// The destination a macro (or morph) writes to.
+///
+/// `Slot` addresses a parameter inside a [`GraphEngine`] chain slot; `Global`
+/// addresses a graph-level control ([`GlobalParam`]). The same enum is used by
+/// the runtime [`MacroMapping`] and by the persisted `sonido-patch` format, so
+/// authored mappings survive serialization unchanged.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum MacroTarget {
+    /// Parameter `param` of effect at chain `slot`.
+    Slot {
+        /// Slot index in the engine's linear chain.
+        slot: u8,
+        /// Parameter index within that slot's effect.
+        param: u8,
+    },
+    /// A graph-level control.
+    Global(GlobalParam),
+}
+
 // ─── MacroMapping ─────────────────────────────────────────────────────────────
 
 /// A single macro-to-parameter mapping entry.

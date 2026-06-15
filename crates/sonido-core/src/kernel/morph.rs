@@ -42,7 +42,8 @@ use crate::{ParamDescriptor, ParamFlags, ParamScale};
 /// Each parameter in a [`MorphSpace`] can use a different curve,
 /// allowing frequency params (Logarithmic), enum params (Snap), and
 /// continuous params (Linear) to all morph correctly in a single operation.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub enum MorphCurve {
     /// Arithmetic interpolation: `a + (b - a) * t`.
@@ -61,6 +62,25 @@ pub enum MorphCurve {
     /// `t < 0.5` → `a`, `t >= 0.5` → `b`. Suitable for enum/discrete parameters
     /// (filter type, waveshape selector, etc.).
     Snap,
+}
+
+/// How a footswitch (or host gesture) drives the A/B morph position over time.
+///
+/// Shared by the persisted `sonido-patch` format and the runtime morph engine
+/// so the pedal, GUI, and plugin agree on morph behavior.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[non_exhaustive]
+pub enum MorphMode {
+    /// Each footswitch ramps the position toward one end at the configured speed
+    /// and it stays there (the classic A↔B latch ramp).
+    Ramp,
+    /// Holding the switch ramps toward B; releasing ramps back to A (a momentary
+    /// "lift" gesture).
+    Momentary,
+    /// Tapping the switch toggles the target end (0.0 ↔ 1.0), always ramping at
+    /// the configured speed.
+    Latch,
 }
 
 /// N-dimensional morph space for parameter interpolation.

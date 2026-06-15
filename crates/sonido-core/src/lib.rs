@@ -154,12 +154,12 @@ pub use graph::{
     SnapshotTopology, StereoBuffer, StereoSamples, TopoNode,
 };
 pub use kernel::{
-    Adapter, DirectPolicy, DspKernel, KernelParams, MorphCurve, MorphSpace, SmoothedPolicy,
-    SmoothingPolicy, SmoothingStyle,
+    Adapter, DirectPolicy, DspKernel, KernelParams, MorphCurve, MorphMode, MorphSpace,
+    SmoothedPolicy, SmoothingPolicy, SmoothingStyle,
 };
 pub use lfo::{Lfo, LfoWaveform};
 pub use loop_buffer::LoopBuffer;
-pub use macro_map::{MacroMap, MacroMapping};
+pub use macro_map::{GlobalParam, MacroMap, MacroMapping, MacroTarget};
 pub use math::{
     asymmetric_clip, asymmetric_clip_ad, db_to_linear, fast_tanh, flush_denormal, foldback,
     foldback_ad, hard_clip, hard_clip_ad, linear_to_db, mono_sum, soft_clip, soft_clip_ad,

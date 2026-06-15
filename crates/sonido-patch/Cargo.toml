@@ -1,0 +1,30 @@
+[package]
+name = "sonido-patch"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Canonical Sonido patch format — one model, three projections (JSON, binary sector, runtime)"
+keywords = ["dsp", "audio", "patch", "no_std"]
+categories = ["multimedia::audio", "no-std"]
+
+[features]
+default = ["std"]
+## Host build: enables `std`, JSON (serde), and file helpers.
+std = ["serde", "sonido-core/std"]
+## Serialize/Deserialize for `Patch` (JSON). no_std compatible (needs alloc).
+serde = ["dep:serde", "sonido-core/serde"]
+
+[dependencies]
+sonido-core = { path = "../sonido-core", default-features = false }
+serde = { version = "1.0", default-features = false, features = [
+    "derive",
+    "alloc",
+], optional = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
+proptest = { workspace = true }
+
+[lints]
+workspace = true

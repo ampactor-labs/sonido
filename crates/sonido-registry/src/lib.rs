@@ -78,6 +78,78 @@ pub const PEDAL_EFFECT_IDS: &[&str] = &[
     "filter",     // 7
 ];
 
+// ---------------------------------------------------------------------------
+// Stable effect UIDs (canonical patch-format identity)
+// ---------------------------------------------------------------------------
+
+/// Stable, append-only `(string-id, UID)` table.
+///
+/// A UID is a permanent identity for an effect, unlike a *position* in
+/// [`PEDAL_EFFECT_IDS`] or the registration order (both of which proved
+/// fragile — see the index drift fixed in the daisy export tests). The
+/// canonical `sonido-patch` wire format stores effect **UIDs**, so a patch
+/// authored today still resolves after effects are added or reordered.
+///
+/// # Invariant
+///
+/// Append-only. Once assigned, a UID is never reused or changed; new effects
+/// take the next free value. UID `0` is reserved to mean "no effect" and never
+/// appears here. The `uid_table_is_total_and_unique` test enforces that every
+/// registered effect has exactly one UID and that all UIDs are distinct.
+pub const EFFECT_UIDS: &[(&str, u16)] = &[
+    ("distortion", 1),
+    ("compressor", 2),
+    ("chorus", 3),
+    ("flanger", 4),
+    ("phaser", 5),
+    ("delay", 6),
+    ("filter", 7),
+    ("vibrato", 8),
+    ("tape", 9),
+    ("preamp", 10),
+    ("reverb", 11),
+    ("tremolo", 12),
+    ("gate", 13),
+    ("wah", 14),
+    ("eq", 15),
+    ("limiter", 16),
+    ("bitcrusher", 17),
+    ("ringmod", 18),
+    ("stage", 19),
+    ("looper", 20),
+    ("amp", 21),
+    ("cabinet", 22),
+    ("deesser", 23),
+    ("drone", 24),
+    ("glitch", 25),
+    ("multiband_comp", 26),
+    ("pitch_shift", 27),
+    ("plate_reverb", 28),
+    ("shelving_eq", 29),
+    ("spring_reverb", 30),
+    ("stereo_widener", 31),
+    ("texture", 32),
+    ("time_stretch", 33),
+    ("transient_shaper", 34),
+    ("tuner", 35),
+];
+
+/// Returns the stable UID for an effect string-id, or `None` if unknown.
+pub fn effect_uid(id: &str) -> Option<u16> {
+    EFFECT_UIDS
+        .iter()
+        .find(|(name, _)| *name == id)
+        .map(|(_, uid)| *uid)
+}
+
+/// Returns the effect string-id for a stable UID, or `None` if unknown.
+pub fn effect_by_uid(uid: u16) -> Option<&'static str> {
+    EFFECT_UIDS
+        .iter()
+        .find(|(_, u)| *u == uid)
+        .map(|(name, _)| *name)
+}
+
 // Re-export EffectWithParams from core (moved there to unblock ProcessingGraph).
 pub use sonido_core::EffectWithParams;
 use sonido_core::{Adapter, ParamDescriptor};
@@ -785,6 +857,39 @@ mod tests {
         let registry = EffectRegistry::new();
         let effects = registry.all_effects();
         assert_eq!(effects.len(), 35);
+    }
+
+    #[test]
+    fn uid_table_is_total_and_unique() {
+        let registry = EffectRegistry::new();
+
+        // Every registered effect has exactly one UID, and it round-trips.
+        for desc in registry.all_effects() {
+            let uid = effect_uid(desc.id)
+                .unwrap_or_else(|| panic!("'{}' missing from EFFECT_UIDS", desc.id));
+            assert_eq!(
+                effect_by_uid(uid),
+                Some(desc.id),
+                "UID {uid} does not round-trip back to '{}'",
+                desc.id
+            );
+        }
+
+        // No stray UID entries beyond the registered set, and UID 0 is reserved.
+        assert_eq!(EFFECT_UIDS.len(), registry.all_effects().len());
+        assert!(EFFECT_UIDS.iter().all(|(_, uid)| *uid != 0), "UID 0 is reserved");
+
+        // All UIDs are distinct.
+        let mut uids: Vec<u16> = EFFECT_UIDS.iter().map(|(_, u)| *u).collect();
+        uids.sort_unstable();
+        let unique = uids.len();
+        uids.dedup();
+        assert_eq!(uids.len(), unique, "duplicate UID in EFFECT_UIDS");
+
+        // Every pedal effect resolves to a UID (export relies on this).
+        for id in PEDAL_EFFECT_IDS {
+            assert!(effect_uid(id).is_some(), "pedal effect '{id}' has no UID");
+        }
     }
 
     #[test]
