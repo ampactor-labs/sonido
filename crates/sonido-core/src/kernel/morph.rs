@@ -64,6 +64,25 @@ pub enum MorphCurve {
     Snap,
 }
 
+impl MorphCurve {
+    /// The morph curve appropriate for a parameter, from its descriptor.
+    ///
+    /// This is the single source of truth for curve selection, shared by
+    /// [`MorphSpace::auto_curves`], the GUI A/B morph, and the firmware:
+    /// - [`ParamFlags::STEPPED`] → [`Snap`](MorphCurve::Snap)
+    /// - [`ParamScale::Logarithmic`] → [`Logarithmic`](MorphCurve::Logarithmic)
+    /// - otherwise → [`Linear`](MorphCurve::Linear)
+    pub fn from_descriptor(desc: &ParamDescriptor) -> Self {
+        if desc.flags.contains(ParamFlags::STEPPED) {
+            MorphCurve::Snap
+        } else if desc.scale == ParamScale::Logarithmic {
+            MorphCurve::Logarithmic
+        } else {
+            MorphCurve::Linear
+        }
+    }
+}
+
 /// How a footswitch (or host gesture) drives the A/B morph position over time.
 ///
 /// Shared by the persisted `sonido-patch` format and the runtime morph engine
@@ -182,6 +201,15 @@ impl MorphSpace {
         &self.snapshots[corner]
     }
 
+    /// Sets a single parameter value at a snapshot corner (alloc-free capture).
+    ///
+    /// # Panics
+    ///
+    /// Panics if `corner >= snapshot_count()` or `param_index >= param_count()`.
+    pub fn set_snapshot_param(&mut self, corner: usize, param_index: usize, value: f32) {
+        self.snapshots[corner][param_index] = value;
+    }
+
     /// Returns the number of snapshot corners: 2 for 1D, 4 for 2D.
     pub fn snapshot_count(&self) -> usize {
         self.snapshots.len()
@@ -234,12 +262,10 @@ impl MorphSpace {
     ///   May be shorter than `param_count`; missing entries default to Linear.
     pub fn auto_curves(&mut self, descriptors: &[Option<ParamDescriptor>]) {
         for (i, curve) in self.curves.iter_mut().enumerate() {
-            let desc = descriptors.get(i).and_then(|d| d.as_ref());
-            *curve = match desc {
-                Some(d) if d.flags.contains(ParamFlags::STEPPED) => MorphCurve::Snap,
-                Some(d) if d.scale == ParamScale::Logarithmic => MorphCurve::Logarithmic,
-                _ => MorphCurve::Linear,
-            };
+            *curve = descriptors
+                .get(i)
+                .and_then(|d| d.as_ref())
+                .map_or(MorphCurve::Linear, MorphCurve::from_descriptor);
         }
     }
 
@@ -308,12 +334,58 @@ impl MorphSpace {
             _ => unreachable!("dimensions must be 1 or 2"),
         }
     }
+
+    /// Interpolates a single parameter at `position`, without a scratch buffer.
+    ///
+    /// Equivalent to one lane of [`interpolate`](Self::interpolate); lets
+    /// callers (e.g. [`ChainMorph`](crate::kernel::chain_morph::ChainMorph) on
+    /// the pedal) apply morphing without allocating a per-slot output buffer.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `param_index >= param_count()` or `position.len() != dimensions()`.
+    pub fn interpolate_param(&self, param_index: usize, position: &[f32]) -> f32 {
+        assert!(param_index < self.param_count, "param_index out of range");
+        assert_eq!(
+            position.len(),
+            self.dimensions as usize,
+            "position.len() must equal dimensions"
+        );
+        let c = self.curves[param_index];
+        match self.dimensions {
+            1 => curve_lerp(
+                self.snapshots[0][param_index],
+                self.snapshots[1][param_index],
+                position[0],
+                c,
+            ),
+            2 => {
+                let (x, y) = (position[0], position[1]);
+                let bottom = curve_lerp(
+                    self.snapshots[0][param_index],
+                    self.snapshots[1][param_index],
+                    x,
+                    c,
+                );
+                let top = curve_lerp(
+                    self.snapshots[2][param_index],
+                    self.snapshots[3][param_index],
+                    x,
+                    c,
+                );
+                curve_lerp(bottom, top, y, c)
+            }
+            _ => unreachable!("dimensions must be 1 or 2"),
+        }
+    }
 }
 
 /// Applies a [`MorphCurve`] to interpolate between `a` and `b` at position `t`.
 ///
-/// `t = 0.0` → `a`, `t = 1.0` → `b`.
-fn curve_lerp(a: f32, b: f32, t: f32, curve: MorphCurve) -> f32 {
+/// `t = 0.0` → `a`, `t = 1.0` → `b`. The single interpolation primitive shared
+/// by [`MorphSpace`], [`ChainMorph`](crate::kernel::chain_morph::ChainMorph),
+/// the GUI A/B morph, and the firmware, so all four agree value-for-value.
+pub fn curve_lerp(a: f32, b: f32, t: f32, curve: MorphCurve) -> f32 {
     match curve {
         MorphCurve::Linear => a + (b - a) * t,
         MorphCurve::Logarithmic => {

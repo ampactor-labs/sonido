@@ -73,9 +73,11 @@
 //! This module is fully `no_std` compatible with `alloc` (for `Vec` in the adapter).
 
 mod adapter;
+pub mod chain_morph;
 pub mod morph;
 mod traits;
 
 pub use adapter::{Adapter, DirectPolicy, SmoothedPolicy, SmoothingPolicy};
-pub use morph::{MorphCurve, MorphMode, MorphSpace};
+pub use chain_morph::ChainMorph;
+pub use morph::{MorphCurve, MorphMode, MorphSpace, curve_lerp};
 pub use traits::{DspKernel, KernelParams, SmoothingStyle};

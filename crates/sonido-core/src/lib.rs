@@ -154,8 +154,8 @@ pub use graph::{
     SnapshotTopology, StereoBuffer, StereoSamples, TopoNode,
 };
 pub use kernel::{
-    Adapter, DirectPolicy, DspKernel, KernelParams, MorphCurve, MorphMode, MorphSpace,
-    SmoothedPolicy, SmoothingPolicy, SmoothingStyle,
+    Adapter, ChainMorph, DirectPolicy, DspKernel, KernelParams, MorphCurve, MorphMode, MorphSpace,
+    SmoothedPolicy, SmoothingPolicy, SmoothingStyle, curve_lerp,
 };
 pub use lfo::{Lfo, LfoWaveform};
 pub use loop_buffer::LoopBuffer;

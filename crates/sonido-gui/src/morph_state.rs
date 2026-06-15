@@ -4,9 +4,10 @@
 //! between them using a crossfade parameter `t`. Mirrors the interpolation
 //! logic from [`KernelParams::lerp()`](sonido_core::kernel::KernelParams::lerp):
 //! continuous parameters use linear interpolation while
-//! [`STEPPED`](sonido_core::ParamFlags::STEPPED) parameters snap at `t = 0.5`.
+//! frequency parameters interpolate logarithmically and stepped parameters
+//! snap at `t = 0.5`, via the shared [`sonido_core::curve_lerp`].
 
-use sonido_core::ParamFlags;
+use sonido_core::{MorphCurve, curve_lerp};
 use sonido_gui_core::{ParamBridge, ParamIndex, SlotIndex};
 
 /// Captured parameter state for a single effect slot.
@@ -48,11 +49,13 @@ impl MorphSnapshot {
         Self { slots }
     }
 
-    /// Apply linearly interpolated values from snapshots A and B onto a bridge.
+    /// Apply curve-aware interpolated values from snapshots A and B onto a bridge.
     ///
-    /// Mirrors [`KernelParams::lerp()`](sonido_core::kernel::KernelParams::lerp):
-    /// - Continuous parameters: `va + (vb - va) * t`
+    /// Interpolation curve is per-parameter, chosen by
+    /// [`MorphCurve::from_descriptor`](sonido_core::MorphCurve::from_descriptor):
+    /// - Logarithmic-scale (frequency) parameters: geometric interpolation
     /// - [`STEPPED`](sonido_core::ParamFlags::STEPPED) parameters: snap at `t = 0.5`
+    /// - everything else: linear
     /// - Bypass state: snap at `t = 0.5`
     /// - Locked slots (where `locked[i]` is `true`) are skipped entirely.
     /// - Slots where the effect ID differs between A and B are skipped (morphing
@@ -92,16 +95,15 @@ impl MorphSnapshot {
                 let vb = sb.values[p];
                 let pidx = ParamIndex(p);
 
-                let value = if bridge
+                // Per-parameter curve from the descriptor — the same rule core's
+                // ChainMorph and the firmware use, so all three agree. This is
+                // where the GUI gains logarithmic frequency morphing (a cutoff
+                // 100 Hz↔10 kHz now passes through 1 kHz at t=0.5, not 5.05 kHz)
+                // and stepped-param snapping, instead of the old linear-only path.
+                let curve = bridge
                     .param_descriptor(slot, pidx)
-                    .is_some_and(|d| d.flags.contains(ParamFlags::STEPPED))
-                {
-                    if t < 0.5 { va } else { vb }
-                } else {
-                    va + (vb - va) * t
-                };
-
-                bridge.set(slot, pidx, value);
+                    .map_or(MorphCurve::Linear, |d| MorphCurve::from_descriptor(&d));
+                bridge.set(slot, pidx, curve_lerp(va, vb, t, curve));
             }
         }
     }
@@ -318,6 +320,29 @@ mod tests {
         // t=0.7 — stepped param snaps to B value
         MorphSnapshot::apply_lerped(&a, &b, 0.7, &[], &bridge);
         assert!((bridge.get(SlotIndex(0), ParamIndex(0)) - 3.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn lerp_frequency_param_is_logarithmic() {
+        use sonido_core::ParamScale;
+
+        // A logarithmic-scale (frequency) parameter must morph through its
+        // geometric mean — the fidelity fix. Previously this path was linear and
+        // 100 Hz ↔ 10 kHz crossed 5050 Hz at t=0.5 instead of 1000 Hz.
+        let freq = ParamDescriptor::custom("Cutoff", "Cut", 20.0, 20_000.0, 1_000.0)
+            .with_scale(ParamScale::Logarithmic);
+        let bridge = MockBridge::new(&[("filter", &[100.0], &[Some(freq)])]);
+
+        let a = MorphSnapshot::capture(&bridge);
+        bridge.set(SlotIndex(0), ParamIndex(0), 10_000.0);
+        let b = MorphSnapshot::capture(&bridge);
+
+        MorphSnapshot::apply_lerped(&a, &b, 0.5, &[], &bridge);
+        let mid = bridge.get(SlotIndex(0), ParamIndex(0));
+        assert!(
+            (mid - 1_000.0).abs() < 1.0,
+            "log midpoint was {mid}, expected ~1000"
+        );
     }
 
     #[test]
