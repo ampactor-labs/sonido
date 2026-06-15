@@ -1,38 +1,28 @@
 //! Parameter macro mapping — N exposed knobs → M internal parameters.
 //!
-//! A [`MacroMap`] exposes a small number of high-level "macro" knobs (e.g., four
-//! performance knobs on a hardware controller) and maps each one to one or more
-//! target (slot, param) pairs inside a [`GraphEngine`].  Every mapping has its
-//! own min/max range so the macro can act as a scaled, inverted, or range-limited
-//! control for any underlying parameter.
+//! A [`MacroMap`] exposes a small number of high-level "macro" knobs (the six
+//! knobs on the pedal, six automatable params in the plugin) and maps each one
+//! to one or more [`MacroTarget`]s — effect-slot parameters *or* graph-level
+//! globals. Every mapping has its own min/max range and [`MorphCurve`], so a
+//! macro can scale, invert, log-sweep, or range-limit any underlying control.
 //!
 //! # Design
 //!
 //! ```text
-//!  Macro knob 0  ─────┬──►  slot 0, param 2  (0.0 – 1.0)
-//!                     └──►  slot 1, param 4  (0.5 – 2.0)   ← different range
-//!  Macro knob 1  ─────────►  slot 2, param 0  (1.0 – 0.0)   ← inverted
+//!  Macro knob 0  ─────┬──►  Slot{0, 2}            (0.0 – 1.0, linear)
+//!                     └──►  Slot{1, 4}            (0.5 – 2.0, log)      ← different range/curve
+//!  Macro knob 1  ─────────►  Global(MasterVolume) (0.0 – -40 dB)       ← inverted, global
 //! ```
 //!
-//! The const generic `N` sets the number of exposed macro knobs at
-//! compile time.  Mappings are added at runtime, one per
-//! [`MacroMap::add_mapping`] call, with no fixed cap (stored on the heap).
+//! The const generic `N` sets the number of exposed macro knobs at compile
+//! time. Mappings are added at runtime (heap, no fixed cap).
 //!
-//! # Usage
+//! # Application is decoupled from the engine
 //!
-//! ```rust,ignore
-//! use sonido_core::macro_map::{MacroMap, MacroMapping};
-//! use sonido_core::GraphEngine;
-//!
-//! // 4 macro knobs
-//! let mut macros: MacroMap<4> = MacroMap::new();
-//!
-//! // Macro 0 controls slot 0, param 2 over the full 0–1 range
-//! macros.add_mapping(MacroMapping { macro_index: 0, target_slot: 0, target_param: 2, min: 0.0, max: 1.0 });
-//!
-//! // Move macro 0 to 0.75 — applies to all its targets
-//! macros.set_macro(&mut engine, 0, 0.75);
-//! ```
+//! [`MacroMap::apply_all`] feeds resolved `(target, value)` pairs to a sink
+//! closure, so the same map drives a GUI `ParamBridge`, a plugin `GraphEngine`,
+//! or raw firmware writes. [`MacroMap::apply_to_engine`] is the convenience
+//! wrapper for the common `GraphEngine` + globals case.
 //!
 //! # no_std
 //!
@@ -42,6 +32,7 @@
 use alloc::vec::Vec;
 
 use crate::graph::engine::GraphEngine;
+use crate::kernel::morph::{MorphCurve, curve_lerp};
 
 // ─── Macro targets ────────────────────────────────────────────────────────────
 
@@ -85,59 +76,65 @@ pub enum MacroTarget {
 
 // ─── MacroMapping ─────────────────────────────────────────────────────────────
 
-/// A single macro-to-parameter mapping entry.
+/// A single macro-to-target mapping entry.
 ///
-/// Maps one macro knob position (0.0 – 1.0) to a target parameter in a
-/// [`GraphEngine`] slot, remapped through `[min, max]`.
-///
-/// The final parameter value is:
-/// ```text
-/// param_value = min + position * (max - min)
-/// ```
+/// Maps one macro knob position (0.0 – 1.0) to a [`MacroTarget`], remapped
+/// through `[min, max]` along `curve`.
 ///
 /// # Ranges
 ///
-/// * `min` and `max` must be within the parameter's own valid range (as defined
-///   by its [`ParamDescriptor`](crate::param_info::ParamDescriptor)).  No
-///   clamping is applied here — the `GraphEngine` clamps at the descriptor level.
 /// * Setting `max < min` inverts the control (0.0 → max, 1.0 → min).
-#[derive(Clone, Debug)]
+/// * `curve` selects the sweep shape: [`MorphCurve::Linear`] for most params,
+///   [`MorphCurve::Logarithmic`] for frequencies, [`MorphCurve::Snap`] for
+///   stepped/enum params. No clamping to the descriptor range is done here — the
+///   consumer (e.g. `GraphEngine::set_param_at`) clamps.
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct MacroMapping {
     /// Index of the macro knob (0 – N-1) that drives this mapping.
     pub macro_index: usize,
-    /// Slot index in the [`GraphEngine`]'s linear chain.
-    pub target_slot: usize,
-    /// Parameter index within the effect at `target_slot`.
-    pub target_param: usize,
-    /// Parameter value when the macro knob is at 0.0.
+    /// Where this mapping writes.
+    pub target: MacroTarget,
+    /// Target value when the macro knob is at 0.0.
     pub min: f32,
-    /// Parameter value when the macro knob is at 1.0.
+    /// Target value when the macro knob is at 1.0.
     pub max: f32,
+    /// Interpolation curve across the knob's travel.
+    pub curve: MorphCurve,
 }
 
 impl MacroMapping {
-    /// Compute the target parameter value for the given macro position.
+    /// A linear mapping over `[min, max]` for the given target.
+    pub fn linear(macro_index: usize, target: MacroTarget, min: f32, max: f32) -> Self {
+        Self {
+            macro_index,
+            target,
+            min,
+            max,
+            curve: MorphCurve::Linear,
+        }
+    }
+
+    /// Compute the target value for the given macro position.
     ///
     /// `position` is clamped to `[0.0, 1.0]` before interpolation.
     #[inline]
     pub fn evaluate(&self, position: f32) -> f32 {
-        let t = position.clamp(0.0, 1.0);
-        self.min + t * (self.max - self.min)
+        curve_lerp(self.min, self.max, position.clamp(0.0, 1.0), self.curve)
     }
 }
 
 // ─── MacroMap ─────────────────────────────────────────────────────────────────
 
-/// Maps `N` macro knobs to an arbitrary number of internal parameters.
+/// Maps `N` macro knobs to an arbitrary number of targets.
 ///
-/// `N` is the number of exposed macro knobs (compile-time constant).  Mappings
-/// are dynamic (heap-allocated) so any number of parameter destinations can be
-/// registered at runtime.
+/// `N` is the number of exposed macro knobs (compile-time constant). Mappings
+/// are dynamic (heap-allocated) so any number of destinations can be registered.
 ///
 /// # Invariants
 ///
 /// * Macro indices must be in the range `[0, N)`.
-/// * Each macro's current position is stored and re-applied on `set_macro`.
+/// * Each macro's current position is stored and re-applied on demand.
 /// * All current positions start at 0.0.
 pub struct MacroMap<const N: usize> {
     /// Current knob positions, one per macro, in `[0.0, 1.0]`.
@@ -155,10 +152,10 @@ impl<const N: usize> MacroMap<N> {
         }
     }
 
-    /// Register a new macro-to-parameter mapping.
+    /// Register a new macro-to-target mapping.
     ///
     /// Multiple mappings for the same macro index are allowed — all are applied
-    /// together when [`set_macro`](Self::set_macro) is called.
+    /// together.
     ///
     /// # Panics
     ///
@@ -183,12 +180,12 @@ impl<const N: usize> MacroMap<N> {
         self.mappings.clear();
     }
 
-    /// Returns a slice of all current mappings.
+    /// All current mappings.
     pub fn mappings(&self) -> &[MacroMapping] {
         &self.mappings
     }
 
-    /// Returns the current position of macro `index` in `[0.0, 1.0]`.
+    /// Current position of macro `index` in `[0.0, 1.0]`.
     ///
     /// # Panics
     ///
@@ -197,49 +194,57 @@ impl<const N: usize> MacroMap<N> {
         self.positions[index]
     }
 
-    /// Set macro knob `index` to `position` and apply all associated mappings
-    /// to `engine`.
-    ///
-    /// `position` is clamped to `[0.0, 1.0]`.  Every mapping whose
-    /// `macro_index` matches `index` is evaluated and written to the engine via
-    /// [`GraphEngine::set_param_at`].
+    /// Store macro `index`'s position without applying it (clamped to `[0,1]`).
     ///
     /// # Panics
     ///
     /// Panics if `index >= N`.
-    pub fn set_macro(&mut self, engine: &mut GraphEngine, index: usize, position: f32) {
-        let pos = position.clamp(0.0, 1.0);
-        self.positions[index] = pos;
-        for mapping in &self.mappings {
-            if mapping.macro_index == index {
-                let value = mapping.evaluate(pos);
-                engine.set_param_at(mapping.target_slot, mapping.target_param, value);
-            }
-        }
+    pub fn set_position(&mut self, index: usize, position: f32) {
+        self.positions[index] = position.clamp(0.0, 1.0);
     }
 
-    /// Re-apply all current macro positions to `engine`.
+    /// Apply macro `index`'s mappings at its stored position to `sink`.
     ///
-    /// Useful after an engine topology change (e.g., after loading a preset)
-    /// to ensure all macro-driven parameters reflect the current knob positions.
-    pub fn apply_all(&mut self, engine: &mut GraphEngine) {
-        for i in 0..N {
-            let pos = self.positions[i];
-            for mapping in &self.mappings {
-                if mapping.macro_index == i {
-                    let value = mapping.evaluate(pos);
-                    engine.set_param_at(mapping.target_slot, mapping.target_param, value);
-                }
-            }
+    /// `sink(target, value)` receives each resolved write. Decoupled from any
+    /// engine so the same map can drive a bridge, an engine, or firmware.
+    pub fn apply(&self, index: usize, mut sink: impl FnMut(MacroTarget, f32)) {
+        let pos = self.positions[index];
+        for m in self.mappings.iter().filter(|m| m.macro_index == index) {
+            sink(m.target, m.evaluate(pos));
         }
     }
 
-    /// Returns the number of registered mappings.
+    /// Apply every macro's mappings at their stored positions to `sink`.
+    pub fn apply_all(&self, mut sink: impl FnMut(MacroTarget, f32)) {
+        for m in &self.mappings {
+            sink(m.target, m.evaluate(self.positions[m.macro_index]));
+        }
+    }
+
+    /// Convenience: apply every mapping, routing slot targets to `engine` and
+    /// global targets to `globals`.
+    ///
+    /// This is what the standalone audio thread, the plugin, and the firmware
+    /// call once per control tick after knob positions change.
+    pub fn apply_to_engine(
+        &self,
+        engine: &mut GraphEngine,
+        mut globals: impl FnMut(GlobalParam, f32),
+    ) {
+        self.apply_all(|target, value| match target {
+            MacroTarget::Slot { slot, param } => {
+                engine.set_param_at(slot as usize, param as usize, value);
+            }
+            MacroTarget::Global(g) => globals(g, value),
+        });
+    }
+
+    /// Number of registered mappings.
     pub fn mapping_count(&self) -> usize {
         self.mappings.len()
     }
 
-    /// Returns how many mappings are registered for a given macro index.
+    /// Mappings registered for a given macro index.
     pub fn mapping_count_for(&self, macro_index: usize) -> usize {
         self.mappings
             .iter()
@@ -256,134 +261,100 @@ impl<const N: usize> Default for MacroMap<N> {
 
 #[cfg(test)]
 mod tests {
+    extern crate alloc;
     use super::*;
+    use alloc::vec::Vec;
 
-    // We can't easily construct a GraphEngine in a unit test without real effects,
-    // so we test MacroMap logic directly where possible.
+    fn slot(slot: u8, param: u8) -> MacroTarget {
+        MacroTarget::Slot { slot, param }
+    }
 
     #[test]
-    fn test_macro_mapping_evaluate() {
-        let m = MacroMapping {
-            macro_index: 0,
-            target_slot: 0,
-            target_param: 0,
-            min: 100.0,
-            max: 200.0,
-        };
+    fn evaluate_linear_endpoints_and_midpoint() {
+        let m = MacroMapping::linear(0, slot(0, 0), 100.0, 200.0);
         assert!((m.evaluate(0.0) - 100.0).abs() < 1e-6);
         assert!((m.evaluate(1.0) - 200.0).abs() < 1e-6);
         assert!((m.evaluate(0.5) - 150.0).abs() < 1e-6);
     }
 
     #[test]
-    fn test_macro_mapping_inverted() {
-        let m = MacroMapping {
-            macro_index: 0,
-            target_slot: 0,
-            target_param: 0,
-            min: 1.0,
-            max: 0.0,
-        };
+    fn evaluate_inverted() {
+        let m = MacroMapping::linear(0, slot(0, 0), 1.0, 0.0);
         assert!((m.evaluate(0.0) - 1.0).abs() < 1e-6);
         assert!((m.evaluate(1.0) - 0.0).abs() < 1e-6);
     }
 
     #[test]
-    fn test_macro_mapping_clamping() {
+    fn evaluate_logarithmic_curve() {
         let m = MacroMapping {
             macro_index: 0,
-            target_slot: 0,
-            target_param: 0,
-            min: 0.0,
-            max: 10.0,
+            target: slot(0, 0),
+            min: 100.0,
+            max: 10_000.0,
+            curve: MorphCurve::Logarithmic,
         };
+        assert!((m.evaluate(0.5) - 1000.0).abs() < 1.0); // geometric mean
+    }
+
+    #[test]
+    fn evaluate_clamps_position() {
+        let m = MacroMapping::linear(0, slot(0, 0), 0.0, 10.0);
         assert!((m.evaluate(-1.0) - 0.0).abs() < 1e-6);
         assert!((m.evaluate(2.0) - 10.0).abs() < 1e-6);
     }
 
     #[test]
-    fn test_macro_map_new() {
-        let map: MacroMap<4> = MacroMap::new();
-        assert_eq!(map.mapping_count(), 0);
-        for i in 0..4 {
-            assert_eq!(map.position(i), 0.0);
-        }
+    fn apply_all_routes_targets_via_sink() {
+        let mut map: MacroMap<6> = MacroMap::new();
+        map.add_mapping(MacroMapping::linear(0, slot(0, 2), 0.0, 1.0));
+        map.add_mapping(MacroMapping::linear(0, slot(1, 4), 0.0, 10.0));
+        map.add_mapping(MacroMapping::linear(
+            1,
+            MacroTarget::Global(GlobalParam::MasterVolume),
+            0.0,
+            -40.0,
+        ));
+        map.set_position(0, 0.5);
+        map.set_position(1, 1.0);
+
+        let mut writes: Vec<(MacroTarget, f32)> = Vec::new();
+        map.apply_all(|t, v| writes.push((t, v)));
+
+        assert_eq!(writes.len(), 3);
+        assert!(writes.contains(&(slot(0, 2), 0.5)));
+        assert!(writes.contains(&(slot(1, 4), 5.0)));
+        assert!(writes.contains(&(MacroTarget::Global(GlobalParam::MasterVolume), -40.0)));
     }
 
     #[test]
-    fn test_macro_map_add_and_count() {
-        let mut map: MacroMap<4> = MacroMap::new();
-        map.add_mapping(MacroMapping {
-            macro_index: 0,
-            target_slot: 0,
-            target_param: 0,
-            min: 0.0,
-            max: 1.0,
-        });
-        map.add_mapping(MacroMapping {
-            macro_index: 0,
-            target_slot: 1,
-            target_param: 2,
-            min: 0.0,
-            max: 10.0,
-        });
-        map.add_mapping(MacroMapping {
-            macro_index: 1,
-            target_slot: 2,
-            target_param: 0,
-            min: 0.5,
-            max: 2.0,
-        });
+    fn apply_single_macro_only() {
+        let mut map: MacroMap<6> = MacroMap::new();
+        map.add_mapping(MacroMapping::linear(0, slot(0, 0), 0.0, 1.0));
+        map.add_mapping(MacroMapping::linear(1, slot(1, 0), 0.0, 1.0));
+        map.set_position(0, 1.0);
+
+        let mut count = 0;
+        map.apply(0, |_, _| count += 1);
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn counts_and_clear() {
+        let mut map: MacroMap<6> = MacroMap::new();
+        map.add_mapping(MacroMapping::linear(0, slot(0, 0), 0.0, 1.0));
+        map.add_mapping(MacroMapping::linear(0, slot(1, 2), 0.0, 10.0));
+        map.add_mapping(MacroMapping::linear(1, slot(2, 0), 0.5, 2.0));
         assert_eq!(map.mapping_count(), 3);
         assert_eq!(map.mapping_count_for(0), 2);
-        assert_eq!(map.mapping_count_for(1), 1);
-        assert_eq!(map.mapping_count_for(2), 0);
-    }
-
-    #[test]
-    fn test_macro_map_clear_macro() {
-        let mut map: MacroMap<4> = MacroMap::new();
-        map.add_mapping(MacroMapping {
-            macro_index: 0,
-            target_slot: 0,
-            target_param: 0,
-            min: 0.0,
-            max: 1.0,
-        });
-        map.add_mapping(MacroMapping {
-            macro_index: 1,
-            target_slot: 1,
-            target_param: 0,
-            min: 0.0,
-            max: 1.0,
-        });
         map.clear_macro(0);
-        assert_eq!(map.mapping_count(), 1);
         assert_eq!(map.mapping_count_for(0), 0);
-        assert_eq!(map.mapping_count_for(1), 1);
-    }
-
-    #[test]
-    fn test_macro_map_position_updates() {
-        let mut map: MacroMap<4> = MacroMap::new();
-        // Positions update even without mappings
-        // We can't call set_macro without an engine, but we test position tracking separately
-        assert_eq!(map.position(0), 0.0);
-        // Manually set via positions array for test purposes
-        map.positions[0] = 0.75;
-        assert!((map.position(0) - 0.75).abs() < 1e-6);
+        assert_eq!(map.mapping_count(), 1);
     }
 
     #[test]
     #[should_panic]
-    fn test_macro_map_out_of_range_panics() {
-        let mut map: MacroMap<4> = MacroMap::new();
-        map.add_mapping(MacroMapping {
-            macro_index: 4, // out of range for N=4
-            target_slot: 0,
-            target_param: 0,
-            min: 0.0,
-            max: 1.0,
-        });
+    fn out_of_range_macro_panics() {
+        let mut map: MacroMap<6> = MacroMap::new();
+        map.add_mapping(MacroMapping::linear(6, slot(0, 0), 0.0, 1.0));
     }
 }
