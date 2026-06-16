@@ -34,6 +34,7 @@
 
 pub mod audio;
 mod egui_bridge;
+pub mod graph_player;
 pub mod gui;
 pub mod main_thread;
 pub mod shared;
