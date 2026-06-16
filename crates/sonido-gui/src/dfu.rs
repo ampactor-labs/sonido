@@ -5,7 +5,8 @@
 //! footswitches ~1.5 s, or press BOOT+RESET on the Seed.
 //!
 //! The parsing and argument-construction logic is split out as pure functions so
-//! it is unit-tested without spawning anything; only [`flash`] touches a process.
+//! it is unit-tested without spawning anything; only [`flash_patch`]/[`flash_firmware`]
+//! touch a process.
 
 #![cfg(not(target_arch = "wasm32"))]
 

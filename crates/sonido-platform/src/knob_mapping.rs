@@ -66,7 +66,7 @@ fn knob_min_override(effect_id: &str, param_idx: usize) -> Option<f32> {
 ///
 /// Looks up the noon preset for `effect_id` at `param_idx`, falls back to the
 /// descriptor's default if no noon preset is defined. Applies a per-effect
-/// knob floor override (see [`knob_min_override`]) when one is defined.
+/// knob floor override (see `knob_min_override`) when one is defined.
 ///
 /// # Parameters
 ///
