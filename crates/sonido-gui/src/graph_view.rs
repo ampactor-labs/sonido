@@ -1068,7 +1068,7 @@ impl SnarlViewer<SonidoNode> for SonidoViewer<'_> {
                                     smoothing,
                                 },
                             );
-                            append_before_output(snarl, new_id);
+                            splice_at_nearest(snarl, new_id, pos);
                             *self.topology_changed = true;
                             *self.needs_arrange = true;
                             ui.close_menu();
@@ -1100,7 +1100,7 @@ impl SnarlViewer<SonidoNode> for SonidoViewer<'_> {
                                 smoothing,
                             },
                         );
-                        append_before_output(snarl, new_id);
+                        splice_at_nearest(snarl, new_id, pos);
                         *self.topology_changed = true;
                         *self.needs_arrange = true;
                         // Clear filter for next open
@@ -1213,13 +1213,71 @@ impl SnarlViewer<SonidoNode> for SonidoViewer<'_> {
     }
 }
 
+/// Perpendicular distance from a point to a line segment `a`–`b`.
+fn dist_point_to_segment(p: egui::Pos2, a: egui::Pos2, b: egui::Pos2) -> f32 {
+    let ab = b - a;
+    let len_sq = ab.length_sq();
+    if len_sq <= f32::EPSILON {
+        return (p - a).length();
+    }
+    let t = ((p - a).dot(ab) / len_sq).clamp(0.0, 1.0);
+    (p - (a + ab * t)).length()
+}
+
+/// Splice a freshly added node into the wire nearest the insertion point.
+///
+/// The new node would otherwise sit disconnected yet *look* wired (the
+/// auto-flow places it in the signal lane). Finding the closest existing wire
+/// to where the user right-clicked and inserting the node into it makes the
+/// appearance honest and puts the effect exactly where they aimed. Falls back
+/// to [`append_before_output`] when there is no wire to splice into.
+fn splice_at_nearest(snarl: &mut Snarl<SonidoNode>, new_id: NodeId, pos: egui::Pos2) {
+    let wires: Vec<(OutPinId, InPinId)> = snarl.wires().collect();
+    let mut best: Option<(OutPinId, InPinId)> = None;
+    let mut best_d = f32::INFINITY;
+    for (out_pin, in_pin) in wires {
+        if out_pin.node == new_id || in_pin.node == new_id {
+            continue;
+        }
+        let (Some(a), Some(b)) = (
+            snarl.get_node_info(out_pin.node).map(|n| n.pos),
+            snarl.get_node_info(in_pin.node).map(|n| n.pos),
+        ) else {
+            continue;
+        };
+        let d = dist_point_to_segment(pos, a, b);
+        if d < best_d {
+            best_d = d;
+            best = Some((out_pin, in_pin));
+        }
+    }
+
+    if let Some((out_pin, in_pin)) = best {
+        snarl.disconnect(out_pin, in_pin);
+        snarl.connect(
+            out_pin,
+            InPinId {
+                node: new_id,
+                input: 0,
+            },
+        );
+        snarl.connect(
+            OutPinId {
+                node: new_id,
+                output: 0,
+            },
+            in_pin,
+        );
+    } else {
+        append_before_output(snarl, new_id);
+    }
+}
+
 /// Splice a freshly added node into the chain just before the Output.
 ///
-/// A newly added node would otherwise sit disconnected yet *look* wired (the
-/// auto-flow places it in the signal lane). Rerouting everything that feeds the
-/// Output through the new node makes the appearance honest: the node is now
-/// genuinely the last stage in the chain. If the Output was unconnected, wires
-/// Input → new → Output instead.
+/// Used as the fallback when there is no existing wire to splice into (e.g. the
+/// graph is empty). Reroutes everything feeding the Output through the new node,
+/// or wires Input → new → Output if the Output was unconnected.
 fn append_before_output(snarl: &mut Snarl<SonidoNode>, new_id: NodeId) {
     let mut output = None;
     let mut input = None;
