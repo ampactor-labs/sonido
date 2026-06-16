@@ -47,15 +47,22 @@ Runtime layering, shared by GUI / plugin / pedal:
 | `qspi_read_test` hardware probe | `sonido-daisy/examples/` | ✅ compiles; **awaiting hardware** |
 | Export logic (dfu / cost table / validate) | `sonido-gui/{dfu,export}.rs`, `sonido-platform/cycle_table.rs` | ✅ 11 tests |
 | Macro panel + morph crossfader widgets | `sonido-gui-core/widgets/{macro_panel,morph_bar}.rs` | ✅ lib-checked |
+| **PatchPlayer** runtime (macros+morph+gains over a graph) | `sonido-patch/runtime.rs` | ✅ 5 tests; no_std thumbv7em |
+| **Graph-player CLAP plugin** (headless: params/state/audio) | `sonido-plugin/graph_player.rs` + example | ✅ cdylib builds; 4 tests; in `make verify` |
+| Full `make verify` (fmt+clippy+tests+no_std+wasm+doc) | whole workspace | ✅ exits 0, zero warnings |
 
-## Remaining integration (blocked on GL / hardware)
+`PatchPlayer` is the single runtime the plugin and firmware both wrap, so a rig
+sounds identical in the DAW and on the pedal.
 
-Two external blockers gate the rest:
+## Remaining integration (needs a live GUI / hardware)
 
-1. **`mesa-libGL-devel` not installed** → `sonido-plugin` can't type-check and the
-   Studio GUI can't be run/seen. Install: `sudo dnf install mesa-libGL-devel
-   libX11-devel libxcb-devel`.
-2. **No Seed/pedal access yet** → the QSPI-on-H7 read path is unvalidated.
+GL is now installed (plugin builds, full `make verify` green). What's left needs
+either a visible GUI session (you, present) or the pedal:
+
+1. **No Seed/pedal access yet** → the QSPI-on-H7 read path is unvalidated (run
+   `qspi_read_test` first).
+2. **Standalone GUI panels** can be lib-checked but want a visible window to dial
+   in the UX (you've said morph must feel right) — best done with you present.
 
 Precise remaining wiring points, by workstream:
 
