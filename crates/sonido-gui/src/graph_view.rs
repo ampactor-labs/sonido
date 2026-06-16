@@ -13,19 +13,15 @@ use egui_snarl::ui::{PinInfo, SnarlStyle, SnarlViewer};
 use egui_snarl::{InPin, InPinId, NodeId, OutPin, OutPinId, Snarl};
 
 use sonido_core::graph::{GraphEngine, MAX_SPLIT_TARGETS, ProcessingGraph};
-use sonido_core::{ParamDescriptor, SmoothingStyle};
+use sonido_core::{ParamDescriptor, ParamFlags, SmoothingStyle};
 use sonido_gui_core::theme::SonidoTheme;
 use sonido_gui_core::widgets::glow;
 use sonido_registry::{EffectCategory, EffectRegistry};
 
 use crate::chain_manager::GraphCommand;
 
-/// Maximum number of fan-out/fan-in ports on Split/Merge nodes.
+/// Maximum number of fan-out/fan-in ports on legacy Split/Merge nodes.
 const MAX_PORTS: usize = MAX_SPLIT_TARGETS;
-
-/// Horizontal offset (pixels) for auto-inserted Merge nodes relative to their
-/// downstream target.
-const AUTO_MERGE_OFFSET_PX: f32 = 80.0;
 
 /// A node in the visual graph editor.
 #[derive(Clone, Debug)]
@@ -198,6 +194,80 @@ impl GraphView {
         }
     }
 
+    /// Re-flow effect/structural nodes left→right by dependency depth.
+    ///
+    /// Each node lands in the column matching its longest path from an Input,
+    /// and nodes sharing a column stack vertically — so the signal path reads
+    /// left to right and nodes never overlap. Input/Output are left to
+    /// [`pin_io_nodes`](Self::pin_io_nodes), which anchors them to the bounding
+    /// box. Called only after a *user* topology edit (never on session restore,
+    /// which preserves saved positions).
+    fn auto_arrange(&mut self) {
+        use std::collections::HashMap;
+
+        // Adjacency + in-degree over the current snarl nodes.
+        let mut adj: HashMap<NodeId, Vec<NodeId>> = HashMap::new();
+        let mut indeg: HashMap<NodeId, usize> = HashMap::new();
+        for (id, _) in self.snarl.node_ids() {
+            adj.entry(id).or_default();
+            indeg.entry(id).or_insert(0);
+        }
+        for (out, inp) in self.snarl.wires() {
+            if out.node == inp.node {
+                continue;
+            }
+            adj.entry(out.node).or_default().push(inp.node);
+            *indeg.entry(inp.node).or_insert(0) += 1;
+        }
+
+        // Longest-path layering (Kahn). Any node left in a cycle keeps depth 0;
+        // `compile_to_engine` rejects cycles, so layout only needs best-effort.
+        let mut depth: HashMap<NodeId, usize> = HashMap::new();
+        let mut remaining = indeg.clone();
+        let mut queue: Vec<NodeId> = remaining
+            .iter()
+            .filter(|&(_, &d)| d == 0)
+            .map(|(&n, _)| n)
+            .collect();
+        while let Some(n) = queue.pop() {
+            let dn = depth.get(&n).copied().unwrap_or(0);
+            for &c in &adj[&n] {
+                if dn + 1 > depth.get(&c).copied().unwrap_or(0) {
+                    depth.insert(c, dn + 1);
+                }
+                if let Some(r) = remaining.get_mut(&c) {
+                    *r -= 1;
+                    if *r == 0 {
+                        queue.push(c);
+                    }
+                }
+            }
+        }
+
+        const COL_SPACING: f32 = 190.0;
+        const ROW_SPACING: f32 = 96.0;
+        let base = egui::pos2(140.0, 170.0);
+        let mut rows_at: HashMap<usize, usize> = HashMap::new();
+
+        let ids: Vec<NodeId> = self.snarl.node_ids().map(|(id, _)| id).collect();
+        for id in ids {
+            // I/O nodes are anchored by `pin_io_nodes`, not laid out here.
+            if matches!(self.snarl[id], SonidoNode::Input | SonidoNode::Output) {
+                continue;
+            }
+            let col = depth.get(&id).copied().unwrap_or(0);
+            let row = rows_at.entry(col).or_insert(0);
+            let pos = egui::pos2(
+                base.x + col as f32 * COL_SPACING,
+                base.y + *row as f32 * ROW_SPACING,
+            );
+            *row += 1;
+            if let Some(info) = self.snarl.get_node_info_mut(id) {
+                info.pos = pos;
+            }
+        }
+    }
+
     /// Renders the graph editor and returns the slot index of the currently
     /// selected effect node, if any.
     ///
@@ -208,16 +278,24 @@ impl GraphView {
         self.pin_io_nodes();
         let theme = SonidoTheme::get(ui.ctx());
         let mut click_handled = false;
+        let mut needs_arrange = false;
         let mut viewer = SonidoViewer {
             selected_node: &mut self.selected_node,
             click_handled: &mut click_handled,
             topology_changed: &mut self.topology_changed,
+            needs_arrange: &mut needs_arrange,
             theme,
             slot_activity: &self.slot_activity,
             slot_peaks: &self.slot_peaks,
         };
         self.snarl
             .show(&mut viewer, &self.style, "sonido_graph", ui);
+
+        // Re-flow the graph after a user topology edit so nodes never overlap
+        // and the signal path reads left→right. Applied next frame.
+        if needs_arrange {
+            self.auto_arrange();
+        }
 
         // Click on empty space deselects — only within the graph area.
         // Without the rect check, clicks on the effect panel (below the graph)
@@ -601,6 +679,10 @@ struct SonidoViewer<'a> {
     /// Set to `true` when a connect/disconnect/remove changes the topology,
     /// signalling the app to auto-compile.
     topology_changed: &'a mut bool,
+    /// Set to `true` when a *user* topology edit should re-flow the layout.
+    /// Distinct from `topology_changed` so session restore (which also marks
+    /// the topology changed, to recompile) does not discard saved positions.
+    needs_arrange: &'a mut bool,
     /// Arcade CRT theme snapshot for palette access.
     theme: SonidoTheme,
     /// Per-effect-slot activity level (0.0--1.0) for LED indicators.
@@ -828,8 +910,17 @@ impl SnarlViewer<SonidoNode> for SonidoViewer<'_> {
                 }
             }
 
-            // Plain label — selection is handled via final_node_rect()
-            let body_text = format!("{} · {} params", category.name(), descriptors.len());
+            // Plain label — selection is handled via final_node_rect().
+            // Count only *visible* params so the badge matches the editor panel,
+            // which skips HIDDEN/READ_ONLY params (e.g. the tuner's outputs).
+            let visible_params = descriptors
+                .iter()
+                .filter(|d| {
+                    !d.flags.contains(ParamFlags::HIDDEN)
+                        && !d.flags.contains(ParamFlags::READ_ONLY)
+                })
+                .count();
+            let body_text = format!("{} · {} params", category.name(), visible_params);
             let color = if is_selected { accent } else { dim };
             ui.label(
                 RichText::new(body_text)
@@ -941,6 +1032,7 @@ impl SnarlViewer<SonidoNode> for SonidoViewer<'_> {
                                 },
                             );
                             *self.topology_changed = true;
+                            *self.needs_arrange = true;
                             ui.close_menu();
                         }
                     }
@@ -971,6 +1063,7 @@ impl SnarlViewer<SonidoNode> for SonidoViewer<'_> {
                             },
                         );
                         *self.topology_changed = true;
+                        *self.needs_arrange = true;
                         // Clear filter for next open
                         ui.data_mut(|d| d.insert_temp::<String>(filter_id, String::new()));
                         ui.close_menu();
@@ -1001,6 +1094,7 @@ impl SnarlViewer<SonidoNode> for SonidoViewer<'_> {
             }
             snarl.remove_node(node);
             *self.topology_changed = true;
+            *self.needs_arrange = true;
             ui.close_menu();
             return;
         }
@@ -1013,6 +1107,7 @@ impl SnarlViewer<SonidoNode> for SonidoViewer<'_> {
             let offset = egui::vec2(30.0, 30.0);
             snarl.insert_node(original_pos + offset, original);
             *self.topology_changed = true;
+            *self.needs_arrange = true;
             ui.close_menu();
         }
     }
@@ -1051,108 +1146,32 @@ impl SnarlViewer<SonidoNode> for SonidoViewer<'_> {
     }
 
     fn connect(&mut self, from: &OutPin, to: &InPin, snarl: &mut Snarl<SonidoNode>) {
-        if matches!(snarl[to.id.node], SonidoNode::Merge) {
-            // Merge nodes accept multiple inputs directly.
-            snarl.connect(from.id, to.id);
-        } else {
-            // Check if the target already has an incoming wire.
-            let existing_source: Option<OutPinId> = snarl
-                .wires()
-                .find(|&(_, inp)| inp.node == to.id.node)
-                .map(|(out, _)| out);
-
-            match existing_source {
-                Some(old) if matches!(snarl[old.node], SonidoNode::Merge) => {
-                    add_to_existing_merge(from.id, old.node, snarl);
-                }
-                Some(old) => {
-                    insert_merge_between(from.id, old, to.id, snarl);
-                }
-                None => {
-                    snarl.connect(from.id, to.id);
-                }
-            }
-        }
+        // Any input may receive multiple wires. Fan-in is summed implicitly when
+        // the graph compiles (`compile_to_engine` auto-inserts a Merge for any
+        // node with >1 source), so the editor never materializes a Merge node —
+        // wires simply converge on the single input connector.
+        snarl.connect(from.id, to.id);
         *self.topology_changed = true;
+        *self.needs_arrange = true;
     }
 
     fn disconnect(&mut self, from: &OutPin, to: &InPin, snarl: &mut Snarl<SonidoNode>) {
         snarl.disconnect(from.id, to.id);
         *self.topology_changed = true;
+        *self.needs_arrange = true;
     }
 
     fn drop_outputs(&mut self, pin: &OutPin, snarl: &mut Snarl<SonidoNode>) {
         snarl.drop_outputs(pin.id);
         *self.topology_changed = true;
+        *self.needs_arrange = true;
     }
 
     fn drop_inputs(&mut self, pin: &InPin, snarl: &mut Snarl<SonidoNode>) {
         snarl.drop_inputs(pin.id);
         *self.topology_changed = true;
+        *self.needs_arrange = true;
     }
-}
-
-/// Add a new connection to an existing Merge node.
-///
-/// Counts current inputs on the Merge and appends the new source to the next
-/// available input slot.
-fn add_to_existing_merge(from: OutPinId, merge_node: NodeId, snarl: &mut Snarl<SonidoNode>) {
-    let used = snarl
-        .wires()
-        .filter(|&(_, inp)| inp.node == merge_node)
-        .count();
-    snarl.connect(
-        from,
-        InPinId {
-            node: merge_node,
-            input: used,
-        },
-    );
-}
-
-/// Auto-insert a Merge node between a new source, an existing source, and
-/// their shared target.
-///
-/// Creates a Merge node offset [`AUTO_MERGE_OFFSET_PX`] pixels to the left of
-/// the target, rewires the existing connection through it, and adds the new
-/// connection.
-fn insert_merge_between(
-    from: OutPinId,
-    existing: OutPinId,
-    target: InPinId,
-    snarl: &mut Snarl<SonidoNode>,
-) {
-    let target_pos = snarl
-        .get_node_info(target.node)
-        .map_or(egui::pos2(0.0, 0.0), |n| n.pos);
-    let merge_pos = target_pos - egui::vec2(AUTO_MERGE_OFFSET_PX, 0.0);
-    let merge_id = snarl.insert_node(merge_pos, SonidoNode::Merge);
-
-    // Reroute: existing source → Merge input 0
-    snarl.disconnect(existing, target);
-    snarl.connect(
-        existing,
-        InPinId {
-            node: merge_id,
-            input: 0,
-        },
-    );
-    // New source → Merge input 1
-    snarl.connect(
-        from,
-        InPinId {
-            node: merge_id,
-            input: 1,
-        },
-    );
-    // Merge output → original target
-    snarl.connect(
-        OutPinId {
-            node: merge_id,
-            output: 0,
-        },
-        target,
-    );
 }
 
 /// Collect parameter descriptors for an effect by creating a temporary instance.

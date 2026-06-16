@@ -1,27 +1,28 @@
-//! Generic fallback UI panel for effects without a dedicated panel.
+//! Unified UI panel that renders any effect's full parameter set.
 //!
-//! [`GenericPanel`] renders any registered effect's parameters using
-//! [`bridged_fader`] for continuous parameters and [`bridged_combo`] for
-//! stepped/enum parameters. It discovers parameter metadata at render time
-//! via the [`ParamBridge`], so it works for any effect ID.
+//! [`GenericPanel`] renders every visible parameter using [`bridged_knob`] for
+//! continuous parameters and [`bridged_combo`] for stepped/enum parameters. It
+//! discovers parameter metadata at render time via the [`ParamBridge`], so it
+//! works for any effect ID and always shows *all* params — keeping the node's
+//! "N params" badge honest and every parameter reachable for macros and morph.
 //!
-//! This is the catch-all panel returned by [`create_panel`](super::create_panel)
-//! when no dedicated panel exists for the given effect ID.
+//! This is the panel returned by [`create_panel`](super::create_panel) for every
+//! effect except the looper (which has a bespoke transport panel).
 
 use crate::effects_ui::EffectPanel;
 use crate::theme::SonidoTheme;
-use crate::widgets::{bridged_combo, bridged_fader};
+use crate::widgets::{bridged_combo, bridged_knob};
 use crate::{ParamBridge, ParamIndex, SlotIndex};
 use egui::Ui;
 use sonido_core::ParamFlags;
 
-/// Number of faders per row in the generic layout.
-const FADERS_PER_ROW: usize = 6;
+/// Fixed column width (px) reserved for each knob + its label/LED readout.
+const KNOB_CELL_WIDTH: f32 = 64.0;
 
-/// Fallback UI panel for any registered effect.
+/// Unified UI panel for any registered effect.
 ///
-/// Renders all visible parameters in rows of 6, using
-/// [`bridged_combo`] for stepped (enum) parameters and [`bridged_fader`]
+/// Renders all visible parameters as a wrapping bank of knobs, using
+/// [`bridged_combo`] for stepped (enum) parameters and [`bridged_knob`]
 /// for continuous parameters. Parameters flagged `READ_ONLY` or `HIDDEN`
 /// are skipped.
 ///
@@ -81,9 +82,9 @@ impl GenericPanel {
 
     /// Render the generic effect controls.
     ///
-    /// Parameters are rendered in rows of 6. Stepped
-    /// (enum) parameters use a combo box; continuous parameters use a fader.
-    /// `READ_ONLY` and `HIDDEN` parameters are skipped.
+    /// Stepped (enum) parameters render as a combo box; continuous parameters
+    /// render as knobs that wrap to fit the panel width. `READ_ONLY` and
+    /// `HIDDEN` parameters are skipped.
     pub fn ui(&mut self, ui: &mut Ui, bridge: &dyn ParamBridge, slot: SlotIndex) {
         let theme = SonidoTheme::get(ui.ctx());
         let param_count = bridge.param_count(slot);
@@ -117,11 +118,6 @@ impl GenericPanel {
             }
         }
 
-        let avail_w = ui.available_width();
-        let row_count = continuous.len().clamp(1, FADERS_PER_ROW);
-        let fader_w = theme.layout.fader_width(avail_w, row_count);
-        let fader_h = theme.layout.fader_height(ui.available_height().min(200.0));
-
         ui.vertical(|ui| {
             // Stepped (combo) params in a horizontal row
             if !stepped.is_empty() {
@@ -154,11 +150,19 @@ impl GenericPanel {
                 ui.add_space(8.0);
             }
 
-            // Continuous params in rows of FADERS_PER_ROW
+            // Continuous params as knobs, wrapping to fit the panel width. Each
+            // knob carries its own LED readout and (via the bridge) its A/B morph
+            // ring markers, so the whole effect reads as one bank of knobs.
             if !continuous.is_empty() {
                 ui.horizontal_wrapped(|ui| {
                     for &i in &continuous {
-                        bridged_fader(ui, bridge, slot, ParamIndex(i), fader_w, fader_h);
+                        let label = bridge
+                            .param_descriptor(slot, ParamIndex(i))
+                            .map_or("", |d| d.short_name);
+                        ui.vertical(|ui| {
+                            ui.set_width(KNOB_CELL_WIDTH);
+                            bridged_knob(ui, bridge, slot, ParamIndex(i), label);
+                        });
                     }
                 });
             }

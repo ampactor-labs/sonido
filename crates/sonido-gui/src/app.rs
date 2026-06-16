@@ -628,7 +628,7 @@ impl SonidoApp {
             .corner_radius(theme.sizing.panel_border_radius)
             .inner_margin(Margin::same(theme.sizing.panel_padding as i8));
 
-        let panel_response = panel_frame.show(ui, |ui| {
+        panel_frame.show(ui, |ui| {
             // Title row: effect name + morph bar + bypass
             ui.horizontal(|ui| {
                 ui.label(
@@ -687,9 +687,6 @@ impl SonidoApp {
                 panel.ui(ui, bridge, slot);
             }
         });
-
-        let panel_rect = panel_response.response.rect;
-        glow::scanlines(ui.painter(), panel_rect, &theme);
     }
 
     /// Render the status bar.
