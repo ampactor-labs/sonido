@@ -638,32 +638,9 @@ impl SonidoApp {
                         .strong(),
                 );
 
-                // Inline morph bar
-                if !self.single_effect {
-                    ui.add_space(8.0);
-                    let has_a = self.morph_state.a.is_some();
-                    let has_b = self.morph_state.b.is_some();
-                    let resp = morph_bar(ui, &mut self.morph_state.t, has_a, has_b);
-                    if resp.capture_a {
-                        self.morph_state.capture_a(&*self.bridge);
-                    }
-                    if resp.capture_b {
-                        self.morph_state.capture_b(&*self.bridge);
-                    }
-                    if resp.recall_a {
-                        self.morph_state.recall_a(&*self.bridge);
-                    }
-                    if resp.recall_b {
-                        self.morph_state.recall_b(&*self.bridge);
-                    }
-                    if resp.t_changed {
-                        self.morph_state.active = true;
-                        self.morph_state.apply(&*self.bridge);
-                    }
-                }
-
-                // Bypass — a clearly labeled, separated toggle (not a dot cramped
-                // against the morph A/B bar). Green ACTIVE / red BYPASSED.
+                // Bypass — a clearly labeled toggle on the right of the header.
+                // (Global A/B morph lives in its own full-width band, not here —
+                // morph crossfades the whole rig, not this one effect.)
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     let is_bypassed = self.bridge.is_bypassed(slot);
                     let (label, col) = if is_bypassed {
@@ -693,6 +670,66 @@ impl SonidoApp {
             if let Some((_, _, ref mut panel)) = self.cached_panel {
                 let bridge: &dyn ParamBridge = &*self.bridge;
                 panel.ui(ui, bridge, slot);
+            }
+        });
+    }
+
+    /// Render the global A/B morph band — a full-width performance strip.
+    ///
+    /// Morph is a whole-rig control: it crossfades *every* effect's parameters
+    /// between snapshots A and B (curve-aware per parameter). It therefore lives
+    /// in its own always-visible band rather than inside any single effect panel.
+    /// Click A/B to capture; right-click/double-click to recall; drag the bar to
+    /// sweep. Per-knob A/B ring markers show where each parameter sits.
+    fn render_morph_band(&mut self, ui: &mut egui::Ui) {
+        let theme = SonidoTheme::get(ui.ctx());
+        let has_a = self.morph_state.a.is_some();
+        let has_b = self.morph_state.b.is_some();
+        let ready = has_a && has_b;
+
+        ui.horizontal(|ui| {
+            ui.add_space(4.0);
+            ui.label(
+                egui::RichText::new("MORPH")
+                    .font(FontId::monospace(12.0))
+                    .color(theme.colors.amber)
+                    .strong(),
+            );
+            ui.add_space(10.0);
+
+            // Position readout (or a hint to capture both snapshots first).
+            let (readout, readout_color) = if ready {
+                (
+                    format!("A→B {:>3.0}%", self.morph_state.t * 100.0),
+                    theme.colors.text_primary,
+                )
+            } else {
+                ("capture A + B".to_owned(), theme.colors.text_secondary)
+            };
+            ui.label(
+                egui::RichText::new(readout)
+                    .font(FontId::monospace(11.0))
+                    .color(readout_color),
+            );
+            ui.add_space(10.0);
+
+            // The A/B crossfader fills the remaining width.
+            let resp = morph_bar(ui, &mut self.morph_state.t, has_a, has_b);
+            if resp.capture_a {
+                self.morph_state.capture_a(&*self.bridge);
+            }
+            if resp.capture_b {
+                self.morph_state.capture_b(&*self.bridge);
+            }
+            if resp.recall_a {
+                self.morph_state.recall_a(&*self.bridge);
+            }
+            if resp.recall_b {
+                self.morph_state.recall_b(&*self.bridge);
+            }
+            if resp.t_changed {
+                self.morph_state.active = true;
+                self.morph_state.apply(&*self.bridge);
             }
         });
     }
@@ -954,6 +991,16 @@ impl eframe::App for SonidoApp {
             self.render_status_bar(ui);
             ui.add_space(2.0);
         });
+
+        // Global A/B morph band — full width, just above the status bar. Graph
+        // mode only; in single-effect mode there is no rig to crossfade.
+        if !self.single_effect {
+            TopBottomPanel::bottom("morph").show(ctx, |ui| {
+                ui.add_space(4.0);
+                self.render_morph_band(ui);
+                ui.add_space(4.0);
+            });
+        }
 
         // Main content
         CentralPanel::default().show(ctx, |ui| {
