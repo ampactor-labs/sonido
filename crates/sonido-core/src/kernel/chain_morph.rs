@@ -19,6 +19,7 @@ use alloc::vec::Vec;
 
 use super::morph::{MorphCurve, MorphSpace};
 use crate::ParamDescriptor;
+use crate::graph::engine::GraphEngine;
 
 /// A/B morph state for one chain slot.
 struct SlotMorph {
@@ -147,6 +148,32 @@ impl ChainMorph {
             );
             for p in 0..slot.space.param_count() {
                 set_param(i, p, slot.space.interpolate_param(p, &pos));
+            }
+        }
+    }
+
+    /// Apply the morph at `t` directly to a [`GraphEngine`] (slot i → engine slot i).
+    ///
+    /// The convenience wrapper for the common case — a single `&mut engine`
+    /// borrow, avoiding the two-closure form's aliasing when both writes target
+    /// the same engine.
+    pub fn apply_to_engine(&self, t: f32, engine: &mut GraphEngine) {
+        let t = t.clamp(0.0, 1.0);
+        let pos = [t];
+        for (i, slot) in self.slots.iter().enumerate() {
+            if slot.locked {
+                continue;
+            }
+            engine.set_bypass_at(
+                i,
+                if t < 0.5 {
+                    slot.bypass_a
+                } else {
+                    slot.bypass_b
+                },
+            );
+            for p in 0..slot.space.param_count() {
+                engine.set_param_at(i, p, slot.space.interpolate_param(p, &pos));
             }
         }
     }

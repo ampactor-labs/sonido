@@ -34,10 +34,12 @@ use alloc::{string::String, vec::Vec};
 
 pub mod binary;
 pub mod build;
+pub mod runtime;
 pub mod validate;
 
 pub use binary::{PatchError, decode, encode};
 pub use build::{PatchBuildError, build_graph_from_patch};
+pub use runtime::PatchPlayer;
 // Re-export the shared runtime enums so consumers can name everything through
 // `sonido_patch::` without also depending on `sonido-core` directly.
 pub use sonido_core::{GlobalParam, MacroTarget, MorphCurve, MorphMode};
