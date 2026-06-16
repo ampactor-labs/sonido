@@ -135,7 +135,6 @@ pub fn bridged_knob(
     param: ParamIndex,
     label: &str,
 ) -> Response {
-    let theme = SonidoTheme::get(ui.ctx());
     let desc = bridge.param_descriptor(slot, param);
     let (min, max, default) = desc.map_or((0.0, 1.0, 0.5), |d| (d.min, d.max, d.default));
 
@@ -145,14 +144,11 @@ pub fn bridged_knob(
     let mut normalized = normalize(desc.as_ref(), plain_value, min, max);
     let norm_default = normalize(desc.as_ref(), default, min, max);
 
-    // Hide the knob's built-in value text — the LED display below shows it instead
+    // Value renders inside the ring (centered), label below — no separate row.
     let knob = Knob::new(&mut normalized, 0.0, 1.0, label)
         .default(norm_default)
-        .show_value(false);
-
-    // Build the formatted text for the LED display.
-    let unit = desc.as_ref().map_or(ParamUnit::None, |d| d.unit);
-    let formatted = format_plain_value(plain_value, unit);
+        .show_value(false)
+        .value_inside(true);
 
     // Format: denormalize back to plain value, then apply unit formatting
     let knob = if let Some(d) = desc {
@@ -199,9 +195,6 @@ pub fn bridged_knob(
     };
 
     let response = ui.add(knob);
-
-    // 7-segment LED value display below the knob
-    ui.add(LedDisplay::new(formatted).color(theme.colors.amber));
 
     // Denormalize back to plain value for the bridge
     let plain_out = denormalize(desc.as_ref(), normalized, min, max);

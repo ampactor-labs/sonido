@@ -27,6 +27,7 @@ pub struct Knob<'a> {
     diameter: f32,
     sensitivity: f32,
     show_value: bool,
+    value_inside: bool,
 }
 
 impl<'a> Knob<'a> {
@@ -42,6 +43,7 @@ impl<'a> Knob<'a> {
             diameter: 60.0,
             sensitivity: 0.004,
             show_value: true,
+            value_inside: false,
         }
     }
 
@@ -74,6 +76,13 @@ impl<'a> Knob<'a> {
     /// Use when an external display (e.g., LED) shows the value instead.
     pub fn show_value(mut self, show: bool) -> Self {
         self.show_value = show;
+        self
+    }
+
+    /// Render the formatted value *inside* the ring (centered) instead of
+    /// below it, and label below. Compact — no separate value row to clip.
+    pub fn value_inside(mut self, inside: bool) -> Self {
+        self.value_inside = inside;
         self
     }
 
@@ -117,8 +126,15 @@ impl<'a> Knob<'a> {
 
 impl Widget for Knob<'_> {
     fn ui(self, ui: &mut Ui) -> Response {
-        // Extra space: label only (20px) or label + value text (35px)
-        let extra = if self.show_value { 35.0 } else { 20.0 };
+        // Vertical room beyond the ring: value-inside reserves space for the
+        // label only; value-below reserves label + value; bare reserves label.
+        let extra = if self.value_inside {
+            18.0
+        } else if self.show_value {
+            35.0
+        } else {
+            20.0
+        };
         let size = vec2(self.diameter, self.diameter + extra);
         let (rect, mut response) = ui.allocate_exact_size(size, Sense::click_and_drag());
 
@@ -127,6 +143,11 @@ impl Widget for Knob<'_> {
 
         // Handle interaction
         let mut changed = false;
+
+        // Clicking or grabbing the knob focuses it so the keyboard can drive it.
+        if response.clicked() || response.drag_started() {
+            response.request_focus();
+        }
 
         // Double-click to reset
         if response.double_clicked() {
@@ -149,11 +170,43 @@ impl Widget for Knob<'_> {
             changed = true;
         }
 
+        // Keyboard: while focused, arrow keys nudge the value (1% per press,
+        // Shift = 0.2% fine). Keys are consumed so focus does not jump away.
+        if response.has_focus() {
+            let step = (self.max - self.min)
+                * if ui.input(|i| i.modifiers.shift) {
+                    0.002
+                } else {
+                    0.01
+                };
+            let up = ui.input_mut(|i| {
+                i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp)
+                    || i.consume_key(egui::Modifiers::SHIFT, egui::Key::ArrowUp)
+                    || i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowRight)
+                    || i.consume_key(egui::Modifiers::SHIFT, egui::Key::ArrowRight)
+            });
+            let down = ui.input_mut(|i| {
+                i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown)
+                    || i.consume_key(egui::Modifiers::SHIFT, egui::Key::ArrowDown)
+                    || i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowLeft)
+                    || i.consume_key(egui::Modifiers::SHIFT, egui::Key::ArrowLeft)
+            });
+            if up {
+                *self.value = (*self.value + step).clamp(self.min, self.max);
+                changed = true;
+            }
+            if down {
+                *self.value = (*self.value - step).clamp(self.min, self.max);
+                changed = true;
+            }
+        }
+
         // Draw knob
         if ui.is_rect_visible(rect) {
             let painter = ui.painter();
             let theme = SonidoTheme::get(ui.ctx());
             let hovered = response.hovered();
+            let focused = response.has_focus();
 
             // Hover multiplier — bloom doubles on pointer + value arc
             let hover_mult = if hovered {
@@ -184,7 +237,6 @@ impl Widget for Knob<'_> {
             );
 
             // Value arc (filled portion) — phosphor amber glow
-            // Hover: stroke widens for brighter bloom
             if normalized > 0.001 {
                 glow::glow_arc(
                     painter,
@@ -198,24 +250,65 @@ impl Widget for Knob<'_> {
                 );
             }
 
-            // Pointer line — from center to value position
-            // Hover: stroke widens for brighter bloom
-            let pointer_len = radius - 14.0;
-            let pointer_end = pos2(
-                center.x + value_angle.cos() * pointer_len,
-                center.y + value_angle.sin() * pointer_len,
-            );
-            glow::glow_line(
-                painter,
-                center,
-                pointer_end,
-                theme.colors.amber,
-                2.0 * hover_mult,
-                &theme,
-            );
+            if self.value_inside {
+                // Pointer as an outer-rim tick, leaving the center free for the
+                // value readout.
+                let p_inner = pos2(
+                    center.x + value_angle.cos() * (radius * 0.6),
+                    center.y + value_angle.sin() * (radius * 0.6),
+                );
+                let p_outer = pos2(
+                    center.x + value_angle.cos() * (radius - 2.0),
+                    center.y + value_angle.sin() * (radius - 2.0),
+                );
+                glow::glow_line(
+                    painter,
+                    p_inner,
+                    p_outer,
+                    theme.colors.amber,
+                    2.0 * hover_mult,
+                    &theme,
+                );
 
-            // Center dot
-            glow::glow_circle(painter, center, 2.0, theme.colors.amber, &theme);
+                // Value centered inside the ring.
+                let value_text = if let Some(ref formatter) = self.format_value {
+                    formatter(*self.value)
+                } else {
+                    format!("{:.2}", *self.value)
+                };
+                painter.text(
+                    center,
+                    egui::Align2::CENTER_CENTER,
+                    value_text,
+                    egui::FontId::monospace(9.0),
+                    theme.colors.amber,
+                );
+            } else {
+                // Pointer line from center + center dot.
+                let pointer_len = radius - 14.0;
+                let pointer_end = pos2(
+                    center.x + value_angle.cos() * pointer_len,
+                    center.y + value_angle.sin() * pointer_len,
+                );
+                glow::glow_line(
+                    painter,
+                    center,
+                    pointer_end,
+                    theme.colors.amber,
+                    2.0 * hover_mult,
+                    &theme,
+                );
+                glow::glow_circle(painter, center, 2.0, theme.colors.amber, &theme);
+            }
+
+            // Focus ring — thin cyan halo so the keyboard target is unmistakable.
+            if focused {
+                painter.circle_stroke(
+                    center,
+                    radius + 3.0,
+                    egui::Stroke::new(1.0, theme.colors.cyan),
+                );
+            }
 
             // Label — brightens to full cyan on hover
             let label_color = if hovered {
@@ -228,12 +321,12 @@ impl Widget for Knob<'_> {
                 label_pos,
                 egui::Align2::CENTER_TOP,
                 self.label,
-                egui::FontId::monospace(11.0),
+                egui::FontId::monospace(if self.value_inside { 10.0 } else { 11.0 }),
                 label_color,
             );
 
-            // Value text (hidden when an external LED display is used)
-            if self.show_value {
+            // Value below — only in the legacy value-below mode.
+            if self.show_value && !self.value_inside {
                 let value_text = if let Some(ref formatter) = self.format_value {
                     formatter(*self.value)
                 } else {

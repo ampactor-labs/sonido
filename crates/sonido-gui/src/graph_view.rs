@@ -107,6 +107,10 @@ pub struct GraphView {
     /// Per-effect-slot L/R peak levels (0.0--1.0), updated each frame from
     /// audio-thread metering data. Drives the inline L/R meter strips.
     pub slot_peaks: Vec<(f32, f32)>,
+    /// Target positions a re-flow is easing nodes toward. Non-empty while the
+    /// layout is animating; each frame nodes glide a fraction of the remaining
+    /// distance, so a topology edit settles smoothly instead of snapping.
+    arrange_targets: HashMap<NodeId, egui::Pos2>,
 }
 
 impl GraphView {
@@ -141,6 +145,7 @@ impl GraphView {
             topology_changed: false,
             slot_activity: Vec::new(),
             slot_peaks: Vec::new(),
+            arrange_targets: HashMap::new(),
         }
     }
 
@@ -250,6 +255,7 @@ impl GraphView {
         let mut rows_at: HashMap<usize, usize> = HashMap::new();
 
         let ids: Vec<NodeId> = self.snarl.node_ids().map(|(id, _)| id).collect();
+        self.arrange_targets.clear();
         for id in ids {
             // I/O nodes are anchored by `pin_io_nodes`, not laid out here.
             if matches!(self.snarl[id], SonidoNode::Input | SonidoNode::Output) {
@@ -262,9 +268,37 @@ impl GraphView {
                 base.y + *row as f32 * ROW_SPACING,
             );
             *row += 1;
+            // Record the target; `animate_arrange` eases toward it each frame.
+            self.arrange_targets.insert(id, pos);
+        }
+    }
+
+    /// Ease node positions a fraction of the way toward their re-flow targets,
+    /// snapping when within half a pixel. Keeps the layout tidy without the
+    /// jarring teleport of an instant rearrange.
+    fn animate_arrange(&mut self, ctx: &egui::Context) {
+        if self.arrange_targets.is_empty() {
+            return;
+        }
+        let mut settled: Vec<NodeId> = Vec::new();
+        for (&id, &target) in &self.arrange_targets {
             if let Some(info) = self.snarl.get_node_info_mut(id) {
-                info.pos = pos;
+                let delta = target - info.pos;
+                if delta.length() < 0.5 {
+                    info.pos = target;
+                    settled.push(id);
+                } else {
+                    info.pos += delta * 0.25;
+                }
+            } else {
+                settled.push(id); // node was removed — drop its target
             }
+        }
+        for id in settled {
+            self.arrange_targets.remove(&id);
+        }
+        if !self.arrange_targets.is_empty() {
+            ctx.request_repaint();
         }
     }
 
@@ -276,6 +310,7 @@ impl GraphView {
     pub fn show(&mut self, ui: &mut Ui) -> Option<usize> {
         self.topology_changed = false;
         self.pin_io_nodes();
+        self.animate_arrange(ui.ctx());
         let theme = SonidoTheme::get(ui.ctx());
         let mut click_handled = false;
         let mut needs_arrange = false;
@@ -615,6 +650,8 @@ impl GraphView {
         self.snarl = snarl;
         self.selected_node = None;
         self.topology_changed = true;
+        // Saved positions are authoritative — discard any in-flight re-flow.
+        self.arrange_targets.clear();
     }
 }
 
@@ -1021,7 +1058,7 @@ impl SnarlViewer<SonidoNode> for SonidoViewer<'_> {
                         if ui.button(desc.name).clicked() {
                             let descriptors = collect_descriptors(desc.id, 48000.0);
                             let smoothing = collect_smoothing(desc.id, 48000.0);
-                            snarl.insert_node(
+                            let new_id = snarl.insert_node(
                                 pos,
                                 SonidoNode::Effect {
                                     effect_id: desc.id,
@@ -1031,6 +1068,7 @@ impl SnarlViewer<SonidoNode> for SonidoViewer<'_> {
                                     smoothing,
                                 },
                             );
+                            append_before_output(snarl, new_id);
                             *self.topology_changed = true;
                             *self.needs_arrange = true;
                             ui.close_menu();
@@ -1052,7 +1090,7 @@ impl SnarlViewer<SonidoNode> for SonidoViewer<'_> {
                     {
                         let descriptors = collect_descriptors(desc.id, 48000.0);
                         let smoothing = collect_smoothing(desc.id, 48000.0);
-                        snarl.insert_node(
+                        let new_id = snarl.insert_node(
                             pos,
                             SonidoNode::Effect {
                                 effect_id: desc.id,
@@ -1062,6 +1100,7 @@ impl SnarlViewer<SonidoNode> for SonidoViewer<'_> {
                                 smoothing,
                             },
                         );
+                        append_before_output(snarl, new_id);
                         *self.topology_changed = true;
                         *self.needs_arrange = true;
                         // Clear filter for next open
@@ -1172,6 +1211,74 @@ impl SnarlViewer<SonidoNode> for SonidoViewer<'_> {
         *self.topology_changed = true;
         *self.needs_arrange = true;
     }
+}
+
+/// Splice a freshly added node into the chain just before the Output.
+///
+/// A newly added node would otherwise sit disconnected yet *look* wired (the
+/// auto-flow places it in the signal lane). Rerouting everything that feeds the
+/// Output through the new node makes the appearance honest: the node is now
+/// genuinely the last stage in the chain. If the Output was unconnected, wires
+/// Input → new → Output instead.
+fn append_before_output(snarl: &mut Snarl<SonidoNode>, new_id: NodeId) {
+    let mut output = None;
+    let mut input = None;
+    for (id, n) in snarl.node_ids() {
+        match n {
+            SonidoNode::Output => output = Some(id),
+            SonidoNode::Input => input = Some(id),
+            _ => {}
+        }
+    }
+    let Some(output) = output else { return };
+
+    let feeders: Vec<OutPinId> = snarl
+        .wires()
+        .filter(|(_, inp)| inp.node == output)
+        .map(|(out, _)| out)
+        .collect();
+
+    if feeders.is_empty() {
+        if let Some(input) = input {
+            snarl.connect(
+                OutPinId {
+                    node: input,
+                    output: 0,
+                },
+                InPinId {
+                    node: new_id,
+                    input: 0,
+                },
+            );
+        }
+    } else {
+        for src in feeders {
+            snarl.disconnect(
+                src,
+                InPinId {
+                    node: output,
+                    input: 0,
+                },
+            );
+            snarl.connect(
+                src,
+                InPinId {
+                    node: new_id,
+                    input: 0,
+                },
+            );
+        }
+    }
+    snarl.connect(
+        OutPinId {
+            node: new_id,
+            output: 0,
+        },
+        InPinId {
+            node: output,
+            input: 0,
+        },
+    );
 }
 
 /// Collect parameter descriptors for an effect by creating a temporary instance.

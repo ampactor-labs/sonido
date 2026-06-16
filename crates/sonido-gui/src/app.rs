@@ -662,20 +662,28 @@ impl SonidoApp {
                     }
                 }
 
-                // Bypass LED dot right-aligned (green = active, red = bypassed)
+                // Bypass — a clearly labeled, separated toggle (not a dot cramped
+                // against the morph A/B bar). Green ACTIVE / red BYPASSED.
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     let is_bypassed = self.bridge.is_bypassed(slot);
-                    let led_color = if is_bypassed {
-                        theme.colors.red
+                    let (label, col) = if is_bypassed {
+                        ("BYPASSED", theme.colors.red)
                     } else {
-                        theme.colors.green
+                        ("ACTIVE", theme.colors.green)
                     };
-                    let (led_rect, led_resp) =
-                        ui.allocate_exact_size(vec2(16.0, 16.0), egui::Sense::click());
-                    glow::glow_circle(ui.painter(), led_rect.center(), 5.0, led_color, &theme);
-                    if led_resp.clicked() {
+                    let btn = egui::Button::new(
+                        egui::RichText::new(label)
+                            .font(FontId::monospace(10.0))
+                            .color(col),
+                    )
+                    .stroke(Stroke::new(1.0, col))
+                    .fill(col.gamma_multiply(0.10))
+                    .min_size(vec2(76.0, 20.0));
+                    if ui.add(btn).clicked() {
                         self.bridge.set_bypassed(slot, !is_bypassed);
                     }
+                    // Breathing room between the bypass toggle and the morph bar.
+                    ui.add_space(16.0);
                 });
             });
 
