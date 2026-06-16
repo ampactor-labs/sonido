@@ -20,6 +20,7 @@ pub mod fader;
 pub mod glow;
 mod knob;
 pub mod led_display;
+mod macro_panel;
 mod meter;
 mod morph_bar;
 pub mod spectrum;
@@ -33,6 +34,7 @@ pub use bridged_knob::{
 pub use fader::Fader;
 pub use knob::Knob;
 pub use led_display::LedDisplay;
+pub use macro_panel::{MacroPanelResponse, MacroView, macro_panel};
 pub use meter::{GainReductionMeter, LevelMeter};
 pub use morph_bar::{MorphBarResponse, morph_bar};
 pub use spectrum::{SpectrumState, SpectrumWidget};
