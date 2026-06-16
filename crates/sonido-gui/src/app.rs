@@ -16,11 +16,12 @@ use egui::{
     Align, CentralPanel, Context, FontId, Frame, Layout, Margin, Rect, Stroke, TopBottomPanel,
     UiBuilder, pos2, vec2,
 };
+use sonido_core::{GlobalParam, MacroMap, MacroMapping, MacroTarget, MorphCurve};
 use sonido_gui_core::effects_ui;
 use sonido_gui_core::theme::SonidoTheme;
 use sonido_gui_core::widgets::glow;
-use sonido_gui_core::widgets::morph_bar;
-use sonido_gui_core::{ParamBridge, SlotIndex};
+use sonido_gui_core::widgets::{MacroAction, MacroView, macro_panel, morph_bar, take_macro_action};
+use sonido_gui_core::{ParamBridge, ParamIndex, SlotIndex};
 use sonido_registry::EffectRegistry;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -50,6 +51,16 @@ pub struct SonidoApp {
     graph_view: GraphView,
     morph_state: MorphState,
     file_player: FilePlayer,
+
+    /// Six performance macros (K1–K6) → effect params + globals. Authored via
+    /// the param-knob right-click menu and driven from the macro row; the GUI
+    /// owns the map and applies it through the bridge (the audio thread reads
+    /// the bridge as usual, so a macro move is just a batched param write).
+    macro_map: MacroMap<6>,
+    /// Per-macro display names (empty ⇒ rendered as "macro N").
+    macro_names: [String; 6],
+    /// Index of the macro whose mapping-editor popup is open, if any.
+    macro_editor: Option<usize>,
 
     /// Cached effect panel: (slot, effect_id, panel).
     /// Avoids reconstructing the panel widget every frame.
@@ -145,6 +156,9 @@ impl SonidoApp {
             graph_view: GraphView::new(),
             morph_state: MorphState::new(),
             file_player: FilePlayer::new(transport_tx),
+            macro_map: MacroMap::new(),
+            macro_names: std::array::from_fn(|_| String::new()),
+            macro_editor: None,
             cached_panel: None,
             sample_rate: initial_rate,
             buffer_size: initial_buffer,
@@ -734,6 +748,200 @@ impl SonidoApp {
         });
     }
 
+    /// Render the six-macro performance row (K1–K6).
+    ///
+    /// Turning a macro knob sweeps every parameter mapped to it at once; the
+    /// resolved values are written straight to the bridge, so the rig responds
+    /// immediately. Clicking a macro's name opens its mapping editor.
+    fn render_macro_row(&mut self, ui: &mut egui::Ui) {
+        // The widget needs `&mut f32` per macro; positions are canonical in the
+        // map, so copy out, let the knobs mutate, then write back the changed one.
+        let mut pos: [f32; 6] = std::array::from_fn(|i| self.macro_map.position(i));
+
+        let resp = {
+            let names = &self.macro_names;
+            let map = &self.macro_map;
+            let mut views: Vec<MacroView> = pos
+                .iter_mut()
+                .enumerate()
+                .map(|(i, p)| MacroView {
+                    name: names[i].as_str(),
+                    position: p,
+                    mapping_count: map.mapping_count_for(i),
+                })
+                .collect();
+            macro_panel(ui, &mut views)
+        };
+
+        if let Some(i) = resp.changed {
+            self.macro_map.set_position(i, pos[i]);
+            self.apply_macro(i);
+        }
+        if let Some(i) = resp.edit_requested {
+            self.macro_editor = Some(i);
+        }
+    }
+
+    /// Apply macro `index`'s mappings at its current position to the rig.
+    ///
+    /// Slot targets write to the bridge; global targets route through
+    /// [`apply_global`](Self::apply_global). Resolved writes are collected first
+    /// so the immutable borrow of `macro_map` ends before the mutable apply.
+    fn apply_macro(&mut self, index: usize) {
+        let mut writes: Vec<(MacroTarget, f32)> = Vec::new();
+        self.macro_map.apply(index, |t, v| writes.push((t, v)));
+        for (target, value) in writes {
+            match target {
+                MacroTarget::Slot { slot, param } => {
+                    self.bridge
+                        .set(SlotIndex(slot as usize), ParamIndex(param as usize), value);
+                }
+                MacroTarget::Global(g) => self.apply_global(g, value),
+            }
+        }
+    }
+
+    /// Write one global-target value (input gain, master volume, morph position).
+    fn apply_global(&mut self, g: GlobalParam, value: f32) {
+        match g {
+            GlobalParam::InputGain => self.audio_bridge.input_gain().set(value),
+            GlobalParam::MasterVolume => self.audio_bridge.master_volume().set(value),
+            GlobalParam::MorphPosition => {
+                self.morph_state.t = value.clamp(0.0, 1.0);
+                self.morph_state.active = true;
+                self.morph_state.apply(&*self.bridge);
+            }
+            // MorphSpeed (and any future global) — no GUI control yet; the morph
+            // band grows a speed knob in Workstream C.
+            _ => {}
+        }
+    }
+
+    /// Apply a macro-mapping action from a parameter knob's right-click menu.
+    ///
+    /// Binding is exclusive (a parameter drives at most one macro): any prior
+    /// binding for the target is cleared first. The range and curve come from the
+    /// parameter's own descriptor, so the macro sweeps its full range with the
+    /// right shape (log for frequency, snap for stepped). Binding does *not* snap
+    /// the parameter — it keeps its current value until the macro is next moved.
+    fn handle_macro_action(&mut self, action: MacroAction) {
+        match action {
+            MacroAction::Map {
+                slot,
+                param,
+                macro_index,
+            } => {
+                let target = MacroTarget::Slot {
+                    slot: slot as u8,
+                    param: param as u8,
+                };
+                self.macro_map.clear_target(target);
+                let (min, max, curve) = self
+                    .bridge
+                    .param_descriptor(SlotIndex(slot), ParamIndex(param))
+                    .map_or((0.0, 1.0, MorphCurve::Linear), |d| {
+                        (d.min, d.max, MorphCurve::from_descriptor(&d))
+                    });
+                self.macro_map.add_mapping(MacroMapping {
+                    macro_index,
+                    target,
+                    min,
+                    max,
+                    curve,
+                });
+            }
+            MacroAction::Clear { slot, param } => {
+                self.macro_map.clear_target(MacroTarget::Slot {
+                    slot: slot as u8,
+                    param: param as u8,
+                });
+            }
+        }
+    }
+
+    /// Human-readable label for a macro target ("Distortion · Drive").
+    fn describe_target(&self, target: MacroTarget) -> String {
+        match target {
+            MacroTarget::Slot { slot, param } => {
+                let s = SlotIndex(slot as usize);
+                let effect = self
+                    .registry
+                    .descriptor(self.bridge.effect_id(s))
+                    .map_or("?", |d| d.name);
+                let pname = self
+                    .bridge
+                    .param_descriptor(s, ParamIndex(param as usize))
+                    .map_or("?", |d| d.short_name);
+                format!("{effect} · {pname}")
+            }
+            MacroTarget::Global(g) => format!("{g:?}"),
+        }
+    }
+
+    /// Render the floating mapping editor for the open macro, if any.
+    ///
+    /// Lets the user rename the macro (its name maps to a physical pedal knob)
+    /// and review/remove the parameters it drives. Range/curve editing is
+    /// descriptor-derived for now; per-mapping min/max comes later.
+    fn render_macro_editor(&mut self, ctx: &Context) {
+        let Some(idx) = self.macro_editor else {
+            return;
+        };
+
+        // Pre-resolve target labels so the window closure doesn't borrow the
+        // bridge/registry while it mutates the map.
+        let entries: Vec<(MacroTarget, String)> = self
+            .macro_map
+            .mappings()
+            .iter()
+            .filter(|m| m.macro_index == idx)
+            .map(|m| (m.target, self.describe_target(m.target)))
+            .collect();
+
+        let mut open = true;
+        egui::Window::new(format!("Macro K{} mapping", idx + 1))
+            .collapsible(false)
+            .resizable(false)
+            .open(&mut open)
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label("Name:");
+                    ui.text_edit_singleline(&mut self.macro_names[idx]);
+                });
+                ui.separator();
+
+                if entries.is_empty() {
+                    ui.label(
+                        egui::RichText::new(
+                            "No parameters mapped.\nRight-click a knob → Map to Macro.",
+                        )
+                        .font(FontId::monospace(10.0)),
+                    );
+                } else {
+                    let mut to_clear: Option<MacroTarget> = None;
+                    for (target, label) in &entries {
+                        ui.horizontal(|ui| {
+                            if ui.small_button("✕").clicked() {
+                                to_clear = Some(*target);
+                            }
+                            ui.label(label);
+                        });
+                    }
+                    if let Some(t) = to_clear {
+                        self.macro_map.clear_target(t);
+                    }
+                    ui.separator();
+                    if ui.button("Clear all").clicked() {
+                        self.macro_map.clear_macro(idx);
+                    }
+                }
+            });
+
+        if !open {
+            self.macro_editor = None;
+        }
+    }
+
     /// Render the status bar.
     fn render_status_bar(&mut self, ui: &mut egui::Ui) {
         let theme = SonidoTheme::get(ui.ctx());
@@ -992,10 +1200,16 @@ impl eframe::App for SonidoApp {
             ui.add_space(2.0);
         });
 
-        // Global A/B morph band — full width, just above the status bar. Graph
-        // mode only; in single-effect mode there is no rig to crossfade.
+        // Performance band — full width, just above the status bar. The six
+        // macros (K1–K6) and the global A/B morph form one cluster: the controls
+        // that map to the pedal's knobs and footswitch. Graph mode only; in
+        // single-effect mode there is no rig to perform.
         if !self.single_effect {
-            TopBottomPanel::bottom("morph").show(ctx, |ui| {
+            TopBottomPanel::bottom("performance").show(ctx, |ui| {
+                ui.add_space(4.0);
+                self.render_macro_row(ui);
+                ui.add_space(6.0);
+                ui.separator();
                 ui.add_space(4.0);
                 self.render_morph_band(ui);
                 ui.add_space(4.0);
@@ -1126,6 +1340,16 @@ impl eframe::App for SonidoApp {
                 ),
             ));
         });
+
+        // Drain a pending "map param → macro" action raised by a knob's
+        // right-click menu during this frame's panel render, then float the
+        // macro mapping editor if one is open.
+        if !self.single_effect {
+            if let Some(action) = take_macro_action(ctx) {
+                self.handle_macro_action(action);
+            }
+            self.render_macro_editor(ctx);
+        }
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {

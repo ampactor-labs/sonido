@@ -11,7 +11,7 @@
 
 use crate::effects_ui::EffectPanel;
 use crate::theme::SonidoTheme;
-use crate::widgets::{bridged_combo, bridged_knob};
+use crate::widgets::{bridged_combo, bridged_knob, param_macro_menu};
 use crate::{ParamBridge, ParamIndex, SlotIndex};
 use egui::Ui;
 use sonido_core::ParamFlags;
@@ -133,16 +133,19 @@ impl GenericPanel {
 
                         let id_salt = format!("{}_{}", self.effect_id, i);
                         if let Some(ref d) = desc {
-                            if let Some(labels) = d.step_labels {
-                                bridged_combo(ui, bridge, slot, ParamIndex(i), &id_salt, labels);
+                            let resp = if let Some(labels) = d.step_labels {
+                                bridged_combo(ui, bridge, slot, ParamIndex(i), &id_salt, labels)
                             } else {
                                 let count = (d.max - d.min).round() as usize + 1;
                                 let generated: Vec<String> =
                                     (0..count).map(|n| n.to_string()).collect();
                                 let refs: Vec<&str> =
                                     generated.iter().map(String::as_str).collect();
-                                bridged_combo(ui, bridge, slot, ParamIndex(i), &id_salt, &refs);
-                            }
+                                bridged_combo(ui, bridge, slot, ParamIndex(i), &id_salt, &refs)
+                            };
+                            // Right-click a stepped param → map it to a macro
+                            // (Snap curve, chosen from the descriptor at bind time).
+                            param_macro_menu(&resp, slot, ParamIndex(i));
                         }
                         ui.add_space(8.0);
                     }
@@ -161,7 +164,9 @@ impl GenericPanel {
                             .map_or("", |d| d.short_name);
                         ui.vertical(|ui| {
                             ui.set_width(KNOB_CELL_WIDTH);
-                            bridged_knob(ui, bridge, slot, ParamIndex(i), label);
+                            let resp = bridged_knob(ui, bridge, slot, ParamIndex(i), label);
+                            // Right-click a knob → map it to a performance macro.
+                            param_macro_menu(&resp, slot, ParamIndex(i));
                         });
                     }
                 });

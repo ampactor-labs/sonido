@@ -175,6 +175,15 @@ impl<const N: usize> MacroMap<N> {
         self.mappings.retain(|m| m.macro_index != macro_index);
     }
 
+    /// Remove every mapping that writes to `target`, across all macros.
+    ///
+    /// Keeps a single parameter bound to at most one macro: re-binding a
+    /// parameter first clears any prior binding so two macros never race to
+    /// last-writer-wins over the same target.
+    pub fn clear_target(&mut self, target: MacroTarget) {
+        self.mappings.retain(|m| m.target != target);
+    }
+
     /// Remove all mappings.
     pub fn clear_all(&mut self) {
         self.mappings.clear();
@@ -349,6 +358,20 @@ mod tests {
         map.clear_macro(0);
         assert_eq!(map.mapping_count_for(0), 0);
         assert_eq!(map.mapping_count(), 1);
+    }
+
+    #[test]
+    fn clear_target_removes_bindings_across_macros() {
+        let mut map: MacroMap<6> = MacroMap::new();
+        map.add_mapping(MacroMapping::linear(0, slot(1, 2), 0.0, 1.0));
+        map.add_mapping(MacroMapping::linear(3, slot(1, 2), 0.0, 1.0)); // same target, other macro
+        map.add_mapping(MacroMapping::linear(0, slot(0, 0), 0.0, 1.0));
+        assert_eq!(map.mapping_count(), 3);
+
+        map.clear_target(slot(1, 2));
+
+        assert_eq!(map.mapping_count(), 1);
+        assert!(map.mappings().iter().all(|m| m.target == slot(0, 0)));
     }
 
     #[test]
