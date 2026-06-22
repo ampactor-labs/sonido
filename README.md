@@ -300,20 +300,22 @@ graph TD
 | `sonido-config` | Preset and chain configuration management | No |
 | `sonido-io` | WAV I/O, real-time audio streaming via cpal | No |
 | `sonido-gui-core` | Shared GUI widgets, theme, ParamBridge trait | No |
-| `sonido-gui` | egui-based real-time effects GUI with preset management | No |
+| `sonido-gui` | egui node-graph editor: macros, A/B morph, session save/load, CLAP/pedal export | No |
 | `sonido-cli` | Command-line processor and analyzer | No |
 | `sonido-plugin` | CLAP plugin adapter with embedded GUI | No |
 
 ## CLAP Plugins
 
-Sonido builds 35 CLAP audio plugins — one per effect — each with an embedded egui GUI. Compatible with Bitwig, Reaper, Ardour, and any CLAP-compatible DAW.
+Sonido builds **19 single-effect CLAP plugins** plus a **graph-player** plugin that hosts any rig exported from the GUI — each with an embedded egui GUI. Compatible with Bitwig, Reaper, Ardour, and any CLAP-compatible DAW. **VST3/AU** are produced from the same CLAP source via [`clap-wrapper`](https://github.com/free-audio/clap-wrapper) (external build step).
 
 ```bash
-# Build and install all plugins
+# Build and install all plugins to ~/.clap/
 make plugins
 ```
 
-Plugins: `sonido-preamp`, `sonido-distortion`, `sonido-compressor`, `sonido-gate`, `sonido-eq`, `sonido-wah`, `sonido-chorus`, `sonido-flanger`, `sonido-phaser`, `sonido-tremolo`, `sonido-delay`, `sonido-filter`, `sonido-vibrato`, `sonido-tape`, `sonido-reverb`, `sonido-limiter`, `sonido-bitcrusher`, `sonido-ringmod`, `sonido-stage`, `sonido-looper`, `sonido-amp`, `sonido-cabinet`, `sonido-deesser`, `sonido-drone`, `sonido-glitch`, `sonido-multiband-comp`, `sonido-pitch-shift`, `sonido-plate-reverb`, `sonido-shelving-eq`, `sonido-spring-reverb`, `sonido-stereo-widener`, `sonido-texture`, `sonido-time-stretch`, `sonido-transient-shaper`, `sonido-tuner`
+Single-effect plugins: `sonido-preamp`, `sonido-distortion`, `sonido-compressor`, `sonido-gate`, `sonido-eq`, `sonido-wah`, `sonido-chorus`, `sonido-flanger`, `sonido-phaser`, `sonido-tremolo`, `sonido-delay`, `sonido-filter`, `sonido-vibrato`, `sonido-tape`, `sonido-reverb`, `sonido-limiter`, `sonido-bitcrusher`, `sonido-ringmod`, `sonido-stage`.
+
+Graph plugin: `sonido-graph-player` — loads `.sonidopatch.json` rigs authored and exported from the GUI (**Export ▸ Export as CLAP patch**), so a whole multi-effect graph runs as one plugin.
 
 ## Synthesis Engine
 
@@ -370,7 +372,17 @@ sonido devices
 cargo run -p sonido-gui --release
 ```
 
-The GUI provides drag-and-drop effect chain building, real-time input/output metering, per-effect knob controls with parameter-scale-aware mapping, preset save/load, and a dark theme optimized for studio use. Also builds to `wasm32-unknown-unknown` via Trunk for browser-based demos.
+A node-graph editor for building DAG effect rigs, with:
+
+- **Visual routing** — right-click to add nodes from a searchable palette; new nodes splice into the nearest wire; the layout auto-arranges left→right by signal-flow depth.
+- **Per-effect controls** — parameter-scale-aware knobs (log for frequency, snap for stepped) with real-time input/output metering and per-node activity.
+- **Six performance macros (K1–K6)** — right-click any knob to map it to a macro; one macro sweeps every parameter it drives, with per-mapping range/curve and invert.
+- **A/B morph** — capture two snapshots of the whole rig and crossfade between them (curve-aware per parameter); lock individual effects out of the morph.
+- **Session save/load** — the full editor state (topology, params, A/B snapshots, macros, morph) round-trips through a versioned JSON session.
+- **Undo/redo** — `Ctrl+Z` / `Ctrl+Shift+Z` for structural edits.
+- **Export** — project the rig to a canonical patch and export it as a CLAP plugin preset, a portable JSON patch, a Daisy pedal `.bin` sector, or flash it straight to the pedal over DFU (pedal targets are validated against the device's effect/CPU/SDRAM budget first).
+
+Built on a lock-free atomic parameter bridge (wait-free audio-thread reads) and a dark CRT-phosphor theme. Also builds to `wasm32-unknown-unknown` via Trunk for browser-based demos.
 
 ## Performance
 

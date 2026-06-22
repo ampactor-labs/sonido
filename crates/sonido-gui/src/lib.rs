@@ -14,7 +14,6 @@ pub mod export;
 pub mod file_player;
 pub mod graph_view;
 pub mod morph_state;
-pub mod preset_manager;
 pub mod session;
 pub mod signal_generator;
 pub mod theme;
@@ -22,5 +21,4 @@ pub mod widgets;
 
 pub use app::SonidoApp;
 pub use audio_bridge::AtomicParam;
-pub use sonido_config::Preset;
 pub use theme::{SonidoTheme, Theme};

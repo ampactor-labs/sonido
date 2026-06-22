@@ -510,13 +510,17 @@ impl GraphView {
 
     /// Capture the current graph state as a [`Session`](crate::session::Session).
     ///
-    /// Walks all nodes and wires in the Snarl graph, reads parameter values
-    /// from the bridge, and bundles everything into a serializable session.
+    /// Walks all nodes and wires in the Snarl graph and bundles everything into
+    /// a serializable session. Each effect's A parameters come from morph
+    /// snapshot A (or the live bridge when no snapshot is captured) and its B
+    /// parameters from morph snapshot B; the macro layer and morph
+    /// behaviour/position ride along via [`PerformanceCapture`].
     pub fn capture_session(
         &self,
         bridge: &dyn sonido_gui_core::ParamBridge,
         input_gain: f32,
         master_volume: f32,
+        perf: crate::session::PerformanceCapture<'_>,
     ) -> crate::session::Session {
         use crate::session::{EffectState, Session, SessionNodeEntry};
         use sonido_gui_core::{ParamIndex, SlotIndex};
@@ -553,17 +557,28 @@ impl GraphView {
             if let crate::session::SessionNode::Effect { ref effect_id } = entry.node {
                 let slot = SlotIndex(effect_slot);
                 let param_count = bridge.param_count(slot);
-                let param_values: Vec<f32> = (0..param_count)
-                    .map(|i| bridge.get(slot, ParamIndex(i)))
-                    .collect();
+                // A snapshot: morph snapshot A if captured, else the live bridge.
+                let params_a: Vec<f32> = perf
+                    .morph_a
+                    .and_then(|s| s.slots.get(effect_slot))
+                    .map(|s| s.values.clone())
+                    .unwrap_or_else(|| {
+                        (0..param_count)
+                            .map(|i| bridge.get(slot, ParamIndex(i)))
+                            .collect()
+                    });
+                // B snapshot: morph snapshot B if captured, else empty (mirrors A).
+                let params_b: Vec<f32> = perf
+                    .morph_b
+                    .and_then(|s| s.slots.get(effect_slot))
+                    .map(|s| s.values.clone())
+                    .unwrap_or_default();
                 params.insert(
                     idx,
                     EffectState {
                         effect_id: effect_id.clone(),
-                        params: param_values,
-                        // B snapshot stays empty here (mirrors A); the A/B morph
-                        // panel (Workstream C) populates it when the user captures B.
-                        params_b: Vec::new(),
+                        params: params_a,
+                        params_b,
                         bypassed: bridge.is_bypassed(slot),
                     },
                 );
@@ -578,10 +593,10 @@ impl GraphView {
             params,
             input_gain,
             master_volume,
-            // Macro and morph state are authored in their own panels (Workstreams
-            // B/C); a freshly captured session starts with neither configured.
-            macros: core::array::from_fn(|_| sonido_patch::MacroDef::default()),
-            morph: sonido_patch::MorphConfig::default(),
+            macros: perf.macros,
+            macro_positions: perf.macro_positions,
+            morph: perf.morph,
+            morph_position: perf.morph_position,
         }
     }
 

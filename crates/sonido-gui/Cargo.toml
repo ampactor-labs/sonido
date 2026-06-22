@@ -20,7 +20,6 @@ egui_extras = { workspace = true }
 cpal.workspace = true
 sonido-core = { workspace = true, features = ["std", "tracing"] }
 sonido-effects = { workspace = true, features = ["std"] }
-sonido-config = { workspace = true, features = ["std"] }
 sonido-gui-core = { workspace = true }
 sonido-registry = { workspace = true, features = ["std"] }
 sonido-graph-dsl = { workspace = true }

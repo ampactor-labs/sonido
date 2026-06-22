@@ -91,6 +91,19 @@ pub struct SonidoApp {
     input_clip_latched: bool,
     /// Latched clip indicator for output meter (click to reset).
     output_clip_latched: bool,
+
+    /// Last export/flash result shown in the header: `Ok` = success (green),
+    /// `Err` = failure (red). Cleared/replaced on the next export.
+    #[cfg(not(target_arch = "wasm32"))]
+    export_msg: Option<Result<String, String>>,
+
+    /// Full-editor undo/redo history (snapshots taken before each structural edit).
+    undo_stack: Vec<crate::session::Session>,
+    /// Redo snapshots (pushed when undoing, cleared on a fresh edit).
+    redo_stack: Vec<crate::session::Session>,
+    /// Snapshot taken at the start of any frame with pointer activity, promoted
+    /// to the undo stack if that frame produced a structural edit.
+    undo_pending: Option<crate::session::Session>,
 }
 
 impl SonidoApp {
@@ -170,6 +183,11 @@ impl SonidoApp {
             compile_success_frames: 0,
             input_clip_latched: false,
             output_clip_latched: false,
+            #[cfg(not(target_arch = "wasm32"))]
+            export_msg: None,
+            undo_stack: Vec::new(),
+            redo_stack: Vec::new(),
+            undo_pending: None,
         };
 
         // Apply theme
@@ -434,6 +452,9 @@ impl SonidoApp {
                 {
                     self.load_session();
                 }
+
+                // Export the rig as a CLAP patch / pedal binary / DFU flash.
+                self.render_export_menu(ui);
             }
 
             ui.separator();
@@ -472,6 +493,20 @@ impl SonidoApp {
                         egui::RichText::new(err)
                             .font(FontId::monospace(10.0))
                             .color(theme.colors.red),
+                    );
+                }
+
+                // Last export/flash result (green on success, red on failure).
+                #[cfg(not(target_arch = "wasm32"))]
+                if let Some(ref result) = self.export_msg {
+                    let (msg, col) = match result {
+                        Ok(m) => (m, theme.colors.green),
+                        Err(m) => (m, theme.colors.red),
+                    };
+                    ui.label(
+                        egui::RichText::new(msg)
+                            .font(FontId::monospace(10.0))
+                            .color(col),
                     );
                 }
 
@@ -590,7 +625,8 @@ impl SonidoApp {
             ui.add_space(8.0);
             ui.label(
                 egui::RichText::new(
-                    "Right-click to add nodes \u{00b7} Click a node to edit params \u{00b7} Ctrl+Scroll to zoom",
+                    "Right-click canvas: add nodes \u{00b7} Click a node: edit params \u{00b7} \
+                     Right-click a knob: map to a macro \u{00b7} Ctrl+Z: undo \u{00b7} Ctrl+Scroll: zoom",
                 )
                 .font(FontId::monospace(10.0))
                 .color(theme.colors.text_secondary)
@@ -675,6 +711,38 @@ impl SonidoApp {
                     }
                     // Breathing room between the bypass toggle and the morph bar.
                     ui.add_space(16.0);
+
+                    // Morph-lock toggle (left of bypass): hold this effect fixed
+                    // while the A/B morph sweeps the rest of the rig. Only shown
+                    // once both morph snapshots exist, since locking is otherwise
+                    // a no-op.
+                    if self.morph_state.is_ready() {
+                        if self.morph_state.locked_slots.len() <= slot.0 {
+                            self.morph_state.locked_slots.resize(slot.0 + 1, false);
+                        }
+                        let locked = self.morph_state.locked_slots[slot.0];
+                        let (label, col) = if locked {
+                            ("LOCKED", theme.colors.amber)
+                        } else {
+                            ("LOCK", theme.colors.dim)
+                        };
+                        let lock_btn = egui::Button::new(
+                            egui::RichText::new(label)
+                                .font(FontId::monospace(10.0))
+                                .color(col),
+                        )
+                        .stroke(Stroke::new(1.0, col))
+                        .fill(col.gamma_multiply(0.10))
+                        .min_size(vec2(64.0, 20.0));
+                        if ui
+                            .add(lock_btn)
+                            .on_hover_text("Exclude this effect from the A/B morph")
+                            .clicked()
+                        {
+                            self.morph_state.locked_slots[slot.0] = !locked;
+                        }
+                        ui.add_space(8.0);
+                    }
                 });
             });
 
@@ -880,23 +948,29 @@ impl SonidoApp {
 
     /// Render the floating mapping editor for the open macro, if any.
     ///
-    /// Lets the user rename the macro (its name maps to a physical pedal knob)
-    /// and review/remove the parameters it drives. Range/curve editing is
-    /// descriptor-derived for now; per-mapping min/max comes later.
+    /// Lets the user rename the macro (its name maps to a physical pedal knob),
+    /// review/remove the parameters it drives, and set each mapping's `[min,
+    /// max]` range — drag the ends or hit ⇄ to invert (`max < min`, which the
+    /// engine clamps). Range edits re-apply the macro at its current position so
+    /// the change is audible immediately.
     fn render_macro_editor(&mut self, ctx: &Context) {
         let Some(idx) = self.macro_editor else {
             return;
         };
 
-        // Pre-resolve target labels so the window closure doesn't borrow the
-        // bridge/registry while it mutates the map.
-        let entries: Vec<(MacroTarget, String)> = self
+        // Pre-resolve each mapping (Copy) + its label so the window closure can
+        // edit ranges in place without borrowing the bridge/registry.
+        let mut rows: Vec<(MacroMapping, String)> = self
             .macro_map
             .mappings()
             .iter()
             .filter(|m| m.macro_index == idx)
-            .map(|m| (m.target, self.describe_target(m.target)))
+            .map(|m| (*m, self.describe_target(m.target)))
             .collect();
+
+        let mut to_clear: Option<MacroTarget> = None;
+        let mut range_update: Option<(MacroTarget, f32, f32)> = None;
+        let mut clear_all = false;
 
         let mut open = true;
         egui::Window::new(format!("Macro K{} mapping", idx + 1))
@@ -910,7 +984,7 @@ impl SonidoApp {
                 });
                 ui.separator();
 
-                if entries.is_empty() {
+                if rows.is_empty() {
                     ui.label(
                         egui::RichText::new(
                             "No parameters mapped.\nRight-click a knob → Map to Macro.",
@@ -918,24 +992,65 @@ impl SonidoApp {
                         .font(FontId::monospace(10.0)),
                     );
                 } else {
-                    let mut to_clear: Option<MacroTarget> = None;
-                    for (target, label) in &entries {
+                    for (mapping, label) in &mut rows {
+                        let target = mapping.target;
                         ui.horizontal(|ui| {
                             if ui.small_button("✕").clicked() {
-                                to_clear = Some(*target);
+                                to_clear = Some(target);
                             }
-                            ui.label(label);
+                            ui.label(label.as_str());
                         });
-                    }
-                    if let Some(t) = to_clear {
-                        self.macro_map.clear_target(t);
+                        // Drag the macro's 0% and 100% values; ⇄ swaps them to
+                        // invert the sweep. Speed scales with the span so wide
+                        // (Hz) and narrow (dB) ranges both drag sensibly.
+                        let span = (mapping.max - mapping.min).abs().max(1.0);
+                        let speed = (span * 0.005).max(0.001);
+                        let mut changed = false;
+                        ui.horizontal(|ui| {
+                            ui.add_space(24.0);
+                            ui.label(
+                                egui::RichText::new("0%")
+                                    .font(FontId::monospace(9.0))
+                                    .weak(),
+                            );
+                            changed |= ui
+                                .add(egui::DragValue::new(&mut mapping.min).speed(speed))
+                                .changed();
+                            ui.label(
+                                egui::RichText::new("100%")
+                                    .font(FontId::monospace(9.0))
+                                    .weak(),
+                            );
+                            changed |= ui
+                                .add(egui::DragValue::new(&mut mapping.max).speed(speed))
+                                .changed();
+                            if ui.small_button("⇄").on_hover_text("Invert").clicked() {
+                                std::mem::swap(&mut mapping.min, &mut mapping.max);
+                                changed = true;
+                            }
+                        });
+                        if changed {
+                            range_update = Some((target, mapping.min, mapping.max));
+                        }
                     }
                     ui.separator();
                     if ui.button("Clear all").clicked() {
-                        self.macro_map.clear_macro(idx);
+                        clear_all = true;
                     }
                 }
             });
+
+        // Apply edits after the closure so `self` is free of the window borrow.
+        if let Some(t) = to_clear {
+            self.macro_map.clear_target(t);
+        }
+        if clear_all {
+            self.macro_map.clear_macro(idx);
+        }
+        if let Some((target, min, max)) = range_update {
+            self.macro_map.set_target_range(target, min, max);
+            self.apply_macro(idx);
+        }
 
         if !open {
             self.macro_editor = None;
@@ -1019,6 +1134,232 @@ impl SonidoApp {
         });
     }
 
+    /// Snapshot the macro + morph performance layer for a session capture.
+    ///
+    /// Bundles the six macros (defs + live knob positions), the morph
+    /// behaviour/locks and crossfade position, and the A/B snapshots whose
+    /// per-slot values become each effect's parameter sets.
+    fn performance_capture(&self) -> crate::session::PerformanceCapture<'_> {
+        let mut morph = sonido_patch::MorphConfig::default();
+        for (i, &locked) in self.morph_state.locked_slots.iter().enumerate() {
+            morph.set_locked(i, locked);
+        }
+        crate::session::PerformanceCapture {
+            macros: crate::session::macro_map_to_defs(&self.macro_map, &self.macro_names),
+            macro_positions: std::array::from_fn(|i| self.macro_map.position(i)),
+            morph,
+            morph_position: self.morph_state.t,
+            morph_a: self.morph_state.a.as_ref(),
+            morph_b: self.morph_state.b.as_ref(),
+        }
+    }
+
+    /// Capture the complete editor state (graph + params + performance layer)
+    /// as a [`Session`](crate::session::Session) — the unit of undo and export.
+    fn snapshot(&self) -> crate::session::Session {
+        self.graph_view.capture_session(
+            &*self.bridge,
+            self.audio_bridge.input_gain().get(),
+            self.audio_bridge.master_volume().get(),
+            self.performance_capture(),
+        )
+    }
+
+    /// Restore the full editor from a session: rebuild topology, recompile,
+    /// and reapply gains, per-effect params/bypass, and the macro/morph layer.
+    ///
+    /// Shared by session load and undo/redo so all three paths restore identically.
+    fn apply_session(&mut self, session: &crate::session::Session) {
+        self.graph_view.restore_session(session, &self.registry);
+        self.compile_and_apply();
+        self.audio_bridge.input_gain().set(session.input_gain);
+        self.audio_bridge.master_volume().set(session.master_volume);
+        // Restore per-effect A params + bypass, matching node index → chain slot.
+        for (node_idx, state) in &session.params {
+            let mut slot = 0usize;
+            for (i, entry) in session.nodes.iter().enumerate() {
+                if matches!(entry.node, crate::session::SessionNode::Effect { .. }) {
+                    if i == *node_idx {
+                        for (p, &val) in state.params.iter().enumerate() {
+                            self.bridge
+                                .set(SlotIndex(slot), sonido_gui_core::ParamIndex(p), val);
+                        }
+                        self.bridge.set_bypassed(SlotIndex(slot), state.bypassed);
+                        break;
+                    }
+                    slot += 1;
+                }
+            }
+        }
+        self.restore_performance(session);
+    }
+
+    /// Undo the last structural edit, returning `true` if anything was undone.
+    fn undo(&mut self) -> bool {
+        if let Some(prev) = self.undo_stack.pop() {
+            self.redo_stack.push(self.snapshot());
+            self.apply_session(&prev);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Redo the last undone edit, returning `true` if anything was redone.
+    fn redo(&mut self) -> bool {
+        if let Some(next) = self.redo_stack.pop() {
+            self.undo_stack.push(self.snapshot());
+            self.apply_session(&next);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Build the canonical [`Patch`](sonido_patch::Patch) from the current rig,
+    /// for export to a CLAP plugin, a `.bin` sector, or the pedal.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn current_patch(&self, name: &str) -> sonido_patch::Patch {
+        self.snapshot().to_patch(name)
+    }
+
+    /// Record an export/flash result for the header status line.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn set_export_msg(&mut self, msg: String, ok: bool) {
+        if ok {
+            tracing::info!(message = %msg, "export");
+        } else {
+            tracing::error!(message = %msg, "export");
+        }
+        self.export_msg = Some(if ok { Ok(msg) } else { Err(msg) });
+    }
+
+    /// Render the Export menu: project the rig to a [`Patch`] and offer the four
+    /// destinations — CLAP sidecar, portable JSON, pedal `.bin` sector, and DFU
+    /// flash. Pedal targets validate against the device's effect/CPU/SDRAM
+    /// budget first and are disabled (with the failing findings shown) when the
+    /// rig won't fit.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn render_export_menu(&mut self, ui: &mut egui::Ui) {
+        use sonido_patch::validate::Severity;
+        let theme = SonidoTheme::get(ui.ctx());
+
+        ui.menu_button(
+            egui::RichText::new("Export")
+                .font(FontId::monospace(12.0))
+                .color(theme.colors.text_primary),
+            |ui| {
+                let patch = self.current_patch("Sonido Rig");
+                let findings = crate::export::validate_patch_for_pedal(&patch);
+                let pedal_ok = crate::export::can_export_to_pedal(&patch);
+
+                // ── Plugin / portable destinations (always available) ──
+                if ui
+                    .button("Export as CLAP patch")
+                    .on_hover_text("Write to the graph-player plugin's patch folder")
+                    .clicked()
+                {
+                    match crate::export::export_as_clap(&patch) {
+                        Ok(p) => self
+                            .set_export_msg(format!("Exported CLAP patch → {}", p.display()), true),
+                        Err(e) => self.set_export_msg(format!("CLAP export failed: {e}"), false),
+                    }
+                    ui.close_menu();
+                }
+                if ui.button("Save patch JSON…").clicked() {
+                    if let Some(path) = rfd::FileDialog::new()
+                        .set_title("Save Patch JSON")
+                        .add_filter("Sonido Patch", &["json"])
+                        .save_file()
+                    {
+                        let result = crate::export::patch_to_json(&patch)
+                            .map_err(|e| e.to_string())
+                            .and_then(|j| std::fs::write(&path, j).map_err(|e| e.to_string()));
+                        match result {
+                            Ok(()) => self
+                                .set_export_msg(format!("Saved patch JSON → {}", path.display()), true),
+                            Err(e) => self.set_export_msg(format!("JSON export failed: {e}"), false),
+                        }
+                    }
+                    ui.close_menu();
+                }
+
+                // ── Pedal (Daisy) destinations — gated on validation ──
+                ui.separator();
+                ui.label(
+                    egui::RichText::new("Pedal (Daisy)")
+                        .font(FontId::monospace(9.0))
+                        .color(theme.colors.text_secondary),
+                );
+                if pedal_ok {
+                    ui.label(
+                        egui::RichText::new("✓ fits pedal budget")
+                            .font(FontId::monospace(10.0))
+                            .color(theme.colors.green),
+                    );
+                } else {
+                    ui.label(
+                        egui::RichText::new("✗ exceeds pedal limits")
+                            .font(FontId::monospace(10.0))
+                            .color(theme.colors.red),
+                    );
+                }
+                for f in &findings {
+                    let col = match f.severity {
+                        Severity::Error => theme.colors.red,
+                        Severity::Warning => theme.colors.yellow,
+                    };
+                    ui.label(
+                        egui::RichText::new(format!("· {}", f.message))
+                            .font(FontId::monospace(9.0))
+                            .color(col),
+                    );
+                }
+
+                if ui
+                    .add_enabled(pedal_ok, egui::Button::new("Save pedal binary (.bin)…"))
+                    .clicked()
+                {
+                    if let Some(path) = rfd::FileDialog::new()
+                        .set_title("Save Pedal Binary")
+                        .add_filter("Pedal Sector", &["bin"])
+                        .save_file()
+                    {
+                        let result = crate::export::encode_patch_sector(&patch)
+                            .map_err(|e| e.to_string())
+                            .and_then(|buf| std::fs::write(&path, buf).map_err(|e| e.to_string()));
+                        match result {
+                            Ok(()) => self.set_export_msg(
+                                format!("Saved pedal binary → {}", path.display()),
+                                true,
+                            ),
+                            Err(e) => self.set_export_msg(format!("Binary export failed: {e}"), false),
+                        }
+                    }
+                    ui.close_menu();
+                }
+                if ui
+                    .add_enabled(pedal_ok, egui::Button::new("Flash to pedal (DFU)"))
+                    .on_hover_text(
+                        "Put the pedal in bootloader (hold both footswitches ~1.5 s), then flash slot 0",
+                    )
+                    .clicked()
+                {
+                    let result = crate::export::encode_patch_sector(&patch)
+                        .map_err(|e| e.to_string())
+                        .and_then(|buf| crate::dfu::flash_patch(0, &buf).map_err(|e| e.to_string()));
+                    match result {
+                        Ok(()) => {
+                            self.set_export_msg("Flashed patch to pedal slot 0".to_owned(), true)
+                        }
+                        Err(e) => self.set_export_msg(format!("Flash failed: {e}"), false),
+                    }
+                    ui.close_menu();
+                }
+            },
+        );
+    }
+
     /// Save the current session to a JSON file via file dialog.
     #[cfg(not(target_arch = "wasm32"))]
     fn save_session(&self) {
@@ -1031,6 +1372,7 @@ impl SonidoApp {
                 &*self.bridge,
                 self.audio_bridge.input_gain().get(),
                 self.audio_bridge.master_volume().get(),
+                self.performance_capture(),
             );
             if let Err(e) = session.save(&path) {
                 tracing::error!(error = %e, "failed to save session");
@@ -1048,39 +1390,80 @@ impl SonidoApp {
         {
             match crate::session::Session::load(&path) {
                 Ok(session) => {
-                    self.graph_view.restore_session(&session, &self.registry);
-                    // Compile the restored graph and send to audio thread
-                    self.compile_and_apply();
-                    // Restore I/O gains
-                    self.audio_bridge.input_gain().set(session.input_gain);
-                    self.audio_bridge.master_volume().set(session.master_volume);
-                    // Restore per-effect params
-                    for (node_idx, state) in &session.params {
-                        let mut slot = 0usize;
-                        for (i, entry) in session.nodes.iter().enumerate() {
-                            if matches!(entry.node, crate::session::SessionNode::Effect { .. }) {
-                                if i == *node_idx {
-                                    for (p, &val) in state.params.iter().enumerate() {
-                                        self.bridge.set(
-                                            SlotIndex(slot),
-                                            sonido_gui_core::ParamIndex(p),
-                                            val,
-                                        );
-                                    }
-                                    if state.bypassed {
-                                        self.bridge.set_bypassed(SlotIndex(slot), true);
-                                    }
-                                    break;
-                                }
-                                slot += 1;
-                            }
-                        }
-                    }
+                    // Loading a session is a fresh start — drop edit history so
+                    // undo can't step back into the previous rig.
+                    self.undo_stack.clear();
+                    self.redo_stack.clear();
+                    self.apply_session(&session);
                 }
                 Err(e) => {
                     tracing::error!(error = %e, "failed to load session");
                 }
             }
+        }
+    }
+
+    /// Restore the macro map + A/B morph state from a loaded session.
+    ///
+    /// Rebuilds the six macros (defs + knob positions) and the per-slot morph
+    /// locks. When the session carried a B snapshot, it also restores the A/B
+    /// morph snapshots and crossfade position and re-applies the morph, so the
+    /// live rig sounds exactly as it did when saved.
+    fn restore_performance(&mut self, session: &crate::session::Session) {
+        use crate::morph_state::{MorphSnapshot, SlotSnapshot};
+        use crate::session::SessionNode;
+
+        // Macros: defs → runtime map + names, then live knob positions.
+        let (map, names) = crate::session::defs_to_macro_map(&session.macros);
+        self.macro_map = map;
+        self.macro_names = names;
+        for (i, &pos) in session.macro_positions.iter().enumerate() {
+            self.macro_map.set_position(i, pos);
+        }
+
+        // Build A/B snapshots from each effect's stored params, in slot order.
+        let mut a_slots = Vec::new();
+        let mut b_slots = Vec::new();
+        let mut has_b = false;
+        for (i, entry) in session.nodes.iter().enumerate() {
+            if matches!(entry.node, SessionNode::Effect { .. })
+                && let Some(state) = session.params.get(&i)
+            {
+                if !state.params_b.is_empty() {
+                    has_b = true;
+                }
+                a_slots.push(SlotSnapshot {
+                    effect_id: state.effect_id.clone(),
+                    values: state.params.clone(),
+                    bypassed: state.bypassed,
+                });
+                b_slots.push(SlotSnapshot {
+                    effect_id: state.effect_id.clone(),
+                    values: state.snapshot_b().to_vec(),
+                    bypassed: state.bypassed,
+                });
+            }
+        }
+
+        // Per-slot morph locks from the config bitfield.
+        self.morph_state.locked_slots = (0..a_slots.len())
+            .map(|i| session.morph.is_locked(i))
+            .collect();
+
+        if has_b {
+            // A real A/B morph was saved — restore both snapshots and position,
+            // then re-apply so the live rig matches the saved crossfade.
+            self.morph_state.a = Some(MorphSnapshot { slots: a_slots });
+            self.morph_state.b = Some(MorphSnapshot { slots: b_slots });
+            self.morph_state.t = session.morph_position.clamp(0.0, 1.0);
+            self.morph_state.active = true;
+            self.morph_state.apply(&*self.bridge);
+        } else {
+            // No B snapshot stored ⇒ morph was never set up; leave it idle.
+            self.morph_state.a = None;
+            self.morph_state.b = None;
+            self.morph_state.t = 0.0;
+            self.morph_state.active = false;
         }
     }
 }
@@ -1184,6 +1567,29 @@ impl eframe::App for SonidoApp {
             if can_play {
                 self.file_player.toggle_play_pause();
             }
+        }
+
+        // Undo / redo for structural edits (Ctrl+Z, Ctrl+Shift+Z, or Ctrl+Y).
+        // `command` is Ctrl on Linux/Windows and ⌘ on macOS.
+        if no_widget_focused {
+            let (do_undo, do_redo) = ctx.input(|i| {
+                let cmd = i.modifiers.command;
+                let shift = i.modifiers.shift;
+                let z = i.key_pressed(egui::Key::Z);
+                let y = i.key_pressed(egui::Key::Y);
+                (cmd && z && !shift, cmd && ((z && shift) || y))
+            });
+            if do_undo {
+                self.undo();
+            } else if do_redo {
+                self.redo();
+            }
+        }
+
+        // Snapshot the editor at the start of any pointer-interaction frame; if
+        // that frame produces a structural edit, this becomes the undo point.
+        if ctx.input(|i| i.pointer.any_pressed()) {
+            self.undo_pending = Some(self.snapshot());
         }
 
         // Header
@@ -1302,7 +1708,19 @@ impl eframe::App for SonidoApp {
                         .inner;
 
                     // Auto-compile when topology changes (connect/disconnect/remove)
+                    // and record the pre-edit snapshot as an undo point. (Undo/redo
+                    // restores rebuild the snarl too, but `show()` clears the flag
+                    // each frame before this check, so our own restores never
+                    // re-enter here and corrupt the stacks.)
                     if self.graph_view.topology_changed {
+                        if let Some(prev) = self.undo_pending.take() {
+                            self.undo_stack.push(prev);
+                            const UNDO_DEPTH: usize = 64;
+                            if self.undo_stack.len() > UNDO_DEPTH {
+                                self.undo_stack.remove(0);
+                            }
+                            self.redo_stack.clear();
+                        }
                         self.compile_and_apply();
                     }
 

@@ -189,6 +189,22 @@ impl<const N: usize> MacroMap<N> {
         self.mappings.clear();
     }
 
+    /// Set the `[min, max]` range of every mapping that writes to `target`.
+    ///
+    /// Binding is kept exclusive (one macro per target), so this normally
+    /// updates a single mapping. Passing `max < min` inverts the control — the
+    /// engine clamps, so no extra handling is needed here. Returns the number of
+    /// mappings updated (0 if `target` is unbound).
+    pub fn set_target_range(&mut self, target: MacroTarget, min: f32, max: f32) -> usize {
+        let mut updated = 0;
+        for m in self.mappings.iter_mut().filter(|m| m.target == target) {
+            m.min = min;
+            m.max = max;
+            updated += 1;
+        }
+        updated
+    }
+
     /// All current mappings.
     pub fn mappings(&self) -> &[MacroMapping] {
         &self.mappings
@@ -372,6 +388,23 @@ mod tests {
 
         assert_eq!(map.mapping_count(), 1);
         assert!(map.mappings().iter().all(|m| m.target == slot(0, 0)));
+    }
+
+    #[test]
+    fn set_target_range_updates_and_inverts() {
+        let mut map: MacroMap<6> = MacroMap::new();
+        map.add_mapping(MacroMapping::linear(0, slot(0, 0), 0.0, 1.0));
+        map.add_mapping(MacroMapping::linear(1, slot(1, 0), 0.0, 1.0));
+
+        // Invert the first mapping's range (max < min).
+        assert_eq!(map.set_target_range(slot(0, 0), 1.0, 0.0), 1);
+        map.set_position(0, 0.0);
+        let mut v = f32::NAN;
+        map.apply(0, |_, val| v = val);
+        assert!((v - 1.0).abs() < 1e-6); // inverted: position 0.0 → max-as-min
+
+        // Unbound target updates nothing.
+        assert_eq!(map.set_target_range(slot(9, 9), 0.0, 1.0), 0);
     }
 
     #[test]

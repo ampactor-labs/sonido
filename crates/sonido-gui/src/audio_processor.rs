@@ -106,6 +106,16 @@ pub(crate) struct AudioProcessor {
     source_mode: SourceMode,
     out_ch: usize,
     buffer_time_secs: f64,
+    /// Reusable per-block scratch buffers (deinterleaved L/R, dry + wet).
+    ///
+    /// Held across callbacks so the real-time audio path never allocates: each
+    /// block `mem::take`s these into locals, resizes them (reusing capacity),
+    /// and stores them back. Sized to the initial buffer; they grow at most once
+    /// if the device hands us a larger block, then stay allocation-free.
+    scratch_raw_l: Vec<f32>,
+    scratch_raw_r: Vec<f32>,
+    scratch_wet_l: Vec<f32>,
+    scratch_wet_r: Vec<f32>,
 }
 
 impl AudioProcessor {
@@ -248,9 +258,15 @@ impl AudioProcessor {
 
         let frames = data.len() / self.out_ch;
 
-        // Collect raw input samples for this buffer (deinterleaved, pre-gain)
-        let mut raw_left = vec![0.0f32; frames];
-        let mut raw_right = vec![0.0f32; frames];
+        // Collect raw input samples for this buffer (deinterleaved, pre-gain).
+        // Reuse the persistent scratch buffers so the audio thread never
+        // allocates; take them out now and store them back at the end of the call.
+        let mut raw_left = std::mem::take(&mut self.scratch_raw_l);
+        let mut raw_right = std::mem::take(&mut self.scratch_raw_r);
+        raw_left.clear();
+        raw_left.resize(frames, 0.0);
+        raw_right.clear();
+        raw_right.resize(frames, 0.0);
 
         let has_file = !self.file_pb.left.is_empty();
         match self.source_mode {
@@ -295,8 +311,12 @@ impl AudioProcessor {
 
         // Advance bypass fade per frame (block-level approximation using final value)
         // We need per-sample fade for accurate crossfade; advance once per frame.
-        let mut wet_left = vec![0.0f32; frames];
-        let mut wet_right = vec![0.0f32; frames];
+        let mut wet_left = std::mem::take(&mut self.scratch_wet_l);
+        let mut wet_right = std::mem::take(&mut self.scratch_wet_r);
+        wet_left.clear();
+        wet_left.resize(frames, 0.0);
+        wet_right.clear();
+        wet_right.resize(frames, 0.0);
 
         // Run the graph for the entire block
         self.graph
@@ -366,6 +386,12 @@ impl AudioProcessor {
             cpu_usage: cpu_pct,
             playback_position_secs: self.file_pb.position_secs(),
         });
+
+        // Return the scratch buffers (with their grown capacity) for next block.
+        self.scratch_raw_l = raw_left;
+        self.scratch_raw_r = raw_right;
+        self.scratch_wet_l = wet_left;
+        self.scratch_wet_r = wet_right;
     }
 }
 
@@ -457,6 +483,10 @@ pub(crate) fn build_audio_streams(
         source_mode: SourceMode::Generator,
         out_ch,
         buffer_time_secs,
+        scratch_raw_l: Vec::with_capacity(buffer_size),
+        scratch_raw_r: Vec::with_capacity(buffer_size),
+        scratch_wet_l: Vec::with_capacity(buffer_size),
+        scratch_wet_r: Vec::with_capacity(buffer_size),
     };
 
     // Output stream -- delegates to AudioProcessor

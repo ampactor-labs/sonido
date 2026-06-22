@@ -6,10 +6,11 @@
 //!
 //! # Versioning & migration
 //!
-//! v2 adds the canonical macro/morph/B-snapshot fields. They are
-//! `#[serde(default)]`, so a v1 file (which lacks them) loads transparently:
-//! macros come up empty, morph defaults, and each effect's B snapshot mirrors
-//! its A snapshot. No separate migration pass is needed.
+//! v2 added the canonical macro/morph/B-snapshot fields and v3 adds the live
+//! `macro_positions` / `morph_position` knob state. Every added field is
+//! `#[serde(default)]`, so an older file loads transparently: macros come up
+//! empty, morph defaults, knob positions zero, and each effect's B snapshot
+//! mirrors its A snapshot. No separate migration pass is needed.
 //!
 //! [`Session::to_patch`] projects a session into the canonical
 //! [`sonido_patch::Patch`] used for export to a CLAP plugin or the pedal.
@@ -18,10 +19,82 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
 
+use sonido_core::{MacroMap, MacroMapping};
 use sonido_patch::{
-    GlobalControls, MacroDef, MorphConfig, Patch, PatchEdge, PatchEndpoint, PatchNode,
+    GlobalControls, MacroDef, MacroMappingSpec, MorphConfig, NUM_MACROS, Patch, PatchEdge,
+    PatchEndpoint, PatchNode,
 };
 use sonido_registry::effect_uid;
+
+use crate::morph_state::MorphSnapshot;
+
+/// The macro + A/B-morph performance layer captured alongside the graph.
+///
+/// Bundles everything [`GraphView::capture_session`](crate::graph_view::GraphView::capture_session)
+/// needs to persist beyond raw topology: the six macro definitions and their
+/// live knob positions, the morph behaviour/locks, the current crossfade
+/// position, and the two morph snapshots whose per-slot values become each
+/// effect's A/B parameter sets.
+pub struct PerformanceCapture<'a> {
+    /// Six macro definitions (name + mappings) in knob order.
+    pub macros: [MacroDef; NUM_MACROS],
+    /// Live macro knob positions (0.0–1.0), restored on load.
+    pub macro_positions: [f32; NUM_MACROS],
+    /// Morph behaviour: speed, mode, and per-slot lock bitfield.
+    pub morph: MorphConfig,
+    /// Current A→B crossfade position (0.0–1.0).
+    pub morph_position: f32,
+    /// Snapshot A — its per-slot values become each effect's `params`.
+    /// `None` ⇒ fall back to the live bridge values.
+    pub morph_a: Option<&'a MorphSnapshot>,
+    /// Snapshot B — its per-slot values become each effect's `params_b`.
+    /// `None` ⇒ leave `params_b` empty (B mirrors A).
+    pub morph_b: Option<&'a MorphSnapshot>,
+}
+
+/// Project the GUI's runtime [`MacroMap`] + display names into the persisted
+/// `[MacroDef; NUM_MACROS]` form (one entry per knob, in knob order).
+pub fn macro_map_to_defs(
+    map: &MacroMap<NUM_MACROS>,
+    names: &[String; NUM_MACROS],
+) -> [MacroDef; NUM_MACROS] {
+    core::array::from_fn(|i| MacroDef {
+        name: names[i].clone(),
+        mappings: map
+            .mappings()
+            .iter()
+            .filter(|m| m.macro_index == i)
+            .map(|m| MacroMappingSpec {
+                target: m.target,
+                min: m.min,
+                max: m.max,
+                curve: m.curve,
+            })
+            .collect(),
+    })
+}
+
+/// Rebuild a runtime [`MacroMap`] and the per-knob display names from persisted
+/// defs — the inverse of [`macro_map_to_defs`]. Knob positions are restored
+/// separately by the caller.
+pub fn defs_to_macro_map(
+    defs: &[MacroDef; NUM_MACROS],
+) -> (MacroMap<NUM_MACROS>, [String; NUM_MACROS]) {
+    let mut map = MacroMap::new();
+    for (i, def) in defs.iter().enumerate() {
+        for spec in &def.mappings {
+            map.add_mapping(MacroMapping {
+                macro_index: i,
+                target: spec.target,
+                min: spec.min,
+                max: spec.max,
+                curve: spec.curve,
+            });
+        }
+    }
+    let names = core::array::from_fn(|i| defs[i].name.clone());
+    (map, names)
+}
 
 /// Complete session state.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -40,14 +113,24 @@ pub struct Session {
     pub master_volume: f32,
     /// Six macro definitions (one per hardware knob). Empty in v1 sessions.
     #[serde(default = "default_macros")]
-    pub macros: [MacroDef; sonido_patch::NUM_MACROS],
+    pub macros: [MacroDef; NUM_MACROS],
+    /// Live macro knob positions (0.0–1.0). Absent in v1/v2 sessions ⇒ all 0.0.
+    #[serde(default = "default_macro_positions")]
+    pub macro_positions: [f32; NUM_MACROS],
     /// A/B morph configuration. Default in v1 sessions.
     #[serde(default)]
     pub morph: MorphConfig,
+    /// Current A→B crossfade position (0.0–1.0). Absent in v1/v2 ⇒ 0.0 (full A).
+    #[serde(default)]
+    pub morph_position: f32,
 }
 
-fn default_macros() -> [MacroDef; sonido_patch::NUM_MACROS] {
+fn default_macros() -> [MacroDef; NUM_MACROS] {
     core::array::from_fn(|_| MacroDef::default())
+}
+
+fn default_macro_positions() -> [f32; NUM_MACROS] {
+    [0.0; NUM_MACROS]
 }
 
 /// A node entry with type and 2D position.
@@ -108,7 +191,10 @@ impl EffectState {
 
 impl Session {
     /// Current schema version.
-    pub const VERSION: u32 = 2;
+    ///
+    /// v3 adds `macro_positions` and `morph_position` (live knob/crossfade
+    /// state). Both are `#[serde(default)]`, so v1/v2 files load unchanged.
+    pub const VERSION: u32 = 3;
 
     /// Save the session to a JSON file.
     ///
@@ -243,7 +329,9 @@ mod tests {
             input_gain: 0.0,
             master_volume: -3.0,
             macros: default_macros(),
+            macro_positions: default_macro_positions(),
             morph: MorphConfig::default(),
+            morph_position: 0.0,
         }
     }
 
@@ -252,7 +340,7 @@ mod tests {
         let session = sample_session();
         let json = serde_json::to_string(&session).unwrap();
         let restored: Session = serde_json::from_str(&json).unwrap();
-        assert_eq!(restored.version, 2);
+        assert_eq!(restored.version, 3);
         assert_eq!(restored.nodes.len(), 3);
         assert_eq!(restored.wires.len(), 2);
         assert_eq!(restored.master_volume, -3.0);
@@ -343,7 +431,9 @@ mod tests {
             input_gain: 0.0,
             master_volume: 0.0,
             macros: default_macros(),
+            macro_positions: default_macro_positions(),
             morph: MorphConfig::default(),
+            morph_position: 0.0,
         };
         let patch = session.to_patch("parallel");
         assert_eq!(patch.nodes.len(), 2);
@@ -359,5 +449,89 @@ mod tests {
                 .iter()
                 .any(|e| matches!(e.to, PatchEndpoint::Merge(0)))
         );
+    }
+
+    #[test]
+    fn macro_map_roundtrips_through_defs() {
+        use sonido_core::{GlobalParam, MacroTarget, MorphCurve};
+
+        let mut map: MacroMap<NUM_MACROS> = MacroMap::new();
+        // K1 drives two targets; K3 drives a global, inverted + log.
+        map.add_mapping(MacroMapping::linear(
+            0,
+            MacroTarget::Slot { slot: 0, param: 2 },
+            0.0,
+            10.0,
+        ));
+        map.add_mapping(MacroMapping {
+            macro_index: 0,
+            target: MacroTarget::Slot { slot: 1, param: 0 },
+            min: 100.0,
+            max: 8000.0,
+            curve: MorphCurve::Logarithmic,
+        });
+        map.add_mapping(MacroMapping {
+            macro_index: 2,
+            target: MacroTarget::Global(GlobalParam::MasterVolume),
+            min: 6.0,
+            max: -40.0,
+            curve: MorphCurve::Linear,
+        });
+
+        let mut names: [String; NUM_MACROS] = core::array::from_fn(|_| String::new());
+        names[0] = "Grit".into();
+        names[2] = "Volume".into();
+
+        let defs = macro_map_to_defs(&map, &names);
+        assert_eq!(defs[0].name, "Grit");
+        assert_eq!(defs[0].mappings.len(), 2);
+        assert_eq!(defs[2].mappings.len(), 1);
+        assert!(!defs[1].is_active());
+
+        let (back, back_names) = defs_to_macro_map(&defs);
+        assert_eq!(back_names, names);
+        assert_eq!(back.mappings().len(), 3);
+        // Every original mapping survives with identical target/range/curve.
+        for original in map.mappings() {
+            assert!(
+                back.mappings()
+                    .iter()
+                    .any(|m| m.macro_index == original.macro_index
+                        && m.target == original.target
+                        && m.min == original.min
+                        && m.max == original.max
+                        && m.curve == original.curve),
+                "mapping {original:?} lost in roundtrip"
+            );
+        }
+    }
+
+    #[test]
+    fn session_json_carries_macros_and_morph() {
+        use sonido_core::{MacroTarget, MorphCurve};
+
+        let mut session = sample_session();
+        // Author a macro, set positions, lock a slot, set a crossfade.
+        session.macros[1] = MacroDef {
+            name: "Sweep".into(),
+            mappings: vec![MacroMappingSpec {
+                target: MacroTarget::Slot { slot: 0, param: 1 },
+                min: 0.0,
+                max: 1.0,
+                curve: MorphCurve::Linear,
+            }],
+        };
+        session.macro_positions[1] = 0.42;
+        session.morph.set_locked(0, true);
+        session.morph_position = 0.65;
+
+        let json = serde_json::to_string(&session).unwrap();
+        let restored: Session = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(restored.macros[1].name, "Sweep");
+        assert_eq!(restored.macros[1].mappings.len(), 1);
+        assert!((restored.macro_positions[1] - 0.42).abs() < 1e-6);
+        assert!(restored.morph.is_locked(0));
+        assert!((restored.morph_position - 0.65).abs() < 1e-6);
     }
 }

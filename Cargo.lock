@@ -4224,7 +4224,6 @@ dependencies = [
  "rfd",
  "serde",
  "serde_json",
- "sonido-config",
  "sonido-core",
  "sonido-effects",
  "sonido-graph-dsl",
