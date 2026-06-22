@@ -214,6 +214,15 @@ impl SonidoApp {
         app
     }
 
+    /// Populate the editor with a representative demo chain and compile it.
+    ///
+    /// Used by `--screenshot` (and handy as a quick demo); not part of the
+    /// default startup, which opens an empty canvas.
+    pub fn populate_demo(&mut self) {
+        self.graph_view.populate_demo();
+        self.compile_and_apply();
+    }
+
     /// Compile the current graph and send it to the audio thread.
     ///
     /// On success, clears any previous compile error and arms the success flash.

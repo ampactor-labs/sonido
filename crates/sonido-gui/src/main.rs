@@ -11,6 +11,9 @@ use clap::Parser;
 use eframe::egui;
 use sonido_gui::SonidoApp;
 
+#[cfg(not(target_arch = "wasm32"))]
+mod screenshot;
+
 /// Sonido DSP GUI application.
 #[cfg(not(target_arch = "wasm32"))]
 #[derive(Parser, Debug)]
@@ -36,6 +39,10 @@ struct Args {
     /// Effect names match the registry IDs: distortion, reverb, compressor, etc.
     #[arg(long)]
     effect: Option<String>,
+
+    /// Capture one screenshot of the editor to this PNG path, then exit.
+    #[arg(long)]
+    screenshot: Option<String>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -49,6 +56,16 @@ fn main() -> eframe::Result<()> {
     tracing_log::LogTracer::init().ok();
 
     let args = Args::parse();
+
+    if let Some(path) = args.screenshot.clone() {
+        return screenshot::run(
+            path.into(),
+            args.effect.clone(),
+            args.sample_rate as f32,
+            args.buffer_size as usize,
+            [1600.0, 1000.0],
+        );
+    }
 
     tracing::info!("Starting Sonido GUI");
     tracing::info!(sample_rate = args.sample_rate, "audio config");

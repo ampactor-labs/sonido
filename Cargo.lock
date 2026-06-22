@@ -4219,6 +4219,7 @@ dependencies = [
  "egui-snarl",
  "egui_extras",
  "hound",
+ "image",
  "log",
  "parking_lot",
  "rfd",

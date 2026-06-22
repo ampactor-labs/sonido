@@ -2,6 +2,11 @@ name: Deploy Web Demo
 
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'crates/**'
+      - '.github/workflows/pages.yml'
 
 permissions:
   contents: read
@@ -32,7 +37,8 @@ jobs:
 
       - name: Build wasm
         working-directory: crates/sonido-gui
-        run: trunk build --release
+        # Project Pages serve under /sonido/, so asset URLs must be prefixed.
+        run: trunk build --release --public-url /sonido/
 
       - name: Upload pages artifact
         uses: actions/upload-pages-artifact@v3

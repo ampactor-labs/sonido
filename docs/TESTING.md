@@ -19,6 +19,21 @@ cargo test test_reverb_basic
 cargo test -- --nocapture
 ```
 
+## A note on "ignored" counts
+
+`cargo test` reports a number of **ignored** tests. These are **not disabled unit
+tests** — the codebase contains **zero `#[ignore]` attributes**. Every "ignored"
+entry is a documentation example whose code fence is marked ```` ```ignore ```` or
+```` ```no_run ```` (illustrative snippets, embedded/hardware code, or examples
+that allocate a real audio device). Those fences are still **compile-checked** by
+`cargo test --doc`; they are only skipped at *run* time. There are no silently
+skipped functional tests.
+
+```bash
+# Confirm there are no #[ignore] unit tests:
+grep -rn '#\[ignore' crates/ --include='*.rs'   # -> no matches
+```
+
 ## Test Organization
 
 Tests in Sonido follow Rust conventions with inline unit tests and separate integration tests.

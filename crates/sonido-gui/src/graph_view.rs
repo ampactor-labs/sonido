@@ -149,6 +149,70 @@ impl GraphView {
         }
     }
 
+    /// Build a representative chain (Input → Distortion → Delay → Reverb →
+    /// Output), laid out left→right. Used to generate the README screenshot and
+    /// as a quick demo graph; not part of normal startup.
+    pub fn populate_demo(&mut self) {
+        let registry = EffectRegistry::new();
+
+        let mut input_id = None;
+        let mut output_id = None;
+        for (id, node) in self.snarl.node_ids() {
+            match node {
+                SonidoNode::Input => input_id = Some(id),
+                SonidoNode::Output => output_id = Some(id),
+                _ => {}
+            }
+        }
+        let (Some(input), Some(output)) = (input_id, output_id) else {
+            return;
+        };
+
+        // Drop the default passthrough wire so the chain reads linearly.
+        self.snarl.disconnect(
+            OutPinId {
+                node: input,
+                output: 0,
+            },
+            InPinId {
+                node: output,
+                input: 0,
+            },
+        );
+
+        let mut prev = OutPinId {
+            node: input,
+            output: 0,
+        };
+        let mut x = 300.0;
+        for effect_id in ["distortion", "delay", "reverb"] {
+            let Some(desc) = registry.get(effect_id) else {
+                continue;
+            };
+            let node = self.snarl.insert_node(
+                egui::pos2(x, 200.0),
+                SonidoNode::Effect {
+                    effect_id: desc.id,
+                    name: desc.name,
+                    category: desc.category,
+                    descriptors: collect_descriptors(desc.id, 48000.0),
+                    smoothing: collect_smoothing(desc.id, 48000.0),
+                },
+            );
+            self.snarl.connect(prev, InPinId { node, input: 0 });
+            prev = OutPinId { node, output: 0 };
+            x += 220.0;
+        }
+        self.snarl.connect(
+            prev,
+            InPinId {
+                node: output,
+                input: 0,
+            },
+        );
+        self.topology_changed = true;
+    }
+
     /// Pin Input/Output nodes to the left/right edges of the effect bounding box.
     ///
     /// Called at the start of each frame so I/O nodes act as fixed wire anchors

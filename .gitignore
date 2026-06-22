@@ -3,6 +3,8 @@ target/
 *.bin
 
 /crates/sonido-gui/dist/
+/dist-clap/
+/dist-presets/
 external-audio
 .claude/worktrees/
 demos/*.wav

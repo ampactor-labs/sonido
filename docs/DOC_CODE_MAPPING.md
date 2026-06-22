@@ -60,5 +60,5 @@ Rows marked `<!-- PLANNED -->` are pre-reserved for v0.3+ features. Do not updat
 | `crates/sonido-daisy/src/noon_presets.rs`, `param_map.rs` | `docs/EMBEDDED.md` (Noon Preset Verification), `crates/sonido-effects/tests/noon_mapping.rs` | Noon table values, biased mapping algorithm, test inlined copies |
 | `crates/sonido-daisy/src/*.rs` | `docs/EMBEDDED.md`, CLAUDE.md (Crates table, Key Files) | Firmware lib, DWT helpers, audio constants, `heartbeat` task, SDRAM init, clock profiles |
 | `crates/sonido-daisy/examples/*.rs` | `docs/EMBEDDED.md` (Tier System, Getting Started, Diagnostics) | bench_kernels, bench_mini, blinky, blinky_bare, heap_test, hothouse_diag, morph_pedal, passthrough, passthrough_blink, silence, single_effect, square_out, tone_out |
-| `LICENSE-MIT`, `LICENSE-APACHE` | `README.md` (License section), `docs/LICENSING.md` | License text, dual-license references |
+| `LICENSE` (AGPL-3.0), `LICENSING.md` | `README.md` (License section) | License text, AGPL-3.0 + commercial dual-license references |
 | `docs/reference/signature-sounds.md` | `docs/ROADMAP.md` (cross-reference) | Brainstorming candidates, interaction patterns |

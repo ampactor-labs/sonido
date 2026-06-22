@@ -69,6 +69,10 @@ jobs:
       - name: Build GUI
         run: cargo build --release --target ${{ matrix.target }} -p sonido-gui
 
+      - name: Build & bundle CLAP plugins
+        shell: bash
+        run: bash scripts/bundle-clap.sh --target ${{ matrix.target }} --out ${{ matrix.artifact }}/clap
+
       - name: Export factory presets
         run: cargo run -p sonido-cli -- presets export-factory ./dist-presets
 
