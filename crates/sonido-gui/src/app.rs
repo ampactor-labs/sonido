@@ -111,6 +111,19 @@ pub struct SonidoApp {
     palette_open: bool,
     /// Live search text for the effect-palette sheet.
     palette_filter: String,
+    /// Which collapsible drawer is open on the Phone breakpoint. On wider tiers
+    /// the performance band is always docked and this is ignored.
+    drawer: Drawer,
+}
+
+/// A summonable drawer on the Phone layout, where the performance band can't be
+/// permanently docked. `Rig` slides up the K1–K6 macros + A/B morph.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Drawer {
+    /// Nothing summoned — the canvas is the hero.
+    None,
+    /// The performance rig: K1–K6 macros and the A/B morph band.
+    Rig,
 }
 
 /// Viewport size class. Touch affordances are *additive* at every tier — a
@@ -229,6 +242,7 @@ impl SonidoApp {
             breakpoint: Breakpoint::Desktop,
             palette_open: false,
             palette_filter: String::new(),
+            drawer: Drawer::None,
         };
 
         // Apply theme
@@ -611,7 +625,10 @@ impl SonidoApp {
     fn render_header(&mut self, ui: &mut egui::Ui) {
         let theme = SonidoTheme::get(ui.ctx());
 
-        ui.horizontal(|ui| {
+        // Wrap so the toolbar flows onto extra rows on a narrow viewport instead
+        // of running off-screen; on a desktop window everything fits one row, so
+        // the layout is unchanged.
+        ui.horizontal_wrapped(|ui| {
             // SONIDO brand
             ui.heading(
                 egui::RichText::new("SONIDO")
@@ -645,6 +662,30 @@ impl SonidoApp {
             }
 
             ui.separator();
+
+            // RIG drawer toggle — Phone only. The performance band can't stay
+            // docked on a 390px screen, so it becomes a summonable drawer.
+            if self.breakpoint == Breakpoint::Phone {
+                let rig_open = self.drawer == Drawer::Rig;
+                let rig_color = if rig_open {
+                    theme.colors.cyan
+                } else {
+                    theme.colors.dim
+                };
+                if ui
+                    .button(
+                        egui::RichText::new("RIG")
+                            .font(FontId::monospace(11.0))
+                            .color(rig_color)
+                            .strong(),
+                    )
+                    .on_hover_text("Show/hide macros + morph")
+                    .clicked()
+                {
+                    self.drawer = if rig_open { Drawer::None } else { Drawer::Rig };
+                }
+                ui.separator();
+            }
 
             // Undo / Redo — touch-reachable (was keyboard-only, dead on mobile).
             let can_undo = !self.undo_stack.is_empty();
@@ -890,6 +931,97 @@ impl SonidoApp {
                     }
                 }
             });
+        });
+    }
+
+    /// Compact horizontal levels row for the Phone layout: input gain, in/out
+    /// horizontal meters with clip indicators, and master volume. Replaces the
+    /// two tall vertical I/O strips so the canvas gets full width — nothing is
+    /// removed, only re-laid-out.
+    fn render_phone_levels(&mut self, ui: &mut egui::Ui) {
+        let theme = SonidoTheme::get(ui.ctx());
+        ui.horizontal(|ui| {
+            // Input gain
+            let input_gain = self.audio_bridge.input_gain();
+            let mut gain_val = input_gain.get();
+            if ui
+                .add(
+                    Knob::new(&mut gain_val, -20.0, 20.0, "IN")
+                        .default(0.0)
+                        .format_db()
+                        .diameter(38.0),
+                )
+                .changed()
+            {
+                input_gain.set(gain_val);
+            }
+            ui.add(
+                LevelMeter::new(self.metering.input_peak, self.metering.input_rms)
+                    .horizontal()
+                    .size(78.0, 10.0),
+            );
+            {
+                let peak = self.metering.input_peak;
+                let latched = &mut self.clip_latched[0];
+                *latched |= peak > 1.0;
+                let col = if *latched {
+                    theme.colors.red
+                } else {
+                    theme.colors.dim
+                };
+                if ui
+                    .button(
+                        egui::RichText::new("CLIP")
+                            .font(FontId::monospace(8.0))
+                            .color(col),
+                    )
+                    .clicked()
+                {
+                    *latched = false;
+                }
+            }
+
+            ui.separator();
+
+            {
+                let peak = self.metering.output_peak;
+                let latched = &mut self.clip_latched[1];
+                *latched |= peak > 1.0;
+                let col = if *latched {
+                    theme.colors.red
+                } else {
+                    theme.colors.dim
+                };
+                if ui
+                    .button(
+                        egui::RichText::new("CLIP")
+                            .font(FontId::monospace(8.0))
+                            .color(col),
+                    )
+                    .clicked()
+                {
+                    *latched = false;
+                }
+            }
+            ui.add(
+                LevelMeter::new(self.metering.output_peak, self.metering.output_rms)
+                    .horizontal()
+                    .size(78.0, 10.0),
+            );
+            // Master volume
+            let master = self.audio_bridge.master_volume();
+            let mut vol_val = master.get();
+            if ui
+                .add(
+                    Knob::new(&mut vol_val, -40.0, 6.0, "OUT")
+                        .default(0.0)
+                        .format_db()
+                        .diameter(38.0),
+                )
+                .changed()
+            {
+                master.set(vol_val);
+            }
         });
     }
 
@@ -1336,7 +1468,9 @@ impl SonidoApp {
     fn render_status_bar(&mut self, ui: &mut egui::Ui) {
         let theme = SonidoTheme::get(ui.ctx());
 
-        ui.horizontal(|ui| {
+        // Wrap so the diagnostics flow onto a second row on a narrow viewport
+        // rather than clipping; unchanged on a desktop-width window.
+        ui.horizontal_wrapped(|ui| {
             // Sample rate
             ui.label(
                 egui::RichText::new(format!("{:.0}Hz", self.sample_rate))
@@ -1893,8 +2027,12 @@ impl eframe::App for SonidoApp {
         // Performance band — full width, just above the status bar. The six
         // macros (K1–K6) and the global A/B morph form one cluster: the controls
         // that map to the pedal's knobs and footswitch. Graph mode only; in
-        // single-effect mode there is no rig to perform.
-        if !self.single_effect {
+        // single-effect mode there is no rig to perform. On Phone it can't stay
+        // docked (it would eat half the screen), so it only shows when the RIG
+        // drawer is summoned; on Desktop/Tablet it is always docked.
+        let show_perf = !self.single_effect
+            && (self.breakpoint != Breakpoint::Phone || self.drawer == Drawer::Rig);
+        if show_perf {
             TopBottomPanel::bottom("performance").show(ctx, |ui| {
                 ui.add_space(4.0);
                 self.render_macro_row(ui);
@@ -1921,11 +2059,25 @@ impl eframe::App for SonidoApp {
             ui.add_space(4.0);
 
             let theme = SonidoTheme::get(ui.ctx());
+
+            // PHONE: the canvas is the hero. The two flanking I/O strips would
+            // crush the graph to ~180px, so fold them into one compact levels
+            // row at the top and give the graph full width below.
+            let phone = self.breakpoint == Breakpoint::Phone;
+            if phone {
+                self.render_phone_levels(ui);
+                ui.add_space(4.0);
+            }
+
             let avail = ui.available_rect_before_wrap();
 
-            // Responsive I/O strip widths from ThemeLayout
-            let io_width = theme.layout.io_strip_width(avail.width());
-            let gap = 8.0;
+            // Responsive I/O strip widths from ThemeLayout (zero on Phone).
+            let io_width = if phone {
+                0.0
+            } else {
+                theme.layout.io_strip_width(avail.width())
+            };
+            let gap = if phone { 0.0 } else { 8.0 };
             let center_width = (avail.width() - 2.0 * io_width - 2.0 * gap).max(200.0);
 
             let input_rect = Rect::from_min_size(avail.min, vec2(io_width, avail.height()));
@@ -1941,8 +2093,8 @@ impl eframe::App for SonidoApp {
                 vec2(io_width, avail.height()),
             );
 
-            // Input strip
-            {
+            // Input strip (Desktop/Tablet only — folded into the levels row on Phone).
+            if !phone {
                 let mut child = ui.new_child(
                     UiBuilder::new()
                         .id_salt("input_col")
@@ -2022,8 +2174,8 @@ impl eframe::App for SonidoApp {
                 }
             }
 
-            // Output strip
-            {
+            // Output strip (Desktop/Tablet only — folded into the levels row on Phone).
+            if !phone {
                 let mut child = ui.new_child(
                     UiBuilder::new()
                         .id_salt("output_col")

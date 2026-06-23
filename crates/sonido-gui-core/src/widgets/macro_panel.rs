@@ -40,7 +40,9 @@ pub fn macro_panel(ui: &mut Ui, macros: &mut [MacroView]) -> MacroPanelResponse 
     let theme = SonidoTheme::get(ui.ctx());
     let mut response = MacroPanelResponse::default();
 
-    ui.horizontal(|ui| {
+    // Wrap so the six 64px macro blocks flow onto multiple rows on narrow
+    // viewports (phone / the RIG drawer); on desktop they stay a single row.
+    ui.horizontal_wrapped(|ui| {
         for (i, m) in macros.iter_mut().enumerate() {
             ui.vertical(|ui| {
                 ui.set_width(64.0);

@@ -43,6 +43,11 @@ struct Args {
     /// Capture one screenshot of the editor to this PNG path, then exit.
     #[arg(long)]
     screenshot: Option<String>,
+
+    /// Window size for `--screenshot`, as `WIDTHxHEIGHT` (e.g. `390x844` to
+    /// preview the phone layout). Defaults to a desktop size.
+    #[arg(long)]
+    screenshot_size: Option<String>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -58,12 +63,18 @@ fn main() -> eframe::Result<()> {
     let args = Args::parse();
 
     if let Some(path) = args.screenshot.clone() {
+        let size = args
+            .screenshot_size
+            .as_deref()
+            .and_then(|s| s.split_once(['x', 'X']))
+            .and_then(|(w, h)| Some([w.trim().parse().ok()?, h.trim().parse().ok()?]))
+            .unwrap_or([1600.0, 1000.0]);
         return screenshot::run(
             path.into(),
             args.effect.clone(),
             args.sample_rate as f32,
             args.buffer_size as usize,
-            [1600.0, 1000.0],
+            size,
         );
     }
 
