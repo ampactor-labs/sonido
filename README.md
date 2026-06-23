@@ -169,9 +169,9 @@ fn audio_callback(left_in: &[f32], right_in: &[f32],
                   left_out: &mut [f32], right_out: &mut [f32]) {
     let kernel = unsafe { KERNEL.as_mut().unwrap() };
 
-    // Read ADC knobs once per block
+    // Read ADC knobs once per block (drive, tone, output, shape, mix, dynamics)
     let params = DistortionParams::from_knobs(
-        read_adc(0), read_adc(1), read_adc(2), read_adc(3), read_adc(4),
+        read_adc(0), read_adc(1), read_adc(2), read_adc(3), read_adc(4), read_adc(5),
     );
 
     // Block processing: no allocation, no trait dispatch
@@ -345,7 +345,7 @@ See [docs/SYNTHESIS.md](docs/SYNTHESIS.md) for the full synthesis guide.
 
 ## CLI
 
-10 commands for processing, analysis, and real-time audio:
+12 commands for processing, analysis, and real-time audio:
 
 ```bash
 # Install
@@ -397,22 +397,19 @@ Built on a lock-free atomic parameter bridge (wait-free audio-thread reads) and 
 
 ## Performance
 
-Even on a 2015 mobile CPU (Intel Core i5-6300U @ 2.40 GHz), every effect runs well within real-time budget. Measured at block size 256 samples, 48 kHz:
+Even on a 2015 mobile CPU (Intel Core i5-6300U @ 3.0 GHz turbo), every effect runs comfortably within the real-time budget. A representative sample at 256-sample blocks, 48 kHz:
 
 | Effect | µs/block | ns/sample | CPU % (mono) |
 |--------|----------|-----------|:------------:|
-| Preamp | 2.2 | 9 | 0.04% |
-| Filter | 3.4 | 13 | 0.06% |
-| Delay | 3.1 | 12 | 0.06% |
-| Tape Saturation | 6.7 | 26 | 0.13% |
-| Distortion | 14.4 | 56 | 0.27% |
-| Chorus | 20.4 | 80 | 0.38% |
-| Compressor | 29.1 | 113 | 0.54% |
-| Reverb | 44.5 | 174 | 0.83% |
-| Vibrato | 73.4 | 287 | 1.38% |
-| 5-effect chain | 42.8 | 167 | 0.80% |
+| Preamp | 2.47 | 9.6 | 0.05% |
+| Filter | 3.69 | 14.4 | 0.07% |
+| Delay | 5.49 | 21.4 | 0.10% |
+| Tape Saturation | 6.88 | 26.9 | 0.13% |
+| Chorus | 22.80 | 89.1 | 0.43% |
+| Distortion | 28.08 | 109.7 | 0.53% |
+| Reverb | 49.22 | 192.3 | 0.92% |
 
-CPU % = `ns_per_sample / (1e9 / 48000) × 100`. Measured on x86_64. Embedded ARM benchmarks pending (see [docs/EMBEDDED.md](docs/EMBEDDED.md) for memory budgets). Run benchmarks via CI: `gh workflow run ci-manual.yml -f job=bench`
+CPU % is `ns_per_sample / (1e9 / 48000) × 100`. The full per-effect table and methodology live in [docs/BENCHMARKS.md](docs/BENCHMARKS.md); reproduce with `cargo bench`. Embedded ARM benchmarks are pending (see [docs/EMBEDDED.md](docs/EMBEDDED.md) for memory budgets).
 
 ## Testing
 
@@ -423,7 +420,7 @@ CPU % = `ns_per_sample / (1e9 / 48000) × 100`. Measured on x86_64. Embedded ARM
 - **no_std verification**: 5 core crates tested without default features
 - **Doc tests**: All rustdoc examples compile and run
 - **Algorithm citations**: Every DSP implementation traces to a published reference (Bristow-Johnson Audio EQ Cookbook, Parker et al. DAFx-2016, Jezar Freeverb, Välimäki PolyBLEP, Zölzer DAFX)
-- **CI**: 4 always-on jobs (lint, test, no_std, wasm) + 3 manual-dispatch (benchmarks, coverage, plugin validation)
+- **CI**: every push and PR runs fmt, clippy, test, and a wasm build (`ci.yml`); a manual workflow (`ci-manual.yml`) adds no_std verification, benchmarks, coverage, and plugin validation
 
 ```bash
 cargo test                          # Full workspace
@@ -440,17 +437,6 @@ Demo files are generated locally, not checked into the repo:
 ```
 
 This produces source tones (sine, sawtooth chord, percussive hit, sweep) and processed versions through each effect and a full 5-effect chain.
-
-## Commercial DSP Reference
-
-Effect algorithms are informed by clean-room analysis of commercial DSP hardware.
-
-| Target Product | DSP Domain | Sonido Implementation |
-|----------------|------------|----------------------|
-| DigiTech Ventura / Modela | Modulation (chorus, vibrato, tremolo) | `Chorus`, `Vibrato`, `Tremolo`, LFO engine |
-| DigiTech Obscura | Delay (analog, tape, lo-fi modes) | `Delay` with feedback coloring, `Tape` |
-| DigiTech Dirty Robot | Envelope-following filter / synth | `Wah` (auto-wah mode), `Filter`, synth engine |
-| DigiTech Polara / Supernatural | Reverb (room, hall, plate, spring) | `Reverb` (Freeverb topology with stereo decorrelation) |
 
 ## Documentation
 
