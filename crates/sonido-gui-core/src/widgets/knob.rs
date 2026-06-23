@@ -170,8 +170,10 @@ impl Widget for Knob<'_> {
             changed = true;
         }
 
-        // Keyboard: while focused, arrow keys nudge the value (1% per press,
-        // Shift = 0.2% fine). Keys are consumed so focus does not jump away.
+        // Keyboard: while focused, Up/Down nudge the value (1% per press, Shift =
+        // 0.2% fine). Only Up/Down are consumed — Left/Right are deliberately left
+        // for egui's built-in directional focus navigation, so the arrows move
+        // *between* knobs left↔right and adjust the focused one up↔down.
         if response.has_focus() {
             let step = (self.max - self.min)
                 * if ui.input(|i| i.modifiers.shift) {
@@ -182,14 +184,10 @@ impl Widget for Knob<'_> {
             let up = ui.input_mut(|i| {
                 i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp)
                     || i.consume_key(egui::Modifiers::SHIFT, egui::Key::ArrowUp)
-                    || i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowRight)
-                    || i.consume_key(egui::Modifiers::SHIFT, egui::Key::ArrowRight)
             });
             let down = ui.input_mut(|i| {
                 i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown)
                     || i.consume_key(egui::Modifiers::SHIFT, egui::Key::ArrowDown)
-                    || i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowLeft)
-                    || i.consume_key(egui::Modifiers::SHIFT, egui::Key::ArrowLeft)
             });
             if up {
                 *self.value = (*self.value + step).clamp(self.min, self.max);

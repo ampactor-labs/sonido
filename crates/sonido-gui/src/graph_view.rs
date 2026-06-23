@@ -462,12 +462,13 @@ impl GraphView {
         self.auto_arrange();
     }
 
-    /// Remove a node (touch action-bar path; mirrors the right-click Remove).
+    /// Remove a node (touch action-bar / Delete-key path; mirrors right-click).
     pub fn remove_node(&mut self, node: NodeId) {
         if self.selected_node == Some(node) {
             self.selected_node = None;
         }
         self.snarl.remove_node(node);
+        ensure_output_connected(&mut self.snarl);
         self.topology_changed = true;
         self.auto_arrange();
     }
@@ -1290,6 +1291,7 @@ impl SnarlViewer<SonidoNode> for SonidoViewer<'_> {
                 *self.selected_node = None;
             }
             snarl.remove_node(node);
+            ensure_output_connected(snarl);
             *self.topology_changed = true;
             *self.needs_arrange = true;
             ui.close_menu();
@@ -1368,6 +1370,46 @@ impl SnarlViewer<SonidoNode> for SonidoViewer<'_> {
         snarl.drop_inputs(pin.id);
         *self.topology_changed = true;
         *self.needs_arrange = true;
+    }
+}
+
+/// Keep the Output reachable: if nothing feeds the Output node (e.g. after the
+/// last node in the chain is removed), auto-connect the node nearest the output
+/// — the rightmost in the left→right flow — so the graph never goes silently
+/// disconnected. No-op if the Output already has an incoming wire.
+fn ensure_output_connected(snarl: &mut Snarl<SonidoNode>) {
+    let mut output = None;
+    for (id, node) in snarl.node_ids() {
+        if matches!(node, SonidoNode::Output) {
+            output = Some(id);
+        }
+    }
+    let Some(output) = output else { return };
+    if snarl.wires().any(|(_, inp)| inp.node == output) {
+        return;
+    }
+    // Rightmost non-Output node = nearest the output in signal-flow order.
+    let mut best: Option<NodeId> = None;
+    let mut best_x = f32::NEG_INFINITY;
+    for (id, node) in snarl.node_ids() {
+        if matches!(node, SonidoNode::Output) {
+            continue;
+        }
+        if let Some(info) = snarl.get_node_info(id)
+            && info.pos.x > best_x
+        {
+            best_x = info.pos.x;
+            best = Some(id);
+        }
+    }
+    if let Some(node) = best {
+        snarl.connect(
+            OutPinId { node, output: 0 },
+            InPinId {
+                node: output,
+                input: 0,
+            },
+        );
     }
 }
 
@@ -1521,4 +1563,50 @@ fn collect_smoothing(effect_id: &str, sample_rate: f32) -> Vec<SmoothingStyle> {
     // Default to Standard smoothing for all params since we cannot access
     // the concrete KernelParams type through the trait-object registry.
     vec![SmoothingStyle::default(); effect.effect_param_count()]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn output_has_input(gv: &GraphView) -> bool {
+        let mut output = None;
+        for (id, node) in gv.snarl.node_ids() {
+            if matches!(node, SonidoNode::Output) {
+                output = Some(id);
+            }
+        }
+        match output {
+            Some(out) => gv.snarl.wires().any(|(_, inp)| inp.node == out),
+            None => false,
+        }
+    }
+
+    fn first_effect(gv: &GraphView) -> Option<NodeId> {
+        for (id, node) in gv.snarl.node_ids() {
+            if matches!(node, SonidoNode::Effect { .. }) {
+                return Some(id);
+            }
+        }
+        None
+    }
+
+    #[test]
+    fn removing_last_node_keeps_output_connected() {
+        let mut gv = GraphView::new(); // Input → Output
+        gv.add_effect_node("distortion"); // Input → Distortion → Output
+        assert_eq!(gv.effect_node_count(), 1);
+        assert!(output_has_input(&gv));
+
+        // Remove the only effect: the Output must auto-reconnect (to Input),
+        // never left silently orphaned.
+        let effect = first_effect(&gv).expect("effect node present");
+        gv.remove_node(effect);
+
+        assert_eq!(gv.effect_node_count(), 0);
+        assert!(
+            output_has_input(&gv),
+            "Output was orphaned after removing the last node"
+        );
+    }
 }

@@ -299,6 +299,28 @@ impl SonidoApp {
         }
     }
 
+    /// React to a structural graph edit: record the undo point and recompile the
+    /// audio graph. Called both for edits made *inside* `GraphView::show()`
+    /// (right-click, wiring) and for edits made *after* it (the "+" FAB add, the
+    /// node action bar, the Delete key) — the latter would otherwise update only
+    /// the visuals, because `show()` clears `topology_changed` at the next frame's
+    /// start before the in-`show` check could see them. No-op when unchanged.
+    fn apply_topology_change(&mut self) {
+        if !self.graph_view.topology_changed {
+            return;
+        }
+        if let Some(prev) = self.undo_pending.take() {
+            self.undo_stack.push(prev);
+            const UNDO_DEPTH: usize = 64;
+            if self.undo_stack.len() > UNDO_DEPTH {
+                self.undo_stack.remove(0);
+            }
+            self.redo_stack.clear();
+        }
+        self.compile_and_apply();
+        self.graph_view.topology_changed = false;
+    }
+
     /// Build cpal streams and start audio processing.
     ///
     /// Streams are stored in `_audio_streams` and stay alive until dropped.
@@ -483,7 +505,12 @@ impl SonidoApp {
                             .font(FontId::monospace(10.0))
                             .color(theme.colors.text_secondary),
                     );
-                    ui.text_edit_singleline(&mut self.palette_filter);
+                    // Auto-focus on open so you can type-to-filter immediately
+                    // (keyboard-driven add — no extra click into the field).
+                    let search = ui.text_edit_singleline(&mut self.palette_filter);
+                    if search.gained_focus() || ui.memory(|m| m.focused().is_none()) {
+                        search.request_focus();
+                    }
                 });
                 ui.separator();
                 egui::ScrollArea::vertical()
@@ -1032,8 +1059,9 @@ impl SonidoApp {
             ui.add_space(8.0);
             ui.label(
                 egui::RichText::new(
-                    "Right-click canvas: add nodes \u{00b7} Click a node: edit params \u{00b7} \
-                     Right-click a knob: map to a macro \u{00b7} Ctrl+Z: undo \u{00b7} Ctrl+Scroll: zoom",
+                    "+ or right-click: add node \u{00b7} Select a node, Delete: remove \u{00b7} \
+                     Up/Down: adjust focused knob, Left/Right: move between \u{00b7} \
+                     Space: play \u{00b7} Ctrl+Z: undo \u{00b7} Ctrl+Scroll: zoom",
                 )
                 .font(FontId::monospace(10.0))
                 .color(theme.colors.text_secondary)
@@ -1975,9 +2003,13 @@ impl eframe::App for SonidoApp {
         #[cfg(not(target_arch = "wasm32"))]
         ctx.request_repaint_after(Duration::from_millis(if is_animating { 16 } else { 250 }));
 
-        // Global keyboard shortcuts (only when no text widget is focused)
-        let no_widget_focused = ctx.memory(|m| m.focused().is_none());
-        if no_widget_focused && ctx.input(|i| i.key_pressed(egui::Key::Space)) {
+        // Global keyboard shortcuts. Active whenever a text field is NOT capturing
+        // the keyboard — so they work while a knob (or the graph) is focused, but
+        // not while typing in a search/name field. Space is *consumed* so a focused
+        // knob can't swallow it (egui otherwise treats Space as a click on the
+        // focused widget).
+        let typing = ctx.wants_keyboard_input();
+        if !typing && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Space)) {
             let can_play = match self.file_player.source_mode() {
                 crate::signal_generator::SourceMode::Generator => true,
                 crate::signal_generator::SourceMode::File => self.file_player.has_file(),
@@ -1989,7 +2021,7 @@ impl eframe::App for SonidoApp {
 
         // Undo / redo for structural edits (Ctrl+Z, Ctrl+Shift+Z, or Ctrl+Y).
         // `command` is Ctrl on Linux/Windows and ⌘ on macOS.
-        if no_widget_focused {
+        if !typing {
             let (do_undo, do_redo) = ctx.input(|i| {
                 let cmd = i.modifiers.command;
                 let shift = i.modifiers.shift;
@@ -2143,22 +2175,12 @@ impl eframe::App for SonidoApp {
                         })
                         .inner;
 
-                    // Auto-compile when topology changes (connect/disconnect/remove)
-                    // and record the pre-edit snapshot as an undo point. (Undo/redo
-                    // restores rebuild the snarl too, but `show()` clears the flag
-                    // each frame before this check, so our own restores never
-                    // re-enter here and corrupt the stacks.)
-                    if self.graph_view.topology_changed {
-                        if let Some(prev) = self.undo_pending.take() {
-                            self.undo_stack.push(prev);
-                            const UNDO_DEPTH: usize = 64;
-                            if self.undo_stack.len() > UNDO_DEPTH {
-                                self.undo_stack.remove(0);
-                            }
-                            self.redo_stack.clear();
-                        }
-                        self.compile_and_apply();
-                    }
+                    // Auto-compile in-`show` topology edits (connect/disconnect,
+                    // right-click add/remove), recording the pre-edit snapshot as
+                    // an undo point. Undo/redo restores rebuild the snarl too, but
+                    // `show()` clears the flag each frame before this check, so our
+                    // own restores never re-enter here and corrupt the stacks.
+                    self.apply_topology_change();
 
                     child.add_space(8.0);
 
@@ -2189,6 +2211,27 @@ impl eframe::App for SonidoApp {
             // bar + effect palette). Additive on desktop; the only add/edit path
             // on touch, where snarl's right-click menus are unreachable.
             self.render_graph_overlays(ctx, center_rect);
+
+            // Delete / Backspace removes the selected effect node — no action-bar
+            // click needed. Gated to graph mode, a selected effect, and not typing.
+            if !typing
+                && !self.single_effect
+                && self.graph_view.selected_is_effect()
+                && ctx.input(|i| {
+                    i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace)
+                })
+                && let Some(node) = self.graph_view.selected_node
+            {
+                if self.undo_pending.is_none() {
+                    self.undo_pending = Some(self.snapshot());
+                }
+                self.graph_view.remove_node(node);
+            }
+
+            // Recompile edits made *after* show() — the "+" FAB add, the node
+            // action bar, and the Delete key above all land here and would
+            // otherwise update only the visual graph, not the audio engine.
+            self.apply_topology_change();
 
             // Advance parent cursor past all three columns
             ui.advance_cursor_after_rect(Rect::from_min_max(
