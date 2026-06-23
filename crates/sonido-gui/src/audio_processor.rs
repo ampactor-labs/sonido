@@ -322,6 +322,22 @@ impl AudioProcessor {
         self.graph
             .process_block_stereo(&raw_left, &raw_right, &mut wet_left, &mut wet_right);
 
+        // Self-heal from a runaway effect. A high-feedback reverb fed a sustained
+        // tone (or any unstable state) can drive a feedback buffer to Inf/NaN,
+        // which then poisons EVERY later block — the audio never comes back, even
+        // after stop/play, because the poison lives in the effect's delay line.
+        // If the block went non-finite, flush the whole graph's state and silence
+        // this block so the next one starts clean.
+        if wet_left
+            .iter()
+            .chain(wet_right.iter())
+            .any(|s| !s.is_finite())
+        {
+            self.graph.reset();
+            wet_left.fill(0.0);
+            wet_right.fill(0.0);
+        }
+
         // Apply global bypass crossfade per sample and master volume, write output
         let mut output_peak = 0.0_f32;
         let mut output_rms_sum = 0.0_f32;
@@ -348,6 +364,22 @@ impl AudioProcessor {
 
             let l = l * mv;
             let r = r * mv;
+
+            // Output safety net: never send a non-finite or runaway-loud sample to
+            // the device. Flush non-finite to silence and hard-cap at ~+12 dBFS —
+            // transparent to normal audio (|x| <= 1), but it stops a feedback
+            // blow-up from blasting the speakers.
+            const SAFE_CEIL: f32 = 4.0;
+            let l = if l.is_finite() {
+                l.clamp(-SAFE_CEIL, SAFE_CEIL)
+            } else {
+                0.0
+            };
+            let r = if r.is_finite() {
+                r.clamp(-SAFE_CEIL, SAFE_CEIL)
+            } else {
+                0.0
+            };
 
             let mono_out = (l + r) * 0.5;
             output_peak = output_peak.max(mono_out.abs());

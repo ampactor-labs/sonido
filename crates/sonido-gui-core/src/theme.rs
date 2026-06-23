@@ -218,7 +218,13 @@ impl ThemeLayout {
     ///
     /// Returns `(graph_h, panel_h)`.
     pub fn split_vertical(&self, content_h: f32, panel_content_h: f32) -> (f32, f32) {
-        let panel_max = content_h * self.panel_max_ratio;
+        // `panel_max` must never fall below `panel_min_h`, or `clamp(min, max)`
+        // panics with `min > max`. This happens when `content_h` is tiny — e.g.
+        // the web canvas during init, before its real size is known — which used
+        // to kill the whole app (`clamp(120.0, 0.5)`). Floor the cap at the min;
+        // at a degenerate height both dimensions just take their minimums and the
+        // layout overflows gracefully instead of crashing.
+        let panel_max = (content_h * self.panel_max_ratio).max(self.panel_min_h);
         let panel_h = panel_content_h.clamp(self.panel_min_h, panel_max);
         let graph_h = (content_h - panel_h).max(self.graph_min_h);
         (graph_h, panel_h)
@@ -361,6 +367,20 @@ mod layout_tests {
         let layout = ThemeLayout::default();
         let (graph_h, _) = layout.split_vertical(300.0, 200.0);
         assert!(graph_h >= layout.graph_min_h);
+    }
+
+    #[test]
+    fn split_vertical_survives_tiny_content() {
+        // A degenerate height (the web canvas during init) used to panic via
+        // `clamp(panel_min_h=120, panel_max<120)`. It must now be panic-free and
+        // finite for any non-negative content height.
+        let layout = ThemeLayout::default();
+        for content_h in [0.0_f32, 0.5, 1.0, 50.0, 119.9, 120.0] {
+            let (graph_h, panel_h) = layout.split_vertical(content_h, 200.0);
+            assert!(graph_h.is_finite() && panel_h.is_finite());
+            assert!(graph_h >= layout.graph_min_h);
+            assert!(panel_h >= layout.panel_min_h);
+        }
     }
 
     #[test]
