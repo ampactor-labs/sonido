@@ -292,6 +292,24 @@ impl SonidoApp {
         self._audio_streams.clear();
     }
 
+    /// Toggle the transport from the single Play/Pause control.
+    ///
+    /// On the web a click is a user-activation gesture, so we also nudge the
+    /// (possibly still-suspended) AudioContext to resume here — guaranteeing one
+    /// tap on PLAY both starts the source and unblocks audio output. On native
+    /// the cfg block compiles out and this is just a play/pause toggle.
+    fn toggle_transport(&mut self) {
+        #[cfg(target_arch = "wasm32")]
+        {
+            use cpal::traits::StreamTrait;
+            for stream in &self._audio_streams {
+                let _ = stream.play();
+            }
+            self.audio_resumed = true;
+        }
+        self.file_player.toggle_play_pause();
+    }
+
     /// Get the current buffer size in samples.
     ///
     /// The buffer size determines the latency and CPU usage characteristics:
@@ -413,6 +431,31 @@ impl SonidoApp {
                     .strong(),
             );
             ui.add_space(12.0);
+
+            // Transport: ONE prominent Play/Pause for both GEN and FILE sources.
+            // Green when playing, amber when stopped. On the web the click is a
+            // user gesture, so toggle_transport() also resumes the AudioContext —
+            // one tap on PLAY both starts the source and unblocks the output.
+            let playing = self.file_player.is_playing();
+            let (play_label, play_color) = if playing {
+                ("PAUSE", theme.colors.green)
+            } else {
+                ("PLAY", theme.colors.amber)
+            };
+            let play_btn = ui.button(
+                egui::RichText::new(play_label)
+                    .font(FontId::monospace(14.0))
+                    .color(play_color)
+                    .strong(),
+            );
+            let play_led = pos2(play_btn.rect.right() + 8.0, play_btn.rect.center().y);
+            glow::glow_circle(ui.painter(), play_led, 3.0, play_color, &theme);
+            ui.add_space(12.0);
+            if play_btn.on_hover_text("Play / Pause  (Space)").clicked() {
+                self.toggle_transport();
+            }
+
+            ui.separator();
 
             // BYPASS (promoted from status bar)
             let chain_bypassed = self.audio_bridge.chain_bypass().load(Ordering::Relaxed);
@@ -1542,10 +1585,16 @@ impl eframe::App for SonidoApp {
         }
 
         // Resume audio on first user gesture (wasm autoplay policy).
-        // Browsers suspend AudioContext until a trusted user interaction.
-        // Re-calling play() from within the user-activation window resumes it.
+        // Browsers suspend the AudioContext until a *trusted* user interaction;
+        // re-calling play() from within that activation window resumes it.
+        //
+        // Gate strictly on a pointer PRESS. The previous `|| !i.events.is_empty()`
+        // clause also fired on a mere mouse-move (egui pushes PointerMoved every
+        // frame), which is NOT a user-activation gesture — so resume() was denied
+        // yet `audio_resumed` latched true, leaving the context suspended forever
+        // and the demo silent no matter what was clicked afterward.
         #[cfg(target_arch = "wasm32")]
-        if !self.audio_resumed && ctx.input(|i| i.pointer.any_pressed() || !i.events.is_empty()) {
+        if !self.audio_resumed && ctx.input(|i| i.pointer.any_pressed()) {
             use cpal::traits::StreamTrait;
             for stream in &self._audio_streams {
                 let _ = stream.play();
