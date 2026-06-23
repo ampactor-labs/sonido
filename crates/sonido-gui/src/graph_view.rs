@@ -432,6 +432,85 @@ impl GraphView {
             .count()
     }
 
+    /// Add an effect node by registry id, splicing it into the nearest wire.
+    ///
+    /// The touch / "+"-FAB add path: egui-snarl's add menu is right-click only
+    /// (no touch equivalent — eframe-web never synthesizes a secondary click),
+    /// so the FAB calls this directly. Mirrors the right-click palette body but
+    /// takes an explicit id and inserts near the graph centroid so
+    /// [`splice_at_nearest`] lands it in the main signal chain. Selects the new
+    /// node so its param panel opens immediately.
+    pub fn add_effect_node(&mut self, effect_id: &str) {
+        let registry = EffectRegistry::new();
+        let Some(desc) = registry.get(effect_id) else {
+            return;
+        };
+        let pos = self.nodes_centroid();
+        let new_id = self.snarl.insert_node(
+            pos,
+            SonidoNode::Effect {
+                effect_id: desc.id,
+                name: desc.name,
+                category: desc.category,
+                descriptors: collect_descriptors(desc.id, 48000.0),
+                smoothing: collect_smoothing(desc.id, 48000.0),
+            },
+        );
+        splice_at_nearest(&mut self.snarl, new_id, pos);
+        self.selected_node = Some(new_id);
+        self.topology_changed = true;
+        self.auto_arrange();
+    }
+
+    /// Remove a node (touch action-bar path; mirrors the right-click Remove).
+    pub fn remove_node(&mut self, node: NodeId) {
+        if self.selected_node == Some(node) {
+            self.selected_node = None;
+        }
+        self.snarl.remove_node(node);
+        self.topology_changed = true;
+        self.auto_arrange();
+    }
+
+    /// Duplicate a node (touch action-bar path; mirrors the right-click Duplicate).
+    pub fn duplicate_node(&mut self, node: NodeId) {
+        let original = self.snarl[node].clone();
+        let base = self
+            .snarl
+            .get_node_info(node)
+            .map_or(egui::pos2(0.0, 0.0), |n| n.pos);
+        let new_id = self
+            .snarl
+            .insert_node(base + egui::vec2(30.0, 30.0), original);
+        self.selected_node = Some(new_id);
+        self.topology_changed = true;
+        self.auto_arrange();
+    }
+
+    /// Whether the currently selected node is an editable effect (not I/O).
+    pub fn selected_is_effect(&self) -> bool {
+        self.selected_node
+            .map(|n| matches!(self.snarl[n], SonidoNode::Effect { .. }))
+            .unwrap_or(false)
+    }
+
+    /// Centroid of all node positions — a sensible fallback insert anchor.
+    fn nodes_centroid(&self) -> egui::Pos2 {
+        let mut sum = egui::Vec2::ZERO;
+        let mut count = 0.0;
+        for (id, _) in self.snarl.node_ids() {
+            if let Some(info) = self.snarl.get_node_info(id) {
+                sum += info.pos.to_vec2();
+                count += 1.0;
+            }
+        }
+        if count > 0.0 {
+            (sum / count).to_pos2()
+        } else {
+            egui::pos2(300.0, 200.0)
+        }
+    }
+
     /// Compiles the Snarl topology into a [`GraphCommand::ReplaceTopology`].
     ///
     /// Walks all nodes and connections, builds a [`ProcessingGraph`], creates

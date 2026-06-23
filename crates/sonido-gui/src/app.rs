@@ -87,10 +87,8 @@ pub struct SonidoApp {
     /// Frames remaining for compile success flash.
     compile_success_frames: u32,
 
-    /// Latched clip indicator for input meter (click to reset).
-    input_clip_latched: bool,
-    /// Latched clip indicator for output meter (click to reset).
-    output_clip_latched: bool,
+    /// Latched clip indicators `[input, output]` (click to reset).
+    clip_latched: [bool; 2],
 
     /// Last export/flash result shown in the header: `Ok` = success (green),
     /// `Err` = failure (red). Cleared/replaced on the next export.
@@ -104,6 +102,47 @@ pub struct SonidoApp {
     /// Snapshot taken at the start of any frame with pointer activity, promoted
     /// to the undo stack if that frame produced a structural edit.
     undo_pending: Option<crate::session::Session>,
+
+    /// Viewport size class, recomputed each frame from the window width. Drives
+    /// touch-target sizing and (later) responsive layout. Resolves to Desktop on
+    /// the native 1000×700 window, so desktop behavior is unchanged.
+    breakpoint: Breakpoint,
+    /// Whether the touch effect-palette ("+" FAB) sheet is open.
+    palette_open: bool,
+    /// Live search text for the effect-palette sheet.
+    palette_filter: String,
+}
+
+/// Viewport size class. Touch affordances are *additive* at every tier — a
+/// Desktop user sees today's behavior; narrower tiers add finger-friendly
+/// targets and (later) reflow chrome into drawers.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Breakpoint {
+    /// ≥900px — the full desktop layout (today's behavior, unchanged).
+    Desktop,
+    /// 600–900px — wrapped chrome plus enlarged touch targets.
+    Tablet,
+    /// <600px — full-width canvas, drawers, FAB; the only sub-800px path, which
+    /// only the web demo reaches (native enforces an 800×550 minimum).
+    Phone,
+}
+
+impl Breakpoint {
+    /// Classify from available width in points.
+    pub fn from_width(w: f32) -> Self {
+        if w >= 900.0 {
+            Breakpoint::Desktop
+        } else if w >= 600.0 {
+            Breakpoint::Tablet
+        } else {
+            Breakpoint::Phone
+        }
+    }
+
+    /// True for Tablet/Phone — where touch targets enlarge and chrome collapses.
+    pub fn is_compact(self) -> bool {
+        !matches!(self, Breakpoint::Desktop)
+    }
 }
 
 impl SonidoApp {
@@ -181,13 +220,15 @@ impl SonidoApp {
             single_effect,
             compile_error: None,
             compile_success_frames: 0,
-            input_clip_latched: false,
-            output_clip_latched: false,
+            clip_latched: [false; 2],
             #[cfg(not(target_arch = "wasm32"))]
             export_msg: None,
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             undo_pending: None,
+            breakpoint: Breakpoint::Desktop,
+            palette_open: false,
+            palette_filter: String::new(),
         };
 
         // Apply theme
@@ -308,6 +349,154 @@ impl SonidoApp {
             self.audio_resumed = true;
         }
         self.file_player.toggle_play_pause();
+    }
+
+    /// Floating touch-authoring overlays over the canvas `area`: the "+" add-node
+    /// FAB, a contextual action bar for the selected node, and the effect-palette
+    /// sheet. egui-snarl's add/remove menus are right-click-only (eframe-web never
+    /// synthesizes a secondary click), so these give touch — and discoverability —
+    /// a first-class path. All additive: desktop keeps right-click and keyboard.
+    fn render_graph_overlays(&mut self, ctx: &Context, area: Rect) {
+        if self.single_effect {
+            return;
+        }
+        let theme = SonidoTheme::get(ctx);
+        let fab = if self.breakpoint.is_compact() {
+            52.0
+        } else {
+            38.0
+        };
+        let margin = 14.0;
+
+        // "+" add-node FAB, bottom-right of the canvas (thumb-reachable).
+        egui::Area::new(egui::Id::new("add_node_fab"))
+            .fixed_pos(pos2(area.max.x - fab - margin, area.max.y - fab - margin))
+            .order(egui::Order::Foreground)
+            .show(ctx, |ui| {
+                let (rect, resp) = ui.allocate_exact_size(vec2(fab, fab), egui::Sense::click());
+                let hot = resp.hovered() || self.palette_open;
+                let (bg, fg) = if hot {
+                    (theme.colors.amber, theme.colors.void)
+                } else {
+                    (theme.colors.void, theme.colors.amber)
+                };
+                let p = ui.painter();
+                p.circle_filled(rect.center(), fab * 0.5, bg);
+                p.circle_stroke(
+                    rect.center(),
+                    fab * 0.5,
+                    egui::Stroke::new(1.5, theme.colors.amber),
+                );
+                p.text(
+                    rect.center(),
+                    egui::Align2::CENTER_CENTER,
+                    "+",
+                    egui::FontId::monospace(fab * 0.6),
+                    fg,
+                );
+                if resp.on_hover_text("Add effect").clicked() {
+                    self.palette_open = !self.palette_open;
+                }
+            });
+
+        // Contextual action bar for the selected effect node (touch Remove/Dup).
+        if self.graph_view.selected_is_effect() {
+            egui::Area::new(egui::Id::new("node_action_bar"))
+                .fixed_pos(pos2(area.min.x + margin, area.min.y + margin))
+                .order(egui::Order::Foreground)
+                .show(ctx, |ui| {
+                    egui::Frame::popup(ui.style()).show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            if ui
+                                .button(
+                                    egui::RichText::new("Duplicate")
+                                        .font(FontId::monospace(11.0))
+                                        .color(theme.colors.text_primary),
+                                )
+                                .clicked()
+                                && let Some(n) = self.graph_view.selected_node
+                            {
+                                self.graph_view.duplicate_node(n);
+                            }
+                            if ui
+                                .button(
+                                    egui::RichText::new("Remove")
+                                        .font(FontId::monospace(11.0))
+                                        .color(theme.colors.red),
+                                )
+                                .clicked()
+                                && let Some(n) = self.graph_view.selected_node
+                            {
+                                self.graph_view.remove_node(n);
+                            }
+                        });
+                    });
+                });
+        }
+
+        // Effect-palette sheet (opened by the FAB).
+        if self.palette_open {
+            let filter = self.palette_filter.to_lowercase();
+            let effects: Vec<(&'static str, &'static str)> = self
+                .registry
+                .all_effects()
+                .iter()
+                .filter(|d| {
+                    filter.is_empty()
+                        || d.name.to_lowercase().contains(&filter)
+                        || d.id.contains(&filter)
+                })
+                .map(|d| (d.id, d.name))
+                .collect();
+
+            let mut open = true;
+            let mut chosen: Option<&'static str> = None;
+            egui::Window::new(
+                egui::RichText::new("ADD EFFECT")
+                    .font(FontId::monospace(12.0))
+                    .color(theme.colors.amber),
+            )
+            .id(egui::Id::new("effect_palette"))
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_BOTTOM, vec2(0.0, -48.0))
+            .show(ctx, |ui| {
+                ui.set_min_width(260.0);
+                ui.horizontal(|ui| {
+                    ui.label(
+                        egui::RichText::new("Search")
+                            .font(FontId::monospace(10.0))
+                            .color(theme.colors.text_secondary),
+                    );
+                    ui.text_edit_singleline(&mut self.palette_filter);
+                });
+                ui.separator();
+                egui::ScrollArea::vertical()
+                    .max_height(300.0)
+                    .show(ui, |ui| {
+                        for (id, name) in &effects {
+                            if ui
+                                .add(
+                                    egui::Button::new(
+                                        egui::RichText::new(*name).font(FontId::monospace(12.0)),
+                                    )
+                                    .min_size(vec2(244.0, 28.0)),
+                                )
+                                .clicked()
+                            {
+                                chosen = Some(id);
+                            }
+                        }
+                    });
+            });
+            if let Some(id) = chosen {
+                self.graph_view.add_effect_node(id);
+                self.palette_filter.clear();
+                open = false;
+            }
+            self.palette_open = open;
+        }
     }
 
     /// Get the current buffer size in samples.
@@ -453,6 +642,44 @@ impl SonidoApp {
             ui.add_space(12.0);
             if play_btn.on_hover_text("Play / Pause  (Space)").clicked() {
                 self.toggle_transport();
+            }
+
+            ui.separator();
+
+            // Undo / Redo — touch-reachable (was keyboard-only, dead on mobile).
+            let can_undo = !self.undo_stack.is_empty();
+            let can_redo = !self.redo_stack.is_empty();
+            let undo_color = if can_undo {
+                theme.colors.text_primary
+            } else {
+                theme.colors.dim
+            };
+            if ui
+                .button(
+                    egui::RichText::new("UNDO")
+                        .font(FontId::monospace(11.0))
+                        .color(undo_color),
+                )
+                .on_hover_text("Undo  (Ctrl+Z)")
+                .clicked()
+            {
+                self.undo();
+            }
+            let redo_color = if can_redo {
+                theme.colors.text_primary
+            } else {
+                theme.colors.dim
+            };
+            if ui
+                .button(
+                    egui::RichText::new("REDO")
+                        .font(FontId::monospace(11.0))
+                        .color(redo_color),
+                )
+                .on_hover_text("Redo  (Ctrl+Shift+Z)")
+                .clicked()
+            {
+                self.redo();
             }
 
             ui.separator();
@@ -612,11 +839,7 @@ impl SonidoApp {
                 ui.add(LevelMeter::new(peak, rms).size(20.0, 100.0));
 
                 // Clip indicator (latched, click to reset)
-                let clip_latched = if is_input {
-                    &mut self.input_clip_latched
-                } else {
-                    &mut self.output_clip_latched
-                };
+                let clip_latched = &mut self.clip_latched[usize::from(!is_input)];
                 if peak > 1.0 {
                     *clip_latched = true;
                 }
@@ -1571,6 +1794,9 @@ fn draw_sparkline(
 
 impl eframe::App for SonidoApp {
     fn update(&mut self, ctx: &Context, _frame: &mut eframe::Frame) {
+        // Classify the viewport once per frame; touch affordances key off this.
+        self.breakpoint = Breakpoint::from_width(ctx.screen_rect().width());
+
         // Update metering data
         if let Some(data) = self.audio_bridge.receive_metering() {
             self.cpu_usage = data.cpu_usage;
@@ -1806,6 +2032,11 @@ impl eframe::App for SonidoApp {
                 );
                 self.render_io_strip(&mut child, false);
             }
+
+            // Touch-authoring overlays floated over the canvas (FAB + node action
+            // bar + effect palette). Additive on desktop; the only add/edit path
+            // on touch, where snarl's right-click menus are unreachable.
+            self.render_graph_overlays(ctx, center_rect);
 
             // Advance parent cursor past all three columns
             ui.advance_cursor_after_rect(Rect::from_min_max(
