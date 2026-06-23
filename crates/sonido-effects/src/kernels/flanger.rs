@@ -584,8 +584,8 @@ mod tests {
             let (l, r) = kernel.process_stereo(0.1, 0.1, &params);
             assert!(l.is_finite(), "Left blew up at sample {i}: {l}");
             assert!(r.is_finite(), "Right blew up at sample {i}: {r}");
-            assert!(l.abs() < 10.0, "Left exceeded bounds at sample {i}: {l}",);
-            assert!(r.abs() < 10.0, "Right exceeded bounds at sample {i}: {r}",);
+            assert!(l.abs() < 10.0, "Left exceeded bounds at sample {i}: {l}");
+            assert!(r.abs() < 10.0, "Right exceeded bounds at sample {i}: {r}");
         }
     }
 
@@ -919,7 +919,7 @@ mod tests {
         kernel.reset();
 
         let (l, r) = kernel.process_stereo(0.0, 0.0, &params);
-        assert!(l.abs() < 0.01, "Left should be silent after reset, got {l}",);
+        assert!(l.abs() < 0.01, "Left should be silent after reset, got {l}");
         assert!(
             r.abs() < 0.01,
             "Right should be silent after reset, got {r}",

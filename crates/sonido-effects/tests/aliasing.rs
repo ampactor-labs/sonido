@@ -104,12 +104,12 @@ fn inharmonic_energy_ratio(signal: &[f32], fundamental_hz: f32) -> f32 {
         total_energy += power;
 
         // Is this bin within ±1 of a harmonic?
-        let is_harmonic = if fundamental_bin > 0 {
-            let harmonic_number = (k + fundamental_bin / 2) / fundamental_bin;
-            let nearest_harmonic_bin = harmonic_number * fundamental_bin;
-            k.abs_diff(nearest_harmonic_bin) <= 1
-        } else {
-            false
+        let is_harmonic = match (k + fundamental_bin / 2).checked_div(fundamental_bin) {
+            Some(harmonic_number) => {
+                let nearest_harmonic_bin = harmonic_number * fundamental_bin;
+                k.abs_diff(nearest_harmonic_bin) <= 1
+            }
+            None => false,
         };
 
         if is_harmonic {
