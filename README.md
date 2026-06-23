@@ -1,6 +1,6 @@
 # Sonido
 
-A three-layer DSP kernel architecture built in Rust that runs identically on CLAP (VST3 incoming) plugins, and ARM (Electrosmith Daisy Seed - STM32H750, 480 MHz Cortex-M7) via `no_std` core, dynamic build target adapter, parameter bridge, and a shared DSL. Convenience-first with `from_knobs()` for ADC-param mapping and baked-in `lerp()` for easy multi-param morphing.
+A three-layer DSP kernel architecture in Rust that runs identically as CLAP plugins (VST3 incoming) and on ARM (Electrosmith Daisy Seed: STM32H750, 480 MHz Cortex-M7), via a `no_std` core, a dynamic build-target adapter, a parameter bridge, and a shared DSL. `from_knobs()` maps ADC readings to parameter ranges, and `lerp()` interpolates between multi-param presets.
 
 DAG orchestration with 35 effects, synthesis engine, spectral analysis, real-time GUI node-graph editor.
 
@@ -8,7 +8,7 @@ DAG orchestration with 35 effects, synthesis engine, spectral analysis, real-tim
 [![License: AGPL-3.0 + Commercial](https://img.shields.io/badge/License-AGPL--3.0%20%2B%20Commercial-blue.svg)](LICENSE)
 [![Rust Edition](https://img.shields.io/badge/Rust-Edition%202024-orange.svg)](https://doc.rust-lang.org/edition-guide/)
 
-**[▶ Try the live browser demo](https://ampactor.dev/sonido/)** — the node-graph editor, compiled to WebAssembly.
+**[▶ Try the live browser demo](https://ampactor.dev/sonido/)**: the node-graph editor, compiled to WebAssembly.
 
 ![Sonido node-graph editor](docs/img/editor.png)
 
@@ -24,7 +24,7 @@ sonido-effects = { git = "https://github.com/ampactor-labs/sonido" }
 
 ### Embedded / Bare-Metal Path
 
-Direct kernel access — no allocator, no smoothing overhead, no trait objects. The kernel receives typed parameters each sample and returns audio:
+Direct kernel access, with no allocator, no smoothing overhead, and no trait objects. The kernel receives typed parameters each sample and returns audio:
 
 ```rust
 use sonido_effects::kernels::{DistortionKernel, DistortionParams};
@@ -82,7 +82,7 @@ Every effect is implemented as a three-layer stack that separates pure DSP from 
 │                     XxxKernel                            │
 │  Pure DSP state: filters, delay lines, ADAA stages       │
 │  process_stereo(&mut self, l, r, &Params) → (l, r)      │
-│  No parameter ownership — receives &Params each sample   │
+│  No parameter ownership; receives &Params each sample    │
 │  Embedded / Bare-metal consumer                          │
 ├─────────────────────────────────────────────────────────┤
 │                     XxxParams                            │
@@ -93,12 +93,12 @@ Every effect is implemented as a three-layer stack that separates pure DSP from 
 └─────────────────────────────────────────────────────────┘
 ```
 
-**Why this matters for embedded**: The kernel never allocates, never owns parameters, and never smooths. On a Cortex-M7, your DMA audio callback calls `kernel.process_stereo()` with parameters constructed directly from ADC readings. The `Adapter<K, SmoothedPolicy>` layer — smoothing, trait dispatch, boxing — only exists on desktop where you can afford it.
+On embedded, the kernel never allocates, never owns parameters, and never smooths. On a Cortex-M7, the DMA audio callback calls `kernel.process_stereo()` with parameters built directly from ADC readings. The `Adapter<K, SmoothedPolicy>` layer (smoothing, trait dispatch, boxing) exists only on desktop, where there is headroom for it.
 
 ### Anti-Aliasing
 
 - **ADAA** (Anti-Derivative Anti-Aliasing): First-order ADAA on all nonlinear kernels (distortion, tape saturation). Reference: Parker et al., "Reducing the Aliasing of Nonlinear Waveshaping Using Continuous-Time Convolution" (DAFx-2016).
-- **Oversampled\<N, E\> wrapper**: 2×/4×/8× oversampling with 48-tap FIR filter (>80 dB stopband rejection). Wraps any `Effect` — the inner effect runs at N× the base sample rate.
+- **Oversampled\<N, E\> wrapper**: 2×/4×/8× oversampling with a 48-tap FIR filter (>80 dB stopband rejection). Wraps any `Effect`, running the inner effect at N× the base sample rate.
 
 ### Parameter Smoothing
 
@@ -106,14 +106,14 @@ Every effect is implemented as a three-layer stack that separates pure DSP from 
 
 | Style | Time | Use Case |
 |-------|------|----------|
-| `None` | 0 ms | Stepped/enum params — snap immediately |
-| `Fast` | 5 ms | Drive, nonlinear gain — fast response |
+| `None` | 0 ms | Stepped/enum params; snap immediately |
+| `Fast` | 5 ms | Drive, nonlinear gain; fast response |
 | `Standard` | 10 ms | Most continuous params (rate, depth, mix) |
 | `Slow` | 20 ms | Filter coefficients, EQ bands |
-| `Interpolated` | 50 ms | Delay time, predelay — glitch-free |
+| `Interpolated` | 50 ms | Delay time, predelay; glitch-free |
 | `Custom(ms)` | arbitrary | Special cases |
 
-The kernel never sees smoothing. On embedded, ADC readings are already hardware-filtered — smoothing is skipped entirely.
+The kernel never sees smoothing. On embedded, ADC readings are already hardware-filtered, so smoothing is skipped entirely.
 
 ### Preset Morphing
 
@@ -138,17 +138,17 @@ let blended = DistortionParams::lerp(&clean_preset, &heavy_preset, 0.5);
 
 Target hardware: **Electrosmith Daisy Seed** (STM32H750, Cortex-M7 @ 480 MHz, 64 MB SDRAM) and **PedalPCB Hothouse** DIY pedal platform (6 knobs, 3 toggles, stereo I/O).
 
-`no_std` across 6 crates (`sonido-core`, `sonido-effects`, `sonido-synth`, `sonido-registry`, `sonido-platform`, `sonido-daisy`). All math via `libm`. All 35 effects provide `from_knobs()` for direct 0.0–1.0 ADC-to-parameter mapping.
+`no_std` across 6 crates (`sonido-core`, `sonido-effects`, `sonido-synth`, `sonido-registry`, `sonido-platform`, `sonido-daisy`). All math via `libm`. All 35 effects provide `from_knobs()` for direct 0.0 to 1.0 ADC-to-parameter mapping.
 
 ### Morph Pedal Demo
 
-The `sonido_pedal` firmware is Sonido's flagship embedded demo — a 3-slot multi-effect with real-time morphing, running on the Hothouse at 48 kHz / 128 samples:
+The `sonido_pedal` firmware is the embedded demo: a 3-slot multi-effect with real-time morphing, running on the Hothouse at 48 kHz / 128 samples.
 
-- **3 effect slots** — scroll through all 35 effects per slot via footswitch
-- **Topology switching** — serial, parallel (split/merge), and fan routing, live via toggle
-- **Per-node A/B editing** — capture Sound A and Sound B independently for each slot
-- **Real-time morphing** — expression-ready sweep between A/B snapshots across all slots via `KernelParams::lerp()`
-- **Zero-allocation audio path** — DMA callback calls `kernel.process_stereo()` directly
+- **3 effect slots**: scroll through all 35 effects per slot via footswitch
+- **Topology switching**: serial, parallel (split/merge), and fan routing, live via toggle
+- **Per-node A/B editing**: capture Sound A and Sound B independently for each slot
+- **Real-time morphing**: expression-ready sweep between A/B snapshots across all slots via `KernelParams::lerp()`
+- **Zero-allocation audio path**: DMA callback calls `kernel.process_stereo()` directly
 
 ```bash
 # Build and flash
@@ -174,7 +174,7 @@ fn audio_callback(left_in: &[f32], right_in: &[f32],
         read_adc(0), read_adc(1), read_adc(2), read_adc(3), read_adc(4),
     );
 
-    // Block processing — no allocation, no trait dispatch
+    // Block processing: no allocation, no trait dispatch
     kernel.process_block_stereo(left_in, right_in, left_out, right_out, &params);
 }
 ```
@@ -183,7 +183,7 @@ The `PlatformController` trait and `ControlMapper` in `sonido-platform` provide 
 
 ## Effects (35)
 
-> **Measured, not just present.** [docs/DSP_MEASUREMENTS.md](docs/DSP_MEASUREMENTS.md) reports reproducible THD-vs-drive, harmonic structure, and reverb RT60 figures, generated by `cargo run --release --example dsp_report -p sonido-effects` through the in-repo FFT/THD tooling.
+> [docs/DSP_MEASUREMENTS.md](docs/DSP_MEASUREMENTS.md) reports reproducible THD-vs-drive, harmonic structure, and reverb RT60 figures, generated by `cargo run --release --example dsp_report -p sonido-effects` through the in-repo FFT/THD tooling.
 
 | Effect | Category | True Stereo | Key Parameters |
 |--------|----------|:-----------:|----------------|
@@ -254,7 +254,7 @@ graph.connect(merge, output)?;
 graph.compile()?;  // Kahn sort → liveness analysis → latency compensation
 ```
 
-- **Buffer liveness analysis**: Minimizes memory — a 20-node chain uses only 2 buffers
+- **Buffer liveness analysis**: minimizes memory, so a 20-node chain uses only 2 buffers
 - **Latency compensation**: Auto-inserts delay lines on shorter parallel paths
 - **Atomic schedule swap**: Compiled schedules swap via `Arc` with ~5ms crossfade (click-free)
 - **Graph DSL**: `"preamp:gain=6 | distortion:drive=15 | reverb:mix=0.3"`
@@ -312,7 +312,7 @@ graph TD
 
 ## CLAP Plugins
 
-Sonido builds **19 single-effect CLAP plugins** plus a **graph-player** plugin that hosts any rig exported from the GUI — each with an embedded egui GUI. Compatible with Bitwig, Reaper, Ardour, and any CLAP-compatible DAW. **VST3/AU** are produced from the same CLAP source via [`clap-wrapper`](https://github.com/free-audio/clap-wrapper) (external build step).
+Sonido builds **19 single-effect CLAP plugins** plus a **graph-player** plugin that hosts any rig exported from the GUI. Each has an embedded egui GUI. Compatible with Bitwig, Reaper, Ardour, and any CLAP-compatible DAW. **VST3/AU** are produced from the same CLAP source via [`clap-wrapper`](https://github.com/free-audio/clap-wrapper) (external build step).
 
 ```bash
 # Build and install all plugins to ~/.clap/ (Linux)
@@ -326,7 +326,7 @@ Tagged releases ship pre-built `.clap` bundles for Linux, macOS (x64 + arm64), a
 
 Single-effect plugins: `sonido-preamp`, `sonido-distortion`, `sonido-compressor`, `sonido-gate`, `sonido-eq`, `sonido-wah`, `sonido-chorus`, `sonido-flanger`, `sonido-phaser`, `sonido-tremolo`, `sonido-delay`, `sonido-filter`, `sonido-vibrato`, `sonido-tape`, `sonido-reverb`, `sonido-limiter`, `sonido-bitcrusher`, `sonido-ringmod`, `sonido-stage`.
 
-Graph plugin: `sonido-graph-player` — loads `.sonidopatch.json` rigs authored and exported from the GUI (**Export ▸ Export as CLAP patch**), so a whole multi-effect graph runs as one plugin.
+Graph plugin: `sonido-graph-player` loads `.sonidopatch.json` rigs authored and exported from the GUI (**Export ▸ Export as CLAP patch**), so a whole multi-effect graph runs as one plugin.
 
 ## Synthesis Engine
 
@@ -385,13 +385,13 @@ cargo run -p sonido-gui --release
 
 A node-graph editor for building DAG effect rigs, with:
 
-- **Visual routing** — right-click to add nodes from a searchable palette; new nodes splice into the nearest wire; the layout auto-arranges left→right by signal-flow depth.
-- **Per-effect controls** — parameter-scale-aware knobs (log for frequency, snap for stepped) with real-time input/output metering and per-node activity.
-- **Six performance macros (K1–K6)** — right-click any knob to map it to a macro; one macro sweeps every parameter it drives, with per-mapping range/curve and invert.
-- **A/B morph** — capture two snapshots of the whole rig and crossfade between them (curve-aware per parameter); lock individual effects out of the morph.
-- **Session save/load** — the full editor state (topology, params, A/B snapshots, macros, morph) round-trips through a versioned JSON session.
-- **Undo/redo** — `Ctrl+Z` / `Ctrl+Shift+Z` for structural edits.
-- **Export** — project the rig to a canonical patch and export it as a CLAP plugin preset, a portable JSON patch, a Daisy pedal `.bin` sector, or flash it straight to the pedal over DFU (pedal targets are validated against the device's effect/CPU/SDRAM budget first).
+- **Visual routing**: right-click to add nodes from a searchable palette; new nodes splice into the nearest wire; the layout auto-arranges left→right by signal-flow depth.
+- **Per-effect controls**: parameter-scale-aware knobs (log for frequency, snap for stepped) with real-time input/output metering and per-node activity.
+- **Six performance macros (K1-K6)**: right-click any knob to map it to a macro; one macro sweeps every parameter it drives, with per-mapping range/curve and invert.
+- **A/B morph**: capture two snapshots of the whole rig and crossfade between them (curve-aware per parameter); lock individual effects out of the morph.
+- **Session save/load**: the full editor state (topology, params, A/B snapshots, macros, morph) round-trips through a versioned JSON session.
+- **Undo/redo**: `Ctrl+Z` / `Ctrl+Shift+Z` for structural edits.
+- **Export**: project the rig to a canonical patch and export it as a CLAP plugin preset, a portable JSON patch, a Daisy pedal `.bin` sector, or flash it straight to the pedal over DFU (pedal targets are validated against the device's effect/CPU/SDRAM budget first).
 
 Built on a lock-free atomic parameter bridge (wait-free audio-thread reads) and a dark CRT-phosphor theme. Also builds to `wasm32-unknown-unknown` via Trunk for browser-based demos.
 
@@ -455,10 +455,10 @@ Effect algorithms are informed by clean-room analysis of commercial DSP hardware
 ## Documentation
 
 ### Design & Theory
-- [DSP Fundamentals](docs/DSP_FUNDAMENTALS.md) — signal processing theory behind the implementations
-- [Design Decisions](docs/DESIGN_DECISIONS.md) — architecture decision records
-- [Architecture Overview](docs/ARCHITECTURE.md) — crate structure and data flow
-- [DSP Quality Standard](docs/DSP_QUALITY_STANDARD.md) — measurement protocol and compliance
+- [DSP Fundamentals](docs/DSP_FUNDAMENTALS.md): signal processing theory behind the implementations
+- [Design Decisions](docs/DESIGN_DECISIONS.md): architecture decision records
+- [Architecture Overview](docs/ARCHITECTURE.md): crate structure and data flow
+- [DSP Quality Standard](docs/DSP_QUALITY_STANDARD.md): measurement protocol and compliance
 
 ### User Guides
 - [Getting Started](docs/GETTING_STARTED.md)
@@ -469,18 +469,18 @@ Effect algorithms are informed by clean-room analysis of commercial DSP hardware
 - [Embedded Guide](docs/EMBEDDED.md)
 
 ### Reference
-- [Biosignal Analysis](docs/reference/biosignal.md) — EEG/biosignal processing
-- [CFC Analysis](docs/reference/cfc-analysis.md) — cross-frequency coupling
-- [Hendrix Effects](docs/reference/hendrix-effects.md) — implementation brief
-- [Hendrix Signal Chain](docs/reference/hendrix-signal-chain.md) — reference chain
-- [Signature Sounds](docs/reference/signature-sounds.md) — creative DSP brainstorming
+- [Biosignal Analysis](docs/reference/biosignal.md): EEG/biosignal processing
+- [CFC Analysis](docs/reference/cfc-analysis.md): cross-frequency coupling
+- [Hendrix Effects](docs/reference/hendrix-effects.md): implementation brief
+- [Hendrix Signal Chain](docs/reference/hendrix-signal-chain.md): reference chain
+- [Signature Sounds](docs/reference/signature-sounds.md): creative DSP brainstorming
 
 ### Development
 - [Contributing](docs/CONTRIBUTING.md)
 - [Testing](docs/TESTING.md)
 - [Benchmarks](docs/BENCHMARKS.md)
 - [Changelog](docs/CHANGELOG.md)
-- [Roadmap](docs/ROADMAP.md) — current state, near-term priorities, and capability horizons
+- [Roadmap](docs/ROADMAP.md): current state, near-term priorities, and capability horizons
 
 ## License
 
