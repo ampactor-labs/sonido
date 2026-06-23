@@ -20,7 +20,7 @@ use sonido_core::{GlobalParam, MacroMap, MacroMapping, MacroTarget, MorphCurve};
 use sonido_gui_core::effects_ui;
 use sonido_gui_core::theme::SonidoTheme;
 use sonido_gui_core::widgets::glow;
-use sonido_gui_core::widgets::{MacroAction, MacroView, macro_panel, morph_bar, take_macro_action};
+use sonido_gui_core::widgets::{MacroAction, morph_bar, take_macro_action};
 use sonido_gui_core::{ParamBridge, ParamIndex, SlotIndex};
 use sonido_registry::EffectRegistry;
 use std::sync::Arc;
@@ -404,36 +404,39 @@ impl SonidoApp {
         };
         let margin = 14.0;
 
-        // "+" add-node FAB, bottom-right of the canvas (thumb-reachable).
-        egui::Area::new(egui::Id::new("add_node_fab"))
-            .fixed_pos(pos2(area.max.x - fab - margin, area.max.y - fab - margin))
-            .order(egui::Order::Foreground)
-            .show(ctx, |ui| {
-                let (rect, resp) = ui.allocate_exact_size(vec2(fab, fab), egui::Sense::click());
-                let hot = resp.hovered() || self.palette_open;
-                let (bg, fg) = if hot {
-                    (theme.colors.amber, theme.colors.void)
-                } else {
-                    (theme.colors.void, theme.colors.amber)
-                };
-                let p = ui.painter();
-                p.circle_filled(rect.center(), fab * 0.5, bg);
-                p.circle_stroke(
-                    rect.center(),
-                    fab * 0.5,
-                    egui::Stroke::new(1.5, theme.colors.amber),
-                );
-                p.text(
-                    rect.center(),
-                    egui::Align2::CENTER_CENTER,
-                    "+",
-                    egui::FontId::monospace(fab * 0.6),
-                    fg,
-                );
-                if resp.on_hover_text("Add effect").clicked() {
-                    self.palette_open = !self.palette_open;
-                }
-            });
+        // "+" add-node FAB, Phone only (bottom-right, thumb-reachable). On wider
+        // viewports the labeled "+ EFFECT" header button replaces it.
+        if self.breakpoint == Breakpoint::Phone {
+            egui::Area::new(egui::Id::new("add_node_fab"))
+                .fixed_pos(pos2(area.max.x - fab - margin, area.max.y - fab - margin))
+                .order(egui::Order::Foreground)
+                .show(ctx, |ui| {
+                    let (rect, resp) = ui.allocate_exact_size(vec2(fab, fab), egui::Sense::click());
+                    let hot = resp.hovered() || self.palette_open;
+                    let (bg, fg) = if hot {
+                        (theme.colors.amber, theme.colors.void)
+                    } else {
+                        (theme.colors.void, theme.colors.amber)
+                    };
+                    let p = ui.painter();
+                    p.circle_filled(rect.center(), fab * 0.5, bg);
+                    p.circle_stroke(
+                        rect.center(),
+                        fab * 0.5,
+                        egui::Stroke::new(1.5, theme.colors.amber),
+                    );
+                    p.text(
+                        rect.center(),
+                        egui::Align2::CENTER_CENTER,
+                        "+",
+                        egui::FontId::monospace(fab * 0.6),
+                        fg,
+                    );
+                    if resp.on_hover_text("Add effect").clicked() {
+                        self.palette_open = !self.palette_open;
+                    }
+                });
+        }
 
         // Contextual action bar for the selected effect node (touch Remove/Dup).
         if self.graph_view.selected_is_effect() {
@@ -750,6 +753,28 @@ impl SonidoApp {
                 self.redo();
             }
 
+            // Add-node: a labeled button (clearer than a bare "+"). On phone the
+            // thumb-reachable FAB over the canvas does this job instead.
+            if self.breakpoint != Breakpoint::Phone {
+                let add_color = if self.palette_open {
+                    theme.colors.amber
+                } else {
+                    theme.colors.text_primary
+                };
+                if ui
+                    .button(
+                        egui::RichText::new("+ EFFECT")
+                            .font(FontId::monospace(11.0))
+                            .color(add_color)
+                            .strong(),
+                    )
+                    .on_hover_text("Add an effect node to the graph")
+                    .clicked()
+                {
+                    self.palette_open = !self.palette_open;
+                }
+            }
+
             ui.separator();
 
             // BYPASS (promoted from status bar)
@@ -808,6 +833,13 @@ impl SonidoApp {
 
             // FILE source toggle
             self.file_player.render_source_toggle(ui);
+
+            // Performance macros K1-K6, compact. On phone they live in the RIG
+            // drawer instead (the header stays minimal there).
+            if self.breakpoint != Breakpoint::Phone {
+                ui.separator();
+                self.render_macro_strip(ui);
+            }
 
             // Right-aligned: audio status + compile error
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -1059,7 +1091,7 @@ impl SonidoApp {
             ui.add_space(8.0);
             ui.label(
                 egui::RichText::new(
-                    "+ or right-click: add node \u{00b7} Select a node, Delete: remove \u{00b7} \
+                    "+ EFFECT or right-click: add node \u{00b7} Select a node, Delete: remove \u{00b7} \
                      Up/Down: adjust focused knob, Left/Right: move between \u{00b7} \
                      Space: play \u{00b7} Ctrl+Z: undo \u{00b7} Ctrl+Scroll: zoom",
                 )
@@ -1251,36 +1283,64 @@ impl SonidoApp {
         });
     }
 
-    /// Render the six-macro performance row (K1–K6).
+    /// Compact macro strip: six small K1-K6 position knobs with no label, percent,
+    /// or name rows. Hover a knob for its name and target count; right-click to
+    /// open its mapping editor. Lives in the header on desktop and in the phone
+    /// RIG drawer.
     ///
-    /// Turning a macro knob sweeps every parameter mapped to it at once; the
-    /// resolved values are written straight to the bridge, so the rig responds
-    /// immediately. Clicking a macro's name opens its mapping editor.
-    fn render_macro_row(&mut self, ui: &mut egui::Ui) {
-        // The widget needs `&mut f32` per macro; positions are canonical in the
-        // map, so copy out, let the knobs mutate, then write back the changed one.
+    /// Turning a knob sweeps every parameter mapped to that macro at once; the
+    /// resolved values go straight to the bridge so the rig responds immediately.
+    fn render_macro_strip(&mut self, ui: &mut egui::Ui) {
+        let theme = SonidoTheme::get(ui.ctx());
+        // Positions are canonical in the map; copy out, let the knobs mutate, then
+        // write back the one that changed.
         let mut pos: [f32; 6] = std::array::from_fn(|i| self.macro_map.position(i));
+        let mut changed: Option<usize> = None;
+        let mut edit: Option<usize> = None;
 
-        let resp = {
-            let names = &self.macro_names;
-            let map = &self.macro_map;
-            let mut views: Vec<MacroView> = pos
-                .iter_mut()
-                .enumerate()
-                .map(|(i, p)| MacroView {
-                    name: names[i].as_str(),
-                    position: p,
-                    mapping_count: map.mapping_count_for(i),
-                })
-                .collect();
-            macro_panel(ui, &mut views)
-        };
+        ui.horizontal(|ui| {
+            ui.label(
+                egui::RichText::new("MACROS")
+                    .font(FontId::monospace(10.0))
+                    .color(theme.colors.text_secondary),
+            );
+            for i in 0..6 {
+                let mapped = self.macro_map.mapping_count_for(i);
+                let resp = ui.add(
+                    Knob::new(&mut pos[i], 0.0, 1.0, "")
+                        .diameter(26.0)
+                        .show_value(false),
+                );
+                let name = if self.macro_names[i].is_empty() {
+                    format!("Macro {}", i + 1)
+                } else {
+                    self.macro_names[i].clone()
+                };
+                let tip = if mapped > 0 {
+                    format!("{name}: {mapped} target(s) (right-click to edit)")
+                } else {
+                    format!("{name}: unmapped (map a param from its right-click menu)")
+                };
+                let resp = resp.on_hover_text(tip);
+                if resp.changed() {
+                    changed = Some(i);
+                }
+                if resp.secondary_clicked() {
+                    edit = Some(i);
+                }
+                // A small cyan tick under mapped macros shows which knobs are live.
+                if mapped > 0 && ui.is_rect_visible(resp.rect) {
+                    let tick = pos2(resp.rect.center().x, resp.rect.bottom() - 1.0);
+                    glow::glow_circle(ui.painter(), tick, 1.5, theme.colors.cyan, &theme);
+                }
+            }
+        });
 
-        if let Some(i) = resp.changed {
+        if let Some(i) = changed {
             self.macro_map.set_position(i, pos[i]);
             self.apply_macro(i);
         }
-        if let Some(i) = resp.edit_requested {
+        if let Some(i) = edit {
             self.macro_editor = Some(i);
         }
     }
@@ -1976,13 +2036,15 @@ impl eframe::App for SonidoApp {
         // Browsers suspend the AudioContext until a *trusted* user interaction;
         // re-calling play() from within that activation window resumes it.
         //
-        // Gate strictly on a pointer PRESS. The previous `|| !i.events.is_empty()`
-        // clause also fired on a mere mouse-move (egui pushes PointerMoved every
-        // frame), which is NOT a user-activation gesture — so resume() was denied
-        // yet `audio_resumed` latched true, leaving the context suspended forever
-        // and the demo silent no matter what was clicked afterward.
+        // Gate on a pointer press OR a held key, both of which are genuine
+        // user-activation gestures the browser honours for AudioContext.resume().
+        // (The old `!i.events.is_empty()` clause fired on a mere mouse-move, which
+        // is NOT activation, so resume() was denied yet `audio_resumed` latched
+        // true, leaving the context suspended forever. A key press was missing
+        // entirely, so pressing space resumed nothing until a click happened.)
         #[cfg(target_arch = "wasm32")]
-        if !self.audio_resumed && ctx.input(|i| i.pointer.any_pressed()) {
+        if !self.audio_resumed && ctx.input(|i| i.pointer.any_pressed() || !i.keys_down.is_empty())
+        {
             use cpal::traits::StreamTrait;
             for stream in &self._audio_streams {
                 let _ = stream.play();
@@ -2015,7 +2077,11 @@ impl eframe::App for SonidoApp {
                 crate::signal_generator::SourceMode::File => self.file_player.has_file(),
             };
             if can_play {
-                self.file_player.toggle_play_pause();
+                // Route through toggle_transport (not file_player directly) so the
+                // web AudioContext resumes on the spacebar gesture too. Otherwise
+                // the transport reads "playing" but stays silent until a mouse
+                // click happens to satisfy the resume gate.
+                self.toggle_transport();
             }
         }
 
@@ -2056,21 +2122,21 @@ impl eframe::App for SonidoApp {
             ui.add_space(2.0);
         });
 
-        // Performance band — full width, just above the status bar. The six
-        // macros (K1–K6) and the global A/B morph form one cluster: the controls
-        // that map to the pedal's knobs and footswitch. Graph mode only; in
-        // single-effect mode there is no rig to perform. On Phone it can't stay
-        // docked (it would eat half the screen), so it only shows when the RIG
-        // drawer is summoned; on Desktop/Tablet it is always docked.
+        // Bottom performance band. On Desktop/Tablet it carries just the global
+        // A/B morph (the macros live in the header now, which frees this band's
+        // height for the selected effect's params). On Phone it is the summonable
+        // RIG drawer and carries the macro strip plus morph. Graph mode only.
         let show_perf = !self.single_effect
             && (self.breakpoint != Breakpoint::Phone || self.drawer == Drawer::Rig);
         if show_perf {
             TopBottomPanel::bottom("performance").show(ctx, |ui| {
                 ui.add_space(4.0);
-                self.render_macro_row(ui);
-                ui.add_space(6.0);
-                ui.separator();
-                ui.add_space(4.0);
+                if self.breakpoint == Breakpoint::Phone {
+                    self.render_macro_strip(ui);
+                    ui.add_space(6.0);
+                    ui.separator();
+                    ui.add_space(4.0);
+                }
                 self.render_morph_band(ui);
                 ui.add_space(4.0);
             });
@@ -2184,11 +2250,15 @@ impl eframe::App for SonidoApp {
 
                     child.add_space(8.0);
 
-                    // Effect panel for the selected node
+                    // Effect panel for the selected node, in a scroll area so a
+                    // tall panel (e.g. an 8-param reverb) scrolls within the
+                    // leftover height instead of being clipped by the band below.
                     if let Some(slot_idx) = selected_slot {
                         let slot = SlotIndex(slot_idx);
                         if slot.0 < self.bridge.slot_count() {
-                            self.render_effect_panel(&mut child, slot);
+                            egui::ScrollArea::vertical().show(&mut child, |ui| {
+                                self.render_effect_panel(ui, slot);
+                            });
                         }
                     } else {
                         Self::render_quick_reference(&mut child);

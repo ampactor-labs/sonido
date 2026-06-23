@@ -185,6 +185,7 @@ impl GraphView {
             output: 0,
         };
         let mut x = 300.0;
+        let mut first_effect = None;
         for effect_id in ["distortion", "delay", "reverb"] {
             let Some(desc) = registry.get(effect_id) else {
                 continue;
@@ -199,6 +200,7 @@ impl GraphView {
                     smoothing: collect_smoothing(desc.id, 48000.0),
                 },
             );
+            first_effect.get_or_insert(node);
             self.snarl.connect(prev, InPinId { node, input: 0 });
             prev = OutPinId { node, output: 0 };
             x += 220.0;
@@ -210,6 +212,8 @@ impl GraphView {
                 input: 0,
             },
         );
+        // Open with the first effect selected so its param panel is visible.
+        self.selected_node = first_effect;
         self.topology_changed = true;
     }
 
