@@ -24,6 +24,12 @@ use sonido_registry::{EffectCategory, EffectRegistry};
 /// the bar to match.
 pub const IO_BAR_WIDTH: f32 = 30.0;
 
+/// How far (screen px) inside the canvas edge the welded I/O pins sit. Small, so
+/// the wire emerges right at the wall bar's inner edge. The bars are drawn in
+/// their own columns *outside* the canvas (`vp.rect`), so this is measured from
+/// the canvas edge — NOT offset by a full bar width.
+const IO_PIN_INSET: f32 = 6.0;
+
 use crate::chain_manager::GraphCommand;
 
 /// Maximum number of fan-out/fan-in ports on legacy Split/Merge nodes.
@@ -268,8 +274,8 @@ impl GraphView {
 
         let (input_pos, output_pos) = if let Some(vp) = &self.last_viewport {
             let y = vp.rect.center().y;
-            let input_screen = egui::pos2(vp.rect.left() + IO_BAR_WIDTH, y);
-            let output_screen = egui::pos2(vp.rect.right() - IO_BAR_WIDTH, y);
+            let input_screen = egui::pos2(vp.rect.left() + IO_PIN_INSET, y);
+            let output_screen = egui::pos2(vp.rect.right() - IO_PIN_INSET, y);
             (
                 vp.screen_pos_to_graph(input_screen),
                 vp.screen_pos_to_graph(output_screen),
@@ -1780,8 +1786,8 @@ mod tests {
 
         // The graph positions must map back onto the wall inner edges.
         let vp = gv.last_viewport.as_ref().unwrap();
-        assert!((vp.graph_pos_to_screen(ip).x - (rect.left() + IO_BAR_WIDTH)).abs() < 1.0);
-        assert!((vp.graph_pos_to_screen(op).x - (rect.right() - IO_BAR_WIDTH)).abs() < 1.0);
+        assert!((vp.graph_pos_to_screen(ip).x - (rect.left() + IO_PIN_INSET)).abs() < 1.0);
+        assert!((vp.graph_pos_to_screen(op).x - (rect.right() - IO_PIN_INSET)).abs() < 1.0);
     }
 
     #[test]

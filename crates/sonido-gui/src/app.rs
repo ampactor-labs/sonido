@@ -2033,7 +2033,11 @@ impl eframe::App for SonidoApp {
         // not while typing in a search/name field. Space is *consumed* so a focused
         // knob can't swallow it (egui otherwise treats Space as a click on the
         // focused widget).
-        let typing = ctx.wants_keyboard_input();
+        // True only while a text field is actually being edited (palette search
+        // or a macro-name rename). NOT `wants_keyboard_input()`, which is also
+        // true for a focused knob — that made Space/shortcuts dead after you
+        // touched a parameter until you clicked back into the canvas.
+        let typing = self.palette_open || self.macro_editor.is_some();
         if !typing && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Space)) {
             let can_play = match self.file_player.source_mode() {
                 crate::signal_generator::SourceMode::Generator => true,
