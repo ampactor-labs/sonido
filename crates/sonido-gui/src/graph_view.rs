@@ -352,11 +352,36 @@ impl GraphView {
             }
         }
 
-        const COL_SPACING: f32 = 190.0;
-        const ROW_SPACING: f32 = 96.0;
-        let base = egui::pos2(140.0, 170.0);
-        let mut rows_at: HashMap<usize, usize> = HashMap::new();
+        const COL_SPACING: f32 = 170.0;
+        const ROW_SPACING: f32 = 80.0;
 
+        // Center the chain on the current viewport center (in graph space), so a
+        // freshly arranged chain sits centered between the welded I/O walls
+        // instead of pushed off to one side. Falls back to a fixed point before
+        // the first frame has captured a transform.
+        let (center_x, center_y) = self
+            .last_viewport
+            .as_ref()
+            .map(|vp| {
+                let c = vp.screen_pos_to_graph(vp.rect.center());
+                (c.x, c.y)
+            })
+            .unwrap_or((380.0, 200.0));
+
+        // Pre-count rows per column so each column's stack centers vertically.
+        let max_col = depth.values().copied().max().unwrap_or(0);
+        let start_x = center_x - (max_col as f32 * COL_SPACING) / 2.0;
+        let mut col_rows: HashMap<usize, usize> = HashMap::new();
+        for (id, _) in self.snarl.node_ids() {
+            if matches!(self.snarl[id], SonidoNode::Input | SonidoNode::Output) {
+                continue;
+            }
+            *col_rows
+                .entry(depth.get(&id).copied().unwrap_or(0))
+                .or_insert(0) += 1;
+        }
+
+        let mut rows_at: HashMap<usize, usize> = HashMap::new();
         let ids: Vec<NodeId> = self.snarl.node_ids().map(|(id, _)| id).collect();
         self.arrange_targets.clear();
         for id in ids {
@@ -365,10 +390,11 @@ impl GraphView {
                 continue;
             }
             let col = depth.get(&id).copied().unwrap_or(0);
+            let rows_in_col = col_rows.get(&col).copied().unwrap_or(1);
             let row = rows_at.entry(col).or_insert(0);
             let pos = egui::pos2(
-                base.x + col as f32 * COL_SPACING,
-                base.y + *row as f32 * ROW_SPACING,
+                start_x + col as f32 * COL_SPACING,
+                center_y + (*row as f32 - (rows_in_col as f32 - 1.0) / 2.0) * ROW_SPACING,
             );
             *row += 1;
             // Record the target; `animate_arrange` eases toward it each frame.
@@ -1193,7 +1219,10 @@ impl SnarlViewer<SonidoNode> for SonidoViewer<'_> {
                         && !d.flags.contains(ParamFlags::READ_ONLY)
                 })
                 .count();
-            let body_text = format!("{} · {} params", category.name(), visible_params);
+            // Compact: the category is already conveyed by the node color and
+            // header, so the body just needs the param count. Keeps nodes narrow
+            // enough to fit several across a phone canvas without overlap.
+            let body_text = format!("{visible_params} params");
             let color = if is_selected { accent } else { dim };
             let body_resp = ui.label(
                 RichText::new(body_text)
