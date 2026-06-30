@@ -367,10 +367,12 @@ impl FilePlayer {
         let theme = SonidoTheme::get(ui.ctx());
 
         let gen_active = self.source_mode == SourceMode::Generator;
+        // Inactive uses muted text (not `dim`, RGB ~28 — near-invisible on the
+        // void background); the LED-button styling still marks which is active.
         let gen_color = if gen_active {
             theme.colors.green
         } else {
-            theme.colors.dim
+            theme.colors.text_secondary
         };
         if arcade_led_button(ui, "GEN", gen_color, gen_active, &theme).clicked() && !gen_active {
             self.source_mode = SourceMode::Generator;
@@ -385,7 +387,7 @@ impl FilePlayer {
         let file_color = if file_active {
             theme.colors.amber
         } else {
-            theme.colors.dim
+            theme.colors.text_secondary
         };
         if arcade_led_button(ui, "FILE", file_color, file_active, &theme).clicked() && !file_active
         {
