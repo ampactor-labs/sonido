@@ -239,7 +239,13 @@ impl Widget for LevelMeter {
             state.max_peak_db = f32::NEG_INFINITY;
         }
         if state.animating() {
-            ui.ctx().request_repaint();
+            // Cap meter-driven repaints at ~30fps rather than forcing the
+            // display's full rate. On the wasm `webaudio` backend the audio DSP
+            // shares the main thread, so unbounded repaints starve it into
+            // crackle on weak mobile CPUs. 30fps is smooth for a meter and
+            // matches the app's own adaptive cadence.
+            ui.ctx()
+                .request_repaint_after(std::time::Duration::from_millis(33));
         }
         ui.data_mut(|d| d.insert_temp(id, state));
 
