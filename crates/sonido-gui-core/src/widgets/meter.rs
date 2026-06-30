@@ -312,8 +312,7 @@ impl Widget for LevelMeter {
                 );
             } else {
                 // Vertical: readout header on top, dB labels left, bar right.
-                let readout_rect =
-                    Rect::from_min_size(rect.min, vec2(self.width, READOUT_H));
+                let readout_rect = Rect::from_min_size(rect.min, vec2(self.width, READOUT_H));
                 painter.text(
                     readout_rect.center(),
                     egui::Align2::CENTER_CENTER,
@@ -607,7 +606,10 @@ mod tests {
         for _ in 0..10 {
             s.advance(0.0, 0.0, 0.016);
         }
-        assert!((s.peak_hold - 1.0).abs() < 1e-3, "cap fell during hold window");
+        assert!(
+            (s.peak_hold - 1.0).abs() < 1e-3,
+            "cap fell during hold window"
+        );
         // Well past the hold window, the cap has fallen.
         for _ in 0..200 {
             s.advance(0.0, 0.0, 0.016);

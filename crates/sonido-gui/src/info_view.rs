@@ -158,9 +158,15 @@ mod tests {
             ],
         );
         assert_eq!(p.title, "Compressor");
-        assert_eq!(p.description.as_deref(), Some("Dynamics compressor with program-dependent release"));
+        assert_eq!(
+            p.description.as_deref(),
+            Some("Dynamics compressor with program-dependent release")
+        );
         assert_eq!(p.params.len(), 2);
-        assert_eq!(p.params[0], ("Threshold".to_string(), "-18.0 dB".to_string()));
+        assert_eq!(
+            p.params[0],
+            ("Threshold".to_string(), "-18.0 dB".to_string())
+        );
         assert_eq!(p.shortcuts, EFFECT_SHORTCUTS);
     }
 
