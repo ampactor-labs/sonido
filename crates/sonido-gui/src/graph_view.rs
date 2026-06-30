@@ -1195,7 +1195,7 @@ impl SnarlViewer<SonidoNode> for SonidoViewer<'_> {
                 .count();
             let body_text = format!("{} · {} params", category.name(), visible_params);
             let color = if is_selected { accent } else { dim };
-            ui.label(
+            let body_resp = ui.label(
                 RichText::new(body_text)
                     .font(FontId::monospace(9.0))
                     .color(color),
@@ -1204,10 +1204,14 @@ impl SnarlViewer<SonidoNode> for SonidoViewer<'_> {
             // Inline L/R peak meters — thin colored strips at the bottom of the node.
             let (peak_l, peak_r) = self.slot_peaks.get(slot_idx).copied().unwrap_or((0.0, 0.0));
 
-            // Allocate a thin horizontal rect for the two meter strips.
+            // Size the strips to the body label, NOT `ui.available_width()`:
+            // inside a snarl node (which sizes to its content) grabbing the
+            // available width creates a layout feedback loop — the node balloons
+            // to the whole canvas and jitters frame-to-frame, badly on mobile.
             let meter_height = 4.0_f32;
+            let meter_w = body_resp.rect.width().max(48.0);
             let (meter_rect, _) = ui.allocate_exact_size(
-                egui::vec2(ui.available_width(), meter_height * 2.0 + 2.0),
+                egui::vec2(meter_w, meter_height * 2.0 + 2.0),
                 egui::Sense::hover(),
             );
 
