@@ -120,11 +120,10 @@ pub struct SonidoApp {
     /// last frame's selection — a one-frame lag that is never visible.
     info_slot: Option<usize>,
 
-    /// Full-width-on-demand "focus mode": when true (Desktop/Tablet only),
-    /// the docked chrome — I/O strips, morph band, Info View — collapses so the
-    /// canvas spans the full width. Toggled by the header button or `F`. The
-    /// floating add affordances (FAB / palette) stay live, so authoring still
-    /// works. Ignored on Phone, where the canvas is already the hero.
+    /// Focus mode: when true (Desktop/Tablet only), the morph band and Info View
+    /// collapse so the canvas gets their vertical space. (The I/O wall bars stay
+    /// — they are thin and carry the meters/anchors.) Toggled by the header
+    /// button or `F`. Ignored on Phone, where the canvas is already the hero.
     chrome_collapsed: bool,
 }
 
@@ -750,7 +749,7 @@ impl SonidoApp {
                             .color(focus_color)
                             .strong(),
                     )
-                    .on_hover_text("Full-width canvas \u{2014} hide I/O, morph, info  (F)")
+                    .on_hover_text("Max canvas \u{2014} hide morph + info band  (F)")
                     .clicked()
                 {
                     self.chrome_collapsed = !self.chrome_collapsed;
@@ -956,113 +955,63 @@ impl SonidoApp {
     /// Render a unified I/O strip (INPUT or OUTPUT endpoint).
     ///
     /// `is_input` selects between input gain / output master controls and metering.
-    fn render_io_strip(&mut self, ui: &mut egui::Ui, is_input: bool) {
+    /// Render one I/O **wall bar** — a full-height vertical level meter with the
+    /// gain (input) or master (output) knob docked at its foot. Drawn flush to
+    /// the left/right edge of the graph canvas; the snarl I/O pin welds to its
+    /// inner edge (see [`graph_view::pin_io_nodes`]) so the bar reads as the
+    /// wire's wall anchor. `height` is the canvas height the bar spans.
+    fn render_io_bar(&mut self, ui: &mut egui::Ui, is_input: bool, height: f32) {
+        use crate::graph_view::IO_BAR_WIDTH;
         let theme = SonidoTheme::get(ui.ctx());
-        let label = if is_input { "INPUT" } else { "OUTPUT" };
+        let phone = self.breakpoint == Breakpoint::Phone;
+        let knob_d = (IO_BAR_WIDTH - 4.0).min(if phone { 24.0 } else { 26.0 });
 
-        ui.group(|ui| {
-            ui.set_min_width(50.0);
-            ui.vertical_centered(|ui| {
-                ui.label(
-                    egui::RichText::new(label)
-                        .font(FontId::monospace(11.0))
-                        .color(theme.colors.cyan),
-                );
+        let (peak, rms, label) = if is_input {
+            (self.metering.input_peak, self.metering.input_rms, "IN")
+        } else {
+            (self.metering.output_peak, self.metering.output_rms, "OUT")
+        };
 
-                ui.add_space(4.0);
+        // Budget the height: a tiny label, the meter (bulk), then the foot knob.
+        let label_h = 13.0;
+        let knob_foot = knob_d + 16.0; // knob diameter + its value label
+        let meter_h = (height - label_h - knob_foot).max(40.0);
 
-                // Meter
-                let (peak, rms) = if is_input {
-                    (self.metering.input_peak, self.metering.input_rms)
-                } else {
-                    (self.metering.output_peak, self.metering.output_rms)
-                };
-                ui.add(LevelMeter::new(peak, rms).size(20.0, 100.0));
-                // The meter owns its clip + peak readout now: a numeric dBFS
-                // header that turns red past 0 dBFS, click the meter to reset.
-
-                ui.add_space(4.0);
-
-                // Gain knob
-                if is_input {
-                    let input_gain = self.audio_bridge.input_gain();
-                    let mut gain_val = input_gain.get();
-                    if ui
-                        .add(
-                            Knob::new(&mut gain_val, -20.0, 20.0, "GAIN")
-                                .default(0.0)
-                                .format_db()
-                                .diameter(44.0),
-                        )
-                        .changed()
-                    {
-                        input_gain.set(gain_val);
-                    }
-                } else {
-                    let master_vol_param = self.audio_bridge.master_volume();
-                    let mut master_val = master_vol_param.get();
-                    if ui
-                        .add(
-                            Knob::new(&mut master_val, -40.0, 6.0, "VOL")
-                                .default(0.0)
-                                .format_db()
-                                .diameter(44.0),
-                        )
-                        .changed()
-                    {
-                        master_vol_param.set(master_val);
-                    }
+        ui.vertical_centered(|ui| {
+            ui.label(
+                egui::RichText::new(label)
+                    .font(FontId::monospace(9.0))
+                    .color(theme.colors.cyan),
+            );
+            ui.add(LevelMeter::new(peak, rms).size(IO_BAR_WIDTH, meter_h));
+            if is_input {
+                let input_gain = self.audio_bridge.input_gain();
+                let mut v = input_gain.get();
+                if ui
+                    .add(
+                        Knob::new(&mut v, -20.0, 20.0, "GAIN")
+                            .default(0.0)
+                            .format_db()
+                            .diameter(knob_d),
+                    )
+                    .changed()
+                {
+                    input_gain.set(v);
                 }
-            });
-        });
-    }
-
-    /// Compact horizontal levels row for the Phone layout: input gain, in/out
-    /// horizontal meters with clip indicators, and master volume. Replaces the
-    /// two tall vertical I/O strips so the canvas gets full width — nothing is
-    /// removed, only re-laid-out.
-    fn render_phone_levels(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
-            // Input gain
-            let input_gain = self.audio_bridge.input_gain();
-            let mut gain_val = input_gain.get();
-            if ui
-                .add(
-                    Knob::new(&mut gain_val, -20.0, 20.0, "IN")
-                        .default(0.0)
-                        .format_db()
-                        .diameter(38.0),
-                )
-                .changed()
-            {
-                input_gain.set(gain_val);
-            }
-            ui.add(
-                LevelMeter::new(self.metering.input_peak, self.metering.input_rms)
-                    .horizontal()
-                    .size(78.0, 10.0),
-            );
-
-            ui.separator();
-
-            ui.add(
-                LevelMeter::new(self.metering.output_peak, self.metering.output_rms)
-                    .horizontal()
-                    .size(78.0, 10.0),
-            );
-            // Master volume
-            let master = self.audio_bridge.master_volume();
-            let mut vol_val = master.get();
-            if ui
-                .add(
-                    Knob::new(&mut vol_val, -40.0, 6.0, "OUT")
-                        .default(0.0)
-                        .format_db()
-                        .diameter(38.0),
-                )
-                .changed()
-            {
-                master.set(vol_val);
+            } else {
+                let master = self.audio_bridge.master_volume();
+                let mut v = master.get();
+                if ui
+                    .add(
+                        Knob::new(&mut v, -40.0, 6.0, "VOL")
+                            .default(0.0)
+                            .format_db()
+                            .diameter(knob_d),
+                    )
+                    .changed()
+                {
+                    master.set(v);
+                }
             }
         });
     }
@@ -2202,110 +2151,100 @@ impl eframe::App for SonidoApp {
 
             let theme = SonidoTheme::get(ui.ctx());
 
-            // PHONE: the canvas is the hero. The two flanking I/O strips would
-            // crush the graph to ~180px, so fold them into one compact levels
-            // row at the top and give the graph full width below.
-            let phone = self.breakpoint == Breakpoint::Phone;
-            if phone {
-                self.render_phone_levels(ui);
-                ui.add_space(4.0);
-            }
-
             let avail = ui.available_rect_before_wrap();
 
-            // Hide the flanking I/O strips on Phone (folded into the levels row)
-            // and in focus mode (full-width canvas on demand).
-            let hide_io = phone || collapsed;
-
-            // Responsive I/O strip widths from ThemeLayout (zero when hidden).
-            let io_width = if hide_io {
-                0.0
-            } else {
-                theme.layout.io_strip_width(avail.width())
-            };
-            let gap = if hide_io { 0.0 } else { 8.0 };
-            let center_width = (avail.width() - 2.0 * io_width - 2.0 * gap).max(200.0);
-
-            let input_rect = Rect::from_min_size(avail.min, vec2(io_width, avail.height()));
-            let center_rect = Rect::from_min_size(
-                pos2(avail.min.x + io_width + gap, avail.min.y),
-                vec2(center_width, avail.height()),
-            );
-            let output_rect = Rect::from_min_size(
-                pos2(
-                    avail.min.x + io_width + gap + center_width + gap,
-                    avail.min.y,
-                ),
-                vec2(io_width, avail.height()),
-            );
-
-            // Input strip (hidden on Phone and in focus mode).
-            if !hide_io {
+            if self.single_effect {
+                // Single-effect mode: just the effect panel, full width, no
+                // graph and no I/O wall bars.
                 let mut child = ui.new_child(
                     UiBuilder::new()
-                        .id_salt("input_col")
-                        .max_rect(input_rect)
-                        .layout(Layout::top_down(Align::Center)),
-                );
-                self.render_io_strip(&mut child, true);
-            }
-
-            // Center column (graph editor + effect panel)
-            {
-                let mut child = ui.new_child(
-                    UiBuilder::new()
-                        .id_salt("center_col")
-                        .max_rect(center_rect)
+                        .id_salt("single_effect")
+                        .max_rect(avail)
                         .layout(Layout::top_down(Align::LEFT)),
                 );
+                self.render_effect_panel(&mut child, SlotIndex(0));
+                ui.advance_cursor_after_rect(avail);
+            } else {
+                // Graph mode: a full-width canvas flanked by the two I/O wall
+                // bars (meter + foot knob + welded wire anchor), with the
+                // selected effect's panel below. Bars span the graph height; the
+                // panel runs full width beneath them.
+                let bar_w = crate::graph_view::IO_BAR_WIDTH;
+                let panel_content_h = self.estimate_panel_height();
+                let (graph_h, _panel_h) =
+                    theme.layout.split_vertical(avail.height(), panel_content_h);
 
-                if self.single_effect {
-                    // Single-effect mode: show only the effect panel, no graph
-                    self.render_effect_panel(&mut child, SlotIndex(0));
-                } else {
-                    // Dynamic graph/panel split from ThemeLayout
-                    let content_h = child.available_height();
-                    let panel_content_h = self.estimate_panel_height();
-                    let (graph_h, _panel_h) =
-                        theme.layout.split_vertical(content_h, panel_content_h);
+                let left_bar = Rect::from_min_size(avail.min, vec2(bar_w, graph_h));
+                let right_bar = Rect::from_min_size(
+                    pos2(avail.right() - bar_w, avail.top()),
+                    vec2(bar_w, graph_h),
+                );
+                let graph_rect = Rect::from_min_max(
+                    pos2(avail.left() + bar_w, avail.top()),
+                    pos2(avail.right() - bar_w, avail.top() + graph_h),
+                );
+                let panel_rect =
+                    Rect::from_min_max(pos2(avail.left(), avail.top() + graph_h + 8.0), avail.max);
 
-                    let selected_slot = child
-                        .group(|ui| {
-                            ui.set_max_height(graph_h);
-                            ui.vertical_centered(|ui| {
-                                // Update per-slot activity from output metering
-                                let slot_count = self
-                                    .graph_view
-                                    .snarl
-                                    .node_ids()
-                                    .filter(|(_, n)| matches!(n, SonidoNode::Effect { .. }))
-                                    .count();
-                                self.graph_view.slot_activity =
-                                    vec![self.metering.output_peak; slot_count];
+                // Left wall bar — input meter + gain knob.
+                {
+                    let mut child = ui.new_child(
+                        UiBuilder::new()
+                            .id_salt("io_bar_in")
+                            .max_rect(left_bar)
+                            .layout(Layout::top_down(Align::Center)),
+                    );
+                    self.render_io_bar(&mut child, true, graph_h);
+                }
 
-                                self.graph_view.show(ui)
-                            })
-                            .inner
-                        })
-                        .inner;
+                // Graph canvas.
+                let selected_slot = {
+                    let mut child = ui.new_child(
+                        UiBuilder::new()
+                            .id_salt("graph_canvas")
+                            .max_rect(graph_rect)
+                            .layout(Layout::top_down(Align::LEFT)),
+                    );
+                    let slot_count = self
+                        .graph_view
+                        .snarl
+                        .node_ids()
+                        .filter(|(_, n)| matches!(n, SonidoNode::Effect { .. }))
+                        .count();
+                    self.graph_view.slot_activity = vec![self.metering.output_peak; slot_count];
+                    self.graph_view.show(&mut child)
+                };
 
-                    // Feed the contextual Info View (drawn as a bottom panel
-                    // before this central panel, so it reads this value next
-                    // frame — an invisible one-frame lag).
-                    self.info_slot = selected_slot;
+                // Right wall bar — output meter + master knob.
+                {
+                    let mut child = ui.new_child(
+                        UiBuilder::new()
+                            .id_salt("io_bar_out")
+                            .max_rect(right_bar)
+                            .layout(Layout::top_down(Align::Center)),
+                    );
+                    self.render_io_bar(&mut child, false, graph_h);
+                }
 
-                    // Auto-compile in-`show` topology edits (connect/disconnect,
-                    // right-click add/remove), recording the pre-edit snapshot as
-                    // an undo point. Undo/redo restores rebuild the snarl too, but
-                    // `show()` clears the flag each frame before this check, so our
-                    // own restores never re-enter here and corrupt the stacks.
-                    self.apply_topology_change();
+                // Feed the contextual Info View (drawn as a bottom panel before
+                // this central panel, so it reads this value next frame — an
+                // invisible one-frame lag).
+                self.info_slot = selected_slot;
 
-                    child.add_space(8.0);
+                // Recompile in-`show` topology edits (connect/disconnect,
+                // right-click add/remove).
+                self.apply_topology_change();
 
-                    // Effect panel for the selected node, in a scroll area so a
-                    // tall panel (e.g. an 8-param reverb) scrolls within the
-                    // leftover height instead of being clipped by the band below.
+                // Effect panel for the selected node (full width, below the
+                // canvas), in a scroll area so a tall panel scrolls instead of
+                // clipping. Quick-reference prompt when nothing is selected.
+                {
+                    let mut child = ui.new_child(
+                        UiBuilder::new()
+                            .id_salt("effect_panel_area")
+                            .max_rect(panel_rect)
+                            .layout(Layout::top_down(Align::LEFT)),
+                    );
                     if let Some(slot_idx) = selected_slot {
                         let slot = SlotIndex(slot_idx);
                         if slot.0 < self.bridge.slot_count() {
@@ -2317,53 +2256,31 @@ impl eframe::App for SonidoApp {
                         Self::render_quick_reference(&mut child);
                     }
                 }
-            }
 
-            // Output strip (hidden on Phone and in focus mode).
-            if !hide_io {
-                let mut child = ui.new_child(
-                    UiBuilder::new()
-                        .id_salt("output_col")
-                        .max_rect(output_rect)
-                        .layout(Layout::top_down(Align::Center)),
-                );
-                self.render_io_strip(&mut child, false);
-            }
+                // Touch-authoring overlays floated over the canvas (FAB + node
+                // action bar + effect palette).
+                self.render_graph_overlays(ctx, graph_rect);
 
-            // Touch-authoring overlays floated over the canvas (FAB + node action
-            // bar + effect palette). Additive on desktop; the only add/edit path
-            // on touch, where snarl's right-click menus are unreachable.
-            self.render_graph_overlays(ctx, center_rect);
-
-            // Delete / Backspace removes the selected effect node — no action-bar
-            // click needed. Gated to graph mode, a selected effect, and not typing.
-            if !typing
-                && !self.single_effect
-                && self.graph_view.selected_is_effect()
-                && ctx.input(|i| {
-                    i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace)
-                })
-                && let Some(node) = self.graph_view.selected_node
-            {
-                if self.undo_pending.is_none() {
-                    self.undo_pending = Some(self.snapshot());
+                // Delete / Backspace removes the selected effect node.
+                if !typing
+                    && self.graph_view.selected_is_effect()
+                    && ctx.input(|i| {
+                        i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace)
+                    })
+                    && let Some(node) = self.graph_view.selected_node
+                {
+                    if self.undo_pending.is_none() {
+                        self.undo_pending = Some(self.snapshot());
+                    }
+                    self.graph_view.remove_node(node);
                 }
-                self.graph_view.remove_node(node);
+
+                // Recompile edits made *after* show() (FAB add, action bar,
+                // Delete key) — they would otherwise update only the visuals.
+                self.apply_topology_change();
+
+                ui.advance_cursor_after_rect(avail);
             }
-
-            // Recompile edits made *after* show() — the "+" FAB add, the node
-            // action bar, and the Delete key above all land here and would
-            // otherwise update only the visual graph, not the audio engine.
-            self.apply_topology_change();
-
-            // Advance parent cursor past all three columns
-            ui.advance_cursor_after_rect(Rect::from_min_max(
-                avail.min,
-                pos2(
-                    avail.min.x + io_width + gap + center_width + gap + io_width,
-                    avail.max.y,
-                ),
-            ));
         });
 
         // Drain a pending "map param → macro" action raised by a knob's

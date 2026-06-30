@@ -8,8 +8,8 @@
 
 use std::collections::{HashMap, HashSet};
 
-use egui::{Color32, FontId, RichText, Stroke, Ui};
-use egui_snarl::ui::{PinInfo, SnarlStyle, SnarlViewer};
+use egui::{Color32, FontId, Painter, RichText, Stroke, Style, Ui};
+use egui_snarl::ui::{BackgroundPattern, PinInfo, SnarlStyle, SnarlViewer, Viewport};
 use egui_snarl::{InPin, InPinId, NodeId, OutPin, OutPinId, Snarl};
 
 use sonido_core::graph::{GraphEngine, MAX_SPLIT_TARGETS, ProcessingGraph};
@@ -17,6 +17,12 @@ use sonido_core::{ParamDescriptor, ParamFlags, SmoothingStyle};
 use sonido_gui_core::theme::SonidoTheme;
 use sonido_gui_core::widgets::glow;
 use sonido_registry::{EffectCategory, EffectRegistry};
+
+/// Width (screen px) of each I/O wall bar. Wide enough for a legible vertical
+/// meter plus a small foot knob, thin enough to read as a wall. Shared so
+/// `graph_view` welds the I/O pins to the bar's inner edge and `app.rs` draws
+/// the bar to match.
+pub const IO_BAR_WIDTH: f32 = 30.0;
 
 use crate::chain_manager::GraphCommand;
 
@@ -111,6 +117,10 @@ pub struct GraphView {
     /// layout is animating; each frame nodes glide a fraction of the remaining
     /// distance, so a topology edit settles smoothly instead of snapping.
     arrange_targets: HashMap<NodeId, egui::Pos2>,
+    /// Most recent pan/zoom transform, captured during `draw_background`. Used
+    /// to weld the Input/Output pins to the screen walls each frame. `None`
+    /// until the first frame has rendered.
+    last_viewport: Option<Viewport>,
 }
 
 impl GraphView {
@@ -137,6 +147,11 @@ impl GraphView {
         // Audio graph nodes should never collapse — collapsing hides pins
         // and body, breaking visual wire connections and confusing the layout.
         style.collapsible = Some(false);
+        // Bound zoom so nodes can't be pinched into illegibility or shrunk to a
+        // vanishing point (the "weird resizing" report). The I/O wall bars stay
+        // welded regardless; this only constrains the middle content's scale.
+        style.min_scale = Some(0.5);
+        style.max_scale = Some(1.5);
 
         Self {
             snarl,
@@ -146,6 +161,7 @@ impl GraphView {
             slot_activity: Vec::new(),
             slot_peaks: Vec::new(),
             arrange_targets: HashMap::new(),
+            last_viewport: None,
         }
     }
 
@@ -217,10 +233,15 @@ impl GraphView {
         self.topology_changed = true;
     }
 
-    /// Pin Input/Output nodes to the left/right edges of the effect bounding box.
+    /// Weld the Input/Output pins to the left/right screen walls.
     ///
-    /// Called at the start of each frame so I/O nodes act as fixed wire anchors
-    /// that cannot be dragged out of position.
+    /// Called at the start of each frame. When a viewport transform has been
+    /// captured (every frame after the first), each I/O node is positioned so
+    /// its pin lands on the inner edge of its wall bar at vertical center —
+    /// converting the wall's screen point into graph space via the live
+    /// transform, so the pin stays welded under any pan/zoom. Before the first
+    /// frame renders (no transform yet) it falls back to anchoring the I/O to
+    /// the effect bounding box.
     fn pin_io_nodes(&mut self) {
         let mut input_id = None;
         let mut output_id = None;
@@ -245,7 +266,15 @@ impl GraphView {
             }
         }
 
-        let (input_pos, output_pos) = if effect_count > 0 {
+        let (input_pos, output_pos) = if let Some(vp) = &self.last_viewport {
+            let y = vp.rect.center().y;
+            let input_screen = egui::pos2(vp.rect.left() + IO_BAR_WIDTH, y);
+            let output_screen = egui::pos2(vp.rect.right() - IO_BAR_WIDTH, y);
+            (
+                vp.screen_pos_to_graph(input_screen),
+                vp.screen_pos_to_graph(output_screen),
+            )
+        } else if effect_count > 0 {
             let avg_y = sum_y / effect_count as f32;
             (
                 egui::pos2(min_x - 150.0, avg_y),
@@ -382,6 +411,7 @@ impl GraphView {
         let theme = SonidoTheme::get(ui.ctx());
         let mut click_handled = false;
         let mut needs_arrange = false;
+        let mut captured_viewport = None;
         let mut viewer = SonidoViewer {
             selected_node: &mut self.selected_node,
             click_handled: &mut click_handled,
@@ -390,9 +420,15 @@ impl GraphView {
             theme,
             slot_activity: &self.slot_activity,
             slot_peaks: &self.slot_peaks,
+            captured_viewport: &mut captured_viewport,
         };
         self.snarl
             .show(&mut viewer, &self.style, "sonido_graph", ui);
+
+        // Keep this frame's transform for next frame's I/O-pin welding.
+        if captured_viewport.is_some() {
+            self.last_viewport = captured_viewport;
+        }
 
         // Re-flow the graph after a user topology edit so nodes never overlap
         // and the signal path reads left→right. Applied next frame.
@@ -400,11 +436,15 @@ impl GraphView {
             self.auto_arrange();
         }
 
-        // Click on empty space deselects — only within the graph area.
-        // Without the rect check, clicks on the effect panel (below the graph)
-        // would deselect the node and hide the panel.
+        // Click on empty space deselects — only within the graph area, and only
+        // when the press isn't over a floating overlay. The rect check excludes
+        // the effect panel below the graph; the `is_pointer_over_area` check
+        // excludes the foreground touch overlays (the node action bar, FAB,
+        // palette) — without it, tapping Duplicate/Remove deselected the node
+        // and hid the action bar before the button could act.
         if !click_handled
             && ui.input(|i| i.pointer.primary_pressed())
+            && !ui.ctx().is_pointer_over_area()
             && let Some(pos) = ui.input(|i| i.pointer.interact_pos())
             && ui.max_rect().contains(pos)
         {
@@ -438,12 +478,14 @@ impl GraphView {
 
     /// Add an effect node by registry id, splicing it into the nearest wire.
     ///
-    /// The touch / "+"-FAB add path: egui-snarl's add menu is right-click only
-    /// (no touch equivalent — eframe-web never synthesizes a secondary click),
-    /// so the FAB calls this directly. Mirrors the right-click palette body but
-    /// takes an explicit id and inserts near the graph centroid so
-    /// [`splice_at_nearest`] lands it in the main signal chain. Selects the new
-    /// node so its param panel opens immediately.
+    /// The add-button path (phone "+"-FAB and desktop "+ EFFECT" both route
+    /// here; egui-snarl's own add menu is right-click-only, with no touch
+    /// equivalent). The button carries no positional intent, so the new effect
+    /// is always appended as the final pre-output node via
+    /// [`append_before_output`]: every wire currently feeding the Output is
+    /// rerouted through the new effect, which then becomes the sole node
+    /// reaching the Output. (Right-click-on-wire keeps its positional splice.)
+    /// Selects the new node so its param panel opens immediately.
     pub fn add_effect_node(&mut self, effect_id: &str) {
         let registry = EffectRegistry::new();
         let Some(desc) = registry.get(effect_id) else {
@@ -460,7 +502,7 @@ impl GraphView {
                 smoothing: collect_smoothing(desc.id, 48000.0),
             },
         );
-        splice_at_nearest(&mut self.snarl, new_id, pos);
+        append_before_output(&mut self.snarl, new_id);
         self.selected_node = Some(new_id);
         self.topology_changed = true;
         self.auto_arrange();
@@ -889,6 +931,9 @@ struct SonidoViewer<'a> {
     slot_activity: &'a [f32],
     /// Per-effect-slot L/R peak levels (0.0--1.0) for inline mini meters.
     slot_peaks: &'a [(f32, f32)],
+    /// Receives this frame's pan/zoom transform, captured in `draw_background`,
+    /// so [`GraphView`] can weld the I/O pins to the screen walls next frame.
+    captured_viewport: &'a mut Option<Viewport>,
 }
 
 impl SonidoViewer<'_> {
@@ -903,6 +948,28 @@ impl SonidoViewer<'_> {
 }
 
 impl SnarlViewer<SonidoNode> for SonidoViewer<'_> {
+    /// Capture this frame's pan/zoom transform (so the I/O pins can be welded to
+    /// the screen walls), then draw the default background.
+    fn draw_background(
+        &mut self,
+        background: Option<&BackgroundPattern>,
+        viewport: &Viewport,
+        snarl_style: &SnarlStyle,
+        style: &Style,
+        painter: &Painter,
+        _snarl: &Snarl<SonidoNode>,
+    ) {
+        // Viewport isn't Clone, but its fields are public Copy values.
+        *self.captured_viewport = Some(Viewport {
+            rect: viewport.rect,
+            scale: viewport.scale,
+            offset: viewport.offset,
+        });
+        if let Some(background) = background {
+            background.draw(viewport, snarl_style, style, painter);
+        }
+    }
+
     fn title(&mut self, node: &SonidoNode) -> String {
         match node {
             SonidoNode::Input => "Input".to_string(),
@@ -1593,6 +1660,128 @@ mod tests {
             }
         }
         None
+    }
+
+    fn io_ids(gv: &GraphView) -> (NodeId, NodeId) {
+        let (mut input, mut output) = (None, None);
+        for (id, node) in gv.snarl.node_ids() {
+            match node {
+                SonidoNode::Input => input = Some(id),
+                SonidoNode::Output => output = Some(id),
+                _ => {}
+            }
+        }
+        (input.expect("input"), output.expect("output"))
+    }
+
+    fn insert_effect(gv: &mut GraphView, id: &str) -> NodeId {
+        let registry = EffectRegistry::new();
+        let desc = registry.get(id).expect("effect exists");
+        gv.snarl.insert_node(
+            egui::pos2(0.0, 0.0),
+            SonidoNode::Effect {
+                effect_id: desc.id,
+                name: desc.name,
+                category: desc.category,
+                descriptors: collect_descriptors(desc.id, 48000.0),
+                smoothing: collect_smoothing(desc.id, 48000.0),
+            },
+        )
+    }
+
+    #[test]
+    fn add_button_appends_last_absorbing_output_feeders() {
+        // Build a split that merges at the Output: Input → A → Output and
+        // Input → B → Output (two feeders into Output).
+        let mut gv = GraphView::new();
+        let (input, output) = io_ids(&gv);
+        gv.snarl.disconnect(
+            OutPinId {
+                node: input,
+                output: 0,
+            },
+            InPinId {
+                node: output,
+                input: 0,
+            },
+        );
+        let a = insert_effect(&mut gv, "distortion");
+        let b = insert_effect(&mut gv, "delay");
+        for n in [a, b] {
+            gv.snarl.connect(
+                OutPinId {
+                    node: input,
+                    output: 0,
+                },
+                InPinId { node: n, input: 0 },
+            );
+            gv.snarl.connect(
+                OutPinId { node: n, output: 0 },
+                InPinId {
+                    node: output,
+                    input: 0,
+                },
+            );
+        }
+        assert_eq!(
+            gv.snarl
+                .wires()
+                .filter(|(_, inp)| inp.node == output)
+                .count(),
+            2,
+            "two feeders into Output before the add"
+        );
+
+        // Add via the add button: the new effect must become the SOLE feeder of
+        // Output, with both prior feeders rerouted into it.
+        gv.add_effect_node("reverb");
+        let x = gv.selected_node.expect("new node selected");
+
+        let out_feeders: Vec<NodeId> = gv
+            .snarl
+            .wires()
+            .filter(|(_, inp)| inp.node == output)
+            .map(|(o, _)| o.node)
+            .collect();
+        assert_eq!(
+            out_feeders,
+            vec![x],
+            "added effect is the sole Output feeder"
+        );
+
+        let x_feeders: HashSet<NodeId> = gv
+            .snarl
+            .wires()
+            .filter(|(_, inp)| inp.node == x)
+            .map(|(o, _)| o.node)
+            .collect();
+        assert!(
+            x_feeders.contains(&a) && x_feeders.contains(&b),
+            "both prior feeders now merge into the added effect"
+        );
+    }
+
+    #[test]
+    fn pin_io_nodes_welds_input_left_output_right() {
+        let mut gv = GraphView::new();
+        // Simulate a captured transform: an 800x400 canvas, no pan, unity scale.
+        let rect = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(800.0, 400.0));
+        gv.last_viewport = Some(Viewport {
+            rect,
+            scale: 1.0,
+            offset: egui::vec2(0.0, 0.0),
+        });
+        gv.pin_io_nodes();
+
+        let (input, output) = io_ids(&gv);
+        let ip = gv.snarl.get_node_info(input).unwrap().pos;
+        let op = gv.snarl.get_node_info(output).unwrap().pos;
+        assert!(ip.x < op.x, "input sits left of output in graph space");
+
+        // The graph positions must map back onto the wall inner edges.
+        let vp = gv.last_viewport.as_ref().unwrap();
+        assert!((vp.graph_pos_to_screen(ip).x - (rect.left() + IO_BAR_WIDTH)).abs() < 1.0);
+        assert!((vp.graph_pos_to_screen(op).x - (rect.right() - IO_BAR_WIDTH)).abs() < 1.0);
     }
 
     #[test]
