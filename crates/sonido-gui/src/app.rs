@@ -22,6 +22,8 @@ use sonido_gui_core::theme::SonidoTheme;
 use sonido_gui_core::widgets::glow;
 use sonido_gui_core::widgets::{MacroAction, morph_bar, take_macro_action};
 use sonido_gui_core::{ParamBridge, ParamIndex, SlotIndex};
+
+use crate::info_view::{self, InfoPayload};
 use sonido_registry::EffectRegistry;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -87,9 +89,6 @@ pub struct SonidoApp {
     /// Frames remaining for compile success flash.
     compile_success_frames: u32,
 
-    /// Latched clip indicators `[input, output]` (click to reset).
-    clip_latched: [bool; 2],
-
     /// Last export/flash result shown in the header: `Ok` = success (green),
     /// `Err` = failure (red). Cleared/replaced on the next export.
     #[cfg(not(target_arch = "wasm32"))]
@@ -114,6 +113,19 @@ pub struct SonidoApp {
     /// Which collapsible drawer is open on the Phone breakpoint. On wider tiers
     /// the performance band is always docked and this is ignored.
     drawer: Drawer,
+
+    /// Selected effect slot as of the previous frame, captured from the graph
+    /// view's `show()` return. Drives the contextual Info View, which is drawn
+    /// (as a bottom panel) before the central graph each frame, so it reads
+    /// last frame's selection — a one-frame lag that is never visible.
+    info_slot: Option<usize>,
+
+    /// Full-width-on-demand "focus mode": when true (Desktop/Tablet only),
+    /// the docked chrome — I/O strips, morph band, Info View — collapses so the
+    /// canvas spans the full width. Toggled by the header button or `F`. The
+    /// floating add affordances (FAB / palette) stay live, so authoring still
+    /// works. Ignored on Phone, where the canvas is already the hero.
+    chrome_collapsed: bool,
 }
 
 /// A summonable drawer on the Phone layout, where the performance band can't be
@@ -233,7 +245,6 @@ impl SonidoApp {
             single_effect,
             compile_error: None,
             compile_success_frames: 0,
-            clip_latched: [false; 2],
             #[cfg(not(target_arch = "wasm32"))]
             export_msg: None,
             undo_stack: Vec::new(),
@@ -243,6 +254,8 @@ impl SonidoApp {
             palette_open: false,
             palette_filter: String::new(),
             drawer: Drawer::None,
+            info_slot: None,
+            chrome_collapsed: false,
         };
 
         // Apply theme
@@ -509,9 +522,14 @@ impl SonidoApp {
                             .color(theme.colors.text_secondary),
                     );
                     // Auto-focus on open so you can type-to-filter immediately
-                    // (keyboard-driven add — no extra click into the field).
+                    // (keyboard-driven add — no extra click into the field). Skip
+                    // this on touch tiers: re-grabbing focus whenever nothing is
+                    // focused would pop the soft keyboard the instant a thumb rests
+                    // on the list to scroll. Touch users tap the field to type.
+                    let auto_focus = !self.breakpoint.is_compact();
                     let search = ui.text_edit_singleline(&mut self.palette_filter);
-                    if search.gained_focus() || ui.memory(|m| m.focused().is_none()) {
+                    if auto_focus && (search.gained_focus() || ui.memory(|m| m.focused().is_none()))
+                    {
                         search.request_focus();
                     }
                 });
@@ -713,6 +731,29 @@ impl SonidoApp {
                     .clicked()
                 {
                     self.drawer = if rig_open { Drawer::None } else { Drawer::Rig };
+                }
+                ui.separator();
+            }
+
+            // FOCUS toggle — Desktop/Tablet. Collapses docked chrome for a
+            // full-width canvas; the floating add affordances stay live.
+            if self.breakpoint != Breakpoint::Phone {
+                let focus_color = if self.chrome_collapsed {
+                    theme.colors.cyan
+                } else {
+                    theme.colors.dim
+                };
+                if ui
+                    .button(
+                        egui::RichText::new("FOCUS")
+                            .font(FontId::monospace(11.0))
+                            .color(focus_color)
+                            .strong(),
+                    )
+                    .on_hover_text("Full-width canvas \u{2014} hide I/O, morph, info  (F)")
+                    .clicked()
+                {
+                    self.chrome_collapsed = !self.chrome_collapsed;
                 }
                 ui.separator();
             }
@@ -937,25 +978,8 @@ impl SonidoApp {
                     (self.metering.output_peak, self.metering.output_rms)
                 };
                 ui.add(LevelMeter::new(peak, rms).size(20.0, 100.0));
-
-                // Clip indicator (latched, click to reset)
-                let clip_latched = &mut self.clip_latched[usize::from(!is_input)];
-                if peak > 1.0 {
-                    *clip_latched = true;
-                }
-                let clip_color = if *clip_latched {
-                    theme.colors.red
-                } else {
-                    theme.colors.dim
-                };
-                let clip_resp = ui.button(
-                    egui::RichText::new("CLIP")
-                        .font(FontId::monospace(8.0))
-                        .color(clip_color),
-                );
-                if clip_resp.clicked() {
-                    *clip_latched = false;
-                }
+                // The meter owns its clip + peak readout now: a numeric dBFS
+                // header that turns red past 0 dBFS, click the meter to reset.
 
                 ui.add_space(4.0);
 
@@ -998,7 +1022,6 @@ impl SonidoApp {
     /// two tall vertical I/O strips so the canvas gets full width — nothing is
     /// removed, only re-laid-out.
     fn render_phone_levels(&mut self, ui: &mut egui::Ui) {
-        let theme = SonidoTheme::get(ui.ctx());
         ui.horizontal(|ui| {
             // Input gain
             let input_gain = self.audio_bridge.input_gain();
@@ -1019,49 +1042,9 @@ impl SonidoApp {
                     .horizontal()
                     .size(78.0, 10.0),
             );
-            {
-                let peak = self.metering.input_peak;
-                let latched = &mut self.clip_latched[0];
-                *latched |= peak > 1.0;
-                let col = if *latched {
-                    theme.colors.red
-                } else {
-                    theme.colors.dim
-                };
-                if ui
-                    .button(
-                        egui::RichText::new("CLIP")
-                            .font(FontId::monospace(8.0))
-                            .color(col),
-                    )
-                    .clicked()
-                {
-                    *latched = false;
-                }
-            }
 
             ui.separator();
 
-            {
-                let peak = self.metering.output_peak;
-                let latched = &mut self.clip_latched[1];
-                *latched |= peak > 1.0;
-                let col = if *latched {
-                    theme.colors.red
-                } else {
-                    theme.colors.dim
-                };
-                if ui
-                    .button(
-                        egui::RichText::new("CLIP")
-                            .font(FontId::monospace(8.0))
-                            .color(col),
-                    )
-                    .clicked()
-                {
-                    *latched = false;
-                }
-            }
             ui.add(
                 LevelMeter::new(self.metering.output_peak, self.metering.output_rms)
                     .horizontal()
@@ -1089,17 +1072,48 @@ impl SonidoApp {
         let theme = SonidoTheme::get(ui.ctx());
         ui.vertical_centered(|ui| {
             ui.add_space(8.0);
+            // The full control reference now lives in the docked Info View
+            // below; the empty center just prompts the next action.
             ui.label(
-                egui::RichText::new(
-                    "+ EFFECT or right-click: add node \u{00b7} Select a node, Delete: remove \u{00b7} \
-                     Up/Down: adjust focused knob, Left/Right: move between \u{00b7} \
-                     Space: play \u{00b7} Ctrl+Z: undo \u{00b7} Ctrl+Scroll: zoom",
-                )
-                .font(FontId::monospace(10.0))
-                .color(theme.colors.text_secondary)
-                .italics(),
+                egui::RichText::new("Select a node to edit it \u{00b7} + EFFECT to add one")
+                    .font(FontId::monospace(10.0))
+                    .color(theme.colors.text_secondary)
+                    .italics(),
             );
         });
+    }
+
+    /// Assemble the contextual Info View payload from the current selection.
+    ///
+    /// When an effect node is selected, the title + prose come from the effect
+    /// registry and each parameter's live value is read through the same
+    /// [`ParamDescriptor`](sonido_core::ParamDescriptor) metadata that drives
+    /// accessibility — one source, no drift. Otherwise the empty-state prompt
+    /// plus the general shortcuts are shown.
+    fn build_info_payload(&self) -> InfoPayload {
+        let Some(slot_idx) = self.info_slot else {
+            return InfoPayload::empty_state();
+        };
+        let slot = SlotIndex(slot_idx);
+        if slot.0 >= self.bridge.slot_count() {
+            return InfoPayload::empty_state();
+        }
+
+        let effect_id = self.bridge.effect_id(slot);
+        let descriptor = self.registry.descriptor(effect_id);
+        let name = descriptor.map(|d| d.name).unwrap_or(effect_id);
+        let description = descriptor.map(|d| d.description).unwrap_or("");
+
+        let mut params = Vec::new();
+        for i in 0..self.bridge.param_count(slot) {
+            let param = ParamIndex(i);
+            if let Some(pd) = self.bridge.param_descriptor(slot, param) {
+                let value = self.bridge.get(slot, param);
+                params.push((pd.short_name.to_string(), pd.format_value(value)));
+            }
+        }
+
+        InfoPayload::for_effect(name, description, params)
     }
 
     /// Estimate the needed effect panel height from the cached panel's param count.
@@ -2085,6 +2099,15 @@ impl eframe::App for SonidoApp {
             }
         }
 
+        // Focus mode: `F` collapses the docked chrome to give the canvas full
+        // width (Desktop/Tablet only — Phone is already canvas-first).
+        if !typing
+            && self.breakpoint != Breakpoint::Phone
+            && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::F))
+        {
+            self.chrome_collapsed = !self.chrome_collapsed;
+        }
+
         // Undo / redo for structural edits (Ctrl+Z, Ctrl+Shift+Z, or Ctrl+Y).
         // `command` is Ctrl on Linux/Windows and ⌘ on macOS.
         if !typing {
@@ -2122,11 +2145,18 @@ impl eframe::App for SonidoApp {
             ui.add_space(2.0);
         });
 
+        // Focus mode collapses docked chrome for a full-width canvas. Only
+        // meaningful off Phone (Phone is already canvas-first), so guard the
+        // flag here — a user who collapses on Desktop then shrinks to Phone
+        // still gets the normal Phone layout and its RIG drawer.
+        let collapsed = self.chrome_collapsed && self.breakpoint != Breakpoint::Phone;
+
         // Bottom performance band. On Desktop/Tablet it carries just the global
         // A/B morph (the macros live in the header now, which frees this band's
         // height for the selected effect's params). On Phone it is the summonable
         // RIG drawer and carries the macro strip plus morph. Graph mode only.
         let show_perf = !self.single_effect
+            && !collapsed
             && (self.breakpoint != Breakpoint::Phone || self.drawer == Drawer::Rig);
         if show_perf {
             TopBottomPanel::bottom("performance").show(ctx, |ui| {
@@ -2139,6 +2169,20 @@ impl eframe::App for SonidoApp {
                 }
                 self.render_morph_band(ui);
                 ui.add_space(4.0);
+            });
+        }
+
+        // Contextual Info View — explains the selected node, shows its live
+        // parameter values, and lists the relevant shortcuts. Docked just under
+        // the canvas on Desktop/Tablet in graph mode (Ableton's Info View, but
+        // unified with the registry + accessibility description source).
+        if !self.single_effect && self.breakpoint != Breakpoint::Phone && !collapsed {
+            let payload = self.build_info_payload();
+            TopBottomPanel::bottom("info_view").show(ctx, |ui| {
+                let theme = SonidoTheme::get(ui.ctx());
+                ui.add_space(3.0);
+                info_view::render(ui, &theme, &payload);
+                ui.add_space(3.0);
             });
         }
 
@@ -2169,13 +2213,17 @@ impl eframe::App for SonidoApp {
 
             let avail = ui.available_rect_before_wrap();
 
-            // Responsive I/O strip widths from ThemeLayout (zero on Phone).
-            let io_width = if phone {
+            // Hide the flanking I/O strips on Phone (folded into the levels row)
+            // and in focus mode (full-width canvas on demand).
+            let hide_io = phone || collapsed;
+
+            // Responsive I/O strip widths from ThemeLayout (zero when hidden).
+            let io_width = if hide_io {
                 0.0
             } else {
                 theme.layout.io_strip_width(avail.width())
             };
-            let gap = if phone { 0.0 } else { 8.0 };
+            let gap = if hide_io { 0.0 } else { 8.0 };
             let center_width = (avail.width() - 2.0 * io_width - 2.0 * gap).max(200.0);
 
             let input_rect = Rect::from_min_size(avail.min, vec2(io_width, avail.height()));
@@ -2191,8 +2239,8 @@ impl eframe::App for SonidoApp {
                 vec2(io_width, avail.height()),
             );
 
-            // Input strip (Desktop/Tablet only — folded into the levels row on Phone).
-            if !phone {
+            // Input strip (hidden on Phone and in focus mode).
+            if !hide_io {
                 let mut child = ui.new_child(
                     UiBuilder::new()
                         .id_salt("input_col")
@@ -2241,6 +2289,11 @@ impl eframe::App for SonidoApp {
                         })
                         .inner;
 
+                    // Feed the contextual Info View (drawn as a bottom panel
+                    // before this central panel, so it reads this value next
+                    // frame — an invisible one-frame lag).
+                    self.info_slot = selected_slot;
+
                     // Auto-compile in-`show` topology edits (connect/disconnect,
                     // right-click add/remove), recording the pre-edit snapshot as
                     // an undo point. Undo/redo restores rebuild the snarl too, but
@@ -2266,8 +2319,8 @@ impl eframe::App for SonidoApp {
                 }
             }
 
-            // Output strip (Desktop/Tablet only — folded into the levels row on Phone).
-            if !phone {
+            // Output strip (hidden on Phone and in focus mode).
+            if !hide_io {
                 let mut child = ui.new_child(
                     UiBuilder::new()
                         .id_salt("output_col")
