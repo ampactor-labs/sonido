@@ -1,0 +1,18 @@
+#!/usr/bin/env sh
+# Pre-push: run the first CI gate (rustfmt) locally so a formatting-only
+# failure can never bounce a push to main. This mirrors ci.yml's
+# `cargo fmt --all --check` exactly. It's fast (~seconds); clippy and the
+# test suite stay in CI where they belong.
+#
+# Enable in a fresh clone with:  git config core.hooksPath .githooks
+
+echo "pre-push: cargo fmt --all --check ..."
+if ! cargo fmt --all --check; then
+    echo
+    echo "  rustfmt found unformatted code — this is the FIRST CI gate, so an"
+    echo "  unformatted push fails CI before clippy/test even run."
+    echo "  Fix it with:  cargo fmt --all"
+    echo
+    exit 1
+fi
+echo "pre-push: fmt OK"
