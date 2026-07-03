@@ -231,9 +231,14 @@ impl SonidoEditor {
                 // for knob positions updating from automation.
                 ctx.request_repaint_after(std::time::Duration::from_millis(33));
                 egui::CentralPanel::default().show(ctx, |ui| {
-                    state
-                        .panel
-                        .ui(ui, state.bridge.as_ref() as &dyn ParamBridge, SlotIndex(0));
+                    // No A/B morph in the single-effect plugin view yet, so the
+                    // knobs draw no morph ghost ticks.
+                    state.panel.ui(
+                        ui,
+                        state.bridge.as_ref() as &dyn ParamBridge,
+                        SlotIndex(0),
+                        &|_| None,
+                    );
                 });
             },
         );

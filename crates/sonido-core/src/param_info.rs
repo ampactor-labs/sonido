@@ -254,6 +254,13 @@ impl ParamFlags {
     ///
     /// Requires `modulation_id` in the descriptor for CLAP host routing.
     pub const MODULATABLE: Self = Self(1 << 4);
+    /// Auto-assignment should not bind this parameter to a performance macro.
+    ///
+    /// Marks the non-musical controls — output/makeup gain, dry/wet mix, master
+    /// volume — that a macro should skip when it seeds itself from the effects
+    /// in the chain. Advisory only: it constrains automatic mapping and has no
+    /// effect on plugin-host automation, where every parameter stays available.
+    pub const MACRO_EXCLUDE: Self = Self(1 << 5);
 
     /// Returns `true` if all bits in `other` are set in `self`.
     #[inline]
@@ -1539,6 +1546,16 @@ mod tests {
         assert!(flags.contains(ParamFlags::MODULATABLE));
         assert!(flags.contains(ParamFlags::AUTOMATABLE));
         assert!(!flags.contains(ParamFlags::STEPPED));
+    }
+
+    #[test]
+    fn test_macro_exclude_flag() {
+        let flags = ParamFlags::AUTOMATABLE.union(ParamFlags::MACRO_EXCLUDE);
+        assert!(flags.contains(ParamFlags::MACRO_EXCLUDE));
+        assert!(flags.contains(ParamFlags::AUTOMATABLE));
+        // MACRO_EXCLUDE is its own bit — a default (AUTOMATABLE) param is not excluded.
+        assert!(!ParamFlags::default().contains(ParamFlags::MACRO_EXCLUDE));
+        assert!(!ParamFlags::MACRO_EXCLUDE.contains(ParamFlags::STEPPED));
     }
 
     #[test]

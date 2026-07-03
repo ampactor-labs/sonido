@@ -1,193 +1,339 @@
-//! A/B morph state management.
+//! A/B morph: one global position, per-effect endpoints.
 //!
-//! Captures parameter snapshots at two positions (A and B) and interpolates
-//! between them using a crossfade parameter `t`. Mirrors the interpolation
-//! logic from [`KernelParams::lerp()`](sonido_core::kernel::KernelParams::lerp):
-//! continuous parameters use linear interpolation while
-//! frequency parameters interpolate logarithmically and stepped parameters
-//! snap at `t = 0.5`, via the shared [`sonido_core::curve_lerp`].
+//! Every effect owns two parameter poses — A and B — keyed to its stable graph
+//! identity (the node id), not its slot position. The global morph position `t`
+//! crossfades the whole rig between them, per-parameter and curve-aware.
+//!
+//! Because endpoints ride the effect instance and are seeded to the current
+//! sound the first time an effect appears, changing the chain never desyncs the
+//! morph: a new effect joins immediately, sitting still (`a == b`) until you give
+//! it a distinct B, and reordering or removing effects just moves or drops the
+//! endpoints that travel with them. This replaces the old model — two frozen
+//! whole-rig snapshots that went stale the moment you added an effect.
+//!
+//! Authoring is park-and-edit. Focus A (or B) to park the rig at that pose and
+//! record every knob you turn into it; leave focus to perform. [`grab_edit`] is
+//! the shortcut for "make the sound I have right now be A" — the old capture.
+//!
+//! The struct is generic over the identity key `K` so the core logic unit-tests
+//! against plain integers; the app instantiates it with the graph's `NodeId`.
+//!
+//! [`grab_edit`]: MorphState::grab_edit
+
+use std::collections::{HashMap, HashSet};
+use std::hash::Hash;
 
 use sonido_core::{MorphCurve, curve_lerp};
 use sonido_gui_core::{ParamBridge, ParamIndex, SlotIndex};
 
-/// Captured parameter state for a single effect slot.
-#[derive(Clone, Debug)]
+/// Which pose a morph edit writes to.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum MorphEnd {
+    /// The A pose (position `t = 0.0`).
+    A,
+    /// The B pose (position `t = 1.0`).
+    B,
+}
+
+impl MorphEnd {
+    /// The morph position at which this pose is shown untouched.
+    fn position(self) -> f32 {
+        match self {
+            MorphEnd::A => 0.0,
+            MorphEnd::B => 1.0,
+        }
+    }
+}
+
+/// One effect's A and B endpoints: a value per parameter, plus bypass per pose.
+#[derive(Clone, Debug, Default, PartialEq)]
+struct Endpoints {
+    effect_id: String,
+    a: Vec<f32>,
+    b: Vec<f32>,
+    bypass_a: bool,
+    bypass_b: bool,
+}
+
+/// A single effect's pose in slot order — the persistence DTO for one endpoint.
+///
+/// The runtime keeps endpoints keyed by identity; sessions store them in slot
+/// order as plain value arrays, so save/load converts through this.
+#[derive(Clone, Debug, PartialEq)]
 pub struct SlotSnapshot {
-    /// Registry effect ID (e.g., `"distortion"`, `"reverb"`).
+    /// Registry effect id (e.g. `"distortion"`), for a sanity check on load.
     pub effect_id: String,
     /// Parameter values in index order.
     pub values: Vec<f32>,
-    /// Whether the slot was bypassed at capture time.
+    /// Bypass state for this pose.
     pub bypassed: bool,
 }
 
-/// Complete chain state snapshot for morphing.
-#[derive(Clone, Debug)]
+/// A whole-rig pose in slot order (all of A, or all of B) — persistence DTO.
+#[derive(Clone, Debug, PartialEq)]
 pub struct MorphSnapshot {
-    /// One entry per effect slot in chain order.
+    /// One entry per effect slot, in chain order.
     pub slots: Vec<SlotSnapshot>,
 }
 
-impl MorphSnapshot {
-    /// Capture all slot parameters from a bridge into a snapshot.
-    pub fn capture(bridge: &dyn ParamBridge) -> Self {
-        let count = bridge.slot_count();
-        let mut slots = Vec::with_capacity(count);
-        for i in 0..count {
-            let slot = SlotIndex(i);
-            let param_count = bridge.param_count(slot);
-            let mut values = Vec::with_capacity(param_count);
-            for p in 0..param_count {
-                values.push(bridge.get(slot, ParamIndex(p)));
-            }
-            slots.push(SlotSnapshot {
-                effect_id: bridge.effect_id(slot).to_owned(),
-                values,
-                bypassed: bridge.is_bypassed(slot),
-            });
-        }
-        Self { slots }
-    }
-
-    /// Apply curve-aware interpolated values from snapshots A and B onto a bridge.
-    ///
-    /// Interpolation curve is per-parameter, chosen by
-    /// [`MorphCurve::from_descriptor`](sonido_core::MorphCurve::from_descriptor):
-    /// - Logarithmic-scale (frequency) parameters: geometric interpolation
-    /// - [`STEPPED`](sonido_core::ParamFlags::STEPPED) parameters: snap at `t = 0.5`
-    /// - everything else: linear
-    /// - Bypass state: snap at `t = 0.5`
-    /// - Locked slots (where `locked[i]` is `true`) are skipped entirely.
-    /// - Slots where the effect ID differs between A and B are skipped (morphing
-    ///   between different effect types is not meaningful).
-    pub fn apply_lerped(a: &Self, b: &Self, t: f32, locked: &[bool], bridge: &dyn ParamBridge) {
-        let t = t.clamp(0.0, 1.0);
-        let slot_count = a.slots.len().min(b.slots.len()).min(bridge.slot_count());
-
-        for i in 0..slot_count {
-            // Skip locked slots
-            if locked.get(i).copied().unwrap_or(false) {
-                continue;
-            }
-
-            let sa = &a.slots[i];
-            let sb = &b.slots[i];
-
-            // Skip if effect types differ — interpolation is not meaningful
-            if sa.effect_id != sb.effect_id {
-                continue;
-            }
-
-            let slot = SlotIndex(i);
-
-            // Bypass: snap at midpoint
-            let bypassed = if t < 0.5 { sa.bypassed } else { sb.bypassed };
-            bridge.set_bypassed(slot, bypassed);
-
-            // Parameters: lerp continuous, snap stepped
-            let param_count = sa
-                .values
-                .len()
-                .min(sb.values.len())
-                .min(bridge.param_count(slot));
-            for p in 0..param_count {
-                let va = sa.values[p];
-                let vb = sb.values[p];
-                let pidx = ParamIndex(p);
-
-                // Per-parameter curve from the descriptor — the same rule core's
-                // ChainMorph and the firmware use, so all three agree. This is
-                // where the GUI gains logarithmic frequency morphing (a cutoff
-                // 100 Hz↔10 kHz now passes through 1 kHz at t=0.5, not 5.05 kHz)
-                // and stepped-param snapping, instead of the old linear-only path.
-                let curve = bridge
-                    .param_descriptor(slot, pidx)
-                    .map_or(MorphCurve::Linear, |d| MorphCurve::from_descriptor(&d));
-                bridge.set(slot, pidx, curve_lerp(va, vb, t, curve));
-            }
-        }
-    }
-}
-
-/// GUI-side morph controller managing A/B snapshots and crossfade position.
-pub struct MorphState {
-    /// Snapshot A (typically the "clean" or starting preset).
-    pub a: Option<MorphSnapshot>,
-    /// Snapshot B (typically the "target" preset).
-    pub b: Option<MorphSnapshot>,
-    /// Crossfade position: 0.0 = full A, 1.0 = full B.
+/// Per-effect A/B morph, swept by one global position.
+pub struct MorphState<K: Copy + Eq + Hash> {
+    /// Endpoints keyed by stable effect identity.
+    endpoints: HashMap<K, Endpoints>,
+    /// Effects excluded from the morph (held at their live values).
+    locked: HashSet<K>,
+    /// Global crossfade position: 0.0 = full A, 1.0 = full B.
     pub t: f32,
-    /// Whether morphing is currently active.
-    pub active: bool,
-    /// Per-slot lock flags — locked slots are excluded from morphing.
-    pub locked_slots: Vec<bool>,
+    /// The pose being sculpted (`Some` ⇒ parked and recording knob edits into
+    /// it); `None` ⇒ performing.
+    edit: Option<MorphEnd>,
 }
 
-impl MorphState {
-    /// Create a new inactive morph state.
+impl<K: Copy + Eq + Hash> MorphState<K> {
+    /// A new, empty morph: no effects tracked, position 0, performing.
     pub fn new() -> Self {
         Self {
-            a: None,
-            b: None,
+            endpoints: HashMap::new(),
+            locked: HashSet::new(),
             t: 0.0,
-            active: false,
-            locked_slots: Vec::new(),
+            edit: None,
         }
     }
 
-    /// Returns `true` if both A and B snapshots have been captured.
-    pub fn is_ready(&self) -> bool {
-        self.a.is_some() && self.b.is_some()
+    /// The pose currently focused for editing, if any.
+    pub fn edit(&self) -> Option<MorphEnd> {
+        self.edit
     }
 
-    /// Capture the current bridge state as snapshot A.
-    pub fn capture_a(&mut self, bridge: &dyn ParamBridge) {
-        self.a = Some(MorphSnapshot::capture(bridge));
-        self.ensure_lock_slots(bridge.slot_count());
+    /// Whether the given pose is the one currently focused.
+    pub fn is_editing(&self, end: MorphEnd) -> bool {
+        self.edit == Some(end)
     }
 
-    /// Capture the current bridge state as snapshot B.
-    pub fn capture_b(&mut self, bridge: &dyn ParamBridge) {
-        self.b = Some(MorphSnapshot::capture(bridge));
-        self.ensure_lock_slots(bridge.slot_count());
-    }
-
-    /// Recall snapshot A: set `t = 0.0` and apply.
-    pub fn recall_a(&mut self, bridge: &dyn ParamBridge) {
-        self.t = 0.0;
-        if let Some(a) = &self.a {
-            MorphSnapshot::apply_lerped(a, a, 0.0, &self.locked_slots, bridge);
-        }
-    }
-
-    /// Recall snapshot B: set `t = 1.0` and apply.
-    pub fn recall_b(&mut self, bridge: &dyn ParamBridge) {
-        self.t = 1.0;
-        if let Some(b) = &self.b {
-            MorphSnapshot::apply_lerped(b, b, 1.0, &self.locked_slots, bridge);
-        }
-    }
-
-    /// Apply the current morph position to the bridge.
+    /// Reconcile the endpoint set with the live chain.
     ///
-    /// Only applies if morphing is active and both snapshots are captured.
-    pub fn apply(&self, bridge: &dyn ParamBridge) {
-        if self.active
-            && let (Some(a), Some(b)) = (&self.a, &self.b)
-        {
-            MorphSnapshot::apply_lerped(a, b, self.t, &self.locked_slots, bridge);
+    /// `order[slot]` is the identity of the effect in that chain slot. New
+    /// effects are seeded flat (`a == b ==` their current values), so they join
+    /// the morph without moving; effects no longer present are dropped. An
+    /// effect whose slot now holds a different effect type (id or parameter
+    /// count changed) is reseeded. Call once per frame before applying.
+    pub fn sync(&mut self, order: &[K], bridge: &dyn ParamBridge) {
+        self.endpoints.retain(|k, _| order.contains(k));
+        self.locked.retain(|k| order.contains(k));
+
+        for (slot, &key) in order.iter().enumerate() {
+            let s = SlotIndex(slot);
+            let id = bridge.effect_id(s);
+            let pc = bridge.param_count(s);
+            let needs_seed = match self.endpoints.get(&key) {
+                None => true,
+                Some(e) => e.effect_id.as_str() != id || e.a.len() != pc || e.b.len() != pc,
+            };
+            if needs_seed {
+                let cur: Vec<f32> = (0..pc).map(|p| bridge.get(s, ParamIndex(p))).collect();
+                let byp = bridge.is_bypassed(s);
+                self.endpoints.insert(
+                    key,
+                    Endpoints {
+                        effect_id: id.to_owned(),
+                        a: cur.clone(),
+                        b: cur,
+                        bypass_a: byp,
+                        bypass_b: byp,
+                    },
+                );
+            }
         }
     }
 
-    /// Ensure `locked_slots` is at least `count` elements long.
-    fn ensure_lock_slots(&mut self, count: usize) {
-        if self.locked_slots.len() < count {
-            self.locked_slots.resize(count, false);
+    /// Write the interpolated pose to the bridge: every parameter becomes
+    /// `curve_lerp(a, b, t)`, bypass snaps at the midpoint. Locked effects are
+    /// left untouched. Curve is per-parameter, from the descriptor — the same
+    /// rule the firmware uses, so GUI and pedal agree value-for-value.
+    pub fn apply(&self, order: &[K], bridge: &dyn ParamBridge) {
+        for (slot, key) in order.iter().enumerate() {
+            if self.locked.contains(key) {
+                continue;
+            }
+            let Some(e) = self.endpoints.get(key) else {
+                continue;
+            };
+            let s = SlotIndex(slot);
+            let n = e.a.len().min(e.b.len()).min(bridge.param_count(s));
+            for p in 0..n {
+                let pidx = ParamIndex(p);
+                let curve = bridge
+                    .param_descriptor(s, pidx)
+                    .map_or(MorphCurve::Linear, |d| MorphCurve::from_descriptor(&d));
+                bridge.set(s, pidx, curve_lerp(e.a[p], e.b[p], self.t, curve));
+            }
+            let bypassed = if self.t < 0.5 { e.bypass_a } else { e.bypass_b };
+            bridge.set_bypassed(s, bypassed);
+        }
+    }
+
+    /// Focus a pose: park `t` at it and apply, so the rig shows that pose and
+    /// subsequent knob edits (folded in via [`record`](Self::record)) land in it.
+    pub fn park_edit(&mut self, end: MorphEnd, order: &[K], bridge: &dyn ParamBridge) {
+        self.edit = Some(end);
+        self.t = end.position();
+        self.apply(order, bridge);
+    }
+
+    /// Grab the current live rig into a pose, then focus it — "make the sound I
+    /// have right now be A (or B)." The endpoint takes the live values and the
+    /// rig does not jump, since it already sounds like the new pose.
+    pub fn grab_edit(&mut self, end: MorphEnd, order: &[K], bridge: &dyn ParamBridge) {
+        self.write_pose(end, order, bridge);
+        self.edit = Some(end);
+        self.t = end.position();
+    }
+
+    /// Leave edit mode and perform at position `t`.
+    pub fn perform(&mut self, t: f32, order: &[K], bridge: &dyn ParamBridge) {
+        self.edit = None;
+        self.t = t.clamp(0.0, 1.0);
+        self.apply(order, bridge);
+    }
+
+    /// While a pose is focused, fold the live rig into it — call once per frame
+    /// after the effect panel renders, so knob turns are recorded. A no-op while
+    /// performing, so performed interpolations never overwrite the endpoints.
+    pub fn record(&mut self, order: &[K], bridge: &dyn ParamBridge) {
+        if let Some(end) = self.edit {
+            self.write_pose(end, order, bridge);
+        }
+    }
+
+    /// Copy the live bridge values (and bypass) into `end` for every effect.
+    fn write_pose(&mut self, end: MorphEnd, order: &[K], bridge: &dyn ParamBridge) {
+        for (slot, key) in order.iter().enumerate() {
+            let s = SlotIndex(slot);
+            let Some(e) = self.endpoints.get_mut(key) else {
+                continue;
+            };
+            let arr = match end {
+                MorphEnd::A => &mut e.a,
+                MorphEnd::B => &mut e.b,
+            };
+            let n = arr.len().min(bridge.param_count(s));
+            for (p, slot_val) in arr.iter_mut().enumerate().take(n) {
+                *slot_val = bridge.get(s, ParamIndex(p));
+            }
+            match end {
+                MorphEnd::A => e.bypass_a = bridge.is_bypassed(s),
+                MorphEnd::B => e.bypass_b = bridge.is_bypassed(s),
+            }
+        }
+    }
+
+    /// The `(a, b)` endpoint pair for one parameter, for drawing knob markers.
+    ///
+    /// `None` when the effect is flat there (`a == b`) — nothing to show — or
+    /// when the identity/parameter is unknown.
+    pub fn markers(&self, key: &K, param: usize) -> Option<(f32, f32)> {
+        let e = self.endpoints.get(key)?;
+        let a = *e.a.get(param)?;
+        let b = *e.b.get(param)?;
+        if (a - b).abs() < f32::EPSILON {
+            None
+        } else {
+            Some((a, b))
+        }
+    }
+
+    /// Whether any effect has a distinct A and B — i.e. the morph does something.
+    pub fn is_active(&self) -> bool {
+        self.endpoints
+            .values()
+            .any(|e| e.a != e.b || e.bypass_a != e.bypass_b)
+    }
+
+    /// Whether any effect is being tracked at all (the chain is non-empty).
+    pub fn has_effects(&self) -> bool {
+        !self.endpoints.is_empty()
+    }
+
+    /// Exclude / include an effect. Locked effects are held at their live values
+    /// while the rest of the rig morphs.
+    pub fn set_locked(&mut self, key: K, locked: bool) {
+        if locked {
+            self.locked.insert(key);
+        } else {
+            self.locked.remove(&key);
+        }
+    }
+
+    /// Whether an effect is excluded from the morph.
+    pub fn is_locked(&self, key: &K) -> bool {
+        self.locked.contains(key)
+    }
+
+    /// Export one pose in slot order for a session save.
+    ///
+    /// Effects with no tracked endpoint (should not happen after [`sync`](Self::sync))
+    /// fall back to their live bridge values.
+    pub fn snapshot(&self, end: MorphEnd, order: &[K], bridge: &dyn ParamBridge) -> MorphSnapshot {
+        let slots = order
+            .iter()
+            .enumerate()
+            .map(|(slot, key)| {
+                let s = SlotIndex(slot);
+                let (values, bypassed) = match self.endpoints.get(key) {
+                    Some(e) => {
+                        let arr = match end {
+                            MorphEnd::A => &e.a,
+                            MorphEnd::B => &e.b,
+                        };
+                        let byp = match end {
+                            MorphEnd::A => e.bypass_a,
+                            MorphEnd::B => e.bypass_b,
+                        };
+                        (arr.clone(), byp)
+                    }
+                    None => (
+                        (0..bridge.param_count(s))
+                            .map(|p| bridge.get(s, ParamIndex(p)))
+                            .collect(),
+                        bridge.is_bypassed(s),
+                    ),
+                };
+                SlotSnapshot {
+                    effect_id: bridge.effect_id(s).to_owned(),
+                    values,
+                    bypassed,
+                }
+            })
+            .collect();
+        MorphSnapshot { slots }
+    }
+
+    /// Rebuild endpoints from two saved poses (slot order), keyed to the current
+    /// effects. Call after the chain is rebuilt from a session. Clears any locks
+    /// and edit focus; the caller re-applies locks from the session config.
+    pub fn restore(&mut self, order: &[K], a: &MorphSnapshot, b: &MorphSnapshot) {
+        self.endpoints.clear();
+        self.locked.clear();
+        self.edit = None;
+        for (slot, &key) in order.iter().enumerate() {
+            let (Some(sa), Some(sb)) = (a.slots.get(slot), b.slots.get(slot)) else {
+                continue;
+            };
+            self.endpoints.insert(
+                key,
+                Endpoints {
+                    effect_id: sa.effect_id.clone(),
+                    a: sa.values.clone(),
+                    b: sb.values.clone(),
+                    bypass_a: sa.bypassed,
+                    bypass_b: sb.bypassed,
+                },
+            );
         }
     }
 }
 
-impl Default for MorphState {
+impl<K: Copy + Eq + Hash> Default for MorphState<K> {
     fn default() -> Self {
         Self::new()
     }
@@ -196,9 +342,10 @@ impl Default for MorphState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sonido_core::ParamDescriptor;
+    use sonido_core::{ParamDescriptor, ParamScale};
     use std::sync::Mutex;
 
+    /// Descriptor-aware positional bridge for exercising morph.
     struct MockBridge {
         values: Mutex<Vec<Vec<f32>>>,
         bypassed: Mutex<Vec<bool>>,
@@ -245,8 +392,8 @@ mod tests {
                 .unwrap_or(0.0)
         }
         fn set(&self, slot: SlotIndex, param: ParamIndex, value: f32) {
-            if let Some(slot_vals) = self.values.lock().unwrap().get_mut(slot.0)
-                && let Some(v) = slot_vals.get_mut(param.0)
+            if let Some(sv) = self.values.lock().unwrap().get_mut(slot.0)
+                && let Some(v) = sv.get_mut(param.0)
             {
                 *v = value;
             }
@@ -266,156 +413,214 @@ mod tests {
         }
     }
 
-    #[test]
-    fn capture_roundtrip() {
-        let bridge = MockBridge::new(&[("dist", &[10.0, 0.5], &[None, None])]);
-        let snap = MorphSnapshot::capture(&bridge);
-        assert_eq!(snap.slots.len(), 1);
-        assert_eq!(snap.slots[0].effect_id, "dist");
-        assert_eq!(snap.slots[0].values, vec![10.0, 0.5]);
-        assert!(!snap.slots[0].bypassed);
+    fn none_descs(n: usize) -> Vec<Option<ParamDescriptor>> {
+        vec![None; n]
     }
 
     #[test]
-    fn lerp_continuous_midpoint() {
-        let bridge = MockBridge::new(&[("dist", &[0.0, 0.0], &[None, None])]);
+    fn sync_seeds_new_effects_flat() {
+        let bridge = MockBridge::new(&[("dist", &[10.0, 0.5], &none_descs(2))]);
+        let mut m: MorphState<u32> = MorphState::new();
+        m.sync(&[1], &bridge);
 
-        // Set up A
+        // Freshly seeded → flat, so it is not "active" and shows no markers.
+        assert!(!m.is_active());
+        assert!(m.markers(&1, 0).is_none());
+        // Morphing at any t leaves the value where it is (a == b).
+        m.t = 1.0;
+        m.apply(&[1], &bridge);
+        assert!((bridge.get(SlotIndex(0), ParamIndex(0)) - 10.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn added_effect_joins_flat_and_does_not_move() {
+        // Two effects; give effect 1 a real A/B, leave effect 2 (added later) flat.
+        let bridge = MockBridge::new(&[
+            ("dist", &[10.0], &none_descs(1)),
+            ("verb", &[0.3], &none_descs(1)),
+        ]);
+        let order = [1u32, 2u32];
+        let mut m: MorphState<u32> = MorphState::new();
+        m.sync(&order, &bridge);
+
+        // Author effect 1: A=10, B=20. Effect 2 stays at 0.3 for both.
+        m.park_edit(MorphEnd::A, &order, &bridge);
         bridge.set(SlotIndex(0), ParamIndex(0), 10.0);
-        bridge.set(SlotIndex(0), ParamIndex(1), 0.0);
-        let a = MorphSnapshot::capture(&bridge);
-
-        // Set up B
+        m.record(&order, &bridge);
+        m.park_edit(MorphEnd::B, &order, &bridge);
         bridge.set(SlotIndex(0), ParamIndex(0), 20.0);
-        bridge.set(SlotIndex(0), ParamIndex(1), 1.0);
-        let b = MorphSnapshot::capture(&bridge);
+        m.record(&order, &bridge);
 
-        // Morph to midpoint
-        MorphSnapshot::apply_lerped(&a, &b, 0.5, &[], &bridge);
-        assert!((bridge.get(SlotIndex(0), ParamIndex(0)) - 15.0).abs() < 0.001);
-        assert!((bridge.get(SlotIndex(0), ParamIndex(1)) - 0.5).abs() < 0.001);
+        // Perform to the middle: effect 1 → 15, effect 2 stays flat at 0.3.
+        m.perform(0.5, &order, &bridge);
+        assert!((bridge.get(SlotIndex(0), ParamIndex(0)) - 15.0).abs() < 1e-6);
+        assert!((bridge.get(SlotIndex(1), ParamIndex(0)) - 0.3).abs() < 1e-6);
+        // Effect 2 is in the morph but flat — no marker.
+        assert!(m.markers(&2, 0).is_none());
+        assert!(m.markers(&1, 0).is_some());
     }
 
     #[test]
-    fn lerp_stepped_snaps_at_midpoint() {
-        use sonido_core::ParamFlags;
+    fn endpoints_follow_identity_across_reorder() {
+        // Author on order [1, 2]; then the chain reorders to [2, 1] (a different
+        // bridge layout). Each effect's endpoints must move with its identity.
+        let a_layout = MockBridge::new(&[
+            ("dist", &[10.0], &none_descs(1)),
+            ("verb", &[0.2], &none_descs(1)),
+        ]);
+        let order1 = [1u32, 2u32];
+        let mut m: MorphState<u32> = MorphState::new();
+        m.sync(&order1, &a_layout);
 
-        let stepped = ParamDescriptor::custom("Mode", "Mode", 0.0, 3.0, 0.0)
-            .with_flags(ParamFlags::AUTOMATABLE.union(ParamFlags::STEPPED));
+        // dist (key 1): B = 20. verb (key 2): B = 0.9.
+        m.park_edit(MorphEnd::B, &order1, &a_layout);
+        a_layout.set(SlotIndex(0), ParamIndex(0), 20.0);
+        a_layout.set(SlotIndex(1), ParamIndex(0), 0.9);
+        m.record(&order1, &a_layout);
 
-        let bridge = MockBridge::new(&[("dist", &[0.0, 0.5], &[Some(stepped), None])]);
+        // Reordered layout: verb now in slot 0, dist in slot 1.
+        let b_layout = MockBridge::new(&[
+            ("verb", &[0.0], &none_descs(1)),
+            ("dist", &[0.0], &none_descs(1)),
+        ]);
+        let order2 = [2u32, 1u32];
+        m.sync(&order2, &b_layout); // same ids present → no reseed
+        m.perform(1.0, &order2, &b_layout);
 
-        bridge.set(SlotIndex(0), ParamIndex(0), 1.0);
-        bridge.set(SlotIndex(0), ParamIndex(1), 0.0);
-        let a = MorphSnapshot::capture(&bridge);
+        // Slot 0 holds verb (key 2) → 0.9; slot 1 holds dist (key 1) → 20.
+        assert!((b_layout.get(SlotIndex(0), ParamIndex(0)) - 0.9).abs() < 1e-6);
+        assert!((b_layout.get(SlotIndex(1), ParamIndex(0)) - 20.0).abs() < 1e-6);
+    }
 
+    #[test]
+    fn removed_effect_is_dropped() {
+        let bridge = MockBridge::new(&[("dist", &[1.0], &none_descs(1))]);
+        let mut m: MorphState<u32> = MorphState::new();
+        m.sync(&[1, 2], &bridge); // key 2 has no slot → seeded from empty slot
+        assert!(m.markers(&2, 0).is_none());
+        // Now only key 1 remains.
+        m.sync(&[1], &bridge);
+        assert!(m.markers(&2, 0).is_none());
+        m.set_locked(2, true);
+        m.sync(&[1], &bridge);
+        assert!(!m.is_locked(&2)); // lock for the gone effect was pruned
+    }
+
+    #[test]
+    fn park_edit_records_only_focused_pose() {
+        let bridge = MockBridge::new(&[("dist", &[5.0], &none_descs(1))]);
+        let order = [1u32];
+        let mut m: MorphState<u32> = MorphState::new();
+        m.sync(&order, &bridge);
+
+        m.park_edit(MorphEnd::A, &order, &bridge);
+        bridge.set(SlotIndex(0), ParamIndex(0), 2.0);
+        m.record(&order, &bridge); // A := 2
+
+        m.park_edit(MorphEnd::B, &order, &bridge);
+        bridge.set(SlotIndex(0), ParamIndex(0), 8.0);
+        m.record(&order, &bridge); // B := 8
+
+        assert_eq!(m.markers(&1, 0), Some((2.0, 8.0)));
+        m.perform(0.5, &order, &bridge);
+        assert!((bridge.get(SlotIndex(0), ParamIndex(0)) - 5.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn perform_does_not_corrupt_endpoints() {
+        let bridge = MockBridge::new(&[("dist", &[0.0], &none_descs(1))]);
+        let order = [1u32];
+        let mut m: MorphState<u32> = MorphState::new();
+        m.sync(&order, &bridge);
+        m.park_edit(MorphEnd::A, &order, &bridge);
+        bridge.set(SlotIndex(0), ParamIndex(0), 0.0);
+        m.record(&order, &bridge);
+        m.park_edit(MorphEnd::B, &order, &bridge);
+        bridge.set(SlotIndex(0), ParamIndex(0), 10.0);
+        m.record(&order, &bridge);
+
+        // Perform + record while NOT editing must leave endpoints intact.
+        m.perform(0.5, &order, &bridge); // live → 5
+        m.record(&order, &bridge); // no-op: edit is None
+        assert_eq!(m.markers(&1, 0), Some((0.0, 10.0)));
+    }
+
+    #[test]
+    fn grab_edit_captures_live_without_jump() {
+        let bridge = MockBridge::new(&[("dist", &[7.0], &none_descs(1))]);
+        let order = [1u32];
+        let mut m: MorphState<u32> = MorphState::new();
+        m.sync(&order, &bridge);
+        // Live is 7; grab into B.
+        m.grab_edit(MorphEnd::B, &order, &bridge);
+        // B endpoint is now 7; live unchanged.
+        assert!((bridge.get(SlotIndex(0), ParamIndex(0)) - 7.0).abs() < 1e-6);
+        // A is still the seeded 7 → flat, so no marker yet.
+        assert!(m.markers(&1, 0).is_none());
+    }
+
+    #[test]
+    fn locked_effect_is_excluded_from_apply() {
+        let bridge = MockBridge::new(&[("dist", &[0.0], &none_descs(1))]);
+        let order = [1u32];
+        let mut m: MorphState<u32> = MorphState::new();
+        m.sync(&order, &bridge);
+        m.park_edit(MorphEnd::B, &order, &bridge);
+        bridge.set(SlotIndex(0), ParamIndex(0), 10.0);
+        m.record(&order, &bridge);
+
+        m.set_locked(1, true);
         bridge.set(SlotIndex(0), ParamIndex(0), 3.0);
-        bridge.set(SlotIndex(0), ParamIndex(1), 1.0);
-        let b = MorphSnapshot::capture(&bridge);
-
-        // t=0.3 — stepped param stays at A value
-        MorphSnapshot::apply_lerped(&a, &b, 0.3, &[], &bridge);
-        assert!((bridge.get(SlotIndex(0), ParamIndex(0)) - 1.0).abs() < 0.001);
-
-        // t=0.7 — stepped param snaps to B value
-        MorphSnapshot::apply_lerped(&a, &b, 0.7, &[], &bridge);
-        assert!((bridge.get(SlotIndex(0), ParamIndex(0)) - 3.0).abs() < 0.001);
+        m.perform(1.0, &order, &bridge); // would push to 10 if not locked
+        assert!((bridge.get(SlotIndex(0), ParamIndex(0)) - 3.0).abs() < 1e-6);
     }
 
     #[test]
-    fn lerp_frequency_param_is_logarithmic() {
-        use sonido_core::ParamScale;
-
-        // A logarithmic-scale (frequency) parameter must morph through its
-        // geometric mean — the fidelity fix. Previously this path was linear and
-        // 100 Hz ↔ 10 kHz crossed 5050 Hz at t=0.5 instead of 1000 Hz.
+    fn apply_is_curve_aware_for_frequency() {
         let freq = ParamDescriptor::custom("Cutoff", "Cut", 20.0, 20_000.0, 1_000.0)
             .with_scale(ParamScale::Logarithmic);
         let bridge = MockBridge::new(&[("filter", &[100.0], &[Some(freq)])]);
-
-        let a = MorphSnapshot::capture(&bridge);
+        let order = [1u32];
+        let mut m: MorphState<u32> = MorphState::new();
+        m.sync(&order, &bridge);
+        m.park_edit(MorphEnd::A, &order, &bridge);
+        bridge.set(SlotIndex(0), ParamIndex(0), 100.0);
+        m.record(&order, &bridge);
+        m.park_edit(MorphEnd::B, &order, &bridge);
         bridge.set(SlotIndex(0), ParamIndex(0), 10_000.0);
-        let b = MorphSnapshot::capture(&bridge);
+        m.record(&order, &bridge);
 
-        MorphSnapshot::apply_lerped(&a, &b, 0.5, &[], &bridge);
-        let mid = bridge.get(SlotIndex(0), ParamIndex(0));
-        assert!(
-            (mid - 1_000.0).abs() < 1.0,
-            "log midpoint was {mid}, expected ~1000"
-        );
+        m.perform(0.5, &order, &bridge);
+        // Geometric mean of 100 and 10 000 = 1000 (log curve), not 5050.
+        assert!((bridge.get(SlotIndex(0), ParamIndex(0)) - 1_000.0).abs() < 1.0);
     }
 
     #[test]
-    fn locked_slots_are_skipped() {
-        let bridge = MockBridge::new(&[("dist", &[10.0], &[None]), ("rev", &[0.5], &[None])]);
+    fn snapshot_restore_round_trip() {
+        let bridge = MockBridge::new(&[
+            ("dist", &[0.0], &none_descs(1)),
+            ("verb", &[0.0, 0.0], &none_descs(2)),
+        ]);
+        let order = [1u32, 2u32];
+        let mut m: MorphState<u32> = MorphState::new();
+        m.sync(&order, &bridge);
+        // Author some A/B.
+        m.park_edit(MorphEnd::A, &order, &bridge);
+        bridge.set(SlotIndex(0), ParamIndex(0), 1.0);
+        bridge.set(SlotIndex(1), ParamIndex(0), 2.0);
+        m.record(&order, &bridge);
+        m.park_edit(MorphEnd::B, &order, &bridge);
+        bridge.set(SlotIndex(0), ParamIndex(0), 3.0);
+        bridge.set(SlotIndex(1), ParamIndex(1), 4.0);
+        m.record(&order, &bridge);
 
-        let a = MorphSnapshot::capture(&bridge);
+        let a = m.snapshot(MorphEnd::A, &order, &bridge);
+        let b = m.snapshot(MorphEnd::B, &order, &bridge);
 
-        bridge.set(SlotIndex(0), ParamIndex(0), 20.0);
-        bridge.set(SlotIndex(1), ParamIndex(0), 1.0);
-        let b = MorphSnapshot::capture(&bridge);
-
-        // Lock slot 0, morph to B
-        let locked = vec![true, false];
-        MorphSnapshot::apply_lerped(&a, &b, 1.0, &locked, &bridge);
-
-        // Slot 0 should still be at B's capture value (20.0) — it was skipped
-        // The bridge retains whatever value was last set (20.0 from B capture)
-        assert!((bridge.get(SlotIndex(0), ParamIndex(0)) - 20.0).abs() < 0.001);
-        // Slot 1 should be at B value
-        assert!((bridge.get(SlotIndex(1), ParamIndex(0)) - 1.0).abs() < 0.001);
-    }
-
-    #[test]
-    fn morph_state_lifecycle() {
-        let bridge = MockBridge::new(&[("dist", &[10.0], &[None])]);
-        let mut state = MorphState::new();
-
-        assert!(!state.is_ready());
-
-        state.capture_a(&bridge);
-        assert!(!state.is_ready());
-
-        bridge.set(SlotIndex(0), ParamIndex(0), 20.0);
-        state.capture_b(&bridge);
-        assert!(state.is_ready());
-
-        state.active = true;
-        state.t = 0.5;
-        state.apply(&bridge);
-        assert!((bridge.get(SlotIndex(0), ParamIndex(0)) - 15.0).abs() < 0.001);
-    }
-
-    #[test]
-    fn recall_a_resets_to_snapshot() {
-        let bridge = MockBridge::new(&[("dist", &[10.0], &[None])]);
-        let mut state = MorphState::new();
-
-        state.capture_a(&bridge);
-        bridge.set(SlotIndex(0), ParamIndex(0), 99.0);
-        state.recall_a(&bridge);
-
-        assert!((bridge.get(SlotIndex(0), ParamIndex(0)) - 10.0).abs() < 0.001);
-        assert!((state.t - 0.0).abs() < 0.001);
-    }
-
-    #[test]
-    fn different_effect_ids_are_skipped() {
-        let bridge = MockBridge::new(&[("dist", &[10.0], &[None])]);
-        let a = MorphSnapshot::capture(&bridge);
-
-        // Manually create B with different effect ID
-        let b = MorphSnapshot {
-            slots: vec![SlotSnapshot {
-                effect_id: "reverb".to_owned(),
-                values: vec![99.0],
-                bypassed: false,
-            }],
-        };
-
-        bridge.set(SlotIndex(0), ParamIndex(0), 50.0);
-        MorphSnapshot::apply_lerped(&a, &b, 0.5, &[], &bridge);
-        // Should not have changed — effect IDs differ
-        assert!((bridge.get(SlotIndex(0), ParamIndex(0)) - 50.0).abs() < 0.001);
+        let mut restored: MorphState<u32> = MorphState::new();
+        restored.restore(&order, &a, &b);
+        assert_eq!(restored.markers(&1, 0), m.markers(&1, 0));
+        assert_eq!(restored.markers(&2, 1), m.markers(&2, 1));
+        assert!(restored.is_active());
     }
 }

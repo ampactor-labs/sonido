@@ -35,7 +35,7 @@ use crate::morph_state::MorphSnapshot;
 /// live knob positions, the morph behaviour/locks, the current crossfade
 /// position, and the two morph snapshots whose per-slot values become each
 /// effect's A/B parameter sets.
-pub struct PerformanceCapture<'a> {
+pub struct PerformanceCapture {
     /// Six macro definitions (name + mappings) in knob order.
     pub macros: [MacroDef; NUM_MACROS],
     /// Live macro knob positions (0.0–1.0), restored on load.
@@ -44,12 +44,12 @@ pub struct PerformanceCapture<'a> {
     pub morph: MorphConfig,
     /// Current A→B crossfade position (0.0–1.0).
     pub morph_position: f32,
-    /// Snapshot A — its per-slot values become each effect's `params`.
+    /// Pose A in slot order — its values become each effect's `params`.
     /// `None` ⇒ fall back to the live bridge values.
-    pub morph_a: Option<&'a MorphSnapshot>,
-    /// Snapshot B — its per-slot values become each effect's `params_b`.
+    pub morph_a: Option<MorphSnapshot>,
+    /// Pose B in slot order — its values become each effect's `params_b`.
     /// `None` ⇒ leave `params_b` empty (B mirrors A).
-    pub morph_b: Option<&'a MorphSnapshot>,
+    pub morph_b: Option<MorphSnapshot>,
 }
 
 /// Project the GUI's runtime [`MacroMap`] + display names into the persisted
@@ -196,26 +196,46 @@ impl Session {
     /// state). Both are `#[serde(default)]`, so v1/v2 files load unchanged.
     pub const VERSION: u32 = 3;
 
+    /// Serialize to pretty JSON, without touching the filesystem.
+    ///
+    /// The web build has no file paths — it downloads this string — so both the
+    /// native [`save`](Self::save) and the browser download share it.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if serialization fails.
+    pub fn to_json(&self) -> Result<String, serde_json::Error> {
+        serde_json::to_string_pretty(self)
+    }
+
+    /// Parse a session from a JSON string (v1, v2, or v3), without the
+    /// filesystem. Shared by native [`load`](Self::load) and the browser upload.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the JSON is malformed.
+    pub fn from_json(json: &str) -> Result<Self, serde_json::Error> {
+        serde_json::from_str(json)
+    }
+
     /// Save the session to a JSON file.
     ///
     /// # Errors
     ///
     /// Returns an error if serialization or file I/O fails.
     pub fn save(&self, path: &Path) -> Result<(), Box<dyn std::error::Error>> {
-        let json = serde_json::to_string_pretty(self)?;
-        std::fs::write(path, json)?;
+        std::fs::write(path, self.to_json()?)?;
         Ok(())
     }
 
-    /// Load a session from a JSON file (v1 or v2).
+    /// Load a session from a JSON file (v1, v2, or v3).
     ///
     /// # Errors
     ///
     /// Returns an error if the file cannot be read or the JSON is malformed.
     pub fn load(path: &Path) -> Result<Self, Box<dyn std::error::Error>> {
         let json = std::fs::read_to_string(path)?;
-        let session: Self = serde_json::from_str(&json)?;
-        Ok(session)
+        Ok(Self::from_json(&json)?)
     }
 
     /// Project this session into the canonical [`Patch`].

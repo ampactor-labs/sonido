@@ -508,6 +508,23 @@ impl GraphView {
             .count()
     }
 
+    /// The graph's effect nodes in chain-slot order.
+    ///
+    /// Slot `i` in the parameter bridge is `effect_node_ids()[i]` — the i-th
+    /// `Effect` node in `node_ids()` order, the same order [`capture_session`]
+    /// and the selected-slot mapping use. The `NodeId`s are stable across
+    /// reordering, so the morph keys its per-effect endpoints on them and never
+    /// desyncs when the chain changes.
+    ///
+    /// [`capture_session`]: Self::capture_session
+    pub fn effect_node_ids(&self) -> Vec<NodeId> {
+        self.snarl
+            .node_ids()
+            .filter(|(_, node)| matches!(node, SonidoNode::Effect { .. }))
+            .map(|(id, _)| id)
+            .collect()
+    }
+
     /// Add an effect node by registry id, splicing it into the nearest wire.
     ///
     /// The add-button path (phone "+"-FAB and desktop "+ EFFECT" both route
@@ -742,7 +759,7 @@ impl GraphView {
         bridge: &dyn sonido_gui_core::ParamBridge,
         input_gain: f32,
         master_volume: f32,
-        perf: crate::session::PerformanceCapture<'_>,
+        perf: crate::session::PerformanceCapture,
     ) -> crate::session::Session {
         use crate::session::{EffectState, Session, SessionNodeEntry};
         use sonido_gui_core::{ParamIndex, SlotIndex};
@@ -782,6 +799,7 @@ impl GraphView {
                 // A snapshot: morph snapshot A if captured, else the live bridge.
                 let params_a: Vec<f32> = perf
                     .morph_a
+                    .as_ref()
                     .and_then(|s| s.slots.get(effect_slot))
                     .map(|s| s.values.clone())
                     .unwrap_or_else(|| {
@@ -792,6 +810,7 @@ impl GraphView {
                 // B snapshot: morph snapshot B if captured, else empty (mirrors A).
                 let params_b: Vec<f32> = perf
                     .morph_b
+                    .as_ref()
                     .and_then(|s| s.slots.get(effect_slot))
                     .map(|s| s.values.clone())
                     .unwrap_or_default();
@@ -1726,6 +1745,72 @@ mod tests {
                 smoothing: collect_smoothing(desc.id, 48000.0),
             },
         )
+    }
+
+    #[test]
+    fn restore_session_preserves_effect_order_for_morph_alignment() {
+        // The morph keys each effect's A/B poses to `effect_node_ids()`, and
+        // `restore_performance` realigns saved poses (in session-node order) to
+        // that. If a load reordered the effects, poses would land on the wrong
+        // effect. Lock the invariant: after restore, effect_node_ids() is in the
+        // session's Effect order.
+        use crate::session::{EffectState, Session, SessionNode, SessionNodeEntry};
+        use std::collections::HashMap;
+
+        let effect = |id: &str| SessionNodeEntry {
+            node: SessionNode::Effect {
+                effect_id: id.into(),
+            },
+            pos: [0.0, 0.0],
+        };
+        let io = |node| SessionNodeEntry {
+            node,
+            pos: [0.0, 0.0],
+        };
+        let nodes = vec![
+            io(SessionNode::Input),
+            effect("distortion"),
+            effect("reverb"),
+            effect("delay"),
+            io(SessionNode::Output),
+        ];
+        let mut params = HashMap::new();
+        for (idx, id) in [(1usize, "distortion"), (2, "reverb"), (3, "delay")] {
+            params.insert(
+                idx,
+                EffectState {
+                    effect_id: id.into(),
+                    params: vec![idx as f32], // A pose, distinct per effect
+                    params_b: vec![idx as f32 + 10.0], // B pose, distinct
+                    bypassed: false,
+                },
+            );
+        }
+        let session = Session {
+            version: Session::VERSION,
+            nodes,
+            wires: vec![],
+            params,
+            input_gain: 0.0,
+            master_volume: 0.0,
+            macros: std::array::from_fn(|_| sonido_patch::MacroDef::default()),
+            macro_positions: [0.0; sonido_patch::NUM_MACROS],
+            morph: sonido_patch::MorphConfig::default(),
+            morph_position: 0.0,
+        };
+
+        let mut gv = GraphView::new();
+        gv.restore_session(&session, &EffectRegistry::new());
+
+        let effect_ids: Vec<&str> = gv
+            .effect_node_ids()
+            .iter()
+            .map(|id| match gv.snarl.get_node(*id) {
+                Some(SonidoNode::Effect { effect_id, .. }) => *effect_id,
+                _ => "?",
+            })
+            .collect();
+        assert_eq!(effect_ids, ["distortion", "reverb", "delay"]);
     }
 
     #[test]

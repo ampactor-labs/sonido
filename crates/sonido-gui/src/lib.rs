@@ -14,6 +14,7 @@ pub mod export;
 pub mod file_player;
 pub mod graph_view;
 pub mod info_view;
+pub mod macro_autoassign;
 pub mod morph_state;
 pub mod session;
 pub mod signal_generator;

@@ -9,14 +9,15 @@ use crate::audio_bridge::{AudioBridge, MeteringData};
 use crate::audio_processor::build_audio_streams;
 use crate::file_player::FilePlayer;
 use crate::graph_view::{GraphView, SonidoNode};
-use crate::morph_state::MorphState;
+use crate::morph_state::{MorphEnd, MorphState};
 use crate::theme::Theme;
 use crate::widgets::{Knob, LevelMeter};
 use egui::{
     Align, CentralPanel, Context, FontId, Frame, Layout, Margin, Rect, Stroke, TopBottomPanel,
     UiBuilder, pos2, vec2,
 };
-use sonido_core::{GlobalParam, MacroMap, MacroMapping, MacroTarget, MorphCurve};
+use egui_snarl::NodeId;
+use sonido_core::{GlobalParam, MacroMap, MacroMapping, MacroTarget, MorphCurve, MorphMode};
 use sonido_gui_core::effects_ui;
 use sonido_gui_core::theme::SonidoTheme;
 use sonido_gui_core::widgets::glow;
@@ -32,6 +33,10 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 /// Main application state.
+// Editor state legitimately carries several independent UI toggles (focus mode,
+// palette open, single-effect, audio-resumed on web, …); grouping them into a
+// sub-struct would not clarify anything.
+#[allow(clippy::struct_excessive_bools)]
 pub struct SonidoApp {
     // Audio
     audio_bridge: AudioBridge,
@@ -51,7 +56,17 @@ pub struct SonidoApp {
     // UI
     theme: Theme,
     graph_view: GraphView,
-    morph_state: MorphState,
+    morph_state: MorphState<NodeId>,
+    /// Morph footswitch behaviour, persisted to the patch and honoured by the
+    /// GUI A⇄B trigger.
+    morph_mode: MorphMode,
+    /// Morph ramp speed in position-units per second (GUI trigger + pedal).
+    morph_speed: f32,
+    /// When `Some`, the morph position ramps toward this target (the A⇄B
+    /// trigger); `None` when parked or hand-performed.
+    morph_target: Option<f32>,
+    /// Wall-clock (egui seconds) of the last grab, for the capture flash.
+    morph_flash: Option<f64>,
     file_player: FilePlayer,
 
     /// Six performance macros (K1–K6) → effect params + globals. Authored via
@@ -93,6 +108,14 @@ pub struct SonidoApp {
     /// `Err` = failure (red). Cleared/replaced on the next export.
     #[cfg(not(target_arch = "wasm32"))]
     export_msg: Option<Result<String, String>>,
+
+    /// Web-only: channel delivering loaded-session bytes from the async browser
+    /// file picker back to the update loop (the native path reads files
+    /// synchronously; the browser cannot, so the load future posts here).
+    #[cfg(target_arch = "wasm32")]
+    load_tx: std::sync::mpsc::Sender<Vec<u8>>,
+    #[cfg(target_arch = "wasm32")]
+    load_rx: std::sync::mpsc::Receiver<Vec<u8>>,
 
     /// Full-editor undo/redo history (snapshots taken before each structural edit).
     undo_stack: Vec<crate::session::Session>,
@@ -220,6 +243,9 @@ impl SonidoApp {
         let audio_bridge = AudioBridge::new();
         let transport_tx = audio_bridge.transport_sender();
 
+        #[cfg(target_arch = "wasm32")]
+        let (load_tx, load_rx) = std::sync::mpsc::channel();
+
         let mut app = Self {
             audio_bridge,
             _audio_streams: Vec::new(),
@@ -231,6 +257,10 @@ impl SonidoApp {
             theme: Theme::default(),
             graph_view: GraphView::new(),
             morph_state: MorphState::new(),
+            morph_mode: MorphMode::Ramp,
+            morph_speed: 2.0,
+            morph_target: None,
+            morph_flash: None,
             file_player: FilePlayer::new(transport_tx),
             macro_map: MacroMap::new(),
             macro_names: std::array::from_fn(|_| String::new()),
@@ -246,6 +276,10 @@ impl SonidoApp {
             compile_success_frames: 0,
             #[cfg(not(target_arch = "wasm32"))]
             export_msg: None,
+            #[cfg(target_arch = "wasm32")]
+            load_tx,
+            #[cfg(target_arch = "wasm32")]
+            load_rx,
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             undo_pending: None,
@@ -841,33 +875,31 @@ impl SonidoApp {
 
             ui.separator();
 
-            // Session save / load.
-            #[cfg(not(target_arch = "wasm32"))]
+            // Session save / load + export. Native uses OS file dialogs; the
+            // web build uses the browser file picker (load) and download (save),
+            // so the buttons are present on both — only USB flash and folder
+            // writes stay native-only (a browser tab can't reach them).
+            if ui
+                .button(
+                    egui::RichText::new("Save")
+                        .font(FontId::monospace(12.0))
+                        .color(theme.colors.text_primary),
+                )
+                .clicked()
             {
-                if ui
-                    .button(
-                        egui::RichText::new("Save")
-                            .font(FontId::monospace(12.0))
-                            .color(theme.colors.text_primary),
-                    )
-                    .clicked()
-                {
-                    self.save_session();
-                }
-                if ui
-                    .button(
-                        egui::RichText::new("Load")
-                            .font(FontId::monospace(12.0))
-                            .color(theme.colors.text_primary),
-                    )
-                    .clicked()
-                {
-                    self.load_session();
-                }
-
-                // Export the rig as a CLAP patch / pedal binary / DFU flash.
-                self.render_export_menu(ui);
+                self.save_session();
             }
+            if ui
+                .button(
+                    egui::RichText::new("Load")
+                        .font(FontId::monospace(12.0))
+                        .color(theme.colors.text_primary),
+                )
+                .clicked()
+            {
+                self.load_session();
+            }
+            self.render_export_menu(ui);
 
             ui.separator();
 
@@ -1102,9 +1134,16 @@ impl SonidoApp {
 
         let theme = SonidoTheme::get(ui.ctx());
 
+        // Tint the panel border to the morph pose being sculpted, so it is
+        // obvious you are editing A (cyan) or B (amber) as you turn knobs.
+        let (border_color, border_w) = match self.morph_state.edit() {
+            Some(MorphEnd::A) => (theme.colors.cyan, 2.5),
+            Some(MorphEnd::B) => (theme.colors.amber, 2.5),
+            None => (theme.colors.amber, 2.0),
+        };
         let panel_frame = Frame::new()
             .fill(theme.colors.void)
-            .stroke(Stroke::new(2.0, theme.colors.amber))
+            .stroke(Stroke::new(border_w, border_color))
             .corner_radius(theme.sizing.panel_border_radius)
             .inner_margin(Margin::same(theme.sizing.panel_padding as i8));
 
@@ -1143,14 +1182,14 @@ impl SonidoApp {
                     ui.add_space(16.0);
 
                     // Morph-lock toggle (left of bypass): hold this effect fixed
-                    // while the A/B morph sweeps the rest of the rig. Only shown
-                    // once both morph snapshots exist, since locking is otherwise
-                    // a no-op.
-                    if self.morph_state.is_ready() {
-                        if self.morph_state.locked_slots.len() <= slot.0 {
-                            self.morph_state.locked_slots.resize(slot.0 + 1, false);
-                        }
-                        let locked = self.morph_state.locked_slots[slot.0];
+                    // while the A/B morph sweeps the rest of the rig. Shown once
+                    // the morph does something (some effect has a distinct A/B);
+                    // locking is otherwise a no-op.
+                    let morph_node = self.graph_view.effect_node_ids().get(slot.0).copied();
+                    if self.morph_state.is_active()
+                        && let Some(node) = morph_node
+                    {
+                        let locked = self.morph_state.is_locked(&node);
                         let (label, col) = if locked {
                             ("LOCKED", theme.colors.amber)
                         } else {
@@ -1169,7 +1208,7 @@ impl SonidoApp {
                             .on_hover_text("Exclude this effect from the A/B morph")
                             .clicked()
                         {
-                            self.morph_state.locked_slots[slot.0] = !locked;
+                            self.morph_state.set_locked(node, !locked);
                         }
                         ui.add_space(8.0);
                     }
@@ -1178,45 +1217,77 @@ impl SonidoApp {
 
             ui.add_space(4.0);
 
-            // Effect controls
+            // Effect controls, with per-param A/B ghost ticks for this slot,
+            // keyed to its node so they follow the effect across reorders.
+            let morph_node = self.graph_view.effect_node_ids().get(slot.0).copied();
             if let Some((_, _, ref mut panel)) = self.cached_panel {
                 let bridge: &dyn ParamBridge = &*self.bridge;
-                panel.ui(ui, bridge, slot);
+                let morph = &self.morph_state;
+                let markers = |param: usize| morph_node.and_then(|n| morph.markers(&n, param));
+                panel.ui(ui, bridge, slot, &markers);
             }
         });
     }
 
     /// Render the global A/B morph band — a full-width performance strip.
     ///
-    /// Morph is a whole-rig control: it crossfades *every* effect's parameters
-    /// between snapshots A and B (curve-aware per parameter). It therefore lives
-    /// in its own always-visible band rather than inside any single effect panel.
-    /// Click A/B to capture; right-click/double-click to recall; drag the bar to
-    /// sweep. Per-knob A/B ring markers show where each parameter sits.
+    /// Morph is a whole-rig control: one position `t` crossfades *every* effect
+    /// between its A and B poses (curve-aware per parameter). It lives in its own
+    /// always-visible band rather than inside any single effect panel.
+    ///
+    /// Left-click A or B to park there and sculpt that pose — every knob you turn
+    /// is recorded into it. Right-click a dot to grab the current sound into that
+    /// pose (the old capture). Drag the bar to perform. New effects join the
+    /// morph automatically, flat, until you give them a distinct A/B.
     fn render_morph_band(&mut self, ui: &mut egui::Ui) {
         let theme = SonidoTheme::get(ui.ctx());
-        let has_a = self.morph_state.a.is_some();
-        let has_b = self.morph_state.b.is_some();
-        let ready = has_a && has_b;
+        let order = self.graph_view.effect_node_ids();
+        let editing_a = self.morph_state.is_editing(MorphEnd::A);
+        let editing_b = self.morph_state.is_editing(MorphEnd::B);
+        let enabled = !order.is_empty();
+        let active = self.morph_state.is_active();
+
+        // Capture flash: the label pulses bright for a moment after a grab.
+        let now = ui.input(|i| i.time);
+        let flashing = self.morph_flash.is_some_and(|t0| now - t0 < 0.3);
+        if flashing {
+            ui.ctx().request_repaint();
+        }
 
         ui.horizontal(|ui| {
             ui.add_space(4.0);
+            let label_color = if flashing {
+                theme.colors.text_primary
+            } else if editing_a {
+                theme.colors.cyan
+            } else {
+                theme.colors.amber
+            };
             ui.label(
                 egui::RichText::new("MORPH")
                     .font(FontId::monospace(12.0))
-                    .color(theme.colors.amber)
+                    .color(label_color)
                     .strong(),
             );
             ui.add_space(10.0);
 
-            // Position readout (or a hint to capture both snapshots first).
-            let (readout, readout_color) = if ready {
+            // Status: the pose being sculpted, the live position, or a hint.
+            let (readout, readout_color) = if editing_a {
+                ("editing A".to_owned(), theme.colors.cyan)
+            } else if editing_b {
+                ("editing B".to_owned(), theme.colors.amber)
+            } else if active {
                 (
                     format!("A→B {:>3.0}%", self.morph_state.t * 100.0),
                     theme.colors.text_primary,
                 )
+            } else if enabled {
+                (
+                    "flat — focus A/B to sculpt".to_owned(),
+                    theme.colors.text_secondary,
+                )
             } else {
-                ("capture A + B".to_owned(), theme.colors.text_secondary)
+                ("add an effect".to_owned(), theme.colors.text_secondary)
             };
             ui.label(
                 egui::RichText::new(readout)
@@ -1225,23 +1296,84 @@ impl SonidoApp {
             );
             ui.add_space(10.0);
 
+            // Mode cycle + A⇄B trigger — footswitch-style performance controls,
+            // placed before the crossfader (which greedily fills the rest).
+            let mode_label = match self.morph_mode {
+                MorphMode::Ramp => "RAMP",
+                MorphMode::Momentary => "MOM",
+                MorphMode::Latch => "LATCH",
+                _ => "RAMP",
+            };
+            if ui
+                .add(
+                    egui::Button::new(
+                        egui::RichText::new(mode_label)
+                            .font(FontId::monospace(9.0))
+                            .color(theme.colors.text_secondary),
+                    )
+                    .small(),
+                )
+                .on_hover_text(
+                    "Morph mode — how the A⇄B trigger and the pedal footswitch sweep: \
+                     Ramp (glide), Momentary (hold for B), Latch (toggle)",
+                )
+                .clicked()
+            {
+                self.morph_mode = match self.morph_mode {
+                    MorphMode::Ramp => MorphMode::Momentary,
+                    MorphMode::Momentary => MorphMode::Latch,
+                    MorphMode::Latch => MorphMode::Ramp,
+                    _ => MorphMode::Ramp,
+                };
+            }
+            let trigger = ui
+                .add_enabled(
+                    enabled && active,
+                    egui::Button::new(egui::RichText::new("A⇄B").font(FontId::monospace(10.0)))
+                        .small(),
+                )
+                .on_hover_text(
+                    "Sweep A⇄B. Momentary: hold for B, release for A. Ramp/Latch: click to toggle.",
+                );
+            if self.morph_mode == MorphMode::Momentary {
+                self.morph_target = Some(if trigger.is_pointer_button_down_on() {
+                    1.0
+                } else {
+                    0.0
+                });
+            } else if trigger.clicked() {
+                self.morph_target = Some(if self.morph_state.t < 0.5 { 1.0 } else { 0.0 });
+            }
+            ui.add_space(8.0);
+
             // The A/B crossfader fills the remaining width.
-            let resp = morph_bar(ui, &mut self.morph_state.t, has_a, has_b);
-            if resp.capture_a {
-                self.morph_state.capture_a(&*self.bridge);
+            let mut t = self.morph_state.t;
+            let resp = morph_bar(ui, &mut t, editing_a, editing_b, enabled);
+            if resp.focus_a {
+                self.morph_state
+                    .park_edit(MorphEnd::A, &order, &*self.bridge);
+                self.morph_target = None;
             }
-            if resp.capture_b {
-                self.morph_state.capture_b(&*self.bridge);
+            if resp.focus_b {
+                self.morph_state
+                    .park_edit(MorphEnd::B, &order, &*self.bridge);
+                self.morph_target = None;
             }
-            if resp.recall_a {
-                self.morph_state.recall_a(&*self.bridge);
+            if resp.grab_a {
+                self.morph_state
+                    .grab_edit(MorphEnd::A, &order, &*self.bridge);
+                self.morph_flash = Some(now);
+                self.morph_target = None;
             }
-            if resp.recall_b {
-                self.morph_state.recall_b(&*self.bridge);
+            if resp.grab_b {
+                self.morph_state
+                    .grab_edit(MorphEnd::B, &order, &*self.bridge);
+                self.morph_flash = Some(now);
+                self.morph_target = None;
             }
             if resp.t_changed {
-                self.morph_state.active = true;
-                self.morph_state.apply(&*self.bridge);
+                self.morph_state.perform(t, &order, &*self.bridge);
+                self.morph_target = None;
             }
         });
     }
@@ -1260,6 +1392,8 @@ impl SonidoApp {
         let mut pos: [f32; 6] = std::array::from_fn(|i| self.macro_map.position(i));
         let mut changed: Option<usize> = None;
         let mut edit: Option<usize> = None;
+        let mut do_auto = false;
+        let chain_len = self.bridge.slot_count();
 
         ui.horizontal(|ui| {
             ui.label(
@@ -1267,6 +1401,19 @@ impl SonidoApp {
                     .font(FontId::monospace(10.0))
                     .color(theme.colors.text_secondary),
             );
+            // Seed all six macros from the effects currently in the chain.
+            let tip = if chain_len > 6 {
+                format!("Auto-assign macros K1..K6 (first 6 of {chain_len} effects)")
+            } else {
+                format!("Auto-assign macros K1..K6 to the {chain_len} effect(s) in the chain")
+            };
+            if ui
+                .add_enabled(chain_len > 0, egui::Button::new("Auto").small())
+                .on_hover_text(tip)
+                .clicked()
+            {
+                do_auto = true;
+            }
             for i in 0..6 {
                 let mapped = self.macro_map.mapping_count_for(i);
                 let resp = ui.add(
@@ -1299,6 +1446,11 @@ impl SonidoApp {
             }
         });
 
+        if do_auto {
+            let assigned = crate::macro_autoassign::auto_assign_macros(&*self.bridge);
+            self.macro_map = assigned.map;
+            self.macro_names = assigned.names;
+        }
         if let Some(i) = changed {
             self.macro_map.set_position(i, pos[i]);
             self.apply_macro(i);
@@ -1333,9 +1485,9 @@ impl SonidoApp {
             GlobalParam::InputGain => self.audio_bridge.input_gain().set(value),
             GlobalParam::MasterVolume => self.audio_bridge.master_volume().set(value),
             GlobalParam::MorphPosition => {
-                self.morph_state.t = value.clamp(0.0, 1.0);
-                self.morph_state.active = true;
-                self.morph_state.apply(&*self.bridge);
+                let order = self.graph_view.effect_node_ids();
+                self.morph_state
+                    .perform(value.clamp(0.0, 1.0), &order, &*self.bridge);
             }
             // MorphSpeed (and any future global) — no GUI control yet; the morph
             // band grows a speed knob in Workstream C.
@@ -1599,18 +1751,42 @@ impl SonidoApp {
     /// Bundles the six macros (defs + live knob positions), the morph
     /// behaviour/locks and crossfade position, and the A/B snapshots whose
     /// per-slot values become each effect's parameter sets.
-    fn performance_capture(&self) -> crate::session::PerformanceCapture<'_> {
-        let mut morph = sonido_patch::MorphConfig::default();
-        for (i, &locked) in self.morph_state.locked_slots.iter().enumerate() {
-            morph.set_locked(i, locked);
+    fn performance_capture(&self) -> crate::session::PerformanceCapture {
+        let order = self.graph_view.effect_node_ids();
+        let mut morph = sonido_patch::MorphConfig {
+            mode: self.morph_mode,
+            speed: self.morph_speed,
+            ..sonido_patch::MorphConfig::default()
+        };
+        for (slot, node) in order.iter().enumerate() {
+            morph.set_locked(slot, self.morph_state.is_locked(node));
         }
+        // Only persist the A/B poses when the morph actually does something (some
+        // effect has a distinct A/B). When it is flat everywhere, leave both
+        // `None`: `params` then comes from the live bridge and `params_b` stays
+        // empty, exactly as a session with no morph — no round-trip bloat and the
+        // "no morph ⇒ empty params_b" invariant holds.
+        let (morph_a, morph_b) = if self.morph_state.is_active() {
+            (
+                Some(
+                    self.morph_state
+                        .snapshot(MorphEnd::A, &order, &*self.bridge),
+                ),
+                Some(
+                    self.morph_state
+                        .snapshot(MorphEnd::B, &order, &*self.bridge),
+                ),
+            )
+        } else {
+            (None, None)
+        };
         crate::session::PerformanceCapture {
             macros: crate::session::macro_map_to_defs(&self.macro_map, &self.macro_names),
             macro_positions: std::array::from_fn(|i| self.macro_map.position(i)),
             morph,
             morph_position: self.morph_state.t,
-            morph_a: self.morph_state.a.as_ref(),
-            morph_b: self.morph_state.b.as_ref(),
+            morph_a,
+            morph_b,
         }
     }
 
@@ -1863,6 +2039,100 @@ impl SonidoApp {
         }
     }
 
+    /// Save the current session by downloading it from the browser.
+    #[cfg(target_arch = "wasm32")]
+    fn save_session(&self) {
+        let session = self.graph_view.capture_session(
+            &*self.bridge,
+            self.audio_bridge.input_gain().get(),
+            self.audio_bridge.master_volume().get(),
+            self.performance_capture(),
+        );
+        let json = match session.to_json() {
+            Ok(j) => j,
+            Err(e) => {
+                tracing::error!(error = %e, "failed to serialize session");
+                return;
+            }
+        };
+        let task = rfd::AsyncFileDialog::new()
+            .set_file_name("sonido-rig.json")
+            .add_filter("Sonido Session", &["json"])
+            .save_file();
+        wasm_bindgen_futures::spawn_local(async move {
+            if let Some(handle) = task.await {
+                let _ = handle.write(json.as_bytes()).await;
+            }
+        });
+    }
+
+    /// Load a session via the browser file picker. The async pick posts the
+    /// bytes to `load_rx`, drained in [`update`](Self::update).
+    #[cfg(target_arch = "wasm32")]
+    fn load_session(&mut self) {
+        let tx = self.load_tx.clone();
+        let task = rfd::AsyncFileDialog::new()
+            .add_filter("Sonido Session", &["json"])
+            .pick_file();
+        wasm_bindgen_futures::spawn_local(async move {
+            if let Some(handle) = task.await {
+                let bytes = handle.read().await;
+                let _ = tx.send(bytes);
+            }
+        });
+    }
+
+    /// Web export menu: the portable subset — patch JSON and pedal `.bin`, both
+    /// downloaded. USB DFU flash and the CLAP-folder write need the native app.
+    #[cfg(target_arch = "wasm32")]
+    fn render_export_menu(&mut self, ui: &mut egui::Ui) {
+        let theme = SonidoTheme::get(ui.ctx());
+        ui.menu_button(
+            egui::RichText::new("Export")
+                .font(FontId::monospace(12.0))
+                .color(theme.colors.text_primary),
+            |ui| {
+                let patch = self.snapshot().to_patch("Sonido Rig");
+                if ui.button("Save patch JSON…").clicked() {
+                    if let Ok(json) = crate::export::patch_to_json(&patch) {
+                        let task = rfd::AsyncFileDialog::new()
+                            .set_file_name("sonido-patch.json")
+                            .add_filter("Sonido Patch", &["json"])
+                            .save_file();
+                        wasm_bindgen_futures::spawn_local(async move {
+                            if let Some(handle) = task.await {
+                                let _ = handle.write(json.as_bytes()).await;
+                            }
+                        });
+                    }
+                    ui.close_menu();
+                }
+                if crate::export::can_export_to_pedal(&patch)
+                    && ui.button("Save pedal binary (.bin)…").clicked()
+                {
+                    if let Ok(buf) = crate::export::encode_patch_sector(&patch) {
+                        let task = rfd::AsyncFileDialog::new()
+                            .set_file_name("sonido-patch.bin")
+                            .add_filter("Pedal Sector", &["bin"])
+                            .save_file();
+                        wasm_bindgen_futures::spawn_local(async move {
+                            if let Some(handle) = task.await {
+                                let _ = handle.write(&buf).await;
+                            }
+                        });
+                    }
+                    ui.close_menu();
+                }
+                ui.separator();
+                ui.label(
+                    egui::RichText::new("Flashing to the pedal (USB) needs the native app.")
+                        .font(FontId::monospace(9.0))
+                        .color(theme.colors.text_secondary),
+                );
+            },
+        );
+    }
+
     /// Restore the macro map + A/B morph state from a loaded session.
     ///
     /// Rebuilds the six macros (defs + knob positions) and the per-slot morph
@@ -1881,17 +2151,15 @@ impl SonidoApp {
             self.macro_map.set_position(i, pos);
         }
 
-        // Build A/B snapshots from each effect's stored params, in slot order.
+        // Build A/B poses from each effect's stored params, in slot order.
+        // `snapshot_b()` falls back to the A values when no B was saved, so an
+        // effect with no distinct B loads flat.
         let mut a_slots = Vec::new();
         let mut b_slots = Vec::new();
-        let mut has_b = false;
         for (i, entry) in session.nodes.iter().enumerate() {
             if matches!(entry.node, SessionNode::Effect { .. })
                 && let Some(state) = session.params.get(&i)
             {
-                if !state.params_b.is_empty() {
-                    has_b = true;
-                }
                 a_slots.push(SlotSnapshot {
                     effect_id: state.effect_id.clone(),
                     values: state.params.clone(),
@@ -1905,26 +2173,22 @@ impl SonidoApp {
             }
         }
 
-        // Per-slot morph locks from the config bitfield.
-        self.morph_state.locked_slots = (0..a_slots.len())
-            .map(|i| session.morph.is_locked(i))
-            .collect();
-
-        if has_b {
-            // A real A/B morph was saved — restore both snapshots and position,
-            // then re-apply so the live rig matches the saved crossfade.
-            self.morph_state.a = Some(MorphSnapshot { slots: a_slots });
-            self.morph_state.b = Some(MorphSnapshot { slots: b_slots });
-            self.morph_state.t = session.morph_position.clamp(0.0, 1.0);
-            self.morph_state.active = true;
-            self.morph_state.apply(&*self.bridge);
-        } else {
-            // No B snapshot stored ⇒ morph was never set up; leave it idle.
-            self.morph_state.a = None;
-            self.morph_state.b = None;
-            self.morph_state.t = 0.0;
-            self.morph_state.active = false;
+        // Key the poses to the rebuilt chain's node ids, restore per-effect
+        // locks, then re-apply the saved crossfade so the live rig matches how
+        // it sounded when saved.
+        let a = MorphSnapshot { slots: a_slots };
+        let b = MorphSnapshot { slots: b_slots };
+        let order = self.graph_view.effect_node_ids();
+        self.morph_state.restore(&order, &a, &b);
+        for (slot, node) in order.iter().enumerate() {
+            self.morph_state
+                .set_locked(*node, session.morph.is_locked(slot));
         }
+        self.morph_mode = session.morph.mode;
+        self.morph_speed = session.morph.speed;
+        self.morph_target = None;
+        let t = session.morph_position.clamp(0.0, 1.0);
+        self.morph_state.perform(t, &order, &*self.bridge);
     }
 }
 
@@ -1981,6 +2245,52 @@ impl eframe::App for SonidoApp {
     fn update(&mut self, ctx: &Context, _frame: &mut eframe::Frame) {
         // Classify the viewport once per frame; touch affordances key off this.
         self.breakpoint = Breakpoint::from_width(ctx.screen_rect().width());
+
+        // Keep the morph's per-effect endpoints in step with the live chain:
+        // a new effect joins flat, a removed one drops. Cheap — only newly seen
+        // effects are read. This frame's order is reused below to record edits.
+        let morph_order = self.graph_view.effect_node_ids();
+        self.morph_state.sync(&morph_order, &*self.bridge);
+
+        // Smooth morph ramp toward the A⇄B trigger's target (footswitch feel).
+        // Sculpting a pose cancels the ramp without moving t (editing pins t to
+        // the pose); arriving snaps exactly and clears the target.
+        if let Some(target) = self.morph_target {
+            if self.morph_state.edit().is_some() {
+                self.morph_target = None;
+            } else if (self.morph_state.t - target).abs() <= 1e-3 {
+                self.morph_state
+                    .perform(target, &morph_order, &*self.bridge);
+                self.morph_target = None;
+            } else {
+                let dt = ctx.input(|i| i.stable_dt).clamp(0.0, 0.1);
+                let step = self.morph_speed.max(0.05) * dt;
+                let cur = self.morph_state.t;
+                let next = if target > cur {
+                    (cur + step).min(target)
+                } else {
+                    (cur - step).max(target)
+                };
+                self.morph_state.perform(next, &morph_order, &*self.bridge);
+                ctx.request_repaint();
+            }
+        }
+
+        // Web: a browser file-pick has delivered a session — apply it. Loading
+        // is a fresh start, so drop edit history (mirrors the native path).
+        #[cfg(target_arch = "wasm32")]
+        while let Ok(bytes) = self.load_rx.try_recv() {
+            if let Some(session) = std::str::from_utf8(&bytes)
+                .ok()
+                .and_then(|s| crate::session::Session::from_json(s).ok())
+            {
+                self.undo_stack.clear();
+                self.redo_stack.clear();
+                self.apply_session(&session);
+            } else {
+                tracing::error!("failed to parse loaded session");
+            }
+        }
 
         // Update metering data
         if let Some(data) = self.audio_bridge.receive_metering() {
@@ -2296,6 +2606,12 @@ impl eframe::App for SonidoApp {
             }
             self.render_macro_editor(ctx);
         }
+
+        // While a morph pose is focused, fold this frame's knob edits into it so
+        // sculpting A or B records live. Recompute the order — the chain may have
+        // been rebuilt during this frame's panel render. A no-op while performing.
+        let morph_order = self.graph_view.effect_node_ids();
+        self.morph_state.record(&morph_order, &*self.bridge);
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {

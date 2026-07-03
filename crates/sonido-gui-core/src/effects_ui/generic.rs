@@ -1,7 +1,7 @@
 //! Unified UI panel that renders any effect's full parameter set.
 //!
-//! [`GenericPanel`] renders every visible parameter using [`bridged_knob`] for
-//! continuous parameters and [`bridged_combo`] for stepped/enum parameters. It
+//! [`GenericPanel`] renders every visible parameter using [`bridged_knob_with_morph`]
+//! for continuous parameters and [`bridged_combo`] for stepped/enum parameters. It
 //! discovers parameter metadata at render time via the [`ParamBridge`], so it
 //! works for any effect ID and always shows *all* params — keeping the node's
 //! "N params" badge honest and every parameter reachable for macros and morph.
@@ -9,9 +9,9 @@
 //! This is the panel returned by [`create_panel`](super::create_panel) for every
 //! effect except the looper (which has a bespoke transport panel).
 
-use crate::effects_ui::EffectPanel;
+use crate::effects_ui::{EffectPanel, MorphMarkers};
 use crate::theme::SonidoTheme;
-use crate::widgets::{bridged_combo, bridged_knob, param_macro_menu};
+use crate::widgets::{bridged_combo, bridged_knob_with_morph, param_macro_menu};
 use crate::{ParamBridge, ParamIndex, SlotIndex};
 use egui::Ui;
 use sonido_core::ParamFlags;
@@ -22,9 +22,9 @@ const KNOB_CELL_WIDTH: f32 = 64.0;
 /// Unified UI panel for any registered effect.
 ///
 /// Renders all visible parameters as a wrapping bank of knobs, using
-/// [`bridged_combo`] for stepped (enum) parameters and [`bridged_knob`]
-/// for continuous parameters. Parameters flagged `READ_ONLY` or `HIDDEN`
-/// are skipped.
+/// [`bridged_combo`] for stepped (enum) parameters and
+/// [`bridged_knob_with_morph`] for continuous parameters. Parameters flagged
+/// `READ_ONLY` or `HIDDEN` are skipped.
 ///
 /// The display name and short name are derived from the effect ID at
 /// construction time (capitalized ID, first 4 characters short).
@@ -85,7 +85,13 @@ impl GenericPanel {
     /// Stepped (enum) parameters render as a combo box; continuous parameters
     /// render as knobs that wrap to fit the panel width. `READ_ONLY` and
     /// `HIDDEN` parameters are skipped.
-    pub fn ui(&mut self, ui: &mut Ui, bridge: &dyn ParamBridge, slot: SlotIndex) {
+    pub fn ui(
+        &mut self,
+        ui: &mut Ui,
+        bridge: &dyn ParamBridge,
+        slot: SlotIndex,
+        markers: MorphMarkers<'_>,
+    ) {
         let theme = SonidoTheme::get(ui.ctx());
         let param_count = bridge.param_count(slot);
 
@@ -164,7 +170,14 @@ impl GenericPanel {
                             .map_or("", |d| d.short_name);
                         ui.vertical(|ui| {
                             ui.set_width(KNOB_CELL_WIDTH);
-                            let resp = bridged_knob(ui, bridge, slot, ParamIndex(i), label);
+                            let resp = bridged_knob_with_morph(
+                                ui,
+                                bridge,
+                                slot,
+                                ParamIndex(i),
+                                label,
+                                markers(i),
+                            );
                             // Right-click a knob → map it to a performance macro.
                             param_macro_menu(&resp, slot, ParamIndex(i));
                         });
@@ -184,7 +197,13 @@ impl EffectPanel for GenericPanel {
         self.short_name
     }
 
-    fn ui(&mut self, ui: &mut Ui, bridge: &dyn ParamBridge, slot: SlotIndex) {
-        GenericPanel::ui(self, ui, bridge, slot);
+    fn ui(
+        &mut self,
+        ui: &mut Ui,
+        bridge: &dyn ParamBridge,
+        slot: SlotIndex,
+        markers: MorphMarkers<'_>,
+    ) {
+        GenericPanel::ui(self, ui, bridge, slot, markers);
     }
 }

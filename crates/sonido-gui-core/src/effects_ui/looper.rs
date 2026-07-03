@@ -1,5 +1,6 @@
 //! Looper effect UI panel.
 
+use crate::effects_ui::MorphMarkers;
 use crate::theme::SonidoTheme;
 use crate::widgets::{bridged_combo, bridged_fader};
 use crate::{ParamBridge, ParamIndex, SlotIndex};
@@ -33,7 +34,16 @@ impl LooperPanel {
     /// Layout:
     /// - Row 1: Mode combo, Half Speed combo, Reverse combo
     /// - Row 2: Feedback fader, Mix fader, Output fader
-    pub fn ui(&mut self, ui: &mut Ui, bridge: &dyn ParamBridge, slot: SlotIndex) {
+    ///
+    /// `_markers`: the looper's controls are faders/combos, which carry no A/B
+    /// morph ring — its params still morph, they just have no ghost tick here.
+    pub fn ui(
+        &mut self,
+        ui: &mut Ui,
+        bridge: &dyn ParamBridge,
+        slot: SlotIndex,
+        _markers: MorphMarkers<'_>,
+    ) {
         let theme = SonidoTheme::get(ui.ctx());
         let fader_indices: &[usize] = &[1, 4, 5];
         let fader_count = fader_indices.len();

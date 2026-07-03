@@ -1,10 +1,10 @@
 //! A/B morph crossfader widget.
 //!
-//! Provides a horizontal bar with A and B capture buttons flanking a
-//! crossfade LED segment bar. Click a button to capture the current state
-//! into that snapshot slot; right-click or double-click to recall it.
-//! The segment bar interpolates from cyan (A) to amber (B), with lit
-//! segments indicating the current crossfade position.
+//! A horizontal bar with A and B pose dots flanking a crossfade LED segment
+//! bar. Left-click a dot to focus that pose for editing (park + sculpt);
+//! right-click or double-click to grab the current sound into it. The focused
+//! dot glows. The segment bar interpolates from cyan (A) to amber (B), with lit
+//! segments indicating the current crossfade position; drag it to perform.
 
 use egui::{Color32, Rect, Ui, vec2};
 
@@ -27,67 +27,68 @@ fn lerp_color(a: Color32, b: Color32, t: f32) -> Color32 {
 
 /// Response from the morph bar widget indicating which actions were triggered.
 #[allow(clippy::struct_excessive_bools)]
+#[derive(Default)]
 pub struct MorphBarResponse {
-    /// The crossfade slider value changed.
+    /// The crossfade slider value changed (perform).
     pub t_changed: bool,
-    /// The A button was clicked (capture).
-    pub capture_a: bool,
-    /// The B button was clicked (capture).
-    pub capture_b: bool,
-    /// The A button was right-clicked or double-clicked (recall).
-    pub recall_a: bool,
-    /// The B button was right-clicked or double-clicked (recall).
-    pub recall_b: bool,
+    /// The A dot was left-clicked — focus pose A for editing.
+    pub focus_a: bool,
+    /// The B dot was left-clicked — focus pose B for editing.
+    pub focus_b: bool,
+    /// The A dot was right-clicked or double-clicked — grab current into A.
+    pub grab_a: bool,
+    /// The B dot was right-clicked or double-clicked — grab current into B.
+    pub grab_b: bool,
 }
 
-/// A/B crossfader with capture buttons and LED segment bar.
+/// A/B crossfader with pose dots and an LED segment bar.
 ///
 /// Layout (horizontal):
 /// ```text
 /// [A] ──── LED segments (cyan→amber) ──── [B]
 /// ```
 ///
-/// - Click A/B to capture the current state.
-/// - Right-click or double-click A/B to recall that snapshot.
-/// - Segment bar is ghosted unless both snapshots are captured.
-/// - Segments at or before the crossfade position are lit with glow;
-///   segments after are ghosted.
+/// - Left-click A/B to focus that pose for editing (the dot glows).
+/// - Right-click or double-click A/B to grab the current sound into it.
+/// - Drag the segment bar to perform; it is ghosted until the chain has an effect.
 ///
 /// # Arguments
 ///
 /// * `t` — Mutable crossfade position, 0.0 (full A) to 1.0 (full B).
-/// * `has_a` — Whether snapshot A has been captured.
-/// * `has_b` — Whether snapshot B has been captured.
-pub fn morph_bar(ui: &mut Ui, t: &mut f32, has_a: bool, has_b: bool) -> MorphBarResponse {
+/// * `editing_a` / `editing_b` — Which pose is currently focused (its dot glows).
+/// * `enabled` — Whether the bar can be dragged (the chain has an effect).
+pub fn morph_bar(
+    ui: &mut Ui,
+    t: &mut f32,
+    editing_a: bool,
+    editing_b: bool,
+    enabled: bool,
+) -> MorphBarResponse {
     let theme = SonidoTheme::get(ui.ctx());
-
-    let mut response = MorphBarResponse {
-        t_changed: false,
-        capture_a: false,
-        capture_b: false,
-        recall_a: false,
-        recall_b: false,
-    };
+    let mut response = MorphBarResponse::default();
 
     ui.horizontal(|ui| {
-        // A button — cyan
-        let a_resp = snapshot_button(ui, "A", has_a, theme.colors.cyan, &theme);
+        // A dot — cyan, glows while focused.
+        let a_resp = snapshot_button(ui, "A", editing_a, theme.colors.cyan, &theme).on_hover_text(
+            "Pose A — left-click to sculpt it, right-click to grab the current sound into it",
+        );
         if a_resp.double_clicked() || a_resp.secondary_clicked() {
-            response.recall_a = true;
+            response.grab_a = true;
         } else if a_resp.clicked() {
-            response.capture_a = true;
+            response.focus_a = true;
         }
 
-        // LED segment crossfade bar
-        let enabled = has_a && has_b;
+        // LED segment crossfade bar.
         led_segment_bar(ui, t, enabled, &theme, &mut response);
 
-        // B button — amber
-        let b_resp = snapshot_button(ui, "B", has_b, theme.colors.amber, &theme);
+        // B dot — amber, glows while focused.
+        let b_resp = snapshot_button(ui, "B", editing_b, theme.colors.amber, &theme).on_hover_text(
+            "Pose B — left-click to sculpt it, right-click to grab the current sound into it",
+        );
         if b_resp.double_clicked() || b_resp.secondary_clicked() {
-            response.recall_b = true;
+            response.grab_b = true;
         } else if b_resp.clicked() {
-            response.capture_b = true;
+            response.focus_b = true;
         }
     });
 

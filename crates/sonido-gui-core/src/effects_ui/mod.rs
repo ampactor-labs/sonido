@@ -17,6 +17,13 @@ pub use looper::LooperPanel;
 use crate::{ParamBridge, SlotIndex};
 use egui::Ui;
 
+/// A per-parameter A/B morph endpoint provider for a panel's knobs.
+///
+/// `markers(param_index)` returns `Some((a, b))` when that parameter has a
+/// distinct A and B pose — the knob draws cyan/amber ghost ticks for them — or
+/// `None` when it is flat (or has no endpoint).
+pub type MorphMarkers<'a> = &'a dyn Fn(usize) -> Option<(f32, f32)>;
+
 /// Trait for effect UI panels.
 ///
 /// Panels render controls for a specific effect type, using the
@@ -30,7 +37,16 @@ pub trait EffectPanel: Send + Sync {
     fn short_name(&self) -> &'static str;
 
     /// Render the effect's controls.
-    fn ui(&mut self, ui: &mut Ui, bridge: &dyn ParamBridge, slot: SlotIndex);
+    ///
+    /// `markers` supplies each parameter's A/B morph endpoints for the knob
+    /// ghost ticks; see [`MorphMarkers`].
+    fn ui(
+        &mut self,
+        ui: &mut Ui,
+        bridge: &dyn ParamBridge,
+        slot: SlotIndex,
+        markers: MorphMarkers<'_>,
+    );
 }
 
 impl EffectPanel for LooperPanel {
@@ -40,8 +56,14 @@ impl EffectPanel for LooperPanel {
     fn short_name(&self) -> &'static str {
         "Loop"
     }
-    fn ui(&mut self, ui: &mut Ui, bridge: &dyn ParamBridge, slot: SlotIndex) {
-        LooperPanel::ui(self, ui, bridge, slot);
+    fn ui(
+        &mut self,
+        ui: &mut Ui,
+        bridge: &dyn ParamBridge,
+        slot: SlotIndex,
+        markers: MorphMarkers<'_>,
+    ) {
+        LooperPanel::ui(self, ui, bridge, slot, markers);
     }
 }
 
