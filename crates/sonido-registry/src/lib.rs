@@ -132,6 +132,7 @@ pub const EFFECT_UIDS: &[(&str, u16)] = &[
     ("time_stretch", 33),
     ("transient_shaper", 34),
     ("tuner", 35),
+    ("harmonic_habitat", 36),
 ];
 
 /// Returns the stable UID for an effect string-id, or `None` if unknown.
@@ -156,10 +157,11 @@ use sonido_core::{Adapter, ParamDescriptor};
 use sonido_effects::kernels::{
     AmpKernel, BitcrusherKernel, CabinetKernel, ChorusKernel, CompressorKernel, DeesserKernel,
     DelayKernel, DistortionKernel, DroneKernel, EqKernel, FilterKernel, FlangerKernel, GateKernel,
-    GlitchKernel, LimiterKernel, LooperKernel, MultibandCompKernel, PhaserKernel, PitchShiftKernel,
-    PlateReverbKernel, PreampKernel, ReverbKernel, RingModKernel, ShelvingEqKernel,
-    SpringReverbKernel, StageKernel, StereoWidenerKernel, TapeKernel, TextureKernel,
-    TimeStretchKernel, TransientShaperKernel, TremoloKernel, TunerKernel, VibratoKernel, WahKernel,
+    GlitchKernel, HarmonicHabitatKernel, LimiterKernel, LooperKernel, MultibandCompKernel,
+    PhaserKernel, PitchShiftKernel, PlateReverbKernel, PreampKernel, ReverbKernel, RingModKernel,
+    ShelvingEqKernel, SpringReverbKernel, StageKernel, StereoWidenerKernel, TapeKernel,
+    TextureKernel, TimeStretchKernel, TransientShaperKernel, TremoloKernel, TunerKernel,
+    VibratoKernel, WahKernel,
 };
 
 /// Category of audio effect for organization and filtering.
@@ -258,7 +260,7 @@ impl EffectRegistry {
     /// Create a new registry with all built-in effects registered.
     pub fn new() -> Self {
         let mut registry = Self {
-            entries: Vec::with_capacity(35),
+            entries: Vec::with_capacity(36),
         };
         registry.register_builtin_effects();
         registry
@@ -720,6 +722,19 @@ impl EffectRegistry {
             },
             |sr| Box::new(Adapter::new(TunerKernel::new(sr), sr)),
         );
+
+        // Harmonic Habitat
+        self.register(
+            EffectDescriptor {
+                id: "harmonic_habitat",
+                name: "Harmonic Habitat",
+                short_name: "HABT",
+                description: "Pitch-aware modal reverb tank that retunes its tail around the player's harmonic center",
+                category: EffectCategory::TimeBased,
+                param_count: 0,
+            },
+            |sr| Box::new(Adapter::new(HarmonicHabitatKernel::new(sr), sr)),
+        );
     }
 
     /// Register an effect with the registry.
@@ -849,14 +864,14 @@ mod tests {
     #[test]
     fn test_registry_creation() {
         let registry = EffectRegistry::new();
-        assert_eq!(registry.len(), 35);
+        assert_eq!(registry.len(), 36);
     }
 
     #[test]
     fn test_all_effects() {
         let registry = EffectRegistry::new();
         let effects = registry.all_effects();
-        assert_eq!(effects.len(), 35);
+        assert_eq!(effects.len(), 36);
     }
 
     #[test]
@@ -933,7 +948,7 @@ mod tests {
         assert_eq!(distortion.len(), 6); // Distortion, Tape, Bitcrusher, Amp, Cabinet, Glitch
 
         let time_based = registry.effects_in_category(EffectCategory::TimeBased);
-        assert_eq!(time_based.len(), 6); // Delay, Reverb, Looper, Drone, PlateReverb, SpringReverb
+        assert_eq!(time_based.len(), 7); // Delay, Reverb, Looper, Drone, PlateReverb, SpringReverb, HarmonicHabitat
 
         let filter = registry.effects_in_category(EffectCategory::Filter);
         assert_eq!(filter.len(), 4); // Filter, Wah, ParametricEQ, ShelvingEQ

@@ -5,7 +5,7 @@
 //! effects programmatically.
 //!
 //! Tests are organized by strictness tier:
-//! - Universal rules (all 19 effects): R1 bounded, R3, R5, R6, R7
+//! - Universal rules (all registered effects): R1 bounded, R3, R5, R6, R7
 //! - Selective rules (subset of effects): R1 strict, R2, R4
 
 mod helpers;

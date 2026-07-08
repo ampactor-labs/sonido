@@ -1,4 +1,4 @@
-//! Tier 2: DWT cycle-count benchmarks for all 19 Sonido DSP kernels.
+//! Tier 2: DWT cycle-count benchmarks for registered Sonido DSP kernels.
 //!
 //! Runs each kernel through a 32-sample stereo block and reports cycle counts.
 //! Results are output via **USB serial** (CDC ACM) — no probe needed.
@@ -144,7 +144,7 @@ fn format_results(results: &[u32; NUM_KERNELS], buf: &mut [u8]) -> usize {
     let _ = writeln!(w, "---\r");
     let _ = writeln!(
         w,
-        "  {:>12}  {:>8} cycles  {:>3}.{:02}% / {:>3}.{:02}% (all 19)\r",
+        "  {:>12}  {:>8} cycles  {:>3}.{:02}% / {:>3}.{:02}% (registered)\r",
         "TOTAL",
         total,
         total_pct_perf / 100,

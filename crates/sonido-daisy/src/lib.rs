@@ -21,7 +21,7 @@
 //! # Usage Tiers
 //!
 //! - **Tier 1**: Blinky (validate toolchain + flash)
-//! - **Tier 2**: Kernel benchmarks (DWT cycle counts for all 19 effects)
+//! - **Tier 2**: Kernel benchmarks (DWT cycle counts for all registered effects)
 //! - **Tier 3**: Audio passthrough (validate codec + DMA)
 //! - **Tier 4**: Single effect processing (first real DSP on hardware)
 

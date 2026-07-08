@@ -214,6 +214,10 @@ fn alias_resolution_table() {
         ("ring", "ringmod"),
         ("ring_mod", "ringmod"),
         ("ringmod", "ringmod"),
+        ("habitat", "harmonic_habitat"),
+        ("harmonic", "harmonic_habitat"),
+        ("harmonichabitat", "harmonic_habitat"),
+        ("harmonic_habitat", "harmonic_habitat"),
     ];
     for (alias, expected) in cases {
         assert_eq!(

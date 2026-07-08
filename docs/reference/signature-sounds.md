@@ -425,7 +425,7 @@ but requires bridging the offline analysis path to real-time processing.
 ## See Also
 
 - [Roadmap](ROADMAP.md) -- Planned capabilities and milestones
-- [Effects Reference](EFFECTS_REFERENCE.md) -- Current 19 effects with parameters
+- [Effects Reference](EFFECTS_REFERENCE.md) -- Current 36 effects with parameters
 - [Kernel Architecture](KERNEL_ARCHITECTURE.md) -- DspKernel/KernelParams patterns
 - [Embedded Guide](EMBEDDED.md) -- Hardware targets and constraints
 - [Architecture](ARCHITECTURE.md) -- Crate dependency graph

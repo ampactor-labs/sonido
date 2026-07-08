@@ -25,14 +25,14 @@ CI runs on GitHub Actions with ubuntu-latest runners under the ampactor-labs org
 | Wasm | 15 min | push + PR | sonido-gui wasm32 check |
 | Benchmarks | 45 min | manual dispatch | criterion + critcmp |
 | Coverage | (no limit) | manual dispatch | cargo-llvm-cov |
-| Plugin | 20 min | manual dispatch | Build + clap-validator for all 19 plugins |
+| Plugin | 20 min | manual dispatch | Build + clap-validator for packaged CLAP plugins |
 
 ### Infrastructure
 
 - **Composite action**: `.github/actions/setup-rust/action.yml` — DRY toolchain, sccache, system deps, and cargo registry cache
 - **Caching**: sccache via `mozilla-actions/sccache-action` + cargo registry/git cache via `actions/cache`
 - **System deps**: libasound2-dev, libudev-dev, mold linker, full x11-rs/GL stack (installed by composite action)
-- **Plugin validation**: clap-validator 0.3.2 validates all 19 CLAP plugin binaries (manual dispatch)
+- **Plugin validation**: clap-validator 0.3.2 validates packaged CLAP plugin binaries (manual dispatch)
 - **Coverage**: cargo-llvm-cov, artifact upload (no threshold gate, manual dispatch)
 
 ### Running CI Checks Locally

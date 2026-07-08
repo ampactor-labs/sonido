@@ -65,6 +65,7 @@ pub fn resolve_effect_name(name: &str) -> &str {
         "tremolo" => "tremolo",
         "delay" => "delay",
         "reverb" => "reverb",
+        "habitat" | "harmonic_habitat" | "harmonichabitat" | "harmonic" => "harmonic_habitat",
         "limiter" => "limiter",
         "stage" => "stage",
         // Pass through as-is — the registry will reject unknown names

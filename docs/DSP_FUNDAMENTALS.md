@@ -820,7 +820,7 @@ Knee-based soft limiting framework: Giannoulis et al., "Digital Dynamic Range Co
 
 **Source:** `crates/sonido-core/src/gain.rs`, `param.rs`, `param_info.rs`, `one_pole.rs`, `math.rs`
 
-Sonido extracts recurring DSP patterns into a shared vocabulary in `sonido-core`. This eliminates copy-paste duplication across the 35 effects while establishing consistent conventions.
+Sonido extracts recurring DSP patterns into a shared vocabulary in `sonido-core`. This eliminates copy-paste duplication across the 36 effects while establishing consistent conventions.
 
 ### SmoothedParam Presets
 

@@ -423,7 +423,7 @@ A centralized `EffectRegistry` that maps string names to factory functions, retu
 
 - **Decoupling**: Application code does not need to import every effect type
 - **Categorization**: Effects are organized by `EffectCategory` (Dynamics, Distortion, Modulation, etc.) for UI grouping
-- **Metadata**: Each registry entry includes name, description, category, and parameter count — currently 35 effects with param counts ranging from 3 to 12
+- **Metadata**: Each registry entry includes name, description, category, and parameter count — currently 36 effects with param counts ranging from 3 to 12
 - **Parameter discovery**: `param_index_by_name()` enables CLI and config systems to resolve parameter names to indices at runtime
 - **`no_std` compatible**: The registry uses `alloc` (for `Box` and `Vec`) but not `std`
 
@@ -963,7 +963,7 @@ CLAP's automation recording protocol requires explicit gesture delimiters: `Para
 Three threads need access to shared state: audio processor (real-time), GUI (render thread), main thread (parameter state, host communication). `Arc<SonidoShared>` is cloned into each. Fields inside `SonidoShared` use `parking_lot::RwLock` for effect state and `Arc<AtomicParamBridge>` for lock-free parameter reads in the audio thread. No `Mutex` in the audio path.
 
 **Plugin crate excluded from workspace `default-members`:**
-Building plugins requires the `clack`, `baseview`, and `egui_glow` dependencies, which add non-trivial compile time and introduce system OpenGL requirements. `cargo build --workspace` does not build plugins by default. `make plugins` (or `cargo build -p sonido-plugin`) builds all 19 explicitly.
+Building plugins requires the `clack`, `baseview`, and `egui_glow` dependencies, which add non-trivial compile time and introduce system OpenGL requirements. `cargo build --workspace` does not build plugins by default. `make plugins` (or `cargo build -p sonido-plugin`) builds the packaged single-effect plugins explicitly.
 
 ### Consequences
 

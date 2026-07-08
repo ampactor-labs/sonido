@@ -114,6 +114,10 @@ name = "sonido-reverb"
 crate-type = ["cdylib"]
 
 [[example]]
+name = "sonido-harmonic-habitat"
+crate-type = ["cdylib"]
+
+[[example]]
 name = "sonido-limiter"
 crate-type = ["cdylib"]
 

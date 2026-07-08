@@ -132,7 +132,14 @@ mod tests {
     fn create_panel_unifies_param_effects_on_generic() {
         // A former curated effect and an unknown effect both fall through to the
         // unified generic panel — no per-effect subset panels remain.
-        for id in ["tape", "compressor", "reverb", "amp", "custom_effect"] {
+        for id in [
+            "tape",
+            "compressor",
+            "reverb",
+            "harmonic_habitat",
+            "amp",
+            "custom_effect",
+        ] {
             assert!(
                 create_panel(id).is_some(),
                 "create_panel({id:?}) should produce a GenericPanel"

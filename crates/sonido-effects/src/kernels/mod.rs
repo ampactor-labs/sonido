@@ -1,6 +1,6 @@
 //! Kernel-architecture effect implementations.
 //!
-//! All 20 effects in `sonido-effects` are implemented using the
+//! All 36 effects in `sonido-effects` are implemented using the
 //! [`DspKernel`](sonido_core::DspKernel) pattern: pure DSP separated from parameter
 //! ownership. Each effect defines:
 //!
@@ -24,6 +24,7 @@ pub mod filter;
 pub mod flanger;
 pub mod gate;
 pub mod glitch;
+pub mod harmonic_habitat;
 pub mod limiter;
 pub mod looper;
 pub mod multiband_comp;
@@ -60,6 +61,7 @@ pub use filter::{FilterKernel, FilterParams};
 pub use flanger::{FlangerKernel, FlangerParams};
 pub use gate::{GateKernel, GateParams};
 pub use glitch::{GlitchKernel, GlitchParams};
+pub use harmonic_habitat::{HarmonicHabitatKernel, HarmonicHabitatParams};
 pub use limiter::{LimiterKernel, LimiterParams};
 pub use looper::{LooperKernel, LooperParams};
 pub use multiband_comp::{MultibandCompKernel, MultibandCompParams};

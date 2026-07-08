@@ -561,8 +561,9 @@ mod tests {
 
         assert!(ids.contains(&"distortion"));
         assert!(ids.contains(&"reverb"));
+        assert!(ids.contains(&"harmonic_habitat"));
         assert!(ids.contains(&"compressor"));
-        assert_eq!(ids.len(), 35); // 35 effects registered
+        assert_eq!(ids.len(), 36); // 36 effects registered
     }
 
     #[test]

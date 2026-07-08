@@ -43,7 +43,7 @@ Key DSP quality features active across all effects:
 
 ### Plugin Integration
 
-19 CLAP plugins (one per effect) via the `sonido_effect_entry!` macro. Plugin features:
+20 single-effect CLAP plugins via the `sonido_effect_entry!` macro, plus graph-player. Plugin features:
 - Full `ParameterInfo` automation (stable numeric IDs, CLAP flags, text display)
 - Per-gesture `begin_set/end_set` protocol for DAW automation recording
 - egui GUI shared with standalone GUI via `sonido-gui-core`
@@ -130,7 +130,7 @@ Current known coverage state: DSP core ~100% (unit tested per module), CLI 43 un
 
 **Status:** Complete
 
-All 19 CLAP plugins support host-negotiated window resize via atomic `PendingResize` channel (packed `AtomicU64`). The host calls `set_size()`, the baseview handler applies it in `on_frame()` via `window.resize()`. Size constraints: 320×240 minimum, 1920×1080 maximum, 480×380 default. `can_resize()` returns true, `get_resize_hints()` reports free resize (no aspect ratio), `adjust_size()` clamps to bounds.
+All packaged CLAP plugins support host-negotiated window resize via atomic `PendingResize` channel (packed `AtomicU64`). The host calls `set_size()`, the baseview handler applies it in `on_frame()` via `window.resize()`. Size constraints: 320×240 minimum, 1920×1080 maximum, 480×380 default. `can_resize()` returns true, `get_resize_hints()` reports free resize (no aspect ratio), `adjust_size()` clamps to bounds.
 
 ### Multi-Effect CLAP Plugin
 
@@ -148,7 +148,7 @@ Benchmarks run on-demand via `gh workflow run ci-manual.yml -f job=bench` across
 
 **Status:** Complete
 
-All 19 effects migrated to `DspKernel` + `KernelParams` pattern, separating pure DSP from parameter ownership. `Adapter<K, SmoothedPolicy>` bridges kernels to `Effect + ParameterInfo` with per-parameter smoothing. Registry creates `Adapter<XxxKernel, SmoothedPolicy>` for all effects — transparent to all consumers.
+All 36 effects use the `DspKernel` + `KernelParams` pattern, separating pure DSP from parameter ownership. `Adapter<K, SmoothedPolicy>` bridges kernels to `Effect + ParameterInfo` with per-parameter smoothing. Registry creates `Adapter<XxxKernel, SmoothedPolicy>` for all effects — transparent to all consumers.
 
 Key capabilities unlocked:
 - Kernels callable directly on embedded targets without smoothing overhead or heap allocation
@@ -156,7 +156,7 @@ Key capabilities unlocked:
 - `from_knobs()` maps normalized ADC readings to parameter ranges (embedded convenience)
 - `from_normalized()` / `to_normalized()` for CLAP/MIDI host bridge
 - `SmoothingStyle` per parameter: None, Fast (5ms), Standard (10ms), Slow (20ms), Interpolated (50ms)
-- 225 kernel-specific tests across all 19 implementations
+- 233+ kernel-specific tests across all implementations
 
 See ADR-028 in `docs/DESIGN_DECISIONS.md`.
 

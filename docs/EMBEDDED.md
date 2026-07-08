@@ -1267,7 +1267,7 @@ that uses 73% budget at 480 MHz would use ~250%+ — unusable.
 ### Chain Configurations
 
 With the heap in 64 MB SDRAM, memory is no longer a constraint for
-effect chains. Any combination of all 35 effects fits comfortably.
+effect chains. Any combination of all 36 effects fits comfortably.
 CPU budget is the limiting factor.
 
 **Comfortable** — CPU < 50%:

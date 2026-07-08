@@ -4,7 +4,7 @@ Complete parameter reference for all Sonido effects.
 
 ## Kernel Architecture
 
-All 35 effects have kernel-architecture implementations in `crates/sonido-effects/src/kernels/`. Each effect defines `XxxKernel` (`DspKernel` impl) and `XxxParams` (`KernelParams` impl). The registry creates `Adapter<XxxKernel, SmoothedPolicy>` — all consumers (GUI, CLI, plugin) use kernel-backed effects transparently.
+All 36 effects have kernel-architecture implementations in `crates/sonido-effects/src/kernels/`. Each effect defines `XxxKernel` (`DspKernel` impl) and `XxxParams` (`KernelParams` impl). The registry creates `Adapter<XxxKernel, SmoothedPolicy>` — all consumers (GUI, CLI, plugin) use kernel-backed effects transparently.
 
 Classic `Effect` implementations have been removed as of v0.2. All effects are kernel-only.
 

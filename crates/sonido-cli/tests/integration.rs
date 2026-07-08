@@ -359,43 +359,19 @@ fn cli_generate_tone() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn registry_creates_all_19_effects() {
+fn registry_creates_all_effects() {
     use sonido_registry::EffectRegistry;
 
     let registry = EffectRegistry::new();
 
-    // The registry should have 35 effects
-    assert_eq!(registry.len(), 35, "registry should have 35 effects");
+    assert_eq!(registry.len(), 36, "registry should have 36 effects");
 
-    // Verify we can create each one
-    let effect_names = [
-        "preamp",
-        "distortion",
-        "compressor",
-        "gate",
-        "eq",
-        "wah",
-        "chorus",
-        "flanger",
-        "phaser",
-        "tremolo",
-        "delay",
-        "filter",
-        "vibrato",
-        "tape",
-        "reverb",
-        "limiter",
-        "bitcrusher",
-        "ringmod",
-        "stage",
-        "looper",
-    ];
-
-    for name in &effect_names {
-        let effect = registry.create(name, 48000.0);
+    for desc in registry.all_effects() {
+        let effect = registry.create(desc.id, 48000.0);
         assert!(
             effect.is_some(),
-            "should be able to create effect '{name}' from registry"
+            "should be able to create effect '{}' from registry",
+            desc.id
         );
     }
 }

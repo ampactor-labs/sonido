@@ -50,7 +50,7 @@ See [GUI.md](GUI.md) for detailed GUI documentation.
 
 ### Walkthrough (recommended)
 
-Run the full guided tour -- builds, generates signals, processes all 19 effects,
+Run the full guided tour -- builds, generates signals, processes all 36 effects,
 runs analysis, and prints listening guidance:
 
 ```bash
@@ -467,7 +467,7 @@ This is faster than `trunk build` and sufficient to verify the wasm target compi
 
 ### What Works on Wasm
 
-- Full effect chain with all 19 effects
+- Full effect chain with all 36 effects
 - Real-time audio via cpal's wasm backend (WebAudio API)
 - WAV file loading via browser file picker (`rfd::AsyncFileDialog`)
 - Parameter automation and preset management

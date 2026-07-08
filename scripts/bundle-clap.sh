@@ -27,13 +27,13 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-# The 20 plugin examples (19 single-effect + the graph player).
+# The plugin examples (single-effect plugins + the graph player).
 PLUGINS=(
   sonido-graph-player sonido-preamp sonido-distortion sonido-compressor
   sonido-gate sonido-eq sonido-wah sonido-chorus sonido-flanger
   sonido-phaser sonido-tremolo sonido-delay sonido-filter sonido-vibrato
-  sonido-tape sonido-reverb sonido-limiter sonido-bitcrusher sonido-ringmod
-  sonido-stage
+  sonido-tape sonido-reverb sonido-harmonic-habitat sonido-limiter
+  sonido-bitcrusher sonido-ringmod sonido-stage
 )
 
 echo ">> Building ${#PLUGINS[@]} CLAP plugins (release)..."

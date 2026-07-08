@@ -95,6 +95,7 @@ fn defaults_produce_near_unity_gain() {
         "phaser",
         "delay",
         "reverb",
+        "harmonic_habitat",
         "plate_reverb",
         "spring_reverb", // reverbs — mix at defaults → partial cancellation
         "distortion",

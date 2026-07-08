@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # walkthrough.sh -- Unified guided tour of the Sonido DSP framework.
 #
-# Demonstrates the full Sonido experience: CLI signal generation, all 19 effects
+# Demonstrates the full Sonido experience: CLI signal generation, all 36 effects
 # (22 demos including variants), analysis tools, A/B comparison, presets, and
 # GUI guidance.
 #
@@ -135,10 +135,10 @@ if [ -f "$SONIDO" ]; then
     # Effect count check
     cmd_note "sonido effects"
     EFFECT_COUNT=$("$SONIDO" effects 2>&1 | grep -c "│" || true)
-    if [ "$EFFECT_COUNT" -ge 19 ]; then
-        pass "All 19 effects registered ($EFFECT_COUNT found)"
+    if [ "$EFFECT_COUNT" -ge 36 ]; then
+        pass "All 36 effects registered ($EFFECT_COUNT found)"
     elif [ "$EFFECT_COUNT" -gt 0 ]; then
-        fail "Expected 19 effects, found $EFFECT_COUNT"
+        fail "Expected 36 effects, found $EFFECT_COUNT"
     else
         fail "Could not parse effect list"
     fi

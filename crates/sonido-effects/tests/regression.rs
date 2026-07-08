@@ -20,10 +20,10 @@ use sonido_core::{Adapter, Effect, ParameterInfo};
 use sonido_effects::kernels::{
     AmpKernel, BitcrusherKernel, CabinetKernel, ChorusKernel, CompressorKernel, DeesserKernel,
     DelayKernel, DistortionKernel, EqKernel, FilterKernel, FlangerKernel, GateKernel,
-    LimiterKernel, LooperKernel, MultibandCompKernel, PhaserKernel, PitchShiftKernel,
-    PlateReverbKernel, PreampKernel, ReverbKernel, RingModKernel, ShelvingEqKernel,
-    SpringReverbKernel, StageKernel, StereoWidenerKernel, TapeKernel, TransientShaperKernel,
-    TremoloKernel, TunerKernel, VibratoKernel, WahKernel,
+    HarmonicHabitatKernel, LimiterKernel, LooperKernel, MultibandCompKernel, PhaserKernel,
+    PitchShiftKernel, PlateReverbKernel, PreampKernel, ReverbKernel, RingModKernel,
+    ShelvingEqKernel, SpringReverbKernel, StageKernel, StereoWidenerKernel, TapeKernel,
+    TransientShaperKernel, TremoloKernel, TunerKernel, VibratoKernel, WahKernel,
 };
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader, BufWriter, Write};
@@ -1056,6 +1056,31 @@ fn test_spring_reverb_defaults_regression() {
     let input = generate_test_signal(TEST_DURATION_SAMPLES);
     run_regression_test("spring_reverb_defaults", effect, &input)
         .expect("SpringReverb defaults regression test failed");
+}
+
+#[test]
+fn test_harmonic_habitat_regression() {
+    // HarmonicHabitat params:
+    // 0=room, 1=decay, 2=damping, 3=predelay, 4=harmonicity,
+    // 5=tracking, 6=memory, 7=mode, 8=width, 9=mix, 10=output
+    let mut effect = Adapter::new(HarmonicHabitatKernel::new(SAMPLE_RATE), SAMPLE_RATE);
+    effect.set_param(4, 100.0); // harmonicity
+    effect.set_param(5, 100.0); // tracking
+    effect.set_param(6, 10.0); // fast memory for the short regression window
+    effect.set_param(7, 1.0); // Major
+    effect.set_param(9, 55.0); // mix
+
+    let input = generate_test_signal(TEST_DURATION_SAMPLES);
+    run_regression_test("harmonic_habitat", effect, &input)
+        .expect("HarmonicHabitat regression test failed");
+}
+
+#[test]
+fn test_harmonic_habitat_defaults_regression() {
+    let effect = Adapter::new(HarmonicHabitatKernel::new(SAMPLE_RATE), SAMPLE_RATE);
+    let input = generate_test_signal(TEST_DURATION_SAMPLES);
+    run_regression_test("harmonic_habitat_defaults", effect, &input)
+        .expect("HarmonicHabitat defaults regression test failed");
 }
 
 #[test]

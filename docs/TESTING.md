@@ -465,7 +465,7 @@ let idx = registry.param_index_by_name("distortion", "drive");
 assert!(idx.is_some());
 ```
 
-- [ ] All 19 effects create successfully
+- [ ] All 36 effects create successfully
 - [ ] Param lookup by name works for every effect
 
 #### WAV File Processing
@@ -619,7 +619,7 @@ Default gain behavior for each effect with unit-amplitude input:
 ## See Also
 
 - [CLI Testing Protocol](CLI_TESTING.md) - Manual testing for CLI and GUI
-- [Effects Reference](EFFECTS_REFERENCE.md) - All 19 effects with parameters and DSP theory
+- [Effects Reference](EFFECTS_REFERENCE.md) - All 36 effects with parameters and DSP theory
 - [DSP Fundamentals](DSP_FUNDAMENTALS.md) - Theory behind the implementations
 - [Contributing](CONTRIBUTING.md) - Development guidelines
 - [Benchmarks](BENCHMARKS.md) - Performance testing

@@ -81,7 +81,7 @@ sonido --version
 sonido effects
 ```
 
-- [ ] Lists 19 effects with descriptions
+- [ ] Lists 36 effects with descriptions
 
 ### 1.3 Effect Detail
 
@@ -884,7 +884,7 @@ If audio processing changed intentionally, regenerate golden files and verify th
 ## See Also
 
 - [CLI Guide](CLI_GUIDE.md) — Full command reference
-- [Effects Reference](EFFECTS_REFERENCE.md) — All 19 effects with parameters and DSP theory
+- [Effects Reference](EFFECTS_REFERENCE.md) — All 36 effects with parameters and DSP theory
 - [GUI Documentation](GUI.md) — GUI user guide
 - [Testing Guide](TESTING.md) — Testing guide (includes library consumer testing)
 - [DSP Fundamentals](DSP_FUNDAMENTALS.md) — Theory behind the implementations

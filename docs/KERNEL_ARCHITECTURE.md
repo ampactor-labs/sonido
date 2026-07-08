@@ -1,7 +1,7 @@
 # Kernel Architecture
 
 Reference for Sonido's kernel architecture -- the three-layer separation of DSP math,
-parameter ownership, and runtime bridging. All 35 effects use this pattern exclusively.
+parameter ownership, and runtime bridging. All 36 effects use this pattern exclusively.
 Classic `Effect` implementations have been removed as of v0.2.
 
 ---
@@ -540,7 +540,7 @@ crates/sonido-core/src/kernel/
 +-- adapter.rs      # Adapter<K, P> -- the only Effect implementor
 
 crates/sonido-effects/src/kernels/
-+-- mod.rs              # Module root, re-exports all 35 kernels
++-- mod.rs              # Module root, re-exports all 36 kernels
 +-- amp.rs              # AmpKernel + AmpParams
 +-- bitcrusher.rs       # BitcrusherKernel + BitcrusherParams
 +-- cabinet.rs          # CabinetKernel + CabinetParams
@@ -625,5 +625,5 @@ No `SmoothedParam`. No `Vec`. No `Arc`. No allocation. Same DSP math as the desk
 
 - [Architecture Overview](ARCHITECTURE.md) -- Crate dependency graph and design overview
 - [Design Decisions (ADR-028)](DESIGN_DECISIONS.md#adr-028-kernel-architecture--dspparameter-separation) -- Architectural decision record
-- [Effects Reference](EFFECTS_REFERENCE.md) -- All 35 effects with parameters and DSP theory
+- [Effects Reference](EFFECTS_REFERENCE.md) -- All 36 effects with parameters and DSP theory
 - [Embedded Guide](EMBEDDED.md) -- Hardware targets and deployment
