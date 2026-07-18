@@ -890,13 +890,13 @@ impl ProcessingGraph {
         let node_latency = self.compute_node_latencies(&sorted);
 
         // Emit raw schedule steps (with inline delay compensation).
-        let (
-            raw_steps,
+        let RawSchedule {
+            steps: raw_steps,
             edge_first_write,
             edge_last_read,
             delay_sample_counts,
-            _emit_feedback_count,
-        ) = self.emit_raw_schedule(&sorted, input_node_idx, output_node_idx, &node_latency);
+            feedback_delay_count,
+        } = self.emit_raw_schedule(&sorted, input_node_idx, output_node_idx, &node_latency);
 
         // Buffer liveness analysis: assign buffer slots.
         let (final_steps, buffer_count) =
@@ -933,13 +933,9 @@ impl ProcessingGraph {
             tracing::debug!("  step[{i}]: {}", format_step(step));
         }
 
-        // Count FeedbackDelay steps to size the feedback delay line array.
-        let feedback_delay_count = final_steps
-            .iter()
-            .filter(|s| matches!(s, ProcessStep::FeedbackDelay { .. }))
-            .count();
-
         // Build the compiled schedule (lightweight — no pool or delay lines).
+        // Buffer assignment maps steps 1:1, so the emitter's feedback count
+        // sizes the feedback delay line array.
         let schedule = Arc::new(CompiledSchedule {
             steps: final_steps,
             buffer_count,
@@ -1051,25 +1047,15 @@ impl ProcessingGraph {
 
     /// Emits raw `ProcessStep`s from the topological order.
     ///
-    /// Returns the steps, per-edge first-write/last-read step indices for liveness
-    /// analysis, delay sample counts for latency compensation, and a count of
-    /// feedback delay lines needed. Delay insertion happens here (in virtual-buffer
-    /// space) to avoid aliasing bugs that would occur if inserted after physical
-    /// buffer assignment.
-    #[allow(clippy::type_complexity)]
+    /// Delay insertion happens here (in virtual-buffer space) to avoid aliasing
+    /// bugs that would occur if inserted after physical buffer assignment.
     fn emit_raw_schedule(
         &self,
         sorted: &[usize],
         _input_node_idx: usize,
         _output_node_idx: usize,
         node_latency: &[usize],
-    ) -> (
-        Vec<RawStep>,
-        Vec<(usize, usize)>,
-        Vec<(usize, usize)>,
-        Vec<usize>,
-        usize, // feedback_delay_count
-    ) {
+    ) -> RawSchedule {
         // Map each edge to a temporary "virtual buffer" ID (1:1 with edge index for now).
         // Liveness analysis will collapse these into physical buffer slots.
 
@@ -1355,18 +1341,13 @@ impl ProcessingGraph {
             }
         }
 
-        // Build per-vbuf first_write/last_read.
-        let edge_first_write: Vec<(usize, usize)> =
-            vbuf_first_write.into_iter().enumerate().collect();
-        let edge_last_read: Vec<(usize, usize)> = vbuf_last_read.into_iter().enumerate().collect();
-
-        (
+        RawSchedule {
             steps,
-            edge_first_write,
-            edge_last_read,
+            edge_first_write: vbuf_first_write.into_iter().enumerate().collect(),
+            edge_last_read: vbuf_last_read.into_iter().enumerate().collect(),
             delay_sample_counts,
             feedback_delay_count,
-        )
+        }
     }
 
     // --- Buffer liveness analysis ---
@@ -2234,6 +2215,19 @@ impl ProcessingGraph {
             })
             .expect("no Output node found (should be validated before calling)")
     }
+}
+
+/// Schedule emitted in virtual-buffer space, before physical buffer assignment.
+struct RawSchedule {
+    steps: Vec<RawStep>,
+    /// Per-vbuf (vbuf, step index of first write); `usize::MAX` = never written.
+    edge_first_write: Vec<(usize, usize)>,
+    /// Per-vbuf (vbuf, step index of last read).
+    edge_last_read: Vec<(usize, usize)>,
+    /// Compensation delay lengths, indexed by `delay_line_idx`.
+    delay_sample_counts: Vec<usize>,
+    /// Number of feedback delay lines referenced by `FeedbackDelay` steps.
+    feedback_delay_count: usize,
 }
 
 /// Intermediate step type used during schedule emission before buffer assignment.

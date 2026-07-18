@@ -102,11 +102,6 @@ mod tests {
     }
 
     #[test]
-    fn available_effects_count() {
-        assert_eq!(available_effects().len(), 35);
-    }
-
-    #[test]
     fn available_effects_names_match_registry() {
         let effects = available_effects();
         let names: Vec<&str> = effects.iter().map(|e| e.name.as_str()).collect();

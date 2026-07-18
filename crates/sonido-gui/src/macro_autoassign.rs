@@ -140,6 +140,9 @@ mod tests {
     use sonido_core::{ParamDescriptor, ParamFlags, ParamScale};
     use std::sync::Mutex;
 
+    /// One mock slot: (effect id, param values, param descriptors).
+    type SlotSpec<'a> = (&'a str, &'a [f32], &'a [Option<ParamDescriptor>]);
+
     /// Minimal descriptor-aware bridge (mirrors the one in `morph_state`).
     struct MockBridge {
         values: Mutex<Vec<Vec<f32>>>,
@@ -148,8 +151,7 @@ mod tests {
     }
 
     impl MockBridge {
-        #[allow(clippy::type_complexity)]
-        fn new(slots: &[(&str, &[f32], &[Option<ParamDescriptor>])]) -> Self {
+        fn new(slots: &[SlotSpec]) -> Self {
             Self {
                 values: Mutex::new(slots.iter().map(|(_, v, _)| v.to_vec()).collect()),
                 ids: slots.iter().map(|(id, _, _)| (*id).to_owned()).collect(),
@@ -298,7 +300,7 @@ mod tests {
         // scoped bindings so every tuple can share them (new() copies out).
         let vals = [8.0f32];
         let descs = [Some(drive())];
-        let slots: Vec<(&str, &[f32], &[Option<ParamDescriptor>])> = (0..8)
+        let slots: Vec<SlotSpec> = (0..8)
             .map(|_| ("distortion", &vals[..], &descs[..]))
             .collect();
         let bridge = MockBridge::new(&slots);

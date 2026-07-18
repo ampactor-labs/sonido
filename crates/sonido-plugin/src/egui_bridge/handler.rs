@@ -123,6 +123,9 @@ where
     })
 }
 
+/// Per-frame UI callback: draws the frame against the user state.
+type UpdateFn<S> = Box<dyn FnMut(&Context, &mut S) + Send>;
+
 /// Baseview window handler that drives the egui frame loop.
 ///
 /// Created by [`open_parented`], lives for the duration of the plugin GUI window.
@@ -151,8 +154,7 @@ struct EguiBridgeHandler<S> {
     /// User state passed to the update closure.
     state: S,
     /// Per-frame UI callback.
-    #[allow(clippy::type_complexity)]
-    update_fn: Box<dyn FnMut(&Context, &mut S) + Send>,
+    update_fn: UpdateFn<S>,
 }
 
 impl<S: Send + 'static> WindowHandler for EguiBridgeHandler<S> {

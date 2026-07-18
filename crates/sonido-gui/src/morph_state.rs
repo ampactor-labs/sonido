@@ -345,6 +345,9 @@ mod tests {
     use sonido_core::{ParamDescriptor, ParamScale};
     use std::sync::Mutex;
 
+    /// One mock slot: (effect id, param values, param descriptors).
+    type SlotSpec<'a> = (&'a str, &'a [f32], &'a [Option<ParamDescriptor>]);
+
     /// Descriptor-aware positional bridge for exercising morph.
     struct MockBridge {
         values: Mutex<Vec<Vec<f32>>>,
@@ -354,8 +357,7 @@ mod tests {
     }
 
     impl MockBridge {
-        #[allow(clippy::type_complexity)]
-        fn new(slots: &[(&str, &[f32], &[Option<ParamDescriptor>])]) -> Self {
+        fn new(slots: &[SlotSpec]) -> Self {
             Self {
                 values: Mutex::new(slots.iter().map(|(_, v, _)| v.to_vec()).collect()),
                 bypassed: Mutex::new(vec![false; slots.len()]),
