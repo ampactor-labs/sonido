@@ -138,7 +138,7 @@ let blended = DistortionParams::lerp(&clean_preset, &heavy_preset, 0.5);
 
 Target hardware: **Electrosmith Daisy Seed** (STM32H750, Cortex-M7 @ 480 MHz, 64 MB SDRAM) and **PedalPCB Hothouse** DIY pedal platform (6 knobs, 3 toggles, stereo I/O).
 
-`no_std` across 6 crates (`sonido-core`, `sonido-effects`, `sonido-synth`, `sonido-registry`, `sonido-platform`, `sonido-daisy`). All math via `libm`. All 36 effects provide `from_knobs()` for direct 0.0 to 1.0 ADC-to-parameter mapping.
+`no_std` across 7 crates (`sonido-core`, `sonido-effects`, `sonido-synth`, `sonido-registry`, `sonido-platform`, `sonido-patch`, `sonido-daisy`). All math via `libm`. All 36 effects provide `from_knobs()` for direct 0.0 to 1.0 ADC-to-parameter mapping.
 
 ### Morph Pedal Demo
 
@@ -212,19 +212,19 @@ The `PlatformController` trait and `ControlMapper` in `sonido-platform` provide 
 | Harmonic Habitat | Time-Based | x | room size, harmonicity, tracking, memory, mode |
 | Plate Reverb | Time-Based | x | decay, diffusion, mix |
 | Spring Reverb | Time-Based | | tension, decay, mix |
-| Time Stretch | Time-Based | | ratio, mix |
-| Pitch Shift | Pitch | x | semitones, mix |
+| Time Stretch | Modulation | | ratio, mix |
+| Pitch Shift | Modulation | x | semitones, mix |
 | Amp | Distortion | | drive, tone, cabinet |
-| Cabinet | Utility | x | model |
+| Cabinet | Distortion | x | model |
 | Stereo Widener | Utility | x | width, mono bass cutoff |
-| Drone | Synthesis | | root, mode, volume |
-| Glitch | Modulation | x | rate, depth, size |
+| Drone | Time-Based | | root, mode, volume |
+| Glitch | Distortion | x | rate, depth, size |
 | Texture | Modulation | x | density, size, mix |
 | Tuner | Utility | | reference pitch |
 | Stage | Utility | x | phase invert, DC block, bass mono, width, Haas delay, output |
-| Looper | Utility | x | length, overdub, speed |
+| Looper | Time-Based | x | length, overdub, speed |
 
-**Categories**: Distortion (4), Dynamics (6), Modulation (9), Filter (4), Time-Based (5), Pitch (1), Utility (5), Synthesis (1).
+**Categories** (as reported by the registry): Distortion (6), Dynamics (6), Modulation (9), Filter (4), Time-Based (7), Utility (4).
 
 ## Processing Graph
 
@@ -272,12 +272,14 @@ graph TD
         synth[sonido-synth]
         registry[sonido-registry]
         platform[sonido-platform]
+        patch[sonido-patch]
     end
 
     subgraph "std required"
         analysis[sonido-analysis]
         config[sonido-config]
         io[sonido-io]
+        graph_dsl[sonido-graph-dsl]
         gui_core[sonido-gui-core]
         gui[sonido-gui]
         cli[sonido-cli]
@@ -288,12 +290,14 @@ graph TD
     synth --> core
     registry --> core & effects
     platform --> core
+    patch --> core
     config --> core
     io --> core
+    graph_dsl --> core & registry & config
     gui_core --> core
-    gui --> core & effects & registry & config & gui_core & io
-    cli --> core & effects & synth & registry & config & analysis & io
-    plugin --> core & effects & registry & gui_core
+    gui --> core & effects & registry & config & gui_core & io & graph_dsl & patch
+    cli --> core & effects & synth & registry & config & analysis & io & graph_dsl & patch
+    plugin --> core & effects & registry & gui_core & patch
 ```
 
 | Crate | Purpose | no_std |
@@ -303,8 +307,10 @@ graph TD
 | `sonido-synth` | PolyBLEP oscillators, ADSR envelopes, voice management, modulation matrix | Yes |
 | `sonido-registry` | Effect factory and discovery by name/category | Yes |
 | `sonido-platform` | Hardware abstraction: PlatformController, ControlMapper | Yes |
+| `sonido-patch` | Canonical patch format: one model, three projections (JSON, binary sector, runtime) | Yes |
 | `sonido-analysis` | FFT, spectral analysis, adaptive filters, resampling | No |
 | `sonido-config` | Preset and chain configuration management | No |
+| `sonido-graph-dsl` | Graph topology DSL parser, builder, and effect factory | No |
 | `sonido-io` | WAV I/O, real-time audio streaming via cpal | No |
 | `sonido-gui-core` | Shared GUI widgets, theme, ParamBridge trait | No |
 | `sonido-gui` | egui node-graph editor: macros, A/B morph, session save/load, CLAP/pedal export | No |
@@ -418,7 +424,7 @@ CPU % is `ns_per_sample / (1e9 / 48000) × 100`. The full per-effect table and m
 
 - **Golden file regression**: Effect output compared against reference WAV files (MSE < 1e-6, SNR > 60 dB, spectral correlation > 0.9999)
 - **Property-based testing**: Proptest verifies bounded output and reset behavior for all 36 effects
-- **no_std verification**: 5 core crates tested without default features
+- **no_std verification**: 6 crates tested without default features
 - **Doc tests**: All rustdoc examples compile and run
 - **Algorithm citations**: Every DSP implementation traces to a published reference (Bristow-Johnson Audio EQ Cookbook, Parker et al. DAFx-2016, Jezar Freeverb, Välimäki PolyBLEP, Zölzer DAFX)
 - **CI**: every push and PR runs fmt, clippy, test, and a wasm build (`ci.yml`); a manual workflow (`ci-manual.yml`) adds no_std verification, benchmarks, coverage, and plugin validation
