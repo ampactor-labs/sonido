@@ -1,6 +1,9 @@
 //! Cross-projection roundtrip tests: a `Patch` survives JSON and binary intact,
 //! and the two projections agree.
 
+// JSON projection and proptest both need std.
+#![cfg(feature = "std")]
+
 use proptest::prelude::*;
 use sonido_patch::{
     GlobalControls, GlobalParam, MAX_NODES, MAX_PARAMS, MacroMappingSpec, MacroTarget, MorphConfig,

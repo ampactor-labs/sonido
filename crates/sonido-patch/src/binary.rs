@@ -540,6 +540,7 @@ pub fn decode(data: &[u8]) -> Result<Patch, PatchError> {
 mod tests {
     use super::*;
     use crate::PatchEndpoint;
+    use alloc::vec;
 
     fn sample_patch() -> Patch {
         let mut p = Patch::linear_chain(

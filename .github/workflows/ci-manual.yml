@@ -54,6 +54,7 @@ jobs:
           cargo test --no-default-features -p sonido-synth
           cargo test --no-default-features -p sonido-registry
           cargo test --no-default-features -p sonido-platform
+          cargo test --no-default-features -p sonido-patch
 
       - name: Check wasm compilation
         run: cargo check --target wasm32-unknown-unknown -p sonido-gui

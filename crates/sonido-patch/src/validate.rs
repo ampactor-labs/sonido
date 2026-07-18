@@ -202,6 +202,7 @@ pub fn validate_for_pedal(patch: &Patch, limits: &PedalLimits) -> Vec<Finding> {
 mod tests {
     use super::*;
     use crate::{MacroMappingSpec, MorphCurve, PatchEdge, PatchEndpoint, PatchNode};
+    use alloc::vec;
 
     fn two_node() -> Patch {
         Patch::linear_chain(
