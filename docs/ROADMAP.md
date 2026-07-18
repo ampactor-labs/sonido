@@ -10,11 +10,11 @@ Sonido is a production-grade DSP framework in Rust. The following capabilities a
 
 ### Crate Architecture
 
-14-crate workspace with clear dependency discipline. 6 crates are fully `no_std` (core, effects, synth, registry, platform, daisy), targeting both desktop and embedded hardware from the same implementation.
+15-crate workspace with clear dependency discipline. 7 crates are fully `no_std` (core, effects, synth, registry, platform, patch, daisy), targeting both desktop and embedded hardware from the same implementation.
 
 | Tier | Crates |
 |------|--------|
-| no_std DSP core | sonido-core, sonido-effects, sonido-synth, sonido-registry, sonido-platform |
+| no_std DSP core | sonido-core, sonido-effects, sonido-synth, sonido-registry, sonido-platform, sonido-patch |
 | no_std firmware | sonido-daisy (Daisy Seed, optional build) |
 | std library | sonido-config, sonido-analysis, sonido-io, sonido-graph-dsl |
 | Applications | sonido-cli, sonido-gui-core, sonido-gui |
@@ -22,14 +22,14 @@ Sonido is a production-grade DSP framework in Rust. The following capabilities a
 
 ### Effects Library
 
-19 production effects using the kernel architecture (`DspKernel` + `KernelParams` + `Adapter`):
+36 production effects using the kernel architecture (`DspKernel` + `KernelParams` + `Adapter`), grouped by registry category:
 
-- **Dynamics**: Compressor (11 params, sidechain-capable), Limiter, Gate
-- **Gain/Saturation**: Preamp, Distortion (4 waveshaper modes, ADAA), Tape Saturation (10 params, hysteresis + wow/flutter + head bump)
-- **Modulation**: Chorus, Flanger, Phaser, Tremolo, Vibrato
-- **Time**: Delay (ping-pong, diffusion, tempo sync), Reverb (Hadamard FDN, stereo tanks)
-- **Filter**: Filter (SVF-based), Wah, Parametric EQ (3-band)
-- **Special**: Bitcrusher, Ring Modulator, Stage (4-in-1 processor)
+- **Distortion (6)**: Distortion (4 waveshaper modes, ADAA, envelope-driven dynamics), Tape Saturation (hysteresis + wow/flutter + head bump), Bitcrusher, Amp (dual gain stage + interactive tone stack + sag), Cabinet (direct-convolution IR, 3 factory responses), Glitch
+- **Dynamics (6)**: Compressor (program-dependent release, sidechain-capable), Limiter (lookahead brickwall), Gate, Multiband Compressor (Linkwitz-Riley crossovers), De-esser, Transient Shaper
+- **Modulation (9)**: Chorus, Flanger (through-zero), Phaser, Tremolo, Vibrato, Ring Modulator, Pitch Shift (granular), Time Stretch, Texture (granular pads)
+- **Filter (4)**: Filter (multimode biquad), Wah, Parametric EQ (3-band), Shelving EQ
+- **Time-Based (7)**: Delay (ping-pong, diffusion, tempo sync), Reverb (Freeverb-style), Plate Reverb (Dattorro-inspired), Spring Reverb, Harmonic Habitat (pitch-aware modal tank), Drone, Looper
+- **Utility (4)**: Preamp, Stage (signal conditioning), Stereo Widener, Tuner (YIN pitch detection)
 
 Key DSP quality features active across all effects:
 - Kernel architecture: pure DSP separated from parameter ownership (ADR-028)
@@ -52,18 +52,18 @@ Key DSP quality features active across all effects:
 
 ### GUI
 
-egui-based GUI compiling to both native desktop and `wasm32-unknown-unknown`:
-- Dynamic effect chain: add, remove, reorder effects at runtime
-- Per-effect parameter panels with knobs, toggles, and meters
-- Preset save/load via `sonido-config`
-- Global bypass with 5ms click-free crossfade
-- WAV file playback through effect chain
-- CPU meter with color-coded load indicator
-- Real-time audio via cpal (native) or WebAudio (wasm)
+egui node-graph editor compiling to both native desktop and `wasm32-unknown-unknown` (the live browser demo):
+- DAG rig editing: searchable add palette, wire splicing, auto-arrange by signal-flow depth
+- Parameter-scale-aware knobs with real-time metering and per-node activity
+- Six performance macros (K1-K6) with per-mapping range, curve, and invert
+- A/B morph across the whole rig, curve-aware per parameter, with per-effect locks
+- Versioned JSON sessions (topology, params, snapshots, macros, morph) with undo/redo
+- Export: CLAP patch preset, portable JSON patch, Daisy pedal binary sector, or direct DFU flash
+- Real-time audio via cpal (native) or WebAudio (wasm) over a lock-free atomic parameter bridge
 
 ### CLI
 
-10 commands: `process`, `realtime`, `effects`, `devices`, `generate`, `analyze`, `info`, `presets`, `play`, `compare`.
+12 commands: `process`, `realtime`, `effects`, `devices`, `generate`, `analyze`, `info`, `presets`, `play`, `compare`, `daisy`, `patch`.
 
 ### Synthesis Engine
 
@@ -85,7 +85,7 @@ Full polyphonic synthesis pipeline:
 
 ### Quality Infrastructure
 
-- 48 golden regression baselines (WAV files, MSE < 1e-6, SNR > 60 dB, spectral correlation > 0.9999)
+- 75 golden regression baselines (MSE < 1e-6, SNR > 60 dB, spectral correlation > 0.9999)
 - Property tests via proptest: bounded output, reset state clearing, parameter roundtrip
 - 4 CI workflow files (ci.yml, ci-manual.yml, pages.yml, release.yml) with 9 jobs total
 - Workspace lints: `unsafe_code = deny`, `clippy::pedantic = warn`
@@ -95,10 +95,10 @@ Full polyphonic synthesis pipeline:
 
 | Target | Status | Notes |
 |--------|--------|-------|
-| Linux x86_64 | Production | Primary development target |
-| macOS | Production | CI-verified |
-| Windows | Production | CI-verified |
-| wasm32-unknown-unknown | Production | Deployed to GitHub Pages |
+| Linux x86_64 | Production | Primary development target, CI-gated |
+| macOS | Builds | Release workflow cross-builds bundles; no CI runner yet |
+| Windows | Builds | Release workflow cross-builds bundles; no CI runner yet |
+| wasm32-unknown-unknown | Production | CI-gated build, deployed to GitHub Pages |
 | Cortex-M7 (Daisy Seed) | Stable | no_std core verified, hardware integration manual |
 
 ---
@@ -170,7 +170,7 @@ Informed by analysis of DigiTech's design philosophy (Tom Cram era): musicality 
 
 **What it is:** Input-level-aware distortion that changes character with playing dynamics — not just gain, but the waveshaping transfer function itself. Roll back the guitar volume, and the clipping mode softens from hard clip to gentle saturation. Dig in hard, and harmonic content shifts from even to odd harmonics. This is the "volume knob cleanup" behavior that defines great analog distortion circuits.
 
-**Why it matters:** Sonido's distortion has 4 static waveshaper modes. Real tube amps and classic transistor circuits have a continuous, level-dependent response where the transfer function shape changes with input amplitude. This is the single most-cited quality gap between digital and analog distortion. Tom Cram's DigiTech designs (Whammy, DOD reissues) prioritized this dynamic feel above all other DSP qualities.
+**Why it matters:** Real tube amps and classic transistor circuits have a continuous, level-dependent response where the transfer function shape changes with input amplitude. This is the single most-cited quality gap between digital and analog distortion. Tom Cram's DigiTech designs (Whammy, DOD reissues) prioritized this dynamic feel above all other DSP qualities.
 
 **Implementation approach:**
 - Envelope follower modulates waveshaper blend coefficient in real time
@@ -180,7 +180,7 @@ Informed by analysis of DigiTech's design philosophy (Tom Cram era): musicality 
 
 **Estimated scope:** ~200–400 LOC modification to `DistortionKernel` + new `DynamicWaveshaper` utility in sonido-core.
 
-**Status:** Not started. High priority — addresses the most fundamental quality gap.
+**Status:** Partially complete. The distortion kernel's envelope follower already modulates drive (`dynamics_pct`); the remaining gap is level-dependent blending of the transfer function itself.
 
 ---
 
@@ -188,7 +188,7 @@ Informed by analysis of DigiTech's design philosophy (Tom Cram era): musicality 
 
 **What it is:** Real-time chromatic pitch shifting with harmonizer modes. Single-voice pitch shift (clean octave up/down, fixed intervals) and multi-voice harmonizer (intelligent harmony based on key/scale).
 
-**Why it matters:** Pitch shifting is the most commercially successful guitar DSP category (DigiTech Whammy alone sustained the company for decades). It's also a prerequisite for the Space Station 2.0 vision. No pitch shifting capability exists in Sonido today.
+**Why it matters:** Pitch shifting is the most commercially successful guitar DSP category (DigiTech Whammy alone sustained the company for decades). It's also a prerequisite for the Space Station 2.0 vision. Sonido ships a granular pitch shifter (`pitch_shift`) and time stretch today; the harmonizer and formant-preserving phase-vocoder path remain open.
 
 **Implementation approach:**
 - Phase vocoder in sonido-core (overlap-add FFT, ~800 LOC)
@@ -201,7 +201,7 @@ Informed by analysis of DigiTech's design philosophy (Tom Cram era): musicality 
 
 **Estimated scope:** ~1,200–1,800 LOC for phase vocoder + pitch shift effect kernel.
 
-**Status:** Not started. Second highest priority after dynamic waveshaper.
+**Status:** Partially complete. `pitch_shift` (granular, Hann-windowed grain crossfade) and `time_stretch` ship; the phase vocoder, intelligent harmony, and expression-pedal sweep remain.
 
 ---
 
@@ -209,7 +209,7 @@ Informed by analysis of DigiTech's design philosophy (Tom Cram era): musicality 
 
 **What it is:** Algorithmic amp modeling (preamp stages, tone stack, power amp compression) paired with cabinet impulse response (IR) convolution. Not neural capture — algorithmic models for the amp, convolution for the cab.
 
-**Why it matters:** Amp+cab sim is table stakes for any guitar processor used without a physical amplifier. The existing Preamp effect is a clean gain stage. Musicians expect at minimum a few amp voicings (clean, crunch, high gain) with matching cabinet responses.
+**Why it matters:** Amp+cab sim is table stakes for any guitar processor used without a physical amplifier. Musicians expect at minimum a few amp voicings (clean, crunch, high gain) with matching cabinet responses.
 
 **Implementation approach:**
 - Amp model: cascaded gain stages with tone stack (TMB) using existing SVF/biquad
@@ -218,11 +218,11 @@ Informed by analysis of DigiTech's design philosophy (Tom Cram era): musicality 
 - Ship with 5–10 Creative Commons cabinet IRs
 - IR loader for user-supplied WAV files
 
-**Dependencies:** Convolution engine (new). Amp modeling builds on existing filter primitives.
+**Dependencies:** Partitioned convolution engine (new; the cabinet's direct convolution covers short IRs only). Amp modeling builds on existing filter primitives.
 
-**Estimated scope:** ~800 LOC amp model kernel + ~1,500 LOC convolution engine.
+**Estimated scope:** ~1,500 LOC partitioned convolution engine + IR loader.
 
-**Status:** Not started.
+**Status:** Largely complete. `amp` (dual gain stage, interactive tone stack, sag) and `cabinet` (direct convolution, 3 factory IRs) ship. Remaining: user-supplied IR loading, uniform-partition convolution for long IRs, more voicings.
 
 ---
 
@@ -264,7 +264,7 @@ Informed by analysis of DigiTech's design philosophy (Tom Cram era): musicality 
 
 **Estimated scope:** Mostly creative work (designing the presets). ~200 LOC for category browser UI.
 
-**Status:** Not started.
+**Status:** Started. 5 chains ship in `presets/` (clean boost, guitar crunch, tape delay, subtle chorus, full chain); the 20–30 target and the category browser remain.
 
 ---
 
@@ -367,11 +367,11 @@ See ADR-025 in `docs/DESIGN_DECISIONS.md` for full architectural rationale.
 4. **Parallel routing** — dry guitar path + synth path (requires DAG routing)
 5. **Effect chain on synth path** — reverb, chorus, etc. applied to synthesized signal
 
-**Dependencies:** Pitch detector (new), DAG routing (for parallel dry/synth paths). The synthesis engine (`sonido-synth`) is already complete.
+**Dependencies:** None remaining — every prerequisite now ships: YIN pitch detection (in the tuner effect), DAG routing (parallel dry/synth paths), and the synthesis engine (`sonido-synth`).
 
-**Estimated scope:** ~500–800 LOC for pitch detector + bridge to synth engine. The rest is composition of existing components.
+**Estimated scope:** ~300–500 LOC for the pitch-to-voice bridge. The rest is composition of existing components.
 
-**Status:** Not started. DAG routing dependency resolved (complete). Pitch detector is the remaining prerequisite.
+**Status:** Not started as a product, but fully unblocked.
 
 **References:**
 - Alain de Cheveigné, Hideki Kawahara, "YIN, a fundamental frequency estimator for speech and music" (JASA 2002)
@@ -418,7 +418,7 @@ Full UX redesign of the embedded morph pedal firmware on Hothouse/Daisy Seed. Pe
 CPU budget targets for the most expensive effects, informed by embedded real-time constraints.
 
 **Targets:**
-- Reverb: M7 CPU budget target — Hadamard FDN must stay under 40% of Cortex-M7 budget at 48 kHz/128 samples
+- Reverb: M7 CPU budget target — the Freeverb tank must stay under 40% of Cortex-M7 budget at 48 kHz/128 samples
 - Tape: M7 CPU budget target — hysteresis + wow/flutter + head bump + HF rolloff within 35% budget
 - Graph overhead: schedule compilation + buffer allocation overhead < 5% per block
 
