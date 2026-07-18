@@ -278,7 +278,7 @@ impl Widget for LevelMeter {
                 painter.rect_stroke(
                     bar_rect,
                     2.0,
-                    Stroke::new(1.0, theme.colors.dim),
+                    Stroke::new(1.0_f32, theme.colors.dim),
                     StrokeKind::Inside,
                 );
                 let inner = bar_rect.shrink(1.0);
@@ -305,7 +305,7 @@ impl Widget for LevelMeter {
                     let x = inner.left() + inner.width() * hold_norm;
                     painter.line_segment(
                         [pos2(x, inner.top()), pos2(x, inner.bottom())],
-                        Stroke::new(1.0, cap_color),
+                        Stroke::new(1.0_f32, cap_color),
                     );
                 }
                 // Numeric readout in the gutter.
@@ -343,7 +343,7 @@ impl Widget for LevelMeter {
                 painter.rect_stroke(
                     bar_rect,
                     1.0,
-                    Stroke::new(1.0, theme.colors.dim),
+                    Stroke::new(1.0_f32, theme.colors.dim),
                     StrokeKind::Inside,
                 );
                 let bar_inner = bar_rect.shrink(1.0);
@@ -376,7 +376,7 @@ impl Widget for LevelMeter {
                     let y = bar_inner.bottom() - bar_inner.height() * hold_norm;
                     painter.line_segment(
                         [pos2(bar_inner.left(), y), pos2(bar_inner.right(), y)],
-                        Stroke::new(1.0, cap_color),
+                        Stroke::new(1.0_f32, cap_color),
                     );
                 }
 
@@ -390,7 +390,7 @@ impl Widget for LevelMeter {
                     if y >= bar_inner.top() && y <= bar_inner.bottom() {
                         painter.line_segment(
                             [pos2(tick_right - tick_len, y), pos2(tick_right, y)],
-                            Stroke::new(1.0, theme.colors.dim),
+                            Stroke::new(1.0_f32, theme.colors.dim),
                         );
                         let label_x = inner.left() + label_width - tick_len - 2.0;
                         painter.text(
@@ -481,7 +481,7 @@ impl Widget for GainReductionMeter {
             painter.rect_stroke(
                 meter_rect,
                 2.0,
-                Stroke::new(1.0, theme.colors.dim),
+                Stroke::new(1.0_f32, theme.colors.dim),
                 StrokeKind::Inside,
             );
 

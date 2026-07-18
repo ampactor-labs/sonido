@@ -66,7 +66,7 @@ impl Widget for BypassToggle<'_> {
             // Hover ring
             if response.hovered() {
                 let hover_color = theme.colors.cyan.gamma_multiply(0.4);
-                painter.circle_stroke(center, radius + 2.0, Stroke::new(1.0, hover_color));
+                painter.circle_stroke(center, radius + 2.0, Stroke::new(1.0_f32, hover_color));
             }
 
             // Label
@@ -121,7 +121,7 @@ impl Widget for FootswitchToggle<'_> {
             painter.rect_stroke(
                 rect,
                 6.0,
-                Stroke::new(1.0, theme.colors.dim),
+                Stroke::new(1.0_f32, theme.colors.dim),
                 StrokeKind::Inside,
             );
 
@@ -181,7 +181,7 @@ mod tests {
     fn footswitch_toggle_stores_state() {
         let mut active = true;
         let toggle = FootswitchToggle::new(&mut active, "Drive");
-        assert!(toggle.active == &true);
+        assert_eq!(toggle.active, &true);
         assert_eq!(toggle.label, "Drive");
     }
 }

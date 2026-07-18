@@ -173,7 +173,7 @@ impl Widget for SpectrumWidget<'_> {
         painter.rect_stroke(
             rect,
             2.0,
-            Stroke::new(1.0, theme.colors.dim),
+            Stroke::new(1.0_f32, theme.colors.dim),
             StrokeKind::Inside,
         );
 
@@ -197,7 +197,7 @@ impl Widget for SpectrumWidget<'_> {
             let x = inner.left() + t * inner.width();
             painter.line_segment(
                 [pos2(x, inner.top()), pos2(x, inner.bottom())],
-                Stroke::new(1.0, theme.colors.dim),
+                Stroke::new(1.0_f32, theme.colors.dim),
             );
         }
 
@@ -258,7 +258,7 @@ impl Widget for SpectrumWidget<'_> {
             let y = inner.bottom() - inner.height() * normalized;
             painter.line_segment(
                 [pos2(inner.right() - 4.0, y), pos2(inner.right(), y)],
-                Stroke::new(1.0, theme.colors.dim),
+                Stroke::new(1.0_f32, theme.colors.dim),
             );
             painter.text(
                 pos2(inner.right() - 5.0, y),

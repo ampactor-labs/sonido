@@ -469,7 +469,7 @@ impl SonidoApp {
                     p.circle_stroke(
                         rect.center(),
                         fab * 0.5,
-                        egui::Stroke::new(1.5, theme.colors.amber),
+                        egui::Stroke::new(1.5_f32, theme.colors.amber),
                     );
                     p.text(
                         rect.center(),
@@ -1137,9 +1137,9 @@ impl SonidoApp {
         // Tint the panel border to the morph pose being sculpted, so it is
         // obvious you are editing A (cyan) or B (amber) as you turn knobs.
         let (border_color, border_w) = match self.morph_state.edit() {
-            Some(MorphEnd::A) => (theme.colors.cyan, 2.5),
-            Some(MorphEnd::B) => (theme.colors.amber, 2.5),
-            None => (theme.colors.amber, 2.0),
+            Some(MorphEnd::A) => (theme.colors.cyan, 2.5_f32),
+            Some(MorphEnd::B) => (theme.colors.amber, 2.5_f32),
+            None => (theme.colors.amber, 2.0_f32),
         };
         let panel_frame = Frame::new()
             .fill(theme.colors.void)
@@ -1172,7 +1172,7 @@ impl SonidoApp {
                             .font(FontId::monospace(10.0))
                             .color(col),
                     )
-                    .stroke(Stroke::new(1.0, col))
+                    .stroke(Stroke::new(1.0_f32, col))
                     .fill(col.gamma_multiply(0.10))
                     .min_size(vec2(76.0, 20.0));
                     if ui.add(btn).clicked() {
@@ -1200,7 +1200,7 @@ impl SonidoApp {
                                 .font(FontId::monospace(10.0))
                                 .color(col),
                         )
-                        .stroke(Stroke::new(1.0, col))
+                        .stroke(Stroke::new(1.0_f32, col))
                         .fill(col.gamma_multiply(0.10))
                         .min_size(vec2(64.0, 20.0));
                         if ui

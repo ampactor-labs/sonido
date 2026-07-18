@@ -303,24 +303,24 @@ impl SonidoTheme {
 
         // Widget colors — dim base, amber accents
         visuals.widgets.noninteractive.bg_fill = self.colors.void;
-        visuals.widgets.noninteractive.fg_stroke = Stroke::new(1.0, self.colors.text_secondary);
+        visuals.widgets.noninteractive.fg_stroke = Stroke::new(1.0_f32, self.colors.text_secondary);
         visuals.widgets.noninteractive.corner_radius = CornerRadius::same(4);
 
         visuals.widgets.inactive.bg_fill = self.colors.dim;
-        visuals.widgets.inactive.fg_stroke = Stroke::new(1.0, self.colors.text_primary);
+        visuals.widgets.inactive.fg_stroke = Stroke::new(1.0_f32, self.colors.text_primary);
         visuals.widgets.inactive.corner_radius = CornerRadius::same(4);
 
         visuals.widgets.hovered.bg_fill = Color32::from_rgb(35, 30, 15);
-        visuals.widgets.hovered.fg_stroke = Stroke::new(1.5, self.colors.amber);
+        visuals.widgets.hovered.fg_stroke = Stroke::new(1.5_f32, self.colors.amber);
         visuals.widgets.hovered.corner_radius = CornerRadius::same(4);
 
         visuals.widgets.active.bg_fill = Color32::from_rgb(45, 38, 12);
-        visuals.widgets.active.fg_stroke = Stroke::new(2.0, self.colors.amber);
+        visuals.widgets.active.fg_stroke = Stroke::new(2.0_f32, self.colors.amber);
         visuals.widgets.active.corner_radius = CornerRadius::same(4);
 
         // Selection — amber tint
         visuals.selection.bg_fill = self.colors.amber.gamma_multiply(0.2);
-        visuals.selection.stroke = Stroke::new(1.0, self.colors.amber);
+        visuals.selection.stroke = Stroke::new(1.0_f32, self.colors.amber);
 
         visuals.override_text_color = Some(self.colors.text_primary);
 

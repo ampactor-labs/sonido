@@ -833,7 +833,7 @@ fn arcade_button(
         .color(color);
     let btn = egui::Button::new(text)
         .fill(theme.colors.void)
-        .stroke(Stroke::new(1.0, theme.colors.dim));
+        .stroke(Stroke::new(1.0_f32, theme.colors.dim));
     ui.add(btn)
 }
 
@@ -859,7 +859,7 @@ fn arcade_led_button(
         painter.rect_stroke(
             rect,
             3.0,
-            Stroke::new(1.0, theme.colors.dim),
+            Stroke::new(1.0_f32, theme.colors.dim),
             StrokeKind::Inside,
         );
 
@@ -915,7 +915,7 @@ fn segmented_progress_bar(
         painter.rect_stroke(
             rect,
             2.0,
-            Stroke::new(1.0, theme.colors.dim),
+            Stroke::new(1.0_f32, theme.colors.dim),
             StrokeKind::Inside,
         );
 

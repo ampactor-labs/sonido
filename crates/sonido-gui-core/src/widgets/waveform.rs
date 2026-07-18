@@ -183,7 +183,7 @@ impl Widget for WaveformWidget<'_> {
         painter.rect_stroke(
             rect,
             2.0,
-            Stroke::new(1.0, theme.colors.dim),
+            Stroke::new(1.0_f32, theme.colors.dim),
             StrokeKind::Inside,
         );
 
@@ -193,7 +193,7 @@ impl Widget for WaveformWidget<'_> {
         let mid_y = inner.center().y;
         painter.line_segment(
             [pos2(inner.left(), mid_y), pos2(inner.right(), mid_y)],
-            Stroke::new(1.0, theme.colors.dim),
+            Stroke::new(1.0_f32, theme.colors.dim),
         );
 
         // Collect the window's worth of samples.
@@ -239,7 +239,7 @@ impl Widget for WaveformWidget<'_> {
 
         let signal_color = theme.colors.green;
         for win in points.windows(2) {
-            clipped.line_segment([win[0], win[1]], Stroke::new(1.0, signal_color));
+            clipped.line_segment([win[0], win[1]], Stroke::new(1.0_f32, signal_color));
         }
 
         // Clip indicator — draw red border if any sample exceeds ±1.0.
@@ -248,7 +248,7 @@ impl Widget for WaveformWidget<'_> {
             painter.rect_stroke(
                 inner,
                 2.0,
-                Stroke::new(1.0, theme.colors.red),
+                Stroke::new(1.0_f32, theme.colors.red),
                 StrokeKind::Outside,
             );
         }

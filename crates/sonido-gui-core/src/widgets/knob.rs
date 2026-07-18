@@ -304,7 +304,7 @@ impl Widget for Knob<'_> {
                 painter.circle_stroke(
                     center,
                     radius + 3.0,
-                    egui::Stroke::new(1.0, theme.colors.cyan),
+                    egui::Stroke::new(1.0_f32, theme.colors.cyan),
                 );
             }
 

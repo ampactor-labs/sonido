@@ -154,7 +154,7 @@ pub fn scanlines(painter: &Painter, rect: Rect, theme: &SonidoTheme) {
     while y < rect.bottom() {
         painter.line_segment(
             [pos2(rect.left(), y), pos2(rect.right(), y)],
-            Stroke::new(1.0, color),
+            Stroke::new(1.0_f32, color),
         );
         y += theme.scanlines.line_spacing;
     }

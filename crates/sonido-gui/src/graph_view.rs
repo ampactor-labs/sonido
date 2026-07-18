@@ -1054,9 +1054,9 @@ impl SnarlViewer<SonidoNode> for SonidoViewer<'_> {
         let accent = self.node_accent(node_data);
         let is_selected = *self.selected_node == Some(node);
         let (stroke_width, fill) = if is_selected {
-            (2.0, accent.gamma_multiply(0.08))
+            (2.0_f32, accent.gamma_multiply(0.08))
         } else {
-            (1.0, self.theme.colors.void)
+            (1.0_f32, self.theme.colors.void)
         };
         egui::Frame::new()
             .fill(fill)

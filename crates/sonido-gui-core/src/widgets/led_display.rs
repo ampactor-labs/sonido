@@ -213,7 +213,7 @@ fn draw_7seg(
 ) {
     let pad = 2.0;
     let half_h = h / 2.0;
-    let stroke_w = 3.0;
+    let stroke_w = 3.0_f32;
 
     // Segment endpoints: (start, end)
     let seg_lines: [(Pos2, Pos2); 7] = [
