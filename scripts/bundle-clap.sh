@@ -69,10 +69,11 @@ bundle_macos() {  # $1 plugin name, $2 lib path
 <plist version="1.0">
 <dict>
   <key>CFBundleExecutable</key><string>$name</string>
-  <key>CFBundleIdentifier</key><string>com.ampactorlabs.${name//-/.}</string>
+  <key>CFBundleIdentifier</key><string>com.ampactorlabs.$name</string>
   <key>CFBundleName</key><string>$name</string>
   <key>CFBundlePackageType</key><string>BNDL</string>
   <key>CFBundleVersion</key><string>0.1.0</string>
+  <key>CFBundleShortVersionString</key><string>0.1.0</string>
 </dict>
 </plist>
 PLIST
@@ -93,3 +94,7 @@ done
 
 echo ">> Packaged $count/${#PLUGINS[@]} plugins into $OUT"
 ls -1 "$OUT"
+if [[ "$count" -ne "${#PLUGINS[@]}" ]]; then
+  echo "!! incomplete bundle: $count of ${#PLUGINS[@]} plugins packaged" >&2
+  exit 1
+fi

@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-07-19
+
+First tagged release: 36 effects on the three-layer kernel architecture, the DAG graph engine, the node-graph GUI, 21 CLAP plugins, and the Daisy/Hothouse firmware path. Everything below accumulated on the way here.
+
 ### Added
 - **Auto-insert Merge nodes**: GUI graph view auto-inserts Merge nodes for many-to-one connections — users wire directly to effect inputs, routing handles fan-in automatically
 
