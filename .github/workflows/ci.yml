@@ -11,6 +11,7 @@ env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: -D warnings
   # Build deps for the desktop GUI (eframe/winit/cpal) on Linux runners.
+  # macOS and Windows link system frameworks (CoreAudio/WASAPI) — nothing to install.
   SYSTEM_DEPS: >-
     libasound2-dev libudev-dev libgl-dev libx11-dev libx11-xcb-dev
     libxcursor-dev libxrandr-dev libxi-dev libxkbcommon-dev libxext-dev
@@ -21,8 +22,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  check:
-    name: fmt · clippy · test
+  lint:
+    name: fmt · clippy
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -41,6 +42,24 @@ jobs:
 
       - name: Clippy
         run: cargo clippy --workspace --all-targets
+
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y $SYSTEM_DEPS
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
 
       - name: Test
         run: cargo test --workspace
