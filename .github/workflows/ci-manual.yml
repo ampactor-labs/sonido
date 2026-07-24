@@ -164,15 +164,10 @@ jobs:
       - name: Run plugin tests
         run: cargo test -p sonido-plugin
 
-      - name: Build plugin binaries
-        run: cargo build --release -p sonido-plugin --examples
-
-      - name: Verify plugin binaries exist
-        run: |
-          for plugin in preamp distortion compressor gate eq wah chorus flanger phaser tremolo delay filter vibrato tape reverb limiter bitcrusher ringmod stage; do
-            test -f "target/release/examples/libsonido_${plugin}.so" || { echo "Missing libsonido_${plugin}.so"; exit 1; }
-          done
-          echo "All 19 plugin binaries verified"
+      # bundle-clap.sh owns the plugin list: it builds all examples and fails
+      # if any expected .clap is missing, so this job can't drift from it.
+      - name: Build & bundle CLAP plugins
+        run: bash scripts/bundle-clap.sh
 
       - name: Download clap-validator
         run: |
@@ -185,11 +180,14 @@ jobs:
       - name: Validate CLAP plugins
         run: |
           mkdir -p target/plugin-validation
-          for plugin in preamp distortion compressor gate eq wah chorus flanger phaser tremolo delay filter vibrato tape reverb limiter bitcrusher ringmod stage; do
-            echo "Validating sonido_${plugin}..."
-            ./clap-validator validate "target/release/examples/libsonido_${plugin}.so" 2>&1 | tee "target/plugin-validation/${plugin}.txt" || { echo "Validation failed for sonido_${plugin}"; exit 1; }
+          count=0
+          for clap in dist-clap/*.clap; do
+            name="$(basename "$clap" .clap)"
+            echo "Validating ${name}..."
+            ./clap-validator validate "$clap" 2>&1 | tee "target/plugin-validation/${name}.txt" || { echo "Validation failed for ${name}"; exit 1; }
+            count=$((count + 1))
           done
-          echo "All 19 CLAP plugins validated"
+          echo "All ${count} CLAP plugins validated"
 
       - name: Upload plugin validation artifacts
         uses: actions/upload-artifact@v4
