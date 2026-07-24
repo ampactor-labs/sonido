@@ -1,5 +1,5 @@
 .PHONY: build test bench clean check fmt doc demo walkthrough verify-demos
-.PHONY: quick-check verify test-nostd install plugins ci install-hooks smoke measure overnight-qa
+.PHONY: quick-check verify test-nostd install plugins plugins-vst3 ci install-hooks smoke measure overnight-qa
 
 # Build
 build:
@@ -73,15 +73,22 @@ install:
 	cargo install --path crates/sonido-cli
 
 # Build and install CLAP plugins to ~/.clap/
+# Names use dashes, matching the bundle/release artifacts — the VST3 wrapper
+# shims (plugins-vst3) find their .clap by that exact filename stem.
 plugins:
 	cargo build --release -p sonido-plugin --examples
 	@mkdir -p $(HOME)/.clap
 	@for f in target/release/examples/libsonido_*.so; do \
-		name=$$(basename "$$f" .so | sed 's/^lib//; s/-/_/g'); \
+		name=$$(basename "$$f" .so | sed 's/^lib//; s/_/-/g'); \
 		cp "$$f" "$(HOME)/.clap/$$name.clap"; \
 		echo "Installed $$name.clap"; \
 	done
 	@echo "All plugins installed to ~/.clap/"
+
+# Package VST3 wrapper shims next to the CLAP bundles (requires cmake)
+plugins-vst3:
+	./scripts/bundle-clap.sh
+	./scripts/bundle-vst3.sh
 
 # Full local CI check (mirrors remote CI minus no_std/wasm jobs)
 ci:
