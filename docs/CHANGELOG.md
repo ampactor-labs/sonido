@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **VST3 wrapper shims**: `scripts/bundle-vst3.sh` packages a [clap-wrapper](https://github.com/free-audio/clap-wrapper) shim per CLAP plugin (`dist-vst3/`, `make plugins-vst3`); each `.vst3` loads the `.clap` of the same name from the standard CLAP install locations. Release artifacts now ship a `vst3/` directory beside `clap/` on all targets. Wrapped plugins pass Steinberg's VST3 validator (47/47)
+
+### Changed
+- **`make plugins` install names**: installed CLAPs now use the dashed bundle names (`sonido-delay.clap`, previously `sonido_delay.clap`), matching `dist-clap/` and release artifacts — required so the VST3 shims can pair by filename stem. Old underscore installs can be deleted
+- **Dependency health**: `cargo deny check` passes clean — deny.toml moved to the cargo-deny v2 schema, `anyhow` and `crossbeam-epoch` bumped past RUSTSEC-2026-0190/0204, the two quick-xml advisories documented as non-actionable transitives, and the git sources (clack, baseview) pinned in an explicit allow list
+
+### CI
+- Manual plugin job validates every bundled CLAP via `bundle-clap.sh`'s canonical list (was a hand-copied 19-name list that had drifted behind `sonido-harmonic-habitat` and `sonido-graph-player`); `bundle-clap.sh` itself now derives the list from the example sources
+- `actions/checkout` updated to v5 (drops the Node 20 deprecation annotations)
+
 ## [0.1.0] - 2026-07-19
 
 First tagged release: 36 effects on the three-layer kernel architecture, the DAG graph engine, the node-graph GUI, 21 CLAP plugins, and the Daisy/Hothouse firmware path. Everything below accumulated on the way here.
