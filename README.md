@@ -319,7 +319,9 @@ graph TD
 
 ## CLAP Plugins
 
-Sonido builds **20 single-effect CLAP plugins** plus a **graph-player** plugin that hosts any rig exported from the GUI. Each has an embedded egui GUI. Compatible with Bitwig, Reaper, Ardour, and any CLAP-compatible DAW. **VST3/AU** are produced from the same CLAP source via [`clap-wrapper`](https://github.com/free-audio/clap-wrapper) (external build step).
+Sonido builds **20 single-effect CLAP plugins** plus a **graph-player** plugin that hosts any rig exported from the GUI. Each has an embedded egui GUI. Compatible with Bitwig, Reaper, Ardour, and any CLAP-compatible DAW.
+
+For hosts without CLAP support, **VST3** shims are built from the same CLAP binaries via [`clap-wrapper`](https://github.com/free-audio/clap-wrapper): each `.vst3` loads the `.clap` of the same name from the standard CLAP install locations, so install both and every plugin appears in VST3 hosts too. `scripts/bundle-vst3.sh` builds the shims (one wrapper compile serves all plugins); the wrapped plugins pass Steinberg's VST3 validator.
 
 ```bash
 # Build and install all plugins to ~/.clap/ (Linux)
@@ -327,9 +329,12 @@ make plugins
 
 # Or package loadable .clap bundles for any target (macOS bundles, Windows DLLs, CI):
 scripts/bundle-clap.sh            # -> dist-clap/
+
+# VST3 wrapper shims for the bundled plugins (requires cmake):
+scripts/bundle-vst3.sh            # -> dist-vst3/
 ```
 
-Tagged releases ship pre-built `.clap` bundles for Linux, macOS (x64 + arm64), and Windows via the release workflow.
+Tagged releases ship pre-built `.clap` bundles and `.vst3` shims for Linux, macOS (x64 + arm64), and Windows via the release workflow.
 
 Single-effect plugins: `sonido-preamp`, `sonido-distortion`, `sonido-compressor`, `sonido-gate`, `sonido-eq`, `sonido-wah`, `sonido-chorus`, `sonido-flanger`, `sonido-phaser`, `sonido-tremolo`, `sonido-delay`, `sonido-filter`, `sonido-vibrato`, `sonido-tape`, `sonido-reverb`, `sonido-harmonic-habitat`, `sonido-limiter`, `sonido-bitcrusher`, `sonido-ringmod`, `sonido-stage`.
 

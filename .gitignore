@@ -5,6 +5,7 @@ target/
 /crates/sonido-gui/dist/
 /dist-clap/
 /dist-presets/
+/dist-vst3/
 external-audio
 .claude/worktrees/
 demos/*.wav

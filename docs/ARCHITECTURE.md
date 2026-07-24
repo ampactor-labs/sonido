@@ -5,7 +5,7 @@
 Sonido is a production-grade DSP library designed for multi-target deployment:
 - **Desktop**: CLI and GUI applications
 - **Embedded**: Electrosmith Daisy / Hothouse hardware
-- **Plugins**: CLAP via clack (20 single-effect plugins plus graph-player), VST3/AU via clap-wrapper
+- **Plugins**: CLAP via clack (20 single-effect plugins plus graph-player), VST3 via clap-wrapper shims (`scripts/bundle-vst3.sh`)
 
 The library is built with stereo-first processing and no_std compatibility at its core.
 
