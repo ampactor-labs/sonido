@@ -27,14 +27,14 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-# The plugin examples (single-effect plugins + the graph player).
-PLUGINS=(
-  sonido-graph-player sonido-preamp sonido-distortion sonido-compressor
-  sonido-gate sonido-eq sonido-wah sonido-chorus sonido-flanger
-  sonido-phaser sonido-tremolo sonido-delay sonido-filter sonido-vibrato
-  sonido-tape sonido-reverb sonido-harmonic-habitat sonido-limiter
-  sonido-bitcrusher sonido-ringmod sonido-stage
-)
+# The plugin list IS the example sources: every crates/sonido-plugin
+# examples/*.rs is a plugin. A source without a [[example]] cdylib entry in
+# Cargo.toml fails the missing-output check below; an entry without a source
+# fails the cargo build — so the two cannot drift silently.
+PLUGINS=()
+for src in "$ROOT"/crates/sonido-plugin/examples/*.rs; do
+  PLUGINS+=("$(basename "$src" .rs)")
+done
 
 echo ">> Building ${#PLUGINS[@]} CLAP plugins (release)..."
 if [[ -n "$TARGET" ]]; then
