@@ -8,6 +8,9 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  # Pinned free-audio/clap-wrapper release for the VST3 shims; also keys the
+  # wrapper build cache. Keep in sync with the default in scripts/bundle-vst3.sh.
+  CLAP_WRAPPER_TAG: v0.15.1
   SYSTEM_DEPS: >-
     libasound2-dev libudev-dev mold libgl-dev libx11-dev libx11-xcb-dev
     libxcursor-dev libxrandr-dev libxi-dev libxkbcommon-dev libxext-dev
@@ -75,6 +78,18 @@ jobs:
       - name: Build & bundle CLAP plugins
         shell: bash
         run: bash scripts/bundle-clap.sh --target ${{ matrix.target }} --out ${{ matrix.artifact }}/clap
+
+      - name: Cache clap-wrapper build
+        uses: actions/cache@v4
+        with:
+          path: target/clap-wrapper
+          key: clap-wrapper-${{ env.CLAP_WRAPPER_TAG }}-${{ runner.os }}-${{ matrix.target }}
+
+      - name: Build & bundle VST3 wrapper shims
+        shell: bash
+        run: >-
+          bash scripts/bundle-vst3.sh --target ${{ matrix.target }}
+          --clap-dir ${{ matrix.artifact }}/clap --out ${{ matrix.artifact }}/vst3
 
       - name: Export factory presets
         run: cargo run -p sonido-cli -- presets export-factory ./dist-presets
