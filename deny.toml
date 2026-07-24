@@ -1,10 +1,49 @@
 # cargo-deny configuration for sonido.
-# The project itself is AGPL-3.0-or-later, but that isn't listed in [licenses.allow]
-# because the allow list covers *dependency* licenses, not the project's own license.
+#
+# Version-2 config (cargo-deny >= 0.14): vulnerabilities are always errors and
+# unmaintained advisories warn by default — the old severity keys
+# (vulnerability/unmaintained) no longer exist.
 
 [advisories]
-vulnerability = "deny"
-unmaintained = "warn"
+# Error on unmaintained crates only when a workspace crate depends on one
+# directly (those we can swap); transitive ones (paste, ttf-parser,
+# number_prefix today) are pinned by upstream and not actionable here.
+unmaintained = "workspace"
+ignore = [
+    # quick-xml 0.30.0 via zbus_xml (AT-SPI accessibility introspection) and
+    # 0.39.2 via wayland-scanner (a build-time proc-macro over the protocol
+    # XML bundled in the crates). Both advisories are DoS on attacker-supplied
+    # XML; neither path parses untrusted input here, and both sit two major
+    # versions behind the >= 0.41 fix, pinned by upstream (accesskit/zbus and
+    # winit/smithay). Drop these entries when those stacks bump.
+    { id = "RUSTSEC-2026-0194", reason = "transitive, trusted-input XML only; no semver-compatible fix" },
+    { id = "RUSTSEC-2026-0195", reason = "transitive, trusted-input XML only; no semver-compatible fix" },
+]
 
 [licenses]
-allow = ["MIT", "Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "ISC", "Zlib"]
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    # The workspace's own license — cargo-deny judges the workspace crates
+    # against this list too. No external dependency is AGPL today; re-check
+    # with `cargo deny check licenses` when the tree changes.
+    "AGPL-3.0-or-later",
+    "Unicode-3.0",     # unicode-ident and the ICU stack
+    "BSL-1.0",         # clipboard-win, error-code
+    "MPL-2.0",         # option-ext (file-level copyleft, used unmodified)
+    "OFL-1.1",         # epaint's embedded fonts
+    "Ubuntu-font-1.0", # epaint's embedded fonts
+]
+
+[sources]
+unknown-git = "deny"
+allow-git = [
+    # CLAP bindings and the plugin GUI windowing shim, both rev-pinned in
+    # the workspace manifests.
+    "https://github.com/prokopyl/clack",
+    "https://github.com/RustAudio/baseview",
+]

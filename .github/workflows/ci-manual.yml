@@ -59,6 +59,9 @@ jobs:
       - name: Check wasm compilation
         run: cargo check --target wasm32-unknown-unknown -p sonido-gui
 
+      - name: Dependency policy (cargo-deny)
+        uses: EmbarkStudios/cargo-deny-action@v2
+
   bench:
     name: Benchmarks
     runs-on: ubuntu-latest
