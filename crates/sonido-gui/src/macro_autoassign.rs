@@ -42,7 +42,7 @@ pub struct AutoAssign {
 ///
 /// See the module docs for the selection rule. Effects with no mappable
 /// parameter (e.g. a tuner that is all meters) are skipped without consuming a
-/// macro. At most [`MACRO_COUNT`] effects are bound; any beyond that are
+/// macro. At most `MACRO_COUNT` effects are bound; any beyond that are
 /// counted in [`AutoAssign::overflow`].
 pub fn auto_assign_macros(bridge: &dyn ParamBridge) -> AutoAssign {
     let mut map = MacroMap::<MACRO_COUNT>::new();

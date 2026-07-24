@@ -531,7 +531,7 @@ impl GraphView {
     /// here; egui-snarl's own add menu is right-click-only, with no touch
     /// equivalent). The button carries no positional intent, so the new effect
     /// is always appended as the final pre-output node via
-    /// [`append_before_output`]: every wire currently feeding the Output is
+    /// `append_before_output`: every wire currently feeding the Output is
     /// rerouted through the new effect, which then becomes the sole node
     /// reaching the Output. (Right-click-on-wire keeps its positional splice.)
     /// Selects the new node so its param panel opens immediately.
@@ -753,7 +753,8 @@ impl GraphView {
     /// a serializable session. Each effect's A parameters come from morph
     /// snapshot A (or the live bridge when no snapshot is captured) and its B
     /// parameters from morph snapshot B; the macro layer and morph
-    /// behaviour/position ride along via [`PerformanceCapture`].
+    /// behaviour/position ride along via
+    /// [`PerformanceCapture`](crate::session::PerformanceCapture).
     pub fn capture_session(
         &self,
         bridge: &dyn sonido_gui_core::ParamBridge,
