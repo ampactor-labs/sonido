@@ -134,6 +134,25 @@ for clap in "${CLAPS[@]}"; do
   count=$((count + 1))
 done
 
+# A shim whose .clap is missing loads as an empty factory — the host shows
+# nothing, silently. Ship the pairing rule next to the shims.
+cat > "$OUT/README.txt" <<'NOTE'
+These VST3s are clap-wrapper shims: each one loads the Sonido .clap of the
+same name at run time. Install BOTH the .clap files (from the clap/ folder)
+and these .vst3 bundles, or the VST3s will not appear in your host.
+
+CLAP install locations the shims search:
+  Linux:   /usr/lib/clap  or  ~/.clap
+  macOS:   /Library/Audio/Plug-Ins/CLAP  or  ~/Library/Audio/Plug-Ins/CLAP
+  Windows: C:\Program Files\Common Files\CLAP  or
+           %LOCALAPPDATA%\Programs\Common\CLAP
+
+VST3 install locations (standard):
+  Linux:   ~/.vst3
+  macOS:   /Library/Audio/Plug-Ins/VST3  or  ~/Library/Audio/Plug-Ins/VST3
+  Windows: C:\Program Files\Common Files\VST3
+NOTE
+
 echo ">> Packaged $count VST3 shims into $OUT"
 ls -1 "$OUT"
 if [[ "$count" -ne "${#CLAPS[@]}" ]]; then
