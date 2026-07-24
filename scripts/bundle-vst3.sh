@@ -114,11 +114,13 @@ rename_bundle() {  # $1 plugin name
   fi
   cp -R "$SRC_BUNDLE" "$dst"
   # Rename the inner module so the wrapper's runtime name matches the .clap.
-  local module
+  local module base ext=""
   module="$(find "$dst/Contents" -type f \( -name "$GENERIC.so" -o -name "$GENERIC" -o -name "$GENERIC.vst3" \) | head -1)"
   [[ -n "$module" ]] || { echo "!! no inner module in $dst" >&2; exit 1; }
-  local ext=""
-  [[ "$module" == *.* ]] && ext=".${module##*.}"
+  # Extension from the BASENAME only — the path always contains ".vst3", and
+  # the macOS module ("Contents/MacOS/sonido") has no extension of its own.
+  base="$(basename "$module")"
+  [[ "$base" == *.* ]] && ext=".${base##*.}"
   mv "$module" "$(dirname "$module")/$name$ext"
   if [[ "$HOST_OS" == mac && -f "$dst/Contents/Info.plist" ]]; then
     sed_file "$dst/Contents/Info.plist" \
