@@ -101,7 +101,7 @@ If you want a mature plugin suite today, buy one. This is one person's DSP frame
 
 ## Verification
 
-There are 1,899 `#[test]` functions in the tree, 1,864 outside the excluded ARM crate. The shape matters more than the count.
+There are 1,899 `#[test]` functions in the tree, 1,864 outside the excluded ARM crate. Shape matters more than count.
 
 Automatic, on every push and pull request ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)): `cargo fmt --all --check`, `cargo clippy --workspace --all-targets`, `cargo test --workspace` on ubuntu, macOS, and Windows, and a `wasm32-unknown-unknown` build of the editor.
 
@@ -112,7 +112,7 @@ The tests worth naming:
 - Property tests push every registered effect through randomized parameter sets and require finite, bounded output and a clean reset.
 - The registry asserts its own inventory, which is where the number 36 in this README comes from (`crates/sonido-registry/src/lib.rs:867`).
 
-Manual, behind `workflow_dispatch` on `ci-manual.yml`: `--no-default-features` builds for the `no_std` crates, criterion benchmarks, llvm-cov coverage, and clap-validator against every bundled CLAP plugin.
+Manual, behind `workflow_dispatch` on `.github/workflows/ci-manual.yml`: `--no-default-features` builds for the `no_std` crates, criterion benchmarks, llvm-cov coverage, and clap-validator against every bundled CLAP plugin.
 
 ## Also in the box
 
