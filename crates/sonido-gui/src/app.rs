@@ -124,6 +124,8 @@ pub struct SonidoApp {
     export_msg: Option<Result<String, String>>,
     /// The rig's name, as the pedal and the graph player show it.
     rig_name: String,
+    /// The PEDAL window: the controls guide and the pedal over USB.
+    pedal_panel: crate::pedal_panel::PedalPanel,
 
     /// Web-only: channel delivering loaded-session bytes from the async browser
     /// file picker back to the update loop (the native path reads files
@@ -299,6 +301,7 @@ impl SonidoApp {
             compile_success_frames: 0,
             #[cfg(not(target_arch = "wasm32"))]
             export_msg: None,
+            pedal_panel: crate::pedal_panel::PedalPanel::default(),
             rig_name: crate::session::default_rig_name(),
             #[cfg(target_arch = "wasm32")]
             load_tx,
@@ -924,6 +927,17 @@ impl SonidoApp {
                 self.load_session();
             }
             self.render_export_menu(ui);
+            if ui
+                .button(
+                    egui::RichText::new("Pedal")
+                        .font(FontId::monospace(12.0))
+                        .color(theme.colors.text_primary),
+                )
+                .on_hover_text("How to play the pedal, and the pedal over USB")
+                .clicked()
+            {
+                self.pedal_panel.show_window();
+            }
 
             ui.separator();
 
@@ -2003,7 +2017,7 @@ impl SonidoApp {
                 },
             );
 
-            // The pedal's rule, the one Export ▸ Pedal checks: its effect
+            // The pedal's rule, the one Export > Pedal checks: its effect
             // count and estimated CPU, coloured by the verdict.
             ui.separator();
             let load = sonido_patch::validate::daisy_load(
@@ -2017,7 +2031,7 @@ impl SonidoApp {
                 Some(sonido_patch::validate::Severity::Error) => theme.colors.red,
             };
             let mut why = vec![format!(
-                "The pedal's rule, the same one Export ▸ Pedal checks: up to {} \
+                "The pedal's rule, the same one Export > Pedal checks: up to {} \
                  effects and {:.0}% of its CPU.",
                 sonido_patch::MAX_NODES,
                 100.0 * sonido_platform::cycle_table::CHAIN_FRACTION
@@ -2092,6 +2106,12 @@ impl SonidoApp {
             morph_b,
             name: self.rig_name.clone(),
         }
+    }
+
+    /// The PEDAL window (for the screenshot harness).
+    #[doc(hidden)]
+    pub fn pedal_panel_mut(&mut self) -> &mut crate::pedal_panel::PedalPanel {
+        &mut self.pedal_panel
     }
 
     /// Capture the complete editor state (graph + params + performance layer)
@@ -2415,8 +2435,9 @@ impl SonidoApp {
         });
     }
 
-    /// Web export menu: the portable subset — patch JSON and pedal `.bin`, both
-    /// downloaded. USB DFU flash and the CLAP-folder write need the native app.
+    /// Web export menu: patch JSON and the pedal `.bin`, both downloaded, and
+    /// Send to pedal over Web Serial (the PEDAL window shows the result).
+    /// Firmware updates and the CLAP-folder write need the native tools.
     #[cfg(target_arch = "wasm32")]
     fn render_export_menu(&mut self, ui: &mut egui::Ui) {
         let theme = SonidoTheme::get(ui.ctx());
@@ -2457,9 +2478,22 @@ impl SonidoApp {
                     }
                     ui.close_menu();
                 }
+                let fits = crate::export::can_export_to_pedal(&patch);
+                if ui
+                    .add_enabled(fits, egui::Button::new("Send to pedal"))
+                    .on_hover_text(
+                        "Over the pedal's USB port (Chrome or Edge): replaces its rig with this \
+                         name, or takes its first empty bank slot, and plays it",
+                    )
+                    .clicked()
+                {
+                    self.pedal_panel.show_window();
+                    self.pedal_panel.send(patch, ui.ctx());
+                    ui.close_menu();
+                }
                 ui.separator();
                 ui.label(
-                    egui::RichText::new("Flashing to the pedal (USB) needs the native app.")
+                    egui::RichText::new("Firmware updates: `sonido pedal update` (CLI).")
                         .font(FontId::monospace(9.0))
                         .color(theme.colors.text_secondary),
                 );
@@ -2952,6 +2986,14 @@ impl eframe::App for SonidoApp {
             }
             self.render_macro_editor(ctx);
             self.render_toggle_editor(ctx);
+            let fits = self.pedal_panel.open
+                && !sonido_patch::validate::has_errors(
+                    &sonido_patch::validate::validate_for_daisy(&self.current_patch()),
+                );
+            if self.pedal_panel.ui(ctx, fits) {
+                let rig = self.current_patch();
+                self.pedal_panel.send(rig, ctx);
+            }
         }
 
         // While a morph pose is focused, fold this frame's knob edits into it so

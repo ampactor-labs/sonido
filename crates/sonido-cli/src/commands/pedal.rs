@@ -177,14 +177,13 @@ pub fn run(args: PedalArgs) -> anyhow::Result<()> {
                 effects(&jam),
                 playing(RigRef::Jam)
             );
-            for slot in 0..info.slot_count {
-                match link.read_slot(slot)? {
-                    Some(rig) => {
+            for (slot, name) in (0u8..).zip(link.bank()?) {
+                match name {
+                    Some(name) => {
                         position += 1;
                         println!(
-                            "{position:>3}  Bank {:<2}        {}{}",
+                            "{position:>3}  Bank {:<2}        {name}{}",
                             slot + 1,
-                            rig.name,
                             playing(RigRef::Bank(slot))
                         );
                     }

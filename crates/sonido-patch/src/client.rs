@@ -3,7 +3,10 @@
 //!
 //! [`LinkClient`] sends one request and waits for its reply over any
 //! `Read + Write` stream: [`open_pedal`] finds and opens the pedal's serial
-//! port (feature `serial`), and tests hand it an in-memory pedal.
+//! port (feature `serial`), and tests hand it an in-memory pedal. The
+//! protocol's rules sit outside it ([`reply`], [`slot_rig`], [`slot_sector`],
+//! [`choose_send_slot`], the timeouts) so the browser editor's Web Serial
+//! path, which can't block, plays by the same ones.
 
 use std::fmt;
 use std::io::{self, Read, Write};
@@ -14,9 +17,36 @@ use crate::pedal::RigRef;
 use crate::{Patch, PatchError, SECTOR_SIZE, decode, encode};
 
 /// How long most requests may take.
-const TIMEOUT: Duration = Duration::from_secs(2);
+pub const TIMEOUT: Duration = Duration::from_secs(2);
 /// A flash write: sector erase (up to 300 ms), programming, read-back.
-const WRITE_TIMEOUT: Duration = Duration::from_secs(5);
+pub const WRITE_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// A reply frame as a result: an error reply becomes [`LinkError::Refused`],
+/// an unknown kind [`LinkError::BadReply`].
+pub fn reply(kind: u8, arg: u8, payload: &[u8]) -> Result<(Reply, u8, Vec<u8>), LinkError> {
+    match Reply::from_byte(kind) {
+        Some(Reply::Error) => Err(LinkError::Refused(
+            ErrorCode::from_byte(arg).unwrap_or(ErrorCode::Unsupported),
+        )),
+        Some(reply) => Ok((reply, arg, payload.to_vec())),
+        None => Err(LinkError::BadReply),
+    }
+}
+
+/// A bank sector as its rig: `None` for an empty (erased) slot.
+pub fn slot_rig(sector: &[u8]) -> Result<Option<Patch>, LinkError> {
+    if sector.iter().all(|&b| b == 0xFF) {
+        return Ok(None);
+    }
+    decode(sector).map(Some).map_err(LinkError::Patch)
+}
+
+/// `rig` as the sector [`Request::WriteSlot`] carries (erased-flash padded).
+pub fn slot_sector(rig: &Patch) -> Result<Vec<u8>, LinkError> {
+    let mut sector = vec![0xFFu8; SECTOR_SIZE];
+    encode(rig, &mut sector).map_err(LinkError::Patch)?;
+    Ok(sector)
+}
 
 /// What can go wrong talking to a pedal.
 #[derive(Debug)]
@@ -99,11 +129,7 @@ impl<T: Read + Write> LinkClient<T> {
 
     /// The rig in bank `slot` (0-based), or `None` if the slot is empty.
     pub fn read_slot(&mut self, slot: u8) -> Result<Option<Patch>, LinkError> {
-        let sector = self.sector(Request::ReadSlot, slot)?;
-        if sector.iter().all(|&b| b == 0xFF) {
-            return Ok(None);
-        }
-        decode(&sector).map(Some).map_err(LinkError::Patch)
+        slot_rig(&self.sector(Request::ReadSlot, slot)?)
     }
 
     /// The jam as the pedal plays it now, as a rig.
@@ -114,31 +140,28 @@ impl<T: Read + Write> LinkClient<T> {
 
     /// Store `rig` in bank `slot` (0-based). The pedal checks it first.
     pub fn write_slot(&mut self, slot: u8, rig: &Patch) -> Result<(), LinkError> {
-        let mut sector = vec![0xFFu8; SECTOR_SIZE];
-        encode(rig, &mut sector).map_err(LinkError::Patch)?;
-        self.expect_ok(Request::WriteSlot, slot, &sector, WRITE_TIMEOUT)
+        self.expect_ok(Request::WriteSlot, slot, &slot_sector(rig)?, WRITE_TIMEOUT)
     }
 
-    /// Store `rig` the way the editor and CLI send rigs: over the bank rig
-    /// with the same name (sending again after an edit replaces it), else in
-    /// the first empty slot. Returns the 0-based slot; the pedal plays it.
-    pub fn send_rig(&mut self, rig: &Patch) -> Result<u8, LinkError> {
+    /// Each bank slot's rig name, in slot order: `None` for an empty slot or
+    /// one that doesn't decode (which [`send_rig`](Self::send_rig) may
+    /// overwrite).
+    pub fn bank(&mut self) -> Result<Vec<Option<String>>, LinkError> {
         let slots = self.info()?.slot_count;
-        let mut empty = None;
-        for slot in 0..slots {
-            match self.read_slot(slot) {
-                Ok(Some(held)) if held.name == rig.name => {
-                    self.write_slot(slot, rig)?;
-                    return Ok(slot);
-                }
-                Ok(None) | Err(LinkError::Patch(_)) => {
-                    empty.get_or_insert(slot);
-                }
-                Ok(Some(_)) => {}
-                Err(e) => return Err(e),
-            }
-        }
-        let slot = empty.ok_or(LinkError::BankFull)?;
+        (0..slots)
+            .map(|slot| match self.read_slot(slot) {
+                Ok(rig) => Ok(rig.map(|r| r.name)),
+                Err(LinkError::Patch(_)) => Ok(None),
+                Err(e) => Err(e),
+            })
+            .collect()
+    }
+
+    /// Store `rig` the way the editor and CLI send rigs ([`choose_send_slot`]).
+    /// Returns the 0-based slot; the pedal plays it.
+    pub fn send_rig(&mut self, rig: &Patch) -> Result<u8, LinkError> {
+        let bank = self.bank()?;
+        let slot = choose_send_slot(&bank, &rig.name).ok_or(LinkError::BankFull)?;
         self.write_slot(slot, rig)?;
         Ok(slot)
     }
@@ -215,16 +238,22 @@ impl<T: Read + Write> LinkClient<T> {
                 }
             });
             if let Some((kind, arg, payload)) = reply {
-                return match Reply::from_byte(kind) {
-                    Some(Reply::Error) => Err(LinkError::Refused(
-                        ErrorCode::from_byte(arg).unwrap_or(ErrorCode::Unsupported),
-                    )),
-                    Some(reply) => Ok((reply, arg, payload)),
-                    None => Err(LinkError::BadReply),
-                };
+                return self::reply(kind, arg, &payload);
             }
         }
     }
+}
+
+/// Where a rig named `name` goes in a bank whose slots hold `bank` (as
+/// [`LinkClient::bank`] reads it): over the bank rig with that name, so
+/// sending again after an edit replaces it, else into the first empty slot.
+/// `None` when the bank is full.
+pub fn choose_send_slot(bank: &[Option<String>], name: &str) -> Option<u8> {
+    let slot = bank
+        .iter()
+        .position(|held| held.as_deref() == Some(name))
+        .or_else(|| bank.iter().position(Option::is_none))?;
+    u8::try_from(slot).ok()
 }
 
 /// The pedal's USB ids (pid.codes test VID/PID; product "Sonido Pedal").
@@ -397,6 +426,21 @@ mod tests {
         let back = link.read_slot(1).unwrap().unwrap();
         assert_eq!(back.nodes[0].params_a[0], 30.0);
         assert_eq!(link.read_slot(2).unwrap(), None);
+    }
+
+    #[test]
+    fn a_rig_replaces_its_name_else_takes_the_first_empty_slot() {
+        let bank = [
+            Some("Lead".to_owned()),
+            None,
+            Some("Clean".to_owned()),
+            None,
+        ];
+        assert_eq!(choose_send_slot(&bank, "Clean"), Some(2));
+        assert_eq!(choose_send_slot(&bank, "New"), Some(1));
+        let full = [Some("A".to_owned()), Some("B".to_owned())];
+        assert_eq!(choose_send_slot(&full, "C"), None);
+        assert_eq!(choose_send_slot(&full, "B"), Some(1));
     }
 
     #[test]

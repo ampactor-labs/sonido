@@ -37,7 +37,7 @@ trunk serve
 
 Browsers keep audio suspended until a user gesture: the first click, key press, or PLAY resumes it. Hard-refresh (Ctrl+Shift+R) after a rebuild to bypass the cache. There is no headless wasm test runner; the browser is the runtime test. `cargo check` for wasm catches missing `#[cfg]` gates and std-only APIs that the native build doesn't.
 
-The web build differs from native only where a browser tab can't reach: Save/Load use the browser's download and file picker, and Export offers patch JSON and the pedal `.bin` (no CLAP-folder write, no USB flash).
+The web build differs from native only where a browser tab can't reach: Save/Load use the browser's download and file picker; Export offers patch JSON, the pedal `.bin`, and **Send to pedal** over Web Serial (Chrome and Edge; the browser asks which port to use and lists only the pedal); there is no CLAP-folder write or firmware update. The PEDAL window's controls guide downloads as an HTML page.
 
 ## Command-Line Options
 
@@ -100,6 +100,7 @@ The layout adapts to width. **Desktop** (≥ 900 px) is shown above; on a wide w
 - **BYPASS**: bypasses the whole chain with a 5 ms crossfade to the dry signal.
 - **Save / Load**: the session as JSON (see [Sessions](#sessions)).
 - **Export**: see [Export](#export).
+- **Pedal**: the PEDAL window (see [The pedal window](#the-pedal-window)).
 - **GEN / FILE**: source select.
 - **MACROS**: **Auto** plus the six macro knobs K1–K6, then the rig's toggles **T1** and **T3** (in the RIG drawer on Phone).
 - **Right side**: audio status LED (green running, red stopped), plus, when present, `errors: N` (audio stream errors such as underruns), the last compile error, the last export result, and an audio start error with a **Retry** button.
@@ -236,9 +237,17 @@ The **Export** menu projects the rig to a canonical `sonido_patch::Patch` and of
 | Windows | `%APPDATA%\sonido\patches` |
 
 - **Save patch JSON…**: the same patch, anywhere.
-- **Pedal (Daisy)**: the rig is validated against the pedal's supported effects and its CPU-cycle and SDRAM budgets. The menu shows `✓ fits pedal budget` or `✗ exceeds pedal limits` with each finding. The check is `sonido_patch::validate::validate_for_daisy`, the one the CLI uses. When it fits, you can choose **Save pedal binary (.bin)…** (a 4 KB patch sector) or **Send to pedal** (native only). Send to pedal talks to the playing pedal over its USB port (`sonido_patch::client`, the first pedal found): the rig replaces the bank rig with the same name, or takes the first empty bank slot, and the pedal checks it against the same rule and plays it at once; the result names the bank slot ([EMBEDDED.md](EMBEDDED.md#usb-rig-link), [PATCH_PLATFORM.md](PATCH_PLATFORM.md)).
+- **Pedal (Daisy)**: the rig is validated against the pedal's supported effects and its CPU-cycle and SDRAM budgets. The menu shows `✓ fits pedal budget` or `✗ exceeds pedal limits` with each finding. The check is `sonido_patch::validate::validate_for_daisy`, the one the CLI uses. When it fits, you can choose **Save pedal binary (.bin)…** (a 4 KB patch sector) or **Send to pedal** (natively over the USB serial port, in Chrome or Edge over Web Serial). Send to pedal talks to the playing pedal over its USB port (`sonido_patch::client`, the first pedal found): the rig replaces the bank rig with the same name, or takes the first empty bank slot, and the pedal checks it against the same rule and plays it at once; the result names the bank slot ([EMBEDDED.md](EMBEDDED.md#usb-rig-link), [PATCH_PLATFORM.md](PATCH_PLATFORM.md)).
 
 The result appears in the header.
+
+## The pedal window
+
+The header's **Pedal** button opens it.
+
+- **Open the controls guide**: the illustrated guide to playing the pedal, every knob, toggle, LED and footswitch per mode, each jam effect and factory rig (`sonido_rigs::guide`, what `sonido pedal controls` opens). Natively it opens in the browser; on the web it downloads. It prints as a cheat card.
+- **The pedal** (native): with the pedal's USB plugged in, the window reads its firmware and link protocol, CPU load, and rig list in footswitch order (the jam, the 15 bank slots, the factory rigs), marking the one playing. **Play** switches the pedal to a rig; **Erase** empties a bank slot after a second click (**Erase it?**). **Refresh** reads it again. All of it runs on a worker thread through `sonido_patch::client`, so the editor never waits on USB.
+- **Send this rig**: the same as Export ▸ Pedal ▸ Send to pedal, disabled when the rig doesn't fit. On the web it goes over Web Serial (`web_serial.rs`), by the same rules as the native client (`client::choose_send_slot`, `reply`, `slot_rig`, `slot_sector`). If the pedal's firmware predates something the rig uses (its T1/T3 toggles before link protocol 3), the result says so.
 
 ## Keyboard Shortcuts
 

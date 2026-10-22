@@ -18,7 +18,7 @@ build without `std` (with `alloc`).
 ```
 Applications
   sonido-cli ──────▶ core, registry, analysis, io, config, synth, graph-dsl, patch, rigs
-  sonido-gui ──────▶ core, effects, gui-core, registry, graph-dsl, patch, platform, io
+  sonido-gui ──────▶ core, effects, gui-core, registry, graph-dsl, patch, platform, rigs, io
   sonido-plugin ───▶ core, effects, registry, config, patch, rigs, gui-core   (CLAP/VST3 bundle)
   sonido-daisy ────▶ core, effects, registry, patch, platform*     (firmware, no_std;
                      build script: rigs                             excluded from the workspace)
@@ -267,7 +267,7 @@ The canonical rig format, `Patch`: graph topology, per-node A/B parameters, six 
 - `controls`: what every footswitch press, toggle (`toggle_role`), knob page, LED and power-on gesture does; the firmware dispatches through it and `sonido_rigs::guide` draws it
 - `pedal`: the jam (`jam_patch`, `JamSettings`) and the pedal's saved state (`PedalState`)
 - `link`: the USB serial protocol between the pedal and the host (frames, requests incl. `Bootloader`, replies)
-- `client` (`std`): the host side of the link. `LinkClient`, generic over `Read + Write`; `send_rig` replaces the bank rig with the same name, otherwise takes the first empty slot; `enter_bootloader`; with the `serial` feature, `open_pedal` / `pedal_ports` find the pedal by USB id `1209:0001`
+- `client` (`std`): the host side of the link. `LinkClient`, generic over `Read + Write`; `bank` reads the bank's rig names; `send_rig` replaces the bank rig with the same name, otherwise takes the first empty slot (`choose_send_slot`, shared with the browser editor's Web Serial path along with `reply`, `slot_rig`, `slot_sector` and the timeouts); `enter_bootloader`; with the `serial` feature, `open_pedal` / `pedal_ports` find the pedal by USB id `1209:0001`
 - `dfu` (`std`, not wasm): firmware updates through `dfu-util`, to the Daisy bootloader's QSPI region only (`0x90000000`, firmware at `0x90040000`); rigs never go this way
 
 ### sonido-rigs

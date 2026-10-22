@@ -26,6 +26,8 @@ sonido-config = { workspace = true, features = ["std"] }
 sonido-graph-dsl = { workspace = true }
 sonido-patch = { workspace = true, features = ["std"] }
 sonido-platform = { workspace = true, features = ["std"] }
+# The pedal guide (`sonido_rigs::guide`) and the factory rigs' names
+sonido-rigs = { workspace = true }
 
 # Thread-safety
 arc-swap = "1.8"
@@ -61,7 +63,25 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 cpal = { version = "0.17", features = ["wasm-bindgen"] }
 wasm-bindgen-futures = "0.4"
 wasm-bindgen = "0.2"
-web-sys = { version = "0.3", features = ["HtmlCanvasElement", "Window", "Document"] }
+js-sys = "0.3"
+# Web Serial (Send to pedal in the browser) needs --cfg=web_sys_unstable_apis,
+# set for wasm32 in the root .cargo/config.toml.
+web-sys = { version = "0.3", features = [
+    "HtmlCanvasElement",
+    "Window",
+    "Document",
+    "Navigator",
+    "Serial",
+    "SerialPort",
+    "SerialOptions",
+    "SerialPortFilter",
+    "SerialPortRequestOptions",
+    "ReadableStream",
+    "ReadableStreamDefaultReader",
+    "ReadableStreamReadResult",
+    "WritableStream",
+    "WritableStreamDefaultWriter",
+] }
 web-time = "1.1"
 hound = { workspace = true }
 
