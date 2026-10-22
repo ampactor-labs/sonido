@@ -683,17 +683,23 @@ mod tests {
     use super::*;
 
     #[test]
+    #[cfg_attr(
+        windows,
+        ignore = "WASAPI enumeration crashes the windows-2025 CI runner (no audio endpoints)"
+    )]
     fn test_list_devices() {
         // This test just verifies the function doesn't panic
         // Actual device availability depends on the system
-        let _host = crate::audio_host_lock();
         let result = list_devices();
         assert!(result.is_ok());
     }
 
     #[test]
+    #[cfg_attr(
+        windows,
+        ignore = "WASAPI enumeration crashes the windows-2025 CI runner (no audio endpoints)"
+    )]
     fn test_default_device() {
-        let _host = crate::audio_host_lock();
         let result = default_device();
         assert!(result.is_ok());
     }
