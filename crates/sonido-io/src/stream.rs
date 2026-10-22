@@ -686,12 +686,14 @@ mod tests {
     fn test_list_devices() {
         // This test just verifies the function doesn't panic
         // Actual device availability depends on the system
+        let _host = crate::audio_host_lock();
         let result = list_devices();
         assert!(result.is_ok());
     }
 
     #[test]
     fn test_default_device() {
+        let _host = crate::audio_host_lock();
         let result = default_device();
         assert!(result.is_ok());
     }

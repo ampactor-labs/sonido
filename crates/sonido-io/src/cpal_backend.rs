@@ -270,6 +270,7 @@ mod tests {
 
     #[test]
     fn test_cpal_backend_list_devices() {
+        let _host = crate::audio_host_lock();
         let backend = CpalBackend::new();
         // Should not panic; device availability depends on the system.
         let result = backend.list_devices();

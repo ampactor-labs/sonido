@@ -88,3 +88,14 @@ pub enum Error {
 
 /// Convenience result type for audio I/O operations.
 pub type Result<T> = std::result::Result<T, Error>;
+
+/// Held by every test that opens the system audio host, so they run one at a
+/// time: on the Windows CI runners, WASAPI device enumeration from parallel
+/// test threads crashed the test process (access violation) about half the
+/// time.
+#[cfg(test)]
+pub(crate) fn audio_host_lock() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    LOCK.lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
