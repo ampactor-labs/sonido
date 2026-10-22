@@ -382,7 +382,8 @@ Standalone real-time audio effects processor and node-graph editor built on egui
 - `macro_autoassign.rs`: Auto-assigns the six performance macros from the chain
 - `chain_manager.rs`: `GraphCommand` enum for GUI→audio thread topology mutations
 - `session.rs`: Session save/load (graph topology, node parameters, editor state, the rig's name)
-- `export.rs`: Project the editor into a `Patch` and export it (`.bin` sector, `.json`, CLAP graph-player preset) under the rig's name; the Export menu's Send to pedal goes over USB through `sonido_patch::client` (native only)
+- `export.rs`: Project the editor into a `Patch` and export it (`.bin` sector, `.json`, CLAP graph-player preset) under the rig's name; the Export menu's Send to pedal goes over USB through `sonido_patch::client` natively, and over Web Serial (`web_serial.rs`) in the browser
+- `pedal_panel.rs`: the PEDAL window: the controls guide (`sonido_rigs::guide`) and, natively, the connected pedal's state and rig list with Play, Erase and Send, on a worker thread
 - `file_player.rs`: WAV file playback (native + wasm)
 - `signal_generator.rs`: Built-in test/demo signals
 - `info_view.rs`: Contextual info strip (selection, live values, shortcuts)

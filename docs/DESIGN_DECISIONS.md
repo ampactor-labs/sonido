@@ -1448,7 +1448,7 @@ The pedal has six knobs in two rows of three, three toggles, two footswitches an
 
 ### Decision
 
-One rule for the footswitches and one for the knobs, in every rig and every T2 position. They live in `crates/sonido-patch/src/controls.rs` as functions the firmware's control tick dispatches through (`control_tick()` in `crates/sonido-daisy/examples/sonido_pedal.rs`) and `sonido pedal controls` draws as a card, so the description can't drift from the pedal:
+One rule for the footswitches and one for the knobs, in every rig and every T2 position. They live in `crates/sonido-patch/src/controls.rs` as functions the firmware's control tick dispatches through (`control_tick()` in `crates/sonido-daisy/examples/sonido_pedal.rs`) and `sonido pedal controls` draws as an illustrated guide (`sonido_rigs::guide`), so the description can't drift from the pedal:
 
 1. **Footswitches: left on/off, right time, hold = rig.** An FS1 tap toggles bypass, a 5 ms crossfade to the dry input while the rig keeps running. An FS2 tap is tap tempo, and in the jam the delay's time follows it; with T2 in the middle it glides between A and B instead (the morph's time), and a tap mid-glide turns back. Either footswitch held for 0.4 s changes rig right then, while still held: FS1 back, FS2 forward.
 2. **T2: up A, middle Morph, down B**, so Morph sits between the two sounds it moves between.

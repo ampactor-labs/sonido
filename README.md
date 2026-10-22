@@ -124,7 +124,7 @@ crates/
   sonido-synth       PolyBLEP (band-limited) oscillators, envelopes, voices                    no_std
   sonido-platform    hardware control abstractions (knobs, toggles, MIDI)                      no_std
   sonido-patch       the patch format: JSON, binary sector, runtime; pedal state, USB link     no_std
-  sonido-rigs        the factory rigs: one set for the pedal and the graph player
+  sonido-rigs        the factory rigs (one set for the pedal and the graph player) and the pedal guide
   sonido-daisy       Daisy Seed firmware and the pedal examples; outside the workspace         no_std
   sonido-analysis    FFT, THD, RT60 and other offline analysis
   sonido-io          WAV files and cpal (cross-platform audio) streams
@@ -141,8 +141,8 @@ scripts/             bundle-clap.sh, bundle-vst3.sh, update_cycle_table.py, demo
 
 Sixteen crates: fifteen are workspace members, and `sonido-daisy` is excluded because its own `.cargo/config.toml` pins the build to `thumbv7em-none-eabihf`. Seven build without the standard library: six carry `#![cfg_attr(not(feature = "std"), no_std)]` and `sonido-daisy` is `#![no_std]` outright; math goes through `libm`. The applications on top:
 
-- CLI, 12 subcommands (`process`, `realtime`, `generate`, `analyze`, `compare`, `devices`, `effects`, `info`, `play`, `presets`, `patch`, `pedal`): offline processing through a chain or graph string, live input, signal generation, spectrum and impulse-response analysis, rig files (`patch`), and the pedal over USB (`pedal`: list, send, read back and play rigs, update the firmware; `pedal controls` prints how to play it, drawn from the code the firmware runs). `cargo install --path crates/sonido-cli`.
-- GUI (`cargo run -p sonido-gui --release`): the node editor with six macro knobs, whole-rig A/B morph, undo, and export to a CLAP preset, a JSON patch or a pedal binary sector, or straight to the pedal over USB (Export ▸ Send to pedal), under the rig's name.
+- CLI, 12 subcommands (`process`, `realtime`, `generate`, `analyze`, `compare`, `devices`, `effects`, `info`, `play`, `presets`, `patch`, `pedal`): offline processing through a chain or graph string, live input, signal generation, spectrum and impulse-response analysis, rig files (`patch`), and the pedal over USB (`pedal`: list, send, read back and play rigs, update the firmware; `pedal controls` opens an illustrated guide to playing it, drawn from the code the firmware runs). `cargo install --path crates/sonido-cli`.
+- GUI (`cargo run -p sonido-gui --release`): the node editor with six macro knobs, the rig's T1/T3 toggles, whole-rig A/B morph, undo, a status bar that applies the pedal's CPU rule as you build, and export to a CLAP preset, a JSON patch or a pedal binary sector, or straight to the pedal over USB (Export ▸ Send to pedal, or Web Serial in the browser), under the rig's name. Its PEDAL window opens the controls guide and plays or erases the pedal's rigs.
 - Plugins: one `sonido.clap` bundle holding 37 plugins: all 36 effects, plus `Sonido Graph Player`, which runs a whole rig as one plugin, picked from its built-in factory rigs or the rigs the editor exports. A matching `sonido.vst3` shim exposes the same set as VST3. Every plugin draws the same cabinet UI, lit in its family's color, with live meters and a scope of its own signal. See Plugins below.
 - Pedal firmware: `sonido_pedal` for the Cleveland Music Co. Hothouse, a rig player: a jam of three slots, each picked with a knob from eight effects (`JAM_EFFECT_IDS`), in three topologies (linear, parallel, fan) selected with a toggle, up to 15 rigs in its QSPI flash bank, and the six factory rigs (`crates/sonido-rigs`). One control rule everywhere: the left footswitch is on/off, the right one tap tempo (with the A/B toggle in the middle, a glide between A and B), and holding either changes rig; the top row of knobs is levels, with the top right always a volume, and the bottom row the sound. It powers on into the last rig played, saves its state to flash, and takes rigs and firmware-update requests over a USB serial protocol (`sonido_patch::link`). 48 kHz in 32-sample blocks (`BLOCK_SIZE` in `crates/sonido-daisy/src/lib.rs`).
 
@@ -205,13 +205,13 @@ The other gaps:
 
 - The ARM firmware is only built in CI. The `firmware` job builds, lints and size-checks `sonido_pedal.bin`, but nothing runs it; I check the pedal firmware and the benchmark harness (`crates/sonido-daisy/examples/bench_kernels.rs`) by flashing them on my desk.
 - The pedal's jam offers 8 of the 36 effects (`JAM_EFFECT_IDS` in `crates/sonido-registry/src/lib.rs`); a rig can use any effect, within the CPU rule.
-- The editor sends a rig to the pedal by name only: it replaces the bank rig with the same name or takes the first empty slot (`LinkClient::send_rig` in `crates/sonido-patch/src/client.rs`), on the first pedal it finds. Choosing a slot, erasing one and updating the firmware are CLI-only (`sonido pedal push --slot`, `erase`, `update`); a firmware update needs `dfu-util` installed.
-- On the pedal, T1 and T3 do nothing in a rig (they edit and route the jam); assignable toggles in rigs are not built.
+- The editor sends a rig to the pedal by name only: it replaces the bank rig with the same name or takes the first empty slot (`client::choose_send_slot` in `crates/sonido-patch/src/client.rs`), on the first pedal it finds. Its PEDAL window plays and erases bank rigs, but choosing a slot and updating the firmware are CLI-only (`sonido pedal push --slot`, `update`); a firmware update needs `dfu-util` installed.
+- Sending from the browser editor over Web Serial is built but untested against a pedal (`crates/sonido-gui/src/web_serial.rs`); it needs Chrome or Edge.
 - No shipping path oversamples. Aliasing control rests on ADAA in the distortion, tape and amp kernels, and the aliasing suite measures only those three plus the preamp; no other kernel is measured for aliasing.
 - VST3 is unvalidated in CI. The shims come from clap-wrapper (`scripts/bundle-vst3.sh`) and only clap-validator runs in a workflow, so only CLAP has a validation record.
 - 4 of the 36 effects (drone, glitch, texture, time_stretch) have no golden regression file.
 - No crates.io release, no pinned MSRV (minimum supported Rust version), and the benchmark job has no regression gate.
-- The browser build has no file system: presets stay in memory, the export menu downloads the JSON patch and the pedal sector, and sending to the pedal and writing to the CLAP folder need the native app (`crates/sonido-gui/src/app.rs`).
+- The browser build has no file system: presets stay in memory, the export menu downloads the JSON patch and the pedal sector, the controls guide downloads, and writing to the CLAP folder needs the native app (`crates/sonido-gui/src/app.rs`).
 
 It is one person's DSP framework with an unstable API, and it does not try to be a finished plugin suite.
 
