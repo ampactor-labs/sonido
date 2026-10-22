@@ -102,7 +102,7 @@ The per-source-file version of this table is [DOC_CODE_MAPPING.md](DOC_CODE_MAPP
 | `docs/CHANGELOG.md` | Any user-visible change | Add entry under current version |
 | `docs/TESTING.md` | Test infrastructure changes | Update test patterns, CI steps |
 | `docs/GUI.md` | `crates/sonido-gui/src/**/*.rs`, `crates/sonido-gui-core/src/**/*.rs` | Update GUI feature docs |
-| `docs/DSP_FUNDAMENTALS.md` | Core DSP modules (`biquad.rs`, `svf.rs`, `oversample.rs`, `comb.rs`, `allpass.rs`) | Update theory sections when algorithms change |
+| `docs/DSP_FUNDAMENTALS.md` | Core DSP modules (`biquad.rs`, `svf.rs`, `oversample.rs`, `comb.rs`, `allpass.rs`, `level.rs`) | Update theory sections when algorithms change |
 | `docs/DESIGN_DECISIONS.md` | Any architectural decision | Add new ADR entry |
 | `docs/CONTRIBUTING.md` | CI config, dev workflow changes | Update setup/CI/checklist sections |
 
@@ -182,8 +182,8 @@ Kernel parameter structs document every index with its unit, range and default
 ///
 /// | Index | Field | Unit | Range | Default |
 /// |-------|-------|------|-------|---------|
-/// | 0 | `drive_db` | dB | 0–40 | 8.0 |
-/// | 1 | `tone_db` | dB | −12–12 | 0.0 |
+/// | 0 | `drive_db` | dB | 0–40 | 26.0 |
+/// | 1 | `tone_db` | dB | −12–12 | 1.5 |
 /// | ... | | | | |
 pub struct DistortionParams { /* ... */ }
 ```
@@ -293,6 +293,7 @@ chore: Update cpal to 0.15.3
 
 - Use `f32` for audio samples (not `f64`)
 - Kernels hold no smoothers: declare a `SmoothingStyle` per parameter in `kernel_params!` and let `Adapter` do the smoothing
+- Kernels with a mix control mix with `Self::blend` / `Self::blend_stereo`; level matching is the generated calibration (`const LEVEL`), never a hand-picked gain or mix law (see `docs/DSP_QUALITY_STANDARD.md` Rule 8)
 - Avoid allocations in audio processing hot paths
 - Test for both `std` and `no_std` compatibility
 
@@ -304,6 +305,11 @@ cargo test
 
 # Test no_std compatibility
 make test-nostd
+
+# Regenerate the level calibration after changing an effect's sound or
+# defaults, then check the level contract
+cargo run -p sonido-effects --example calibrate --release
+cargo test -p sonido-effects --test level_contract
 
 # Run benchmarks
 cargo bench
@@ -348,17 +354,19 @@ fix: Correct compressor attack time calculation
 7. Export from `crates/sonido-effects/src/kernels/mod.rs` and `crates/sonido-effects/src/lib.rs`
 8. Register in `crates/sonido-registry/src/lib.rs`: an `EffectDescriptor` plus a factory `|sr| Box::new(Adapter::new(XxxKernel::new(sr), sr))`, and append the next free UID to `EFFECT_UIDS` (append-only)
 9. Add a `spec(...)` entry to `CATALOG` in `crates/sonido-plugin/src/bundle.rs` so the plugin bundle exports it as `com.sonido.<id-with-dashes>`
+10. Make the defaults the effect's voiced sweet spot (a fresh plugin starts there, and a pedal knob at noon selects it), with `Default` equal to the descriptor defaults; add the params struct to `crates/sonido-effects/tests/default_parity.rs`
+11. Calibrate its level: run `cargo run -p sonido-effects --example calibrate --release`, which regenerates `crates/sonido-effects/src/calibration.rs` with an entry for every registered effect, then declare `const LEVEL: Level = crate::calibration::<ID>;` (the registry ID, uppercased) in the `DspKernel` impl before running the example again (it scales the trim already in the table, assuming the kernel applies it). With a mix control, mix with `Self::blend` / `Self::blend_stereo`. `cargo test -p sonido-effects --test level_contract` checks it; rerun the example whenever you change the effect's sound or defaults
 
 The CLI, GUI and graph DSL discover effects through the registry, so they need no
 per-effect code (add aliases in `crates/sonido-graph-dsl/src/effects.rs` if useful).
 
 ### Documentation Steps (all required)
 
-10. Add `///` rustdoc on the params and kernel structs explaining the DSP algorithm and parameters
-11. Add entry to `docs/EFFECTS_REFERENCE.md` with: description, parameter table, DSP theory, usage example
-12. Update `README.md` features list and effect count
-13. Add `docs/CHANGELOG.md` entry
-14. If the effect introduces a new DSP concept, add a section to `docs/DSP_FUNDAMENTALS.md`
+12. Add `///` rustdoc on the params and kernel structs explaining the DSP algorithm and parameters
+13. Add entry to `docs/EFFECTS_REFERENCE.md` with: description, parameter table, DSP theory, usage example
+14. Update `README.md` features list and effect count
+15. Add `docs/CHANGELOG.md` entry
+16. If the effect introduces a new DSP concept, add a section to `docs/DSP_FUNDAMENTALS.md`
 
 ### Kernel Template
 

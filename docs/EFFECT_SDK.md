@@ -44,6 +44,12 @@ impl Default for GainParams {
 }
 ```
 
+Defaults are the effect's voiced sweet spot: a freshly opened plugin starts at
+the descriptor defaults, and a pedal knob at noon selects them, so choose the
+setting you want heard first. `Default` must return the same values as the
+descriptors (Step 2); `crates/sonido-effects/tests/default_parity.rs` checks
+every kernel, so add a `check::<GainParams>("mygain", &mut v)` line there.
+
 ## Step 2: Implement KernelParams
 
 ```rust
@@ -89,6 +95,8 @@ impl KernelParams for GainParams {
   `crates/sonido-effects/src/kernels` for `ParamId(` and take the next free block.
 - `string_id` is the serialization key — never rename once shipped.
 - Use `SmoothingStyle::None` for stepped/enum params, `Slow` (20ms) for filter coefficients.
+- When a factory descriptor's default doesn't suit the effect (`ParamDescriptor::mix()`
+  and `depth()` default to 50%), set its sweet spot with `.with_default(v)`.
 
 ## Step 3: Implement DspKernel
 
@@ -128,8 +136,13 @@ impl DspKernel for GainKernel {
 **Rules:**
 - Use `libm::sinf()` / `libm::expf()` — never `f32::sin()` (breaks `no_std`).
 - `reset()` must clear ALL mutable state: filter memories, delay buffers, LFO phases.
-- `set_sample_rate()` must invalidate cached coefficients (NaN sentinel pattern).
+- `set_sample_rate()` must invalidate cached coefficients (set the cache to `NaN`
+  and test it with `needs_update`, or call `Cached::invalidate`; see
+  [Cached Filter Coefficients](#cached-filter-coefficients)).
 - Override `process_stereo()` directly for true stereo (decorrelated L/R) effects.
+- An effect with a mix control mixes with `Self::blend` / `Self::blend_stereo`,
+  never its own crossfade (see [Wet/Dry Mix](#wetdry-mix)).
+- The kernel's level calibration, `const LEVEL`, comes in Step 5.
 
 ## Step 4: Register the Effect
 
@@ -180,7 +193,59 @@ Add a `spec("mygain", "com.sonido.mygain", "Sonido My Gain", &[...])` entry to
 has no catalog entry. Tests that hard-code the effect count (e.g.
 `crates/sonido-config/src/validation.rs`) also need bumping.
 
-## Step 5: Add a test_kernel! Test
+## Step 5: Calibrate Its Level
+
+Every effect meets one level contract (`sonido_core::level`): at its defaults it
+plays at the loudness of its input, and its mix control does not change that
+loudness. The level is measured, never chosen by hand. With the effect
+registered, run:
+
+```bash
+cargo run -p sonido-effects --example calibrate --release
+```
+
+It plays `sonido_analysis::signals::reference_guitar` (a synthetic strummed
+guitar peaking at `NOMINAL_PEAK_DBFS`, -20 dBFS) through every registered
+effect, fully wet when it has a mix control (a parameter matching the key
+`mix`) and at its defaults otherwise, measures the loudness change as
+integrated LUFS (ITU-R BS.1770-4), and regenerates
+`crates/sonido-effects/src/calibration.rs` for all of them. Your effect gets an
+entry named after its registry ID, uppercased (`MYGAIN`). Declare it on the
+kernel:
+
+```rust
+use sonido_core::level::Level;
+
+impl DspKernel for GainKernel {
+    type Params = GainParams;
+    const LEVEL: Level = crate::calibration::MYGAIN;
+    // ...
+}
+```
+
+Do this before running the example again: it scales the trim already in the
+table by the error it measures, so it assumes the kernel applies that trim.
+
+`Level` holds a `trim` and, for an effect with a mix control, the measured
+correlation of its wet signal with the dry input (`mix_correlation`).
+`Self::blend` applies the trim to the wet signal. For an effect without a mix
+control, `Adapter` multiplies the kernel's output by the trim; a kernel driven
+directly, without an `Adapter`, does not get it.
+
+Run the example again whenever you change a kernel's sound or its defaults.
+The level contract test fails until you do:
+
+```bash
+cargo test -p sonido-effects --test level_contract
+```
+
+It holds every registered effect except the looper and tuner (uncalibrated
+utilities) to two limits: within 0.5 dB of the dry loudness fully wet (at its
+defaults, if it has no mix control), and within 1.5 dB at 0, 25, 50 and 75% mix
+and at its default mix. Never edit `calibration.rs` by hand, and don't
+level-match with the output parameter or a fixed gain inside the kernel.
+
+## Step 6: Add a test_kernel! Test
 
 Add to `crates/sonido-effects/src/kernels/mygain.rs`. `test_kernel!` (in
 `crates/sonido-effects/src/test_utils.rs`) generates the standard invariant
@@ -211,7 +276,7 @@ mod tests {
 }
 ```
 
-## Step 6: Golden File Setup
+## Step 7: Golden File Setup
 
 Add a test to `crates/sonido-effects/tests/regression.rs`:
 
@@ -226,7 +291,8 @@ fn test_mygain_regression() {
 }
 ```
 
-Generate the initial golden file:
+Generate the initial golden file after Step 5, and regenerate it whenever a new
+calibration changes this effect's trim (the trim is part of its output):
 
 ```bash
 REGENERATE_GOLDEN=1 cargo test --test regression -p sonido-effects -- mygain
@@ -245,7 +311,7 @@ Thresholds: MSE < 1e-6, SNR > 60 dB, spectral correlation > 0.9999.
 ### Cached Filter Coefficients
 
 ```rust
-use sonido_core::{Biquad, lowpass_coefficients};
+use sonido_core::{Biquad, lowpass_coefficients, needs_update};
 
 pub struct LowpassKernel {
     biquad: Biquad,
@@ -257,7 +323,7 @@ impl DspKernel for LowpassKernel {
     type Params = LowpassParams;
 
     fn process(&mut self, input: f32, params: &LowpassParams) -> f32 {
-        if params.cutoff_hz != self.cached_freq {
+        if needs_update(self.cached_freq, params.cutoff_hz, 0.01) {
             let (b0, b1, b2, a0, a1, a2) =
                 lowpass_coefficients(params.cutoff_hz, 0.707, self.sample_rate);
             self.biquad.set_coefficients(b0, b1, b2, a0, a1, a2);
@@ -278,8 +344,13 @@ impl DspKernel for LowpassKernel {
 }
 ```
 
-`sonido_core::Cached` wraps the same pattern; see `FilterKernel` in
-`crates/sonido-effects/src/kernels/filter.rs` for an epsilon-gated version.
+`needs_update(cached, new, epsilon)` fires when `cached` is `NaN` or `new` has
+moved more than `epsilon`. Don't write the test as
+`(new - cached).abs() > epsilon`: every comparison with `NaN` is false, so a
+cache initialized to `NaN` never fires and the coefficient is never computed
+(that left the plate reverb with no tank feedback). `sonido_core::Cached` wraps
+the same pattern for several inputs; see `FilterKernel` in
+`crates/sonido-effects/src/kernels/filter.rs`.
 
 ### ADAA (Anti-Derivative Anti-Aliasing)
 
@@ -323,13 +394,22 @@ this exact pattern for its four waveshapers.
 ### Wet/Dry Mix
 
 ```rust
-use sonido_core::wet_dry_mix;
-
 fn process(&mut self, input: f32, params: &MyParams) -> f32 {
     let wet = self.do_processing(input, params);
-    wet_dry_mix(input, wet, params.mix_pct / 100.0)
+    Self::blend(input, wet, params.mix_pct / 100.0)
 }
 ```
+
+`blend` and `blend_stereo(dry_l, dry_r, wet_l, wet_r, mix)` are provided by
+`DspKernel`. They scale the wet signal by the kernel's `LEVEL` trim and
+crossfade on a constant-power sine/cosine law normalized for the measured
+wet/dry correlation, so turning the mix knob doesn't change the level
+(`crates/sonido-core/src/level.rs` has the math). Mix 0 returns the dry input
+exactly; mix 1 returns the trimmed wet. Gain that depends on a parameter goes
+on the wet before the blend (delay, flanger and phaser scale it by
+`gain::feedback_wet_compensation(feedback)`), and the output parameter after.
+`sonido_core::math::wet_dry_mix` is a plain linear crossfade, used by the graph
+engine for bypass fades, not by kernels.
 
 ## Dynamic Loading (Experimental)
 

@@ -1163,7 +1163,8 @@ sonido realtime --preset my_preset.toml
 ### Daisy Export
 
 Export a preset to the legacy Daisy Seed binary format (a 4096-byte sector, magic
-`SOND`) for flashing to hardware:
+`SOND`). The shipping pedal firmware does not read this format; use
+[Canonical Patch Export](#canonical-patch-export) for a sector the pedal plays:
 
 ```bash
 sonido daisy export my_preset.toml --output preset.bin --slot 0
@@ -1202,9 +1203,12 @@ sonido patch inspect patch.bin
 | `-o, --output <FILE>` | Output `.bin` file (required) |
 | `-t, --topology <NAME>` | `linear` (default) or `parallel` (all effects between one split/merge) |
 | `--name <NAME>` | Patch name (default: the preset name, or `dsl`) |
-| `--pedal` | Fail unless every effect is in the pedal set |
+| `--pedal` | Fail unless every effect is in the jam's effect set (`PEDAL_EFFECT_IDS`); the pedal itself plays a rig of any registered effects that fits its CPU budget |
 
 Up to 8 effects (`MAX_NODES`). Arbitrary split/merge graphs are authored in the GUI.
+This is the sector the pedal's rig bank holds: flashed over DFU to bank slot *n* at
+`0x907F0000 + n × 4096` (pedal in its bootloader), it appears in the pedal's rig list
+after the next boot (see `docs/EMBEDDED.md`, The Pedal).
 `inspect` prints the name, format version, globals, morph settings, each node's
 parameters (A/B where they differ), edges and active macros.
 

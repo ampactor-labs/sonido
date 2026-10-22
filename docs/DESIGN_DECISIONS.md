@@ -34,6 +34,7 @@ Architecture Decision Records (ADRs) for the Sonido DSP framework. Each record c
 - [ADR-028: Kernel Architecture — DSP/Parameter Separation](#adr-028-kernel-architecture--dspparameter-separation)
 - [ADR-029: Hardware Serves the Kernel — Embedded Design Principle](#adr-029-hardware-serves-the-kernel--embedded-design-principle)
 - [ADR-030: Noon Mapping Belongs in the Embedded Layer](#adr-030-noon-mapping-belongs-in-the-embedded-layer)
+- [ADR-031: One Measured Level Contract](#adr-031-one-measured-level-contract)
 
 ---
 
@@ -239,6 +240,8 @@ The virtual dispatch overhead (~2-3 ns per effect per sample) is negligible for 
 
 **Status:** Accepted
 **Source:** `crates/sonido-core/src/param.rs`
+
+> **Note (2026-10-22):** `SmoothedParam` now settles exactly: it snaps to its target once within one part in a million of the target's magnitude (never tighter than 1e-6), or once a step no longer changes the `f32` value. With the old absolute 1e-6 threshold a smoother could stall a few representable values short of a large target (a 4 kHz parameter never settled; test `large_values_settle_exactly`) and keep its adapter re-writing every parameter every sample. The "equal-power crossfades" use listed below for `LinearSmoothedParam` did not materialize: it has no users in the workspace, and effects' wet/dry blends follow the correlation-normalized constant-power law of `sonido_core::level` (ADR-031).
 
 ### Context
 
@@ -608,8 +611,10 @@ pub fn flush_denormal(x: f32) -> f32 {
 
 ## ADR-017: Shared DSP Vocabulary and Gain Staging
 
-**Status:** Accepted
+**Status:** Accepted; kernel mixing (`wet_dry_mix()`) superseded by ADR-031
 **Source:** `crates/sonido-core/src/gain.rs`, `param.rs`, `param_info.rs`, `one_pole.rs`, `math.rs`
+
+> **Note (2026-10-22):** Kernels no longer mix with `wet_dry_mix()`. Every kernel with a mix control blends through `DspKernel::blend` / `blend_stereo`, the correlation-normalized constant-power law of `sonido_core::level`, and loudness at the defaults is matched by a generated per-kernel trim rather than by hand-set output defaults (ADR-031). The `gain.rs` output parameter below is a user control, not that level match. `wet_dry_mix()` / `wet_dry_mix_stereo()` remain in `sonido_core::math`; the graph engine uses `wet_dry_mix()` for its bypass crossfade (`crates/sonido-core/src/graph/processing.rs`). The record below describes the original design.
 
 ### Context
 
@@ -1090,7 +1095,7 @@ All consumers now use `GraphEngine` (CLI, GUI) or `ProcessingGraph` directly (pl
 
 **Status:** Superseded
 
-> **Note (2026-10-22):** The chain plugin (`ChainPlugin`, `ChainShared`, `ClapParamId`, the 512-ID slot space) no longer exists. Its role is filled by the graph player (`crates/sonido-plugin/src/graph_player.rs`, `com.sonido.graph-player`), which plays an exported `Patch` through `PatchPlayer` with a fixed parameter set (six macros, morph position/speed, input/master gain, bypass); the rig is edited in `sonido-gui`, not in the plugin. The record below describes the original design.
+> **Note (2026-10-22):** The chain plugin (`ChainPlugin`, `ChainShared`, `ClapParamId`, the 512-ID slot space) no longer exists. Its role is filled by the graph player (`crates/sonido-plugin/src/graph_player.rs`, `com.sonido.graph-player`), which plays an exported `Patch` through `PatchPlayer` with a fixed parameter set (six macros, morph position/speed, input/master gain, bypass); the rig is edited in `sonido-gui`, not in the plugin, whose rig browser offers the factory rigs (`sonido_rigs::factory_rigs()`, the set the pedal ships) and the editor's export folder (`crates/sonido-plugin/src/graph_editor.rs`). The record below describes the original design.
 
 ### Context
 
@@ -1134,7 +1139,7 @@ Pre-allocate a flat parameter space: **16 slots × 32 params = 512 CLAP paramete
 
 **Status:** Accepted
 
-> **Note (2026-10-22):** The CLAP consumer described here (`ChainAudioProcessor`, `slot_map`) went away with the chain plugin (see ADR-026). `crates/sonido-plugin/src/audio.rs` now hosts a single effect. The GUI (`crates/sonido-gui/src/audio_processor.rs`) and CLI still use `GraphEngine`.
+> **Note (2026-10-22):** The CLAP consumer described here (`ChainAudioProcessor`, `slot_map`) went away with the chain plugin (see ADR-026). `crates/sonido-plugin/src/audio.rs` now hosts a single effect. The GUI (`crates/sonido-gui/src/audio_processor.rs`) and CLI still use `GraphEngine`, and the embedded consumer exists: the pedal firmware and the graph-player plugin both run rigs on a `GraphEngine` inside `sonido_patch::PatchPlayer` (`crates/sonido-patch/src/runtime.rs`).
 
 ### Context
 
@@ -1241,7 +1246,7 @@ Introduce a three-layer kernel architecture:
 
 **Date:** 2026-03-09
 
-> **Note (2026-10-22):** The shipping pedal firmware (`crates/sonido-daisy/examples/sonido_pedal.rs`) maps knobs through `sonido_platform::param_map` / `knob_mapping` (ADR-030) into `Adapter::new_direct` wrappers rather than calling `from_knobs()`; `from_knobs()` is used by the single-effect examples such as `single_reverb.rs`. There is no `audio_input_diag` example; the diagnostic examples in `crates/sonido-daisy/examples/` include `hothouse_diag`, `tone_out`, `square_out`, and `passthrough`.
+> **Note (2026-10-22):** The shipping pedal firmware (`crates/sonido-daisy/examples/sonido_pedal.rs`) is a rig player and does not call `from_knobs()`. Every sound is a rig played by `sonido_patch::PatchPlayer`, the runtime the graph-player plugin uses, with its effects built by `EffectRegistry::create` (the smoothed `Adapter<K, SmoothedPolicy>` the plugins use) through `crates/sonido-daisy/src/patch_loader.rs`. A rig's knobs are its six macros; the jam's knobs map through `sonido_platform::knob_mapping` (ADR-030). Rule 5 therefore no longer describes the pedal: it smooths parameters in software like every other target, so a rig sounds the same in a DAW and on the pedal, and a freshly loaded rig snaps its parameters (`Effect::snap_params`, `PatchPlayer::apply_controls_now`) rather than sweeping from the defaults. `from_knobs()` is used by the single-effect examples `single_delay.rs` and `single_reverb.rs`; `Adapter::new_direct` (`DirectPolicy`) by `single_effect.rs` and `graph_audio_test.rs`. There is no `audio_input_diag` example; the diagnostic examples in `crates/sonido-daisy/examples/` include `hothouse_diag`, `tone_out`, `square_out`, and `passthrough`.
 
 ### Context
 
@@ -1295,7 +1300,7 @@ The kernel architecture (ADR-028) was designed so the same kernel runs identical
 
 **Date:** 2026-03-15
 
-> **Note (2026-10-22):** The noon mapping moved from `sonido-daisy` to `sonido-platform` (still embedded-side, not in `sonido-core`): `adc_to_param()` and `adc_to_param_biased()` live in `crates/sonido-platform/src/param_map.rs`, the noon table in `crates/sonido-platform/src/noon.rs` (`noon_value`), and `crates/sonido-daisy/src/noon_presets.rs` re-exports it.
+> **Note (2026-10-22):** Revised: a knob at noon now selects the descriptor default, for every parameter. The per-effect noon table (`sonido_platform::noon` and the firmware module that re-exported it) and the near-extreme linear fallback are gone, and STEPPED parameters use the biased split too; see "Revision: Noon Is the Default (2026-10-22)" below. The mapping moved from `sonido-daisy` to `sonido-platform` (still embedded-side, not in `sonido-core`): `adc_to_param()` and `adc_to_param_biased()` live in `crates/sonido-platform/src/param_map.rs`, `knob_to_param()` in `crates/sonido-platform/src/knob_mapping.rs`.
 
 ### Context
 
@@ -1305,25 +1310,27 @@ Research into hardware pedals (Boss DS-1, Rat, TS-808, Klon, MXR Phase 90, Cry B
 
 ### Decision
 
-**Noon mapping is an embedded concern handled by `adc_to_param_biased()` in `sonido-daisy`, not by narrowing descriptor ranges in `sonido-core`.**
+**Noon mapping is an embedded concern handled by `adc_to_param_biased()` in `sonido-platform` (originally `sonido-daisy`), not by narrowing descriptor ranges in `sonido-core`.**
 
-`ParamDescriptor` defines the full musical range for every consumer. The embedded layer biases the ADC-to-parameter curve so that knob center maps to a per-effect "sweet spot" value (which equals the descriptor default — effect authors already set musically correct defaults).
+`ParamDescriptor` defines the full musical range for every consumer. The embedded layer biases the ADC-to-parameter curve so that knob center maps to the effect's sweet spot, which is the descriptor default: effect authors set each default to the voiced sweet spot.
 
 ### Architecture
 
 ```
-ParamDescriptor (sonido-core)          │  Embedded (sonido-daisy)
-Full range: drive [0,40], default=8    │  adc_to_param_biased(desc, noon=8, adc)
-Unchanged for all consumers            │  ADC 0.0→0, ADC 0.5→8, ADC 1.0→40
+ParamDescriptor (sonido-core)          │  Embedded (sonido-platform)
+Full range: drive [0,40], default=26   │  knob_to_param → adc_to_param_biased(desc, noon=26, adc)
+Unchanged for all consumers            │  ADC 0.0→0, ADC 0.5→26, ADC 1.0→40
 ```
+
+(Distortion's drive, `crates/sonido-effects/src/kernels/distortion.rs`.)
 
 `adc_to_param_biased(desc, noon, normalized)` splits the knob travel at center:
 - `[0.0, 0.5]` maps `desc.min` → `noon`
 - `[0.5, 1.0]` maps `noon` → `desc.max`
 
-Both halves respect the descriptor's `ParamScale` (Linear, Logarithmic, Power) for musically consistent response curves.
+Both halves respect the descriptor's `ParamScale` (Linear, Logarithmic, Power) for musically consistent response curves. STEPPED parameters use the same split, rounded to whole steps.
 
-Per-effect noon values are centralized in `noon_presets::noon_value(effect_id, param_idx)`.
+`knob_to_param(effect_id, param_idx, desc, normalized)` passes `desc.default` as `noon`. On the pedal it maps the jam's knobs; a rig's knobs are its macros.
 
 ### Rationale
 
@@ -1335,17 +1342,20 @@ Per-effect noon values are centralized in `noon_presets::noon_value(effect_id, p
 ### Alternatives Considered
 
 - **`noon_aligned()` on descriptors** (reverted): Narrowed ranges globally, making full parameter ranges inaccessible to non-embedded consumers.
-- **Custom `from_knobs()` per effect for embedded**: More code, harder to maintain, no centralized noon table.
+- **Custom `from_knobs()` per effect for embedded**: More code, harder to maintain, no single mapping rule.
 - **Potentiometer taper emulation**: More complex, hardware-specific concept that doesn't translate well to software abstractions.
+- **A per-effect noon table** (2026-03-15 to 2026-10-22): a second set of sweet spots beside the descriptor defaults (mix at 50% on the pedal against 100% in the plugins, for example), so the pedal at noon and a freshly opened plugin sounded different. Replaced by noon = default (revision below).
 
 ### Consequences
 
 - `ParamDescriptor` defines the full musical range — effect authors don't need to think about hardware mapping.
-- Adding noon alignment for a new effect requires one line in the noon table (now `sonido-platform/src/noon.rs`).
+- A new effect needs no noon entry: its descriptor default is its noon. Changing a default changes the pedal's noon, the plugin's initial state and the level calibration (ADR-031) together.
 - The `noon_aligned()` builder method remains available for ad-hoc use but is not applied to production descriptors.
 - `adc_to_param()` (linear mapping) remains available for effects that don't need biased mapping.
 
 ### Revision: Dead Zone Elimination (2026-03-15)
+
+*Superseded by the 2026-10-22 revision below: the fallback and the mix presets are gone.*
 
 `adc_to_param_biased` now automatically falls back to `adc_to_param` (linear mapping) in two cases:
 
@@ -1354,10 +1364,71 @@ Per-effect noon values are centralized in `noon_presets::noon_value(effect_id, p
 
 Additionally, noon preset values for mix parameters were changed from 100% (plugin insert convention) to 50% (pedal blend knob convention), and reverb presets were corrected from stale [0,1]-range values to the actual [0,100] parameter ranges.
 
+### Revision: Noon Is the Default (2026-10-22)
+
+- **No noon table.** `knob_to_param` uses `desc.default` as noon; `sonido_platform::noon` and its firmware re-export are deleted. Defaults were re-voiced as the sweet spots (`ParamDescriptor::with_default` sets one on top of a factory method such as `::mix()`), so the pedal at noon and a freshly opened plugin start identical, and both play at the input's loudness (ADR-031).
+- **Noon at a range end still selects noon.** A parameter voiced at its maximum (distortion's mix, default 100%) sweeps its whole range in the left half of the travel and holds there in the right. The 5% linear fallback is gone: it put noon mid-range, off the voicing.
+- **STEPPED parameters are biased too.** Noon selects the default option; the options below it share the left half of the travel and those above it the right half. A default on the first option keeps the whole left half there. Linear stepping put the middle option at noon whatever the voicing asked for.
+- **Knob floors.** `knob_min_override` raises the knob's minimum for three parameters without touching the descriptor: delay time 30 ms, filter cutoff 150 Hz, bitcrusher bit depth 5.
+- **Tests.** `crates/sonido-effects/tests/noon_mapping.rs` runs `adc_to_param_biased` over every writable parameter of every registered effect (the ends reach min/max, noon is the default, the mapping never reverses); `crates/sonido-platform/tests/knob_calibration.rs` holds each jam effect within ±1.5 dB of the dry guitar with every knob at noon.
+
 ### References
 
-- `crates/sonido-platform/src/param_map.rs` — `adc_to_param()`, `adc_to_param_biased()`, noon mapping logic
-- `crates/sonido-platform/src/noon.rs` — per-effect sweet-spot values (`noon_value`)
-- `crates/sonido-daisy/src/noon_presets.rs` — re-exports `noon_value` for the firmware
+- `crates/sonido-platform/src/param_map.rs` — `adc_to_param()`, `adc_to_param_biased()`
+- `crates/sonido-platform/src/knob_mapping.rs` — `knob_map()`, `knob_to_param()` (noon = `desc.default`), knob floors
+- `crates/sonido-effects/tests/noon_mapping.rs`, `crates/sonido-platform/tests/knob_calibration.rs`
 - ADR-028 — Kernel Architecture (parameter ownership)
 - ADR-029 — Hardware Serves the Kernel (design priority)
+- ADR-031 — One Measured Level Contract (defaults are where levels are calibrated)
+
+---
+
+## ADR-031: One Measured Level Contract
+
+**Status:** Accepted
+
+**Date:** 2026-10-22
+
+### Context
+
+Level matching was a per-effect choice: each kernel set its own output default and makeup gain (ADR-017, ADR-019), and mixed with a linear crossfade. Neither held up. Fully wet, the plate reverb measured 7.5 dB and Harmonic Habitat 10.4 dB under the dry signal, so turning their mix up made them quieter (regression note in `crates/sonido-effects/tests/reverb_decay.rs`). A linear crossfade of an uncorrelated wet (a reverb, an echo) loses 3 dB at 50% mix, while a plain constant-power crossfade of a correlated one (saturation) gains 3 dB. On the pedal, where the jam scrolls between effects and a knob at noon selects the defaults (ADR-030), every level mismatch is a volume jump.
+
+### Decision
+
+One measured level contract, `sonido_core::level` (`crates/sonido-core/src/level.rs`): at its defaults every effect plays at the loudness of its input, and its mix control does not change that loudness.
+
+1. **One declaration per kernel.** `DspKernel::LEVEL` is a `Level { trim, mix_correlation }`, and every kernel sets `const LEVEL: Level = crate::calibration::NAME;`. `trim` brings the wet signal (or, without a mix control, the output) to the input's loudness; `mix_correlation` is the measured correlation `ρ` of the wet signal with the dry input, `None` without a mix control.
+2. **One mix law.** Kernels with a mix control blend through `Self::blend` / `Self::blend_stereo`: the wet is trimmed, then mixed with the constant-power gains `cos(πm/2)`, `sin(πm/2)` normalized by `1/√(1 + ρ·sin(πm))`, constant loudness at any mix for that correlation. Kernels without one are trimmed on their output by the `Adapter` (`output_trim` in `crates/sonido-core/src/kernel/adapter.rs`).
+3. **Measured, never hand-tuned.** `cargo run -p sonido-effects --example calibrate --release` generates `crates/sonido-effects/src/calibration.rs`: it plays `sonido_analysis::signals::reference_guitar` (a strummed guitar peaking at `NOMINAL_PEAK_DBFS` = -20 dBFS, the median measured from a humbucker into the Hothouse) through every registered effect, fully wet if it has a mix control and at its defaults otherwise, and measures integrated LUFS (ITU-R BS.1770-4, `sonido_analysis::loudness::effect_gain_db`). The looper and tuner are utilities and stay uncalibrated.
+4. **Held by a test.** `crates/sonido-effects/tests/level_contract.rs`: within 0.5 dB of the dry loudness fully wet (or at the defaults), and within 1.5 dB at 0/25/50/75% mix and at the default mix.
+5. **Rigs too.** The factory rigs (`crates/sonido-rigs`) get master trims generated into `crates/sonido-rigs/src/trims.rs` by `cargo run -p sonido-rigs --example calibrate --release` and checked by `crates/sonido-rigs/tests/factory.rs`.
+
+### Rationale
+
+- **Measured beats chosen:** a hand-set output default is right only until the kernel's sound changes; a generated table with a failing test cannot drift silently.
+- **Correlation-normalized law:** two signals with correlation `ρ` at gains `a`, `b` sum to power `a² + b² + 2ρab`, so one law covers reverbs (`ρ = 0`, the plain constant-power crossfade), saturation (`ρ = 1`, amplitude kept like a linear crossfade) and partly cancelling wets (`ρ < 0`, boosted). The sine law (not `√m`) has a finite slope at both ends, so the first turn of a mix knob fades the wet in instead of jumping to -20 dB.
+- **Cheap on the Cortex-M7:** `level::mix_gains` runs per sample in every effect, so it uses no transcendentals (libm's `sqrtf` is a software routine there): a polynomial quarter-sine within 6e-4 of the sine and a bit-trick inverse square root within 5 ppm.
+- **A realistic reference:** -20 dBFS peaks is what a humbucker measured into the Hothouse's converter, and close to a DI guitar recorded in a DAW, so the trims are right for what the pedal and the plugins actually play rather than for a full-scale test tone.
+
+### Alternatives Considered
+
+- **Hand-tuned output defaults per effect** (the previous state): drift with every DSP change and are never re-checked.
+- **A per-kernel choice of mix law**: each effect would still need its own level check, and a law that suits one correlation is off for others.
+- **Runtime loudness matching (AGC)**: rejected for the same reason as in ADR-019, cost on the embedded targets.
+
+### Consequences
+
+- Changing a kernel's sound or defaults means re-running the `calibrate` example (`level_contract` fails until you do), then regenerating the golden files, since the trim is part of the output.
+- Levels hold for the reference signal; a saturating effect fed a much hotter or quieter input will measure differently.
+- A kernel called directly, without the `Adapter`, and without a mix control plays without its trim.
+- `sonido_core::math::wet_dry_mix()` stays for the graph engine's bypass crossfade; kernels do not use it.
+
+### References
+
+- `crates/sonido-core/src/level.rs` — `Level`, `mix_gains`, `blend`, `NOMINAL_PEAK_DBFS`
+- `crates/sonido-core/src/kernel/traits.rs` — `DspKernel::LEVEL`, `blend`, `blend_stereo`
+- `crates/sonido-effects/examples/calibrate.rs`, `crates/sonido-effects/src/calibration.rs`
+- `crates/sonido-effects/tests/level_contract.rs`
+- `crates/sonido-rigs/examples/calibrate.rs`, `crates/sonido-rigs/src/trims.rs`, `crates/sonido-rigs/tests/factory.rs`
+- ADR-017 — Shared DSP Vocabulary (`wet_dry_mix()`, superseded for kernels)
+- ADR-030 — Noon Mapping (noon selects the default, where levels are calibrated)

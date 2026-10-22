@@ -17,7 +17,7 @@ Cleveland Music Co. Hothouse DIY pedal platform.
 | Clock | 480 MHz (libDaisy defaults to 400 MHz for thermal headroom) |
 | FPU | Single-precision hardware FPU (no double, no SIMD) |
 | SDRAM | 64 MB (Alliance AS4C16M32MSA-6) — "65 MB" variant |
-| QSPI Flash | 8 MB (Winbond W25Q64JV, JEDEC id `EF 40 17`) |
+| QSPI Flash | 8 MB (ISSI IS25LP064A on current Seeds, JEDEC id `9D 60 17`; the Winbond W25Q64JV, `EF 40 17`, shares its command set) |
 | Audio Codec | PCM3060 (TI) — Rev 7, current production |
 | Audio | 24-bit stereo, up to 96 kHz |
 | GPIO | 31 configurable pins (12x 16-bit ADC, 2x 12-bit DAC) |
@@ -46,30 +46,31 @@ SDRAM heap, not from internal SRAM.
 
 ### Memory Budget
 
-Per-effect heap usage for the 8 pedal effects (`sonido_registry::PEDAL_EFFECT_IDS`),
-measured as the bytes allocated by each kernel's `new(48_000.0)` (counting global
-allocator, host build). `Adapter::new_direct` (the `DirectPolicy` wrapper the pedal
-uses) allocates nothing extra; each effect also costs one small `Box` in the graph.
+Per-effect heap for the 8 jam effects (`sonido_registry::PEDAL_EFFECT_IDS`), as
+recorded in `sonido_platform::cycle_table::EFFECT_SDRAM`: the bytes each effect
+allocates at 48 kHz as `EffectRegistry::create` builds it (kernel plus smoothed
+adapter, the form the pedal plays), measured on the host.
 
-| Effect | Kernel heap (bytes) | Notes |
+| Effect | Heap (bytes) | Notes |
 |--------|-------------------:|-------|
-| chorus | 23,040 | 4 modulated `InterpolatedDelay` lines |
-| phaser | 0 | Allpass stages and LFOs held inline |
-| distortion | 0 | |
-| bitcrusher | 0 | |
-| delay | 775,680 | 2 s stereo delay lines plus diffusion allpasses |
-| reverb | 116,700 | 8 FDN delay lines, modulated allpasses, early-reflection tap delay, stereo predelay |
-| ringmod | 0 | |
-| filter | 0 | |
+| chorus | 23,704 | 4 modulated `InterpolatedDelay` lines |
+| phaser | 752 | Allpass stages and LFOs held inline |
+| distortion | 576 | |
+| bitcrusher | 216 | |
+| delay | 776,432 | 2 s stereo delay lines plus diffusion allpasses |
+| reverb | 118,276 | 8 FDN delay lines, modulated allpasses, early-reflection tap delay, stereo predelay |
+| ringmod | 200 | |
+| filter | 304 | |
 
-For comparison, effects that are not on the pedal: flanger 5,776, tape 3,848,
-looper 23,040,000 (60 s stereo); preamp, gate, wah, compressor, tremolo and
-vibrato allocate nothing.
+The heaviest of the other effects a rig can hold: looper 23,040,312 (60 s
+stereo), time_stretch 1,049,032, texture 524,912, glitch 524,608, spring_reverb
+114,780, plate_reverb 106,188, harmonic_habitat 100,208.
 
-The firmware runs up to 3 effects at once. The worst pedal combination is
-delay + reverb + chorus = **915,420 bytes (~0.9 MB)**. That exceeds the AXI SRAM
+The jam runs up to 3 effects at once; its heaviest combination is
+delay + reverb + chorus = **918,412 bytes (~0.9 MB)**. That exceeds the AXI SRAM
 (which holds the code anyway), so the pedal puts its heap on the 64 MB SDRAM,
-where any combination fits with room to spare. See
+where any combination fits with room to spare; a rig is refused only if its
+effects' `EFFECT_SDRAM` sum passes `SDRAM_BUDGET_BYTES` (64 MB). See
 [Memory Placement](#memory-placement-boot_sram) below.
 
 ### Audio Path
@@ -122,14 +123,14 @@ cargo check --examples --features alloc,platform
 | 3.5 | `convert_passthrough.rs` | u24↔f32 conversion round trip, no DSP | Hothouse |
 | 3.75 | `simple_gain.rs` | Float math + `ControlBuffer` reads (K1 = gain) | Hothouse |
 | — | `graph_audio_test.rs` | `ProcessingGraph` + SDRAM heap coexisting with SAI DMA | Hothouse |
-| — | `qspi_read_test.rs` | W25Q64 JEDEC id + decode of patch slot 0 (defmt output) | Seed + SWD probe |
-| 4 | `single_effect.rs` | One kernel via `EffectSlot` + noon-biased knob mapping (distortion by default) | Hothouse |
+| — | `qspi_test.rs` | QSPI flash: JEDEC id, the app's vector table, the write guard, a write/verify/erase of the state sector, decode of bank slot 0 (defmt output) | Seed + SWD probe |
+| 4 | `single_effect.rs` | One kernel via `EffectSlot` + biased knob mapping, noon = default (distortion by default) | Hothouse |
 | 4 | `single_delay.rs`, `single_reverb.rs` | One kernel driven directly via `from_knobs()` | Hothouse |
-| 5 | `sonido_pedal.rs` | `Adapter<K, DirectPolicy>` + ProcessingGraph DAG + A/B morph | Hothouse |
+| 5 | `sonido_pedal.rs` | The pedal: a rig player (`PatchPlayer`) over the jam, the flash rig bank and the factory rigs, USB rig link, state saved to flash | Hothouse |
 
 Examples that need features (`required-features` in `Cargo.toml`): `sonido_pedal`
 and `single_effect` need `--features alloc,platform`; `graph_audio_test`,
-`qspi_read_test`, `single_delay` and `single_reverb` need `--features alloc`.
+`qspi_test`, `single_delay` and `single_reverb` need `--features alloc`.
 
 ### Modern Rust on Daisy Seed
 
@@ -145,7 +146,7 @@ Reference implementation: `crates/sonido-daisy/examples/single_effect.rs`
 
 ### Control / Audio Separation
 
-All 6 knobs use uniform `blocking_read()` polling in a 100 Hz Embassy task (`hothouse_control_task`, `POLL_INTERVAL_MS` = 10 in `hothouse.rs`). At ~8 µs per channel (CYCLES387_5 sample time), 6 reads cost ~48 µs per 10 ms cycle (~0.5% CPU). This matches libDaisy's own `AnalogControl` polling approach — no DMA channel, DMA buffer, or D2 SRAM allocation needed for the control path. GPIO reads (toggles, footswitches) are instant register accesses. Shared state flows through a lock-free `ControlBuffer` using `Relaxed` atomics. Knob values are not IIR-smoothed: `ControlBuffer::write_knob` snaps readings within 0.005 of either end to 0.0/1.0 and raises a change flag when a value moves more than 3e-4.
+All 6 knobs use uniform `blocking_read()` polling in a 100 Hz Embassy task (`hothouse_control_task`, `POLL_INTERVAL_MS` = 10 in `hothouse.rs`). At ~8 µs per channel (CYCLES387_5 sample time), 6 reads cost ~48 µs per 10 ms cycle (~0.5% CPU). This matches libDaisy's own `AnalogControl` polling approach — no DMA channel, DMA buffer, or D2 SRAM allocation needed for the control path. GPIO reads (toggles, footswitches) are instant register accesses. Shared state flows through a lock-free `ControlBuffer` using `Relaxed` atomics. Knob values are not IIR-smoothed (an IIR added 460 ms of lag): `ControlBuffer::write_knob` snaps readings within 0.005 of either end to 0.0/1.0, holds the stored value until the reading leaves a hysteresis band of 0.15% of travel (`KNOB_HYSTERESIS`) and then follows it at the band's edge, and raises a change flag when a value moves more than 3e-4. An untouched knob therefore reads exactly the same every poll, so the parameters it drives settle and their smoothing stops costing CPU.
 
 **Audio-side control decimation:** The audio callback checks controls every `CONTROL_POLL_EVERY` (15) blocks, not every block. At 48 kHz / 32-sample blocks = 1 500 blocks/s, this yields ~100 Hz control rate, matching the control task so each update is seen once. This constant is coupled to `BLOCK_SIZE` and `SAMPLE_RATE` — changing either requires recalculating. Defined in `effect_slot.rs`.
 
@@ -173,36 +174,50 @@ All 6 knobs use uniform `blocking_read()` polling in a 100 Hz Embassy task (`hot
 | `rcc.rs` | `ClockProfile`, `rcc_config()`, `cycles_per_block()` | Embassy |
 | `sdram.rs` | `init_sdram!`, `configure_mpu()`, `enable_dcache()`, `SDRAM_SIZE` | `stm32-fmc` |
 | `adc.rs`, `led.rs` | CPU temperature sensor enable; `UserLed` (PC7) | Embassy |
-| `qspi.rs` | Preset-sector layout and (de)serialization for the last 4 KB of QSPI flash — not yet used by any example | `core` |
-| `qspi_flash.rs` | Blocking W25Q64 read driver (`QspiFlash`, `patch_slot_addr()`) | Embassy |
-| `patch_loader.rs` | `pedal_make_effect()`, `load_patch()`, `load_and_build()` — read a `sonido-patch` patch from QSPI and build a `GraphEngine` (feature `alloc`) | `sonido-patch` |
+| `qspi_flash.rs` | `QspiFlash` (IS25LP064A / W25Q64): reads anywhere, a page (256 B) at a time with a yield between pages; `write_sector()` erases, programs and verifies a 4 KB sector, only inside the rig bank (`PATCH_BANK_ADDR`, `PATCH_SLOT_COUNT` = 15, `patch_slot_addr()`, `STATE_SECTOR_ADDR`) | Embassy |
+| `patch_loader.rs` | `make_effect()` (through `EffectRegistry::create`), `load_patch()` (read + decode a bank slot), `check_rig()` (the pedal's CPU/memory/structure rule), `error_blink_code()` (feature `platform`) | `sonido-patch`, `sonido-platform` (cycle_table) |
+| `rigs.rs` | `FACTORY_RIG_COUNT`, `factory_rig()` — the factory rigs `build.rs` encodes from `sonido_rigs::factory_rigs()` (feature `platform`) | `sonido-patch` |
 | `effect_slot.rs` | `EffectSlot` — click-free bypass ramp, NaN/Inf sanitization, knob mapping bridge; also exports `BypassCrossfade`, `sanitize_stereo`, `CONTROL_POLL_EVERY` (feature `platform`) | `sonido-core` (SmoothedParam), `sonido-platform` (knob_mapping) |
-| `noon_presets.rs` | Re-exports `sonido_platform::noon::noon_value` plus compile-time length checks against `KernelParams::COUNT` (feature `platform`) | `sonido-platform` |
-| `expression.rs`, `midi.rs`, `tap_tempo.rs`, `device_sync.rs` | Expression-pedal smoothing, USB-MIDI packet parser, tap-tempo BPM, two-Seed sync frame format — library code not yet used by any example | `core` |
+| `tap_tempo.rs` | `TapTempo` — tap-tempo BPM (used by `sonido_pedal`) | `core` |
+| `expression.rs`, `midi.rs`, `device_sync.rs` | Expression-pedal smoothing, USB-MIDI packet parser, two-Seed sync frame format — library code not yet used by any example | `core` |
+
+`build.rs` also generates `$OUT_DIR/factory_rigs.rs` (each factory rig as its
+encoded 4 KB-sector bytes), so the image carries the rigs without the code that
+builds them. `sonido-rigs` is a build-dependency only (beside a `std` build of
+`sonido-patch` for the build script).
 
 The ADC→parameter conversions live in `sonido-platform`, not in this crate:
-`crates/sonido-platform/src/param_map.rs` (`adc_to_param`, `adc_to_param_biased`),
-`noon.rs` (`noon_value`, `HARDWARE_MAPPED`) and `knob_mapping.rs` (`knob_map`,
-`knob_to_param`).
+`crates/sonido-platform/src/param_map.rs` (`adc_to_param`, `adc_to_param_biased`)
+and `knob_mapping.rs` (`knob_map`, `knob_to_param`).
 
-### Biased Knob Mapping (Noon = Sweet Spot)
+### Biased Knob Mapping (Noon = Default)
 
-The Hothouse 6-knob pedal uses a "noon = sweet spot" convention: knobs at 12 o'clock should produce a musically useful tone. This is achieved by biasing the ADC-to-parameter mapping curve, **not** by narrowing descriptor ranges (see ADR-030).
+The Hothouse 6-knob pedal uses a "noon = sweet spot" convention: knobs at 12 o'clock
+should produce a musically useful tone. The sweet spot is the parameter's
+**descriptor default**: every effect's defaults are its voiced sweet spot, level-matched
+by the level contract (`sonido_core::level`), so a pedal with every knob at noon and a
+freshly opened plugin start identical. There is no separate noon table. This is
+achieved by biasing the ADC-to-parameter mapping curve, **not** by narrowing descriptor
+ranges (see ADR-030).
 
 `sonido_platform::adc_to_param_biased(desc, noon, normalized)` splits the knob travel at center:
 - `[0.0, 0.5]` maps `desc.min` → `noon`
 - `[0.5, 1.0]` maps `noon` → `desc.max`
 
 Both halves respect the descriptor's `ParamScale` (Linear, Logarithmic, Power).
+STEPPED parameters use the same split, rounded to whole steps, so the noon option is
+what noon selects: the options below it share the left half of the travel and those
+above it the right half (a default on the first option keeps the whole left half
+there). Noon selects the default even at an end of the range: a parameter voiced at its
+maximum (a distortion's 100% mix) sweeps its whole range in the left half and holds
+there in the right.
 
-`adc_to_param_biased` automatically falls back to linear mapping (`adc_to_param`) for
-STEPPED parameters (equal knob travel per option) and when the noon value is at or near
-a range extreme (within 5% of either end). This eliminates dead zones — where half the
-knob travel produces no change — without requiring the caller to check parameter types.
-
-Firmware calls the wrapper `sonido_platform::knob_to_param`, which looks up the noon value
-(falling back to the descriptor default) and applies per-effect knob floors (currently
-delay time starts at 30 ms instead of 1 ms):
+Firmware calls the wrapper `sonido_platform::knob_to_param`, which uses the descriptor
+default as noon and applies per-effect knob floors that tighten the descriptor's
+minimum for hardware travel only (`knob_min_override`): delay time starts at 30 ms
+(below that echoes read as comb filtering), filter cutoff at 150 Hz (below that a
+resonant low-pass on guitar is silence) and bitcrusher bit depth at 5 (below that a
+guitar at instrument level never crosses the first quantization step):
 
 ```rust
 use sonido_platform::knob_mapping::{knob_map, knob_to_param, NULL_KNOB};
@@ -220,38 +235,33 @@ for k in 0..6 {
 
 `EffectSlot::apply_knobs()` does exactly this.
 
-The noon values are centralized in `sonido_platform::noon::noon_value(effect_id, param_idx)`.
-Most equal the descriptor defaults; mix parameters use 100% for insert effects
-(distortion, bitcrusher, ringmod) and 50% for blend effects (delay, reverb, chorus,
-compressor). The biased mapping centers the ADC curve on these sweet spots without
-narrowing the available range.
+To change what noon sounds like, change the effect's default (descriptor and
+`Params::default` together; `ParamDescriptor::with_default` sets it on a factory
+descriptor), then re-run the level calibration
+(`cargo run -p sonido-effects --example calibrate --release`) so the new default
+stays level-matched. `adc_to_param()` (linear mapping) remains available for controls
+with no sweet spot (the pedal uses it for the jam's morph time and master level).
 
-For effects without noon presets, `knob_to_param` uses the descriptor default as noon,
-and `adc_to_param()` (linear mapping) remains available for controls with no sweet spot
-(the morph pedal uses it for morph speed and master level).
+### Knob Mapping Verification
 
-### Noon Preset Verification
-
-The mapping functions and noon table live in `sonido-platform`, which builds on the
-host, so `param_map.rs` and `knob_mapping.rs` carry their own unit tests
-(`cargo test -p sonido-platform`). `crates/sonido-effects/tests/noon_mapping.rs`
-additionally checks the noon table against every effect in
-`sonido_platform::noon::HARDWARE_MAPPED` (20 effects), using an inlined `std`-math copy
-of the biased mapping.
-
-**Test cases** (`noon_mapping.rs`):
+The mapping functions live in `sonido-platform`, which builds on the host, so
+`param_map.rs` and `knob_mapping.rs` carry their own unit tests
+(`cargo test -p sonido-platform`). Two integration tests run the real
+`adc_to_param_biased` against every registered effect:
 
 | Test | What it catches |
 |------|----------------|
-| `noon_coverage_hardware_mapped` | Writable param of a hardware-mapped effect without a noon preset |
-| `noon_values_in_range` | Stale noon after descriptor range change (the original ADR-030 bug class) |
-| `biased_mapping_endpoints` | Dead zone where knob 0→min or knob 1→max fails |
-| `biased_noon_at_center` | Knob center doesn't produce the sweet-spot value |
-| `biased_mapping_monotonic` | Non-monotonic output from biased split algorithm |
+| `noon_mapping.rs` `biased_mapping_endpoints` (sonido-effects) | Dead zone where knob 0→min or knob 1→max fails, for every writable parameter |
+| `noon_mapping.rs` `noon_is_the_default` | Knob center doesn't select the descriptor default |
+| `noon_mapping.rs` `biased_mapping_monotonic` | Non-monotonic output from the biased split |
+| `knob_calibration.rs` `noon_is_level_matched_and_extremes_are_usable` (sonido-platform) | A jam effect at noon more than ±1.5 dB (integrated LUFS) from the dry guitar; a knob extreme outside −15..+8 dB (K6, the level knob: −30..+13 dB) or non-finite |
 
-**READ_ONLY diagnostic params** — metering outputs, not knob-writable. Noon arrays still
-include an entry for them (arrays cover all `KernelParams::COUNT` params so the
-compile-time length checks in `noon_presets.rs` pass), but no knob map points at them:
+`knob_calibration.rs` drives each of the 8 `PEDAL_EFFECT_IDS` through its `knob_map`
+and `knob_to_param` with a synthetic strummed guitar peaking at −20 dBFS
+(`sonido_analysis::signals::strummed_guitar`); `--nocapture` prints the table.
+
+**READ_ONLY diagnostic params** — metering outputs, not knob-writable. The mapping
+tests skip them and no knob map points at them:
 
 | Effect | Index | Param |
 |--------|-------|-------|
@@ -390,9 +400,9 @@ re-exported at the crate root; import them from `sonido_daisy::effect_slot`.
 
 | Feature | Enables | Required By |
 |---------|---------|-------------|
-| *(none)* | Core library: audio, controls, hothouse, LED, RCC, SDRAM, QSPI | Simple examples (blinky, passthrough, diagnostics, bench_kernels) |
-| `alloc` | `Adapter`/`DirectPolicy` re-exports, `patch_loader` | graph_audio_test, qspi_read_test, single_delay, single_reverb |
-| `platform` | Implies `alloc`; pulls in `sonido-platform`; enables `HothousePlatform`, `effect_slot`, `noon_presets` | sonido_pedal, single_effect |
+| *(none)* | Core library: audio, controls, hothouse, LED, RCC, SDRAM, QSPI flash, tap tempo | Simple examples (blinky, passthrough, diagnostics, bench_kernels) |
+| `alloc` | `Adapter`/`DirectPolicy` re-exports | graph_audio_test, qspi_test, single_delay, single_reverb |
+| `platform` | Implies `alloc`; pulls in `sonido-platform`; enables `HothousePlatform`, `effect_slot`, `patch_loader`, `rigs` | sonido_pedal, single_effect |
 
 ### Dependencies
 
@@ -401,7 +411,8 @@ re-exported at the crate root; import them from `sonido_daisy::effect_slot`.
 | `embassy-stm32` | 0.5 | Async HAL — SAI, DMA, GPIO, ADC, FMC |
 | `embassy-executor` | 0.9 | Async task executor for Cortex-M |
 | `embassy-time` | 0.5 | Timer and delay utilities |
-| `embassy-usb` | 0.5 | USB CDC ACM serial output |
+| `embassy-usb` | 0.5 | USB CDC ACM serial (benchmark output, the pedal's rig link) |
+| `embassy-sync` | 0.7 | Async `Mutex` (the pedal's shared flash driver) |
 | `stm32-fmc` | 0.4 | SDRAM controller (AS4C16M32MSA-6 device definition) |
 | `cortex-m` | 0.7 | Low-level Cortex-M access — DWT, SCB, MPU |
 | `cortex-m-rt` | 0.7 | Runtime — vector table, entry point |
@@ -410,8 +421,9 @@ re-exported at the crate root; import them from `sonido_daisy::effect_slot`.
 | `libm` | 0.2 | `no_std` float math |
 | `grounded` | 0.2 | DMA buffer management (GroundedArrayCell) |
 | `static_cell` | 2 | Safe static initialization for USB buffers |
-| `sonido-core`, `sonido-effects`, `sonido-registry`, `sonido-patch` | path | DSP, kernels, effect IDs/UIDs, patch decoding (`default-features = false`) |
-| `sonido-platform` | path, optional | Knob mapping, noon table, `PlatformController` (feature `platform`) |
+| `sonido-core`, `sonido-effects`, `sonido-registry`, `sonido-patch` | path | DSP, kernels, the effect registry and UIDs, rig format + `PatchPlayer` + pedal state + USB link (`default-features = false`) |
+| `sonido-platform` | path, optional | Knob mapping, cycle table, `PlatformController` (feature `platform`) |
+| `sonido-rigs` | path, build-dependency | Factory rigs, encoded into the image by `build.rs` |
 | `defmt` | 1.0 | Efficient embedded logging |
 | `defmt-rtt` | 1.1 | RTT transport for defmt |
 | `panic-probe` | 1.0 | Panic handler with defmt output |
@@ -638,6 +650,12 @@ cargo run --example bench_kernels --release
 # = probe-rs run --chip STM32H750IBKx target/thumbv7em-none-eabihf/release/examples/bench_kernels
 ```
 
+The defmt log also carries a second pass the USB table does not: each effect on
+the **rig path** (as `EffectRegistry::create` builds it, with the pedal's control
+tick), one `rig=<name> mean=… worst=…` line per effect. Those worst blocks are the
+pedal's cycle table; save the log and regenerate the table with
+`scripts/update_cycle_table.py` ([Benchmarks](BENCHMARKS.md#updating-the-cycle-table)).
+
 `probe-rs read --chip STM32H750IBKx b32 0x5C001000 1` checks the wiring: it
 reads the debug ID code (`0x20036450` on an H750, revision V).
 
@@ -674,13 +692,13 @@ unused.
 ```rust
 // EffectSlot pattern (single_effect.rs)
 let mut slot = EffectSlot::new(Box::new(effect), EFFECT_ID, SAMPLE_RATE);
-slot.apply_knobs(&knob_vals);                 // noon-biased ADC→param
+slot.apply_knobs(&knob_vals);                 // biased ADC→param, noon = default
 let (l, r) = slot.process_stereo(in_l, in_r); // effect → NaN guard → bypass ramp
 ```
 
 `sonido_pedal.rs` (Tier 5) uses the standalone utilities — `BypassCrossfade`
-and `sanitize_stereo` — alongside its DAG-based `ProcessingGraph`,
-since the graph owns the effects rather than individual `EffectSlot` wrappers.
+and `sanitize_stereo` — around its `PatchPlayer`, since the player's graph owns
+the effects rather than individual `EffectSlot` wrappers.
 
 ```bash
 cd crates/sonido-daisy
@@ -790,136 +808,146 @@ cargo run --example <name> --release
 
 ---
 
-## Morph Pedal
+## The Pedal (Rig Player)
 
-The morph pedal (`examples/sonido_pedal.rs`, "Morph Pedal v2" in its header) is the
-flagship firmware — a 3-slot, DAG-routed, A/B morphing guitar pedal with 8 curated
-effects. It demonstrates `ProcessingGraph` for routing, `Adapter<K, DirectPolicy>` for
-zero-smoothing kernel access, noon-biased knob mapping, and footswitch-controlled
-crossfade between two parameter snapshots.
+The pedal firmware (`examples/sonido_pedal.rs`) is a rig player. Every sound it
+makes is a rig, an ordinary `sonido_patch::Patch`, played by
+`sonido_patch::PatchPlayer`, the runtime the graph-player plugin uses, with
+effects built by `EffectRegistry::create`, the constructor the plugins and the
+editor use. A rig's parameters are therefore smoothed (`Adapter<K, SmoothedPolicy>`)
+and it sounds the same on the pedal as in a DAW.
 
 ### Architecture Overview
 
 ```
-   ┌─────────┐     ┌────────────────────┐     ┌──────────────┐
-   │ ADC × 6 │──→──│  knob_to_param()   │──→──│ Graph        │
-   │ Toggles  │     │  (noon-biased,     │     │ .effect_with_│
-   │ Footsw   │     │   ParamScale-aware)│     │ params_mut() │
-   └─────────┘     └────────────────────┘     └──────────────┘
-                                                   │
-                        ┌──────────────────────────┘
-                        ▼
-   ┌─────────────────────────────────────────────────────┐
-   │             ProcessingGraph (compiled DAG)           │
-   │  Input → [Adapter<K, DirectPolicy>] → ... → Output  │
-   │          (zero-smoothing kernel wrapper)             │
-   └─────────────────────────────────────────────────────┘
+  QSPI flash                 rig list (wraps)                  firmware image
+  state sector ──→ ┌──────┬────────────────┬──────────────┐ ←── factory rigs
+  rig bank ──────→ │ Jam  │ bank rigs 1–15 │ factory rigs │     (build.rs)
+  USB rig link ──→ └──────┴───────┬────────┴──────────────┘
+                                  │ load: read, check_rig, build
+                                  ▼
+   ┌─────────┐  macros / jam    ┌───────────────────────────────────────┐
+   │ ADC × 6 │  edits / A·B·    │ PatchPlayer                           │
+   │ Toggles │ ───────────────→ │  graph of registry-built effects      │
+   │ Footsw  │  morph position  │  Input → … → Output                   │
+   └─────────┘                  └───────────────────────────────────────┘
 ```
 
-The input is summed to mono (`(L + R) / 2`) and fed to both graph inputs.
+The input is summed to mono (`(L + R) / 2`) and fed to both sides of the player.
 
-Two sonido pillars are used together:
+### The Rig List
 
-- **ProcessingGraph** — DAG routing with serial/parallel/fan topologies via
-  split/merge nodes. Zero-alloc per audio block after `compile()`.
-- **`Adapter<K, DirectPolicy>`** — wraps any kernel in `Effect + ParameterInfo`
-  (and thus `EffectWithParams` via blanket impl) with zero smoothing overhead.
-  `set_param()` writes directly to the kernel's typed params struct. The value
-  is live on the next `process_stereo()` call.
+The pedal powers on into the rig it last played (hold FS1 while powering on to
+start in the jam). The list wraps around, in this order:
 
-Why not `Adapter<K, SmoothedPolicy>`? It adds a per-sample `SmoothedParam::advance()`
-call for every parameter. On the pedal, params change at the ~100 Hz control rate,
-so the per-sample smoothing is overhead the firmware does not need.
+1. **Jam** — three slots you fill on the pedal from the eight `PEDAL_EFFECT_IDS`,
+   routed by T3. It is saved to flash as you play.
+2. **Bank rigs** — every slot of the QSPI rig bank (15) that holds a decodable rig,
+   sent over the [USB rig link](#usb-rig-link) or flashed over DFU.
+3. **Factory rigs** — the six rigs of `sonido_rigs::factory_rigs()`, compiled into
+   the image (`src/rigs.rs`, see [Factory Rigs](#factory-rigs)).
 
-### DirectPolicy Adapter Pattern
+Hold a footswitch in A or B mode to step through the list; LED 2 then blinks the
+rig's position (the jam is 1).
 
-`Adapter<K, DirectPolicy>` is the `DirectPolicy` form of the generic
-`Adapter<K, S: SmoothingPolicy>` in `crates/sonido-core/src/kernel/adapter.rs`.
-Simplified:
+### Controls
 
-```rust
-struct Adapter<K: DspKernel, S: SmoothingPolicy> {
-    kernel: K,
-    policy: S,            // DirectPolicy is a zero-sized marker
-    snapshot: K::Params,  // typed params the kernel reads
-    sample_rate: f32,
-}
+The exact controls (`controls()` in `sonido_pedal.rs`):
 
-// With S = DirectPolicy, in effect:
-fn process_stereo(&mut self, l: f32, r: f32) -> (f32, f32) {
-    self.kernel.process_stereo(l, r, &self.snapshot)
-}
-fn set_param(&mut self, idx: usize, val: f32) { self.snapshot.set(idx, val); }
-fn get_param(&self, idx: usize) -> f32 { self.snapshot.get(idx) }
-fn param_info(&self, idx: usize) -> Option<ParamDescriptor> { K::Params::descriptor(idx) }
-```
+| Control | Jam | Rig |
+|---------|-----|-----|
+| K1–K6 | Edit the T1 slot's A or B state through the effect's `knob_map`; a knob takes over once you move it. In Morph: K5 morph time, K6 master | The rig's six macros |
+| T1 | Slot 1 / 2 / 3 | — |
+| T2 | A / B / Morph | A / B / Morph |
+| T3 | Linear / Parallel / Fan | — |
+| FS tap (A/B, < 300 ms) | FS1 previous, FS2 next effect in the T1 slot; FS1 double-tap (within 350 ms) clears it | FS2 tap tempo |
+| FS hold (A/B, ≥ 300 ms) | FS1 previous, FS2 next rig | same |
+| FS hold (Morph) | Ramp toward A (FS1) or B (FS2); release to stay | same |
+| Both | Tap: bypass. Hold 3 s: USB bootloader (DFU) | same |
 
-Comparison with sonido's other DSP bridge patterns:
-
-| Pattern | Context | Smoothing | Trait impl |
-|---------|---------|-----------|------------|
-| `Adapter<K, SmoothedPolicy>` | Desktop / Plugin; `pedal_make_effect()` for flash-loaded patches | Yes (SmoothedParam per param) | Effect + ParameterInfo |
-| `Adapter<K, DirectPolicy>` | Morph pedal, `single_effect.rs` | None (direct write) | Effect + ParameterInfo |
-| Direct `DspKernel` | `single_delay.rs`, `single_reverb.rs` | None (`from_knobs()`) | No trait — call `process_stereo()` directly |
-
-Use `Adapter<K, DirectPolicy>` when you need `ProcessingGraph` compatibility (the graph
-requires `Effect + ParameterInfo` behind `EffectWithParams`). Use direct kernel
-access when you have a single fixed effect and don't need the graph.
+Taps and holds are measured in 100 Hz control polls (`TAP_LIMIT` = 30). The
+tapped tempo (120 BPM until the first tap) applies to every rig as its
+`TempoContext` and is saved with the state.
 
 ### Toggle Mapping
 
-Three toggles divide control across three orthogonal concerns:
-
 | Toggle | UP (0) | MID (1) | DOWN (2) |
 |--------|--------|---------|----------|
-| **T1** | Node 1 (effect slot 1) | Node 2 (effect slot 2) | Node 3 (effect slot 3) |
-| **T2** | **A mode**: hear/edit A state | **B mode**: hear/edit B state | **Morph mode**: FS1/FS2 control morph |
+| **T1** | Jam slot 1 | Jam slot 2 | Jam slot 3 |
+| **T2** | **A**: hear/edit A | **B**: hear/edit B | **Morph**: FS1/FS2 ramp between A and B |
 | **T3** | **Linear**: 1 → 2 → 3 | **Parallel**: split → [1,2,3] → merge | **Fan**: 1 → split → [2,3] → merge |
 
-T1 selects which of the 3 effect slots the knobs and footswitch scrolling control.
-T2 selects the editing/performance mode. T3 selects routing topology (triggers graph
-rebuild). Empty slots are skipped when wiring, so with one populated slot every
-topology is a plain chain.
+T1 and T3 only act on the jam; T3 rebuilds it. Empty slots are skipped when
+wiring (`sonido_patch::pedal::jam_patch`), so with one populated slot every
+topology is a plain chain. T2 sets the morph position of whatever plays: A = 0,
+B = 1, Morph = wherever the footswitches leave it.
 
-### A/B Editing
+### The Jam
 
-T2 selects between editing two independent parameter snapshots (A and B) and
-performing a morph between them. The pedal boots with all three slots empty
-(bypass).
+**Slots.** FS taps scroll the T1 slot through empty and the 8 jam effects
+(`PEDAL_EFFECT_IDS`). Scrolling skips any effect that would take the jam past the
+pedal's CPU rule (`cycle_table::chain_fits`, see
+[Chain Configurations](#chain-configurations)); with a reverb loaded that rules
+out a second reverb, and next to reverb and distortion only filter, ringmod or
+bitcrusher fit. A newly selected effect starts where the knobs are, not at its
+defaults: its mapped parameters are set from the current knob positions through
+`knob_to_param`, and A and B start equal.
 
-**A mode** (T2=UP) — Knobs K1–K6 write to A-state parameters for the slot selected
-by T1, through the effect's `knob_map` and `knob_to_param()` (noon-biased,
-`ParamScale`-aware). Sound output reflects the A snapshot.
-Footswitch taps (released in under 300 ms, `TAP_LIMIT` = 30 polls): FS1 = previous
-effect, FS2 = next effect. Selecting a new effect resets both A and B states for
-that slot to the effect's defaults. Scrolling skips any effect that would take the
-chain past 85% of the block budget, summing the measured worst blocks in
-`sonido_platform::cycle_table` (`CHAIN_BUDGET`); in practice that rules out a second
-reverb, which measured 123% of the budget beside the first. Holding FS1 for 300 ms
-or longer and releasing it loads the next of the 3 factory presets, starting with
-preset 1 after boot; LED 2 then blinks the preset number.
+**A/B editing.** In A mode (T2 up) the knobs write the focused slot's A state, in B
+mode its B state, through the effect's `knob_map` and `knob_to_param` (noon = the
+descriptor default, see [Biased Knob Mapping](#biased-knob-mapping-noon--default)).
+The first move out of A seeds each slot's B as a copy of A, so a slot whose B was
+never edited does not move during a morph.
 
-Normally "knob = truth" — the physical pot position is the param value. After
-changing slot (T1), changing mode (T2), scrolling effects, or loading a factory
-preset, **soft takeover** locks all 6 knobs until each physical position comes
-within 5% of the parameter's range (`PICKUP_THRESHOLD_FRAC`) of the current value,
-preventing parameter jumps.
+**Touch takeover.** After a slot, mode or rig change, a knob edits again only once
+it has moved 2% of its travel (`TOUCH_TRAVEL`); untouched knobs leave the stored
+values alone. There is no display to show where a stored value sits, so waiting
+for a knob to sweep past it (pickup) left knobs dead.
 
-**B mode** (T2=MID) — Knobs write to B-state parameters. On first entry, B is
-initialized as a copy of A. Sound output reflects the B snapshot. Same
-footswitch effect scrolling as A mode (factory presets load only from A mode).
-Switching between A and B modes snaps the sound to the stored snapshot.
+**Morph.** In Morph mode (T2 down) FS1 held ramps the morph position toward A,
+FS2 toward B, and releasing latches it. K5 sets the jam's morph time (0.1–5.0 s
+for a full A→B sweep) and K6 its master level (−60 to +12 dB, applied only in
+Morph mode), both through linear `adc_to_param()`; K1–K4 are inactive. The
+player interpolates every parameter per control tick by its descriptor
+(frequency logarithmic, STEPPED snapped at the midpoint, else linear).
 
-**Morph mode** (T2=DOWN) — Footswitch-controlled crossfade between A and B.
-Entering from A starts at `morph_t` = 0.0, from B at 1.0.
-FS1 held → `morph_t` ramps toward 0.0 (A). FS2 held → toward 1.0 (B).
-Neither held → latch (morph_t stays where it is). **K5** sets the morph time
-(0.1–5.0 s for a full A→B sweep, default 2 s) and **K6** sets master level
-(−60 to +12 dB, applied only in morph mode); both use linear `adc_to_param()`.
-K1–K4 are inactive. `interpolate_and_apply()` writes lerped params to all slots
-every control poll (~100 Hz). STEPPED params snap at t=0.5 (same as
-`KernelParams::lerp()`). A slot whose B was never edited has B = A, so its
-parameters do not move during the morph.
+The jam is an ordinary patch: `jam_patch()` turns the slots (each a `JamSlot`:
+effect UID, A and B parameter values) into one, and it plays through the same
+`PatchPlayer` as every other rig.
+
+### Rigs
+
+On a rig, K1–K6 drive the rig's six macros (`PatchPlayer::set_macro`), and T2
+and the footswitches move its A/B morph at the rig's own morph speed. Every factory
+rig maps its macros the same way: K1–K3 are the rig's own controls, K4 input gain
+(±12 dB, 0 at noon), K5 morph time (0.2 s, 1 s at noon, 5 s), K6 master volume
+(±12 dB around the rig's level-matching trim). The A/B morph moves the parameters
+the macros leave alone, so a knob never fights the morph.
+
+#### Factory Rigs
+
+Defined once in `crates/sonido-rigs/src/lib.rs` and shared with the graph-player
+plugin's rig library. The CPU column is the rig's estimate under the pedal's rule
+(`cycle_table::chain_cycles` against the 320,000-cycle block; the limit is 80%):
+
+| # | Rig | Signal path | K1 | K2 | K3 | CPU estimate |
+|--:|-----|-------------|----|----|----|-----:|
+| 1 | Shimmer Cathedral | pitch_shift → plate_reverb, beside delay | Shimmer (octave mix) | Wash (plate output) | Echo (delay mix) | 44% |
+| 2 | Fuzz Lab | distortion → filter, beside bitcrusher → ringmod; into tape | Fuzz (drive) | Filter (cutoff) | Crush (crusher mix) | 57% |
+| 3 | Space Echo | preamp → tape → delay → spring_reverb | Echo (delay mix) | Spring (spring mix) | Grit (preamp gain) | 59% |
+| 4 | Granular Drift | glitch, beside time_stretch → texture; into plate_reverb | Cloud (texture output) | Stretch (time-stretch output) | Stutter (glitch mix) | 48% |
+| 5 | Harmonic Habitat | harmonic_habitat → chorus → delay | Habitat (mix) | Chorus (mix) | Echo (delay mix) | 56% |
+| 6 | Amp Stack | gate → amp → cabinet | Bass | Mid | Treble | 77% |
+
+Each rig's master trim (`crates/sonido-rigs/src/trims.rs`) is generated by
+`cargo run -p sonido-rigs --example calibrate --release`, which plays the
+reference guitar through the rig with every knob at noon, halfway through its
+morph, and sets the master so the rig plays at the dry guitar's loudness.
+`crates/sonido-rigs/tests/factory.rs` holds every rig to that (±0.5 dB at morph
+0.5, ±3 dB at A and at B), to the pedal's CPU and memory rule
+(`validate_for_pedal` with the cycle table), and to a round trip through the
+4 KB binary format with all six macros named. The firmware's `build.rs` encodes
+them into the image, so the pedal ships the bytes, not the code that builds them.
 
 ### Bypass and Bootloader
 
@@ -930,21 +958,119 @@ Holding both footswitches for 3 s (`BOOTLOADER_HOLD_TICKS` = 300 polls) writes
 the Daisy bootloader's "stay in DFU" magic (`0xB0074EFA`) to backup SRAM and resets,
 so the next firmware can be flashed without opening the enclosure.
 
-### Rebuilds and Tails
+### Loading a Rig
 
-Changing an effect, loading a preset or flipping T3 rebuilds the graph in
-`graph_rebuild_task`; meanwhile the callback ramps the bypass crossfade to dry and
-back. Effects with a tail (reverb and delay) can ring out beside the new chain
-(`ProcessingGraph` spillover), but every node is rebuilt, so a reverb's tail runs
-next to a fresh reverb. The pedal keeps the old tails only when they and the new
-chain sum to at most 70% of the budget in measured worst blocks (`SPILLOVER_BUDGET`)
-and cuts them otherwise. Without that rule, any change with a reverb loaded ran two
-reverbs for the 3-second tail, about 125% of the budget, and the codec overran some
-500 times a second until the tail ended.
+A rig change (footswitch hold, jam scroll or T3, USB) is a request the
+`rebuild_task` picks up within 5 ms. Loading (`load()`):
 
-The rebuild still runs on the same executor as the audio loop, so each change costs
-one to six codec restarts (`SAI … Overrun` in the log, a few milliseconds of
-dropout) under the dry ramp.
+1. **Check first.** A bank rig is read from flash and decoded, a factory rig
+   decoded from the image, and either is checked with `patch_loader::check_rig`
+   (every effect available, routing valid, CPU within `CHAIN_FRACTION`, SDRAM
+   within budget) *before* the old rig stops. A refused rig leaves the current
+   one playing, and LED 2 blinks the reason (`error_blink_code`): 2 = empty or
+   corrupt slot, 3 = an effect this firmware lacks, 4 = too heavy for the CPU or
+   memory, 5 = routing that does not build.
+2. **Ramp to dry.** `UPDATING` makes the audio callback crossfade to the dry input
+   and leave the player alone; the task waits 8 ms for the ramp.
+3. **Build.** Each node's effect is built in turn, yielding to the executor between
+   them so audio keeps up. A jam rebuild reuses the effects of slots that did not
+   change, tails included.
+4. **Start at the values.** The new player gets the morph position from T2, the
+   macros from the knobs (rigs), the tempo, and then `apply_controls_now()`, which
+   snaps every parameter to its value (`Effect::snap_params`) instead of sweeping
+   there from the effects' defaults.
+5. `UPDATING` clears and the callback ramps back to the rig. A rig whose graph
+   does not build falls back to the jam.
+
+On success LED 2 blinks the rig's position, and the active rig is marked for the
+next state save.
+
+### Real-Time Hardening
+
+One Embassy executor runs the audio callback and every other task (controls,
+rig loading, flash, USB). While a rig plays at about 75% load, the audio task
+misses its block if another task holds the executor for more than about 0.18 ms.
+The firmware is built around that:
+
+- **Flash reads yield per page.** `QspiFlash::read` transfers 256 bytes (about
+  80 µs) at a time and yields between pages; `write_sector` waits out erase and
+  program with timers and verifies page by page. One 4 KB read used to block for
+  1.3 ms and dropped audio on every state save.
+- **Table-driven CRC32** (`crates/sonido-patch/src/binary.rs`), for the rig and
+  state sectors and the USB frames.
+- **Rigs snap, not sweep.** A freshly built rig used to smooth every parameter
+  from its default, redesigning every coefficient per sample at once: a 116%
+  peak at boot. `Effect::snap_params` (`crates/sonido-core/src/effect.rs`) and
+  `PatchPlayer::apply_controls_now` (`crates/sonido-patch/src/runtime.rs`) start
+  it at its values.
+- **The boot rig is built before the codec starts**, so building it (milliseconds
+  of work) never competes with running audio.
+- **Rig changes ramp to dry** and build one effect per executor turn (above).
+- **Knob hysteresis.** `ControlBuffer` holds each knob's value until the reading
+  leaves a 0.15%-of-travel band (`KNOB_HYSTERESIS` in `src/controls.rs`), so an
+  untouched knob reads exactly the same every poll and the parameters it drives
+  settle; a jittering knob kept a reverb rig about 8 points busier.
+
+Measured on hardware on 2026-10-22 after these fixes: the jam distortion →
+reverb → ringmod ran at 74% mean and about 83–85% at its slowest callbacks, with
+no block over budget and no codec overrun at boot. The firmware image is 461 KB
+of the 480 KB BOOT_SRAM limit.
+
+### Flash: Rig Bank and State Sector
+
+The last 64 KB of the 8 MB QSPI flash belongs to the pedal (`src/qspi_flash.rs`):
+
+| Region | Flash address | Over DFU | Contents |
+|--------|---------------|----------|----------|
+| Rig bank, slots 0–14 (`PATCH_SLOT_COUNT` = 15) | `0x007F_0000` + n × 4096 (`patch_slot_addr`) | `0x907F_0000` + n × 4096 | One encoded `sonido-patch` rig per 4 KB sector |
+| State sector (`STATE_SECTOR_ADDR`) | `0x007F_F000` | `0x907F_F000` | `PedalState` |
+
+`QspiFlash::write_sector` refuses any address outside this region
+(`FlashError::OutsideBank`), so the firmware never erases or programs its own
+image. At boot the pedal reads the state sector and scans the bank for slots
+that decode.
+
+`PedalState` (`crates/sonido-patch/src/pedal.rs`) holds the active rig, the jam's
+topology, its three slots (effect UID, A and B values) and the tapped BPM, behind
+a `SPS1` magic and a CRC32. `save_task` writes it once nothing has changed for
+2 s (`SAVE_QUIET_MS`), checking every 500 ms, so playing never waits on flash
+and the pedal comes back as you left it.
+
+`examples/qspi_test.rs` is the hardware check for this path (JEDEC id, write
+guard, a write/verify/erase of the state sector, slot 0 decode); run it from RAM
+with a probe:
+
+```bash
+cd crates/sonido-daisy
+cargo run --release --example qspi_test --features alloc
+```
+
+### USB Rig Link
+
+While it plays, the Seed's USB port is a CDC-ACM serial device (`1209:0001`,
+product "Sonido Pedal") speaking `sonido_patch::link`
+(`crates/sonido-patch/src/link.rs`): the host sends one request frame and reads
+one reply frame. A frame is the sync bytes `"SL"`, a kind byte, an argument byte,
+a little-endian payload length (at most one 4 KB sector), the payload, and a
+CRC32 of everything after the sync. Rigs travel as the same 4 KB sectors the bank
+stores.
+
+| Request | Argument | Reply |
+|---------|----------|-------|
+| `Hello` | — | `Info`: protocol version, slot and factory-rig counts, active rig, effect UIDs, firmware name |
+| `ReadSlot` | slot | `Sector` (an erased slot reads all `0xFF`) |
+| `WriteSlot` | slot | `Ok` once the sector decodes, passes `check_rig`, is written and verified; the pedal then plays it |
+| `EraseSlot` | slot | `Ok` (if the erased slot was playing, the pedal returns to the jam) |
+| `Activate` | rig byte (0 = jam, 1–15 = bank slot + 1, `0x80` + n = factory rig n) | `Ok` |
+| `ReadJam` | — | `Sector`: the jam as a rig |
+| `Status` | — | `Status`: active rig, bypass, morph position, last second's load mean and peak |
+
+Refusals reply `Error` with an `ErrorCode`: `BadSlot`, `NotARig`,
+`UnknownEffect`, `OverBudget`, `Flash`, `Unsupported`, `BadRig`.
+
+A rig can also go straight into a bank slot over DFU, at the slot's address in the
+table above, for example a sector from `sonido patch export` or the editor's export
+menu; the pedal finds it at the next boot.
 
 ### CPU Load Meter
 
@@ -955,29 +1081,32 @@ second over defmt RTT. Run it from RAM with a probe attached to see it:
 cd crates/sonido-daisy
 cargo build --release --example sonido_pedal --features alloc,platform
 probe-rs run --chip STM32H750IBKx --protocol swd target/thumbv7em-none-eabihf/release/examples/sonido_pedal
-# load mean=78.1% peak=85.1% over_budget=0/1501 slots=[distortion, reverb, bitcrusher] topo=linear bypassed=false
+# level in peak=<dB×10> rms=<dB×10>  out peak=<dB×10> rms=<dB×10> (tenths)
+# load mean=<m>% peak=<p>% over_budget=<n>/<blocks> rig=jam slots=[distortion, reverb, ringmod] topo=linear bypassed=false
 ```
 
 `mean` and `peak` are the average and the slowest callback of that second against
-the 320,000-cycle block budget; `over_budget` counts callbacks that missed it. A RAM
-run is lost at power-off; the bootloader then starts whatever is in QSPI.
+the 320,000-cycle block budget; `over_budget` counts callbacks that missed it. On a
+rig other than the jam the line names the rig byte instead of the slots. The same
+mean and peak are in the USB `Status` reply. A RAM run is lost at power-off; the
+bootloader then starts whatever is in QSPI.
 
 ### LED Feedback
 
 | LED | Meaning |
 |-----|---------|
-| LED1 | Bypass status — on = active, off = bypassed |
-| LED2 | A/B mode: output level meter. Morph mode: duty cycle = `morph_t` (10-poll software PWM). After a factory preset load: blinks the preset number. Off in bypass |
+| LED1 | On while the pedal is active, dark for 70 ms on every tapped beat (`BEAT_FLASH_S`); off in bypass |
+| LED2 | Blinks the rig's position after a rig change, or a refused rig's error code. Otherwise: Morph mode, duty cycle = morph position (10-poll software PWM); A/B mode, output level meter. Off in bypass |
 
 LED duty is approximate: `hothouse_control_task` drives the GPIO on/off from the
 value the callback last wrote (threshold 0.5), so the software PWM is sampled at
 the 100 Hz control rate.
 
-### Curated Effect List and Knob Mapping
+### Jam Effect List and Knob Mapping
 
 8 effects, in the order of `PEDAL_EFFECT_IDS` (`crates/sonido-registry/src/lib.rs`).
-Footswitch scrolling wraps through bypass (index 0) and these 8 (indices 1–8).
-Flash-loaded patches identify effects by stable UID (`EFFECT_UIDS`), not by this
+Footswitch scrolling wraps through empty (index 0) and these 8 (indices 1–8).
+Rigs and the saved jam identify effects by stable UID (`EFFECT_UIDS`), not by this
 index:
 
 | Scroll index | Effect ID | `knob_map` (K1–K6 → param index) |
@@ -1003,9 +1132,9 @@ index:
 | K6 | Level | Output/makeup gain |
 
 The maps live in `knob_map()` in `crates/sonido-platform/src/knob_mapping.rs`,
-keyed by registry ID (it also maps 7 effects that are not on the pedal).
+keyed by registry ID (it also maps 7 effects that are not in the jam).
 `knob_to_param()` in the same file turns a 0–1 knob reading into a parameter
-value on the noon-biased curve:
+value on the biased curve:
 
 ```rust
 pub const NULL_KNOB: u8 = 0xFF; // sentinel for unmapped knobs
@@ -1020,20 +1149,8 @@ pub fn knob_map(effect_id: &str) -> Option<[u8; 6]> {
 }
 ```
 
-The `create_effect(idx, sr)` factory in `sonido_pedal.rs` creates the matching
-`Adapter<K, DirectPolicy>` for each scroll index:
-
-```rust
-fn create_effect(idx: usize, sr: f32) -> Option<Box<dyn EffectWithParams + Send>> {
-    match idx {
-        0 => None, // null / bypass
-        1 => Some(Box::new(Adapter::new_direct(ChorusKernel::new(sr), sr))),
-        2 => Some(Box::new(Adapter::new_direct(PhaserKernel::new(sr), sr))),
-        // ... 3–8: distortion, bitcrusher, delay, reverb, ringmod, filter
-        _ => None,
-    }
-}
-```
+Jam effects are built like every rig's, by UID through the registry
+(`patch_loader::make_effect`).
 
 ### Scale-Aware ADC Conversion
 
@@ -1053,81 +1170,36 @@ fn adc_to_param(desc: &ParamDescriptor, normalized: f32) -> f32 {
 This gives `from_knobs()`-quality response: log sweep for frequency knobs
 (cutoff, LFO rate), linear for dB/mix, power curves for custom params.
 
-### A/B Morphing
+### How to Add a New Effect to the Jam
 
-Each slot's state is a `NodeState` holding an A `SlotSnapshot` and an optional B
-snapshot:
+Any registered effect can already be in a rig; only the jam's scroll list is
+curated.
 
-```rust
-struct SlotSnapshot {
-    values: [f32; MAX_PARAMS],   // MAX_PARAMS = 16
-    stepped: [bool; MAX_PARAMS], // cached ParamFlags::STEPPED per param
-    count: usize,
-}
+1. **Append the effect ID to `PEDAL_EFFECT_IDS`** in
+   `crates/sonido-registry/src/lib.rs` (append, so the scroll order players know
+   stays put).
 
-struct NodeState {
-    effect_index: Option<usize>,
-    params_a: SlotSnapshot,
-    params_b: Option<SlotSnapshot>, // None until B mode or morph is first entered
-    browse_cursor: usize,
-}
-```
+2. **Give it a knob map.** If `knob_map()` in
+   `crates/sonido-platform/src/knob_mapping.rs` has no entry for it, add one: map the
+   6 knobs to parameter indices by checking the kernel's `KernelParams`
+   implementation (the `descriptor(index)` calls in the kernel file). Use `NULL_KNOB`
+   (0xFF) for unused knobs and follow the role convention:
+   K1=Primary, K2=Secondary, K3=Color, K4=Character, K5=Mix, K6=Level. Add a knob
+   floor in `knob_min_override()` if the bottom of a range is unusable on guitar.
 
-`interpolate_and_apply()` writes lerped values to the graph every control
-poll. STEPPED params snap at t=0.5 — the same logic as `KernelParams::lerp()`:
+3. **Voice it at noon.** Noon is the descriptor default, so the defaults must be
+   the sweet spot, level-matched by the effect's calibration (re-run
+   `cargo run -p sonido-effects --example calibrate --release` after changing them).
 
-```rust
-let val = if a.stepped[p] {
-    if t < 0.5 { a.values[p] } else { b.values[p] }
-} else {
-    a.values[p] + (b.values[p] - a.values[p]) * t
-};
-effect.effect_set_param(p, val); // direct write via Adapter<K, DirectPolicy>
-```
-
-### Presets
-
-Three factory presets are compiled in (`factory_preset()`), each with A and B
-snapshots written as the kernels' typed params (`ReverbParams { decay_pct: 40.0, … }`),
-so a renamed, added or reordered parameter fails the build instead of shifting
-values; the stepped flags come from the descriptors:
-
-1. **Room → Shimmer** — reverb in slot 1
-2. **Slap → Self-Osc** — delay in slot 1
-3. **Clean → Saturated** — distortion in slot 1, reverb in slot 2
-
-FS1 long-press in A mode steps through them. Edits are held in RAM only and are
-lost at power-off; the pedal does not save user presets. (Separately,
-`patch_loader.rs` can load a `sonido-patch` patch from QSPI flash — see
-`qspi_read_test.rs` — but `sonido_pedal.rs` does not call it.)
-
-### How to Add a New Effect to the Morph Pedal
-
-1. **Add the kernel import** in the `use sonido_effects::{...}` block at the
-   top of `sonido_pedal.rs`.
-
-2. **Append the effect ID to `PEDAL_EFFECT_IDS`** in
-   `crates/sonido-registry/src/lib.rs` (append only, so scroll indices stay put).
-   If `knob_map()` in `crates/sonido-platform/src/knob_mapping.rs`
-   has no entry for it, add one: map the 6 knobs to parameter indices by
-   checking the kernel's `KernelParams` implementation (look at
-   `descriptor(index)` calls in the kernel file). Use `NULL_KNOB` (0xFF) for
-   unused knobs. Follow the role convention:
-   K1=Primary, K2=Secondary, K3=Color, K4=Character, K5=Mix, K6=Level.
-   Add the effect to `HARDWARE_MAPPED` and `noon_value()` in
-   `crates/sonido-platform/src/noon.rs` if it is not there yet.
-
-3. **Add a match arm to `create_effect()`** at its `PEDAL_EFFECT_IDS` position + 1
-   (index 0 is bypass):
-   ```rust
-   N => Some(Box::new(Adapter::new_direct(MyKernel::new(sr), sr))),
+4. **Test it on the host:**
+   ```bash
+   cargo test -p sonido-platform --test knob_calibration -- --nocapture
    ```
-   and a matching arm, keyed by effect ID, in `pedal_make_effect()`
-   (`src/patch_loader.rs`) so flash patches can load it.
+   which checks the new effect at noon and at every knob's extremes. Its
+   `EFFECT_CYCLES` entry (all 36 effects are measured) decides what it can share
+   the jam with.
 
-4. **`NUM_EFFECTS` updates itself** — it is `EFFECT_IDS.len() + 1`.
-
-5. **Build and verify:**
+5. **Build and verify** (the image must stay within the 480 KB BOOT_SRAM limit):
    ```bash
    cd crates/sonido-daisy
    cargo check --example sonido_pedal --release --features alloc,platform
@@ -1138,51 +1210,41 @@ lost at power-off; the pedal does not save user presets. (Separately,
 All mutable state lives in statics so the `start_callback` closure captures
 nothing (a large captured future starved the executor and caused SAI overruns —
 see the [v2 design note](superpowers/specs/2026-04-09-sonido-pedal-v2-design.md)):
-`CB_STORAGE` (a `CallbackState`), `GRAPH_STORAGE`, `NODES_STORAGE`,
-`NODE_IDS_STORAGE`, plus the atomics `BYPASSED`, `NEEDS_REBUILD` and
-`GRAPH_UPDATING`. They are `static mut`, not `critical_section` mutexes, because
-disabling interrupts during `process_block` blocks DMA completion.
+`PLAYER` (`Option<PatchPlayer>`), `CB` (`Cb`, everything the callback keeps between
+blocks: mode, morph position, takeover anchors, footswitch timers, LED and meter
+state) and `PEDAL` (`Pedal`: the active rig, which bank slots hold rigs, the jam
+slots and their scroll cursors, topology, BPM). They are `static mut`, not
+`critical_section` mutexes, because disabling interrupts would block the DMA
+completions; the executor is single-threaded and the callback runs between awaits,
+and the rebuild task touches `PLAYER` only while `UPDATING` keeps the callback off
+it. Tasks talk to the callback through atomics (`BYPASSED`, `UPDATING`, `REQUEST`,
+`BLINK`, `STATE_DIRTY`, the load meter), and share the flash driver through an
+`embassy_sync` `Mutex` (`FLASH`).
 
 ```
 Audio callback (every block, ~1500 Hz):
-├── GRAPH_UPDATING? → fade to dry input via bypass crossfade, return
+├── UPDATING? → ramp to dry input via the bypass crossfade, return
 ├── BYPASSED? → copy input→output, poll footswitches every 15 blocks, return
 ├── Deinterleave u24 → f32, sum to mono
-├── graph.process_block() (compiled DAG, zero-alloc)
-├── sanitize_stereo → bypass crossfade → master gain (morph mode) → f32 → u24
-└── Every CONTROL_POLL_EVERY (15) blocks (~100 Hz):
-    ├── Toggles: T3 topology (sets NEEDS_REBUILD), T1 slot, T2 mode transitions
+├── PLAYER.process_block_stereo()
+├── sanitize_stereo → bypass crossfade → f32 → u24
+└── Every CONTROL_POLL_EVERY (15) blocks (~100 Hz): controls()
+    ├── Toggles: T1 slot, T2 mode (first move out of A seeds B), T3 topology (requests a jam rebuild)
     ├── Footswitches: morph ramp, both-FS bypass/bootloader,
-    │   tap = scroll effect (sets NEEDS_REBUILD), FS1 hold = factory preset
-    ├── Knobs: A/B → K1–K6 via knob_map + knob_to_param (with soft takeover);
-    │          Morph → K5 morph time, K6 master level
-    ├── Morph: interpolate_and_apply()
+    │   taps = jam scroll / double-tap clear / tap tempo, holds = previous/next rig (request)
+    ├── Knobs: rig → set_macro(k); jam A/B → edit_jam_slot (knob_map + knob_to_param,
+    │          touch takeover); jam Morph → K5 morph time, K6 master level
+    ├── set_morph_position(), apply_controls()
     └── LED feedback
 
-graph_rebuild_task (Embassy task, every 20 ms):
-├── graph.clear_garbage() when no rebuild is running
-└── NEEDS_REBUILD? → set GRAPH_UPDATING, wait 5 ms, rebuild_graph_in_place(),
-    capture default params for new effects, re-apply A/B/morph state,
-    clear GRAPH_UPDATING
+rebuild_task (every 5 ms): REQUEST? → switch_to(rig) → load()  (see Loading a Rig)
+save_task (every 500 ms): state changed and quiet for 2 s → write the state sector
+link_task: USB frames → handle() → reply
+load_report_task (every 1 s): defmt level and load lines; Status numbers
 ```
 
-Key state (`CallbackState` fields unless noted):
-
-| Variable | Type | Purpose |
-|----------|------|---------|
-| `NODES_STORAGE` (static) | `Option<[NodeState; 3]>` | Effect index and A/B snapshots per slot |
-| `NODE_IDS_STORAGE` (static) | `[Option<NodeId>; 3]` | Graph node per slot (None = empty) |
-| `GRAPH_STORAGE` (static) | `Option<ProcessingGraph>` | Compiled DAG |
-| `ab_mode` | `AbMode` | Current operating mode (A / B / Morph) |
-| `topology` | `Topology` | Current routing (Linear / Parallel / Fan) |
-| `focused_node` | `usize` | Which slot knobs/FS control (T1) |
-| `morph_t` | `f32` | Current morph position (0.0=A, 1.0=B) |
-| `morph_speed` / `master_gain` | `f32` | K5 / K6 values in morph mode |
-| `pickup_locked` | `[bool; 6]` | Soft-takeover state per knob |
-
-Graph rebuilds happen only on topology changes: effect scroll, factory preset
-load, or the T3 toggle. Parameter changes never rebuild — they go through
-`graph.effect_with_params_mut(nid).effect_set_param()`.
+Rig changes never happen inside the callback; parameter changes go through the
+player (`set_corner_param` for jam edits, `set_macro` for rig knobs).
 
 ---
 
@@ -1312,17 +1374,22 @@ dfu-util -a 0 -s 0x90040000:leave -D my_example.bin
 Heap lives in 64 MB SDRAM. Memory is abundant — CPU cycles are the constraint.
 
 Each `InterpolatedDelay` buffer = `max_delay_samples * 4` bytes (f32).
-Per-kernel heap at 48 kHz (measured; see [Memory Budget](#memory-budget)):
+Per-effect heap at 48 kHz as the registry builds it (kernel plus adapter;
+`sonido_platform::cycle_table::EFFECT_SDRAM`, all 36 effects; see also
+[Memory Budget](#memory-budget)), the largest first:
 
 | Effect | Heap @ 48 kHz | Notes |
 |--------|:-------------:|-------|
 | Looper | ~23 MB | 60 s stereo |
+| Time stretch | ~1.0 MB | |
 | Delay | ~776 KB | 2 s stereo (`MAX_DELAY_S` in `delay.rs`) |
-| Reverb | ~117 KB | 8-line FDN + allpasses + predelay |
-| Chorus | ~23 KB | |
-| Flanger | ~5.8 KB | |
-| Tape | ~3.8 KB | |
-| Phaser, Distortion, Compressor, Gate, Wah, Preamp, Tremolo, Vibrato, Filter, Bitcrusher, Ringmod | 0 | All state inline |
+| Texture, Glitch | ~525 KB each | |
+| Reverb | ~118 KB | 8-line FDN + allpasses + predelay |
+| Spring reverb, Plate reverb, Harmonic habitat | ~100–115 KB each | |
+| Pitch shift | ~66 KB | |
+| Tuner | ~33 KB | |
+| Chorus | ~24 KB | |
+| Every other effect | under 20 KB | Mostly state held inline; the smoothed adapter adds a few hundred bytes |
 
 ### Memory Placement (BOOT_SRAM)
 
@@ -1399,35 +1466,42 @@ has not been measured on this board.
 ### Chain Configurations
 
 With the heap in 64 MB SDRAM, memory is no longer a constraint for
-effect chains. Any combination of all 36 effects fits comfortably.
+effect chains: only a rig with three loopers (23 MB each) would outgrow it.
 CPU budget is the limiting factor.
 
-Kernel CPU per chain: the sum of each kernel's mean cost measured on a Daisy
-Seed ([Benchmarks](BENCHMARKS.md#cortex-m7-measured-on-a-daisy-seed),
-2026-10-22, % of the 320,000-cycle block budget at 480 MHz). The firmware's own
-work (codec DMA, the graph, controls) comes on top.
+One rule decides whether a chain runs on the pedal, shared by the editor's export
+check (`sonido_patch::validate_for_pedal`) and the pedal (`check_rig` for rigs,
+the jam's scroll): each effect's `EFFECT_CYCLES` (its worst block on the rig path,
+measured on a Daisy Seed on 2026-10-22, see
+[Benchmarks](BENCHMARKS.md#cortex-m7-measured-on-a-daisy-seed)) plus
+`NODE_OVERHEAD_CYCLES` (400) per node, within `CHAIN_FRACTION` (80%) of the
+320,000-cycle block (`sonido_platform::cycle_table::chain_fits`). The estimates
+below are that sum (`chain_cycles`); memory is the sum of `EFFECT_SDRAM`.
 
-**Comfortable** — kernels < 50%:
+| Chain | Memory | Estimate | Runs on the pedal |
+|-------|-------:|---------:|:-----------------:|
+| Preamp → Wah → Distortion → Chorus | ~25 KB | 38.6% | yes |
+| Preamp → Distortion → Chorus → Delay(2s) | ~801 KB | 41.8% | yes |
+| Preamp → Tape → Flanger → Delay(2s) | ~788 KB | 58.3% | yes |
+| Distortion → Reverb → Ringmod (the heaviest jams) | ~119 KB | 79.4% | yes |
+| Compressor → Distortion → Reverb | ~119 KB | 89.4% | no |
+| Preamp → Distortion → Chorus → Delay → Reverb | ~919 KB | 103.8% | no |
+| Reverb, Reverb | ~237 KB | 124.0% | no |
 
-| Chain | Memory | Kernel CPU |
-|-------|-------:|-----------:|
-| Preamp → Distortion → Chorus → Delay(2s) | ~799 KB | 27% |
-| Preamp → Wah → Distortion → Chorus | ~23 KB | 28% |
-| Preamp → Tape → Flanger → Delay(2s) | ~785 KB | 40% |
+The factory rigs estimate between 44% (Shimmer Cathedral) and 77% (Amp Stack)
+([Factory Rigs](#factory-rigs)). Every one of the 36 effects fits a block alone,
+worst block included; the full table is in [Benchmarks](BENCHMARKS.md).
 
-**Tight** — kernels 50–80%, the reverb alone is 53%:
+**Why 80%.** The estimate counts the effects; the whole pedal adds the codec DMA,
+the player and the controls, and its slowest callbacks run above its mean. Measured
+in a Hothouse with a guitar on 2026-10-22 with the [CPU load meter](#cpu-load-meter),
+after the [real-time hardening](#real-time-hardening): the jam distortion → reverb →
+ringmod (estimate 79.4%) ran at 74% mean and about 83–85% at its slowest callbacks,
+with no callback over budget and no codec overrun at boot.
 
-| Chain | Memory | Kernel CPU |
-|-------|-------:|-----------:|
-| Compressor → Distortion → Reverb | ~117 KB | 77% |
-| Preamp → Distortion → Chorus → Delay → Reverb | ~915 KB | 80% |
-
-Every one of the 36 kernels fits a block alone, worst block included; the full
-table is in [Benchmarks](BENCHMARKS.md).
-
-**Measured on the pedal.** The whole firmware (codec DMA, graph, controls, LEDs)
-running in a Hothouse with a guitar, read from the [CPU load meter](#cpu-load-meter)
-on 2026-10-22, steady playing only (the second of each change is left out):
+**The previous firmware, measured.** Before the rig player, the pedal ran its own
+`ProcessingGraph` of unsmoothed `Adapter<K, DirectPolicy>` kernels. Measured the same
+way earlier on 2026-10-22, steady playing only (the second of each change left out):
 
 | Slots | Mean | Typical peak | Highest peak | Callbacks over budget |
 |-------|-----:|-----:|-----:|-----:|
@@ -1440,14 +1514,12 @@ on 2026-10-22, steady playing only (the second of each change is left out):
 | distortion → reverb → delay | 80.3% | 87.1% | 89.7% | 0 of 13,509 |
 | reverb, reverb (now unselectable) | 123.2% | 131.0% | 136.0% | 5,777 of 5,777 |
 
-"Typical peak" is the median of each second's slowest callback. The firmware alone
-costs about 2%; with effects loaded the mean runs 0–5 points above the sum of the
-kernels' bare means, and the typical peak 5–9 points above the mean, which is why the
-pedal budgets on the sum of worst blocks with margin (85% for a chain, 70% while
-tails ring out). Seconds containing a change peaked at up to 96%, still with no
-callback over budget. The distortion rows were measured with an intermediate soft
-clipper that cost 17% more than the shipped one (38.1k vs 32.6k cycles mean in
-`bench_kernels`, under 2 points of the budget).
+"Typical peak" is the median of each second's slowest callback. That firmware alone
+cost about 2%; with effects loaded the mean ran 0–5 points above the sum of the
+kernels' bare means, and the typical peak 5–9 points above the mean, which is why
+the pedal budgets on worst blocks with margin. Its rule, on bare-kernel numbers,
+was 85% for a chain; the distortion rows were measured with an intermediate soft
+clipper that cost 17% more than the shipped one.
 
 ---
 
@@ -1531,9 +1603,12 @@ hardware controls as `ControlId` → normalized `ControlState`. On the Hothouse:
 
 1. `hothouse_control_task` reads ADC/GPIO pins into the `HothouseBuffer`
 2. `HothousePlatform` (feature `platform`) serves those values as `ControlId`s
-   0–12; `sonido_pedal.rs` reads knobs through it
-3. `knob_map` + `knob_to_param` turn knob readings into parameter values, written
-   through `Adapter<K, DirectPolicy>` and processed via `DspKernel::process_stereo()`
+   0–12; no example uses it today: `sonido_pedal.rs` reads the `HothouseBuffer`
+   directly
+3. On the pedal, knob readings become rig macro positions
+   (`PatchPlayer::set_macro`) or, in the jam, parameter values through
+   `knob_map` + `knob_to_param`, written into the `PatchPlayer`'s registry-built
+   effects
 
 `ControlMapper` (also in `sonido-platform`) is not used by the firmware.
 
@@ -1547,17 +1622,18 @@ hardware controls as `ControlId` → normalized `ControlState`. On the Hothouse:
 | Control discovery | `ParameterInfo` — runtime parameter introspection |
 | Math safety | `libm` everywhere — no `f32::sin()` in `no_std` crates |
 | Heap support | Delay buffers use `Vec` with any global allocator |
-| Patch loading | `patch_loader.rs` decodes a `sonido-patch` sector from QSPI and builds a `GraphEngine` (`qspi_read_test.rs` exercises the read + decode; the pedal does not call it yet) |
+| Rig loading | `patch_loader.rs` reads and decodes a `sonido-patch` sector from the QSPI rig bank and checks it against the pedal's CPU and memory rule; `sonido_pedal.rs` plays it through `PatchPlayer` |
+| Persistence | The rig bank (15 slots) and the state sector (active rig, jam, topology, tempo) in QSPI, written by the firmware itself; rigs arrive over the USB rig link or DFU |
+| Tap tempo | `tap_tempo.rs`, on the pedal's FS2 when a rig plays |
 
 ### What Needs Work
 
 | Gap | Detail |
 |-----|--------|
 | Block processing | Biquad/SVF have per-sample `process()` only — block version would improve CM7 cache behavior |
-| Flash persistence | Morph pedal edits are RAM-only — lost on power cycle. `qspi.rs` defines a preset-sector layout but there is no flash write path yet |
 | Expression pedal | `expression.rs` (smoothing, deadzone, slew) exists; no example reads an expression input |
 | MIDI CC routing | `midi.rs` parses USB-MIDI packets; nothing routes CC to parameters |
-| Tap tempo, device sync | `tap_tempo.rs` and `device_sync.rs` exist as library code only |
+| Device sync | `device_sync.rs` exists as library code only |
 
 ---
 
@@ -1607,5 +1683,6 @@ and debounce. Full details and implementation plans are in
 ### Sonido Internal
 
 - [Kernel Architecture](KERNEL_ARCHITECTURE.md)
-- [Benchmarks](BENCHMARKS.md) — Cortex-M7 cycle estimates
+- [Benchmarks](BENCHMARKS.md) — Cortex-M7 cycles measured on a Daisy Seed, and how to regenerate the cycle table
+- [Patch Platform](PATCH_PLATFORM.md) — the rig format, `PatchPlayer`, editor export
 - [Architecture](ARCHITECTURE.md)

@@ -429,7 +429,16 @@ const ALLPASS_TUNINGS_44K: [usize; 4] = [556, 441, 341, 225];
 const ALLPASS_TUNINGS_44K_R: [usize; 4] = [579, 464, 364, 248];
 ```
 
-An allpass passes all frequencies at equal amplitude but disperses energy in time, smoothing the late tail.
+An allpass passes all frequencies at equal amplitude but disperses energy in time, smoothing the late tail. Both `AllpassFilter` and `ModulatedAllpass` are true Schroeder allpasses:
+
+```
+v[n] = x[n] + g·v[n−D]        (written to the delay line)
+y[n] = v[n−D] − g·v[n]
+
+H(z) = (−g + z⁻ᴰ) / (1 − g·z⁻ᴰ)    |H| = 1 at every frequency
+```
+
+Freeverb's shortcut, `y = −x + v[n−D]`, has the response `(−1 + (1+g)·z⁻ᴰ) / (1 − g·z⁻ᴰ)`: up to about 2× gain where `z⁻ᴰ = −1`, even at `g = 0`. After a reverb that is only a coloration, but inside a feedback loop (the delay's diffusion, the plate's tank) it pushes the loop gain above 1.
 
 ### Early Reflections and Stereo Width
 
@@ -468,13 +477,14 @@ Scaling the wet signal by `(1-g)` exactly cancels peak-gain amplification:
 output_at_resonance = c × 1/(1-g) = (1-g)/(1-g) = 1.0
 ```
 
-The compensated wet signal at resonance equals the dry signal — a perfect crossfade with zero amplification at any mix setting. This is implemented in `gain::feedback_wet_compensation()` and used by delay, flanger, and phaser.
+The compensated wet signal at resonance equals the dry signal, whatever the feedback. This is implemented in `gain::feedback_wet_compensation()` and used by delay, flanger, and phaser, which apply it to the wet signal before the mix. The mix (`blend`, see [Gain Staging](#gain-staging)) then applies the effect's fixed, measured level trim, so the compensation keeps the wet level from tracking the feedback knob and the trim matches the effect to its input at its defaults.
 
 | Feedback | Compensation | Peak wet at resonance |
 |----------|-------------|----------------------|
 | 0.0 | 1.000 | 1.0 |
-| 0.4 (delay default) | 0.600 | 1.0 |
-| 0.5 (flanger/phaser default) | 0.500 | 1.0 |
+| 0.3 (phaser default) | 0.700 | 1.0 |
+| 0.35 (delay default) | 0.650 | 1.0 |
+| 0.5 (flanger default) | 0.500 | 1.0 |
 | 0.9 | 0.100 | 1.0 |
 | 0.95 | 0.050 | 1.0 |
 
@@ -521,14 +531,18 @@ pub fn advance(&mut self) -> f32 {
     if self.settled {
         return self.current;
     }
-    self.current = self.current + self.coeff * (self.target - self.current);
-    if (self.current - self.target).abs() < 1e-6 {
+    let next = self.current + self.coeff * (self.target - self.current);
+    if next == self.current || close_enough(next, self.target) {
         self.current = self.target;
         self.settled = true;
+    } else {
+        self.current = next;
     }
     self.current
 }
 ```
+
+`close_enough` is a relative test: within one part in a million of the target's magnitude, never tighter than 1e-6.
 
 This is mathematically equivalent to:
 
@@ -547,7 +561,7 @@ self.coeff = 1.0 - expf(-1.0 / samples);
 **Properties:**
 - After one time constant, the parameter reaches ~63.2% of the way to the target
 - After five time constants, it reaches ~99.3% (effectively settled)
-- The approach is asymptotic, so `advance()` snaps to the target once within 1e-6 and marks the parameter settled (later calls skip the arithmetic)
+- The approach is asymptotic, so `advance()` snaps to the target and marks the parameter settled (later calls skip the arithmetic) once it is close enough, or once a step no longer changes the value. The second test matters in `f32`: a 10 ms smoother stalls about 240 representable values short of its target, and above about 8 even that gap exceeds 1e-6, so with an absolute threshold alone a parameter could keep smoothing forever
 
 Typical smoothing times: 5-10 ms for gain/pan, 20-50 ms for filter cutoff.
 
@@ -582,9 +596,9 @@ Linear smoothing guarantees the target is reached in exactly the specified time.
 Input -> [Envelope] -> Drive (gain, dynamic) -> ADAA Waveshaper -> Tone EQ -> Mix -> Soft Limit -> Output Level
 ```
 
-The drive stage amplifies the input before waveshaping, pushing more of the signal into the nonlinear region. The tone control is a peaking biquad at 1 kHz (Q 0.7, -12 to +12 dB) after the waveshaper. A `soft_limit` safety stage and the output level follow the wet/dry mix.
+The drive stage amplifies the input before waveshaping, pushing more of the signal into the nonlinear region. The tone control is a peaking biquad at 1 kHz (Q 0.7, -12 to +12 dB) after the waveshaper, followed by a `1/√drive` makeup gain that keeps loudness roughly steady as drive rises. A `soft_limit` safety stage and the output level follow the wet/dry mix.
 
-Default parameters are tuned for clearly audible distortion: **drive 8 dB**, **tone 0 dB** (flat), **output 0 dB**, **mix 100%**. These defaults follow the "init to clearly audible" philosophy -- hear the effect immediately, then dial to taste.
+Default parameters are the effect's voiced sweet spot: **drive 26 dB**, **tone +1.5 dB**, **output 0 dB**, **mix 100%**. A freshly opened plugin and a pedal with its knobs at noon both start there, and the level contract trims the result to the input's loudness (see [Gain Staging](#gain-staging)).
 
 ### Waveshaping Functions
 
@@ -742,15 +756,15 @@ Transport control (`play`, `stop`, `reset`) gates the position counter, ensuring
 
 ## Gain Staging
 
-**Source:** `crates/sonido-core/src/gain.rs`
+**Source:** `crates/sonido-core/src/gain.rs`, `crates/sonido-core/src/level.rs`
 
 ### The Problem
 
-Nonlinear effects (distortion, saturation, wah) generate gain that depends on the input signal and parameter settings. Without explicit output level control, effects can produce unexpectedly hot output that clips downstream processors. At the same time, effects with inherent gain reduction (compressor, gate) need makeup gain to restore levels.
+Nonlinear effects (distortion, saturation, wah) generate gain that depends on the input signal and parameter settings. Without explicit output level control, effects can produce unexpectedly hot output that clips downstream processors. At the same time, effects with inherent gain reduction (compressor, gate) need makeup gain to restore levels. And a mix control that crossfades two signals of different loudness, or two signals that partly cancel, changes the level as it turns.
 
 ### Universal Output Level
 
-Effects in Sonido expose an `output` parameter (normally the last index in `ParameterInfo`; see `docs/DSP_QUALITY_STANDARD.md` Rule 3 for the exceptions) that provides -6 to +6 dB of post-processing level control (`OUTPUT_MIN_DB` / `OUTPUT_MAX_DB`, chosen so the knob's noon is 0 dB). The output level is applied as a linear gain multiplier at the end of the processing chain, after all DSP but before the final output.
+Effects in Sonido expose an `output` parameter (normally the last index in `ParameterInfo`; see `docs/DSP_QUALITY_STANDARD.md` Rule 3 for the exceptions) that provides -6 to +6 dB of post-processing level control (`OUTPUT_MIN_DB` / `OUTPUT_MAX_DB`, chosen so the knob's noon is 0 dB). Distortion, tape, drone, glitch, texture and time-stretch define wider ranges. The output level is applied as a linear gain multiplier at the end of the kernel's processing chain. It is the player's control; matching an effect to its input's loudness is the level contract's job (below).
 
 The `gain.rs` module provides the shared implementation (`output_param_descriptor()` plus these helpers):
 
@@ -766,19 +780,41 @@ pub fn set_output_level_db(param: &mut SmoothedParam, db: f32) {
 
 The output level is stored internally as linear gain (1.0 = 0 dB) for efficient per-sample multiplication, with dB conversion only at the parameter interface boundary.
 
+### The Level Contract
+
+At its defaults every effect plays at the loudness of its input, and its mix control does not change that loudness. Each kernel declares one measured calibration in its `DspKernel` impl:
+
+```rust
+const LEVEL: Level = crate::calibration::DELAY;
+
+pub struct Level {
+    pub trim: f32,                    // gain on the wet signal (or the output, without a mix control)
+    pub mix_correlation: Option<f32>, // measured wet/dry correlation ρ; None without a mix control
+}
+```
+
+A kernel with a mix control applies the trim to its wet signal inside `Self::blend` ([below](#level-preserving-mix)). For a kernel without one, `Adapter` multiplies the kernel's output by the trim (`output_trim` in `crates/sonido-core/src/kernel/adapter.rs`), after the kernel's own output level.
+
+The calibration is measured, never hand-tuned. `cargo run -p sonido-effects --example calibrate --release` regenerates `crates/sonido-effects/src/calibration.rs`: it plays `sonido_analysis::signals::reference_guitar`, a synthetic strummed open-E chord (one strum a second, 6 s) peaking at `NOMINAL_PEAK_DBFS` = -20 dBFS (the median measured from a humbucker guitar into the Hothouse's line-level converter), through every registered effect, fully wet if it has a mix control and at its defaults otherwise. `sonido_analysis::loudness::effect_gain_db` measures the change in integrated loudness (ITU-R BS.1770-4 LUFS), the trim is scaled to cancel it, and for a mix control the zero-lag correlation of the fully wet output with the input becomes ρ. `crates/sonido-effects/tests/level_contract.rs` fails when an entry is more than 0.5 dB off, or when the mix moves the level more than 1.5 dB at 0, 25, 50 or 75% or at the default mix; rerun the example after changing a kernel's sound or defaults. The looper and tuner are uncalibrated utilities (unity trim).
+
 ### Per-Effect Gain Staging
 
-| Effect | Net Gain at Defaults | Output Default | Strategy |
-|--------|---------------------|----------------|----------|
-| Distortion | signal-dependent (8 dB drive) | 0.0 dB | `soft_limit` bounds the output |
-| Tape | signal-dependent (6 dB drive) | -6.0 dB | Drive compensated by output level |
-| Wah | ~0 dB | 0.0 dB | BP normalized by Q (see below) |
-| Compressor | gain reduction above -18 dB | makeup 0 dB | Safety-first (user adds makeup or enables Auto Makeup) |
-| Most others | ~0 dB | 0.0 dB | Unity gain at defaults |
+Selected entries from `calibration.rs` (trim in dB, measured fully wet for an effect with a mix control and at defaults otherwise):
+
+| Effect | Trim | ρ | Notes |
+|--------|------|---|-------|
+| Distortion | -11.9 dB | 0.989 | 26 dB drive, `1/√drive` makeup, `soft_limit` after the mix |
+| Preamp | -15.0 dB | none | 15 dB gain |
+| Tape | -5.8 dB | none | 6 dB drive, output -6 dB |
+| Wah | +12.2 dB | none | Band-pass normalized by Q (see below) |
+| Compressor | +0.0 dB | 1.000 | Threshold -18 dB, 4:1, makeup 0 dB |
+| Delay | +3.4 dB | 0.065 | Echoes scaled by `feedback_wet_compensation` |
+| Vibrato | +0.0 dB | -0.365 | Default mix 100%; the wet partly cancels the dry, so a part-wet blend gets a boost |
+| Looper, Tuner | 0.0 dB | none | Uncalibrated |
 
 ### Wah Bandpass Normalization
 
-The SVF bandpass filter has peak gain equal to Q at the center frequency (`update_k` in `svf.rs`: `k = 1/Q`). With the default Q=5, the raw bandpass output would be 5x the input level (+14 dB). Rather than compensating with an output level trim (a band-aid), the wah kernel normalizes the transfer function directly (`WahKernel::process_stereo`):
+The SVF bandpass filter has peak gain equal to Q at the center frequency (`update_k` in `svf.rs`: `k = 1/Q`). With the default Q=5, the raw bandpass output would be 5x the input level (+14 dB). The wah kernel normalizes the transfer function directly (`WahKernel::process_stereo`), so Resonance doesn't change the level at the center frequency:
 
 ```rust
 let safe_q = if resonance > 0.0 { resonance } else { 1.0 };
@@ -786,21 +822,43 @@ let normalized_l = filtered_l / safe_q;       // Unity peak gain at any Q
 let out_l = normalized_l * 0.8 + left * 0.2;  // 80/20 wet/dry blend for body
 ```
 
-At the center frequency: `(input * Q) / Q * 0.8 + input * 0.2 = input`. Unity. The normalization is algebraically exact regardless of Q.
+At the center frequency: `(input * Q) / Q * 0.8 + input * 0.2 = input`. Unity. The normalization is algebraically exact regardless of Q. Unity at the center frequency is not unity on a guitar, though: at its defaults the wah measures 12.2 dB below its input on the reference guitar, and its level trim (+12.2 dB, applied by the adapter) restores it.
 
-### Shared Dry/Wet Mix
+### Level-Preserving Mix
 
-**Source:** `crates/sonido-core/src/math.rs`
+**Source:** `crates/sonido-core/src/level.rs`, `crates/sonido-core/src/kernel/traits.rs`
 
-The dry/wet mix pattern appears in nearly every effect. Rather than inlining `input * (1.0 - mix) + wet * mix`, effects use the shared `wet_dry_mix()` helper:
+Every effect with a mix control mixes through `DspKernel::blend` (or `blend_stereo`), which applies the kernel's `LEVEL`:
 
 ```rust
-pub fn wet_dry_mix(dry: f32, wet: f32, mix: f32) -> f32 {
-    dry + (wet - dry) * mix  // one fewer multiply than the expanded form
+fn blend(dry: f32, wet: f32, mix: f32) -> f32 {
+    level::blend(dry, wet, mix, &Self::LEVEL)  // dry·g_d + wet·trim·g_w
 }
 ```
 
-The `wet_dry_mix_stereo()` variant applies the same crossfade to both channels. These helpers are semantically identical to the inline form but eliminate duplication and make the mix operation self-documenting.
+A linear crossfade, `dry·(1−m) + wet·m`, keeps the level only when wet and dry are equally loud and fully correlated. Two signals with correlation ρ at gains `a` and `b` sum to power `a² + b² + 2ρab`; for an uncorrelated wet (a reverb tail, an echo) the linear crossfade at `m = 0.5` has power 0.5, a 3 dB dip, and a wet that partly cancels the dry (ρ < 0) dips further.
+
+`mix_gains` starts from the constant-power sine/cosine law and normalizes it by the blend's power at the measured correlation:
+
+```
+cos²(πm/2) + sin²(πm/2) + 2ρ·cos(πm/2)·sin(πm/2) = 1 + ρ·sin(πm)
+
+k   = 1/√(1 + ρ·sin(πm))
+g_d = k·cos(πm/2)
+g_w = k·sin(πm/2)
+```
+
+The blend's loudness is then the same at every mix for that correlation:
+
+- **ρ = 0** (reverbs, echoes): `k = 1`, the plain constant-power crossfade.
+- **ρ = 1** (saturation): `g_d + g_w = 1`, so amplitude is preserved as in a linear crossfade.
+- **ρ < 0** (partly cancelling wets, such as a vibrato's comb): `k > 1`, the boost the blend needs.
+
+The sine law, rather than `√m`, has a finite slope at both ends, so the first turn of a mix knob fades the wet in instead of jumping to -20 dB (`√0.01 = 0.1`). Mix 0 and 1 return exactly `(1, 0)` and `(0, 1)`.
+
+`mix_gains` runs per sample in every effect with a mix control, so it uses no transcendentals (libm's `sqrtf` is a software routine on the Cortex-M7): `quarter_sine` is a fifth-order odd polynomial for `sin(πx/2)`, exact at `x = 1` and within 6e-4 elsewhere, and `k` is a bit-trick inverse square root refined by two Newton steps (within 5 ppm). Because `k` normalizes by the polynomial gains' actual power, the polynomial's own deviation from constant power cancels too.
+
+The linear helpers `wet_dry_mix()` / `wet_dry_mix_stereo()` (`crates/sonido-core/src/math.rs`, `dry + (wet - dry) * mix`) remain as plain crossfades: the graph engine uses `wet_dry_mix` for a node's bypass fade (`crates/sonido-core/src/graph/processing.rs`). Kernels don't use them.
 
 ---
 
@@ -841,7 +899,7 @@ Applied in effects where nonlinear processing or resonant filters can produce un
 (soft_limit(mixed_l, 1.0) * output, soft_limit(mixed_r, 1.0) * output)
 ```
 
-Kernels using this pattern with a 1.0 ceiling: chorus, compressor, distortion, eq, filter, preamp, tape, wah. `harmonic_habitat` limits at 3.0 and `spring_reverb` limits its dispersion chain at 1.5. `soft_limit_stereo()` applies it to a pair. Effects with inherently bounded output (e.g., `wet_dry_mix` with normalized inputs) do not need it.
+Kernels using this pattern with a 1.0 ceiling: chorus, compressor, distortion, eq, filter, preamp, tape, wah. `harmonic_habitat` limits at 3.0 and `spring_reverb` limits its dispersion chain at 1.5. `soft_limit_stereo()` applies it to a pair. Effects without a resonant or nonlinear gain stage do not need it. In chorus, compressor and distortion the level trim is inside the blend, before the limiter; eq, filter, preamp, tape and wah have no mix control, so the adapter's level trim follows the limiter and scales its ceiling (wah's trim is +12.2 dB).
 
 ### Reference
 
@@ -875,6 +933,8 @@ Common parameter descriptors are constructed via factory methods rather than inl
 - `ParamDescriptor::feedback()` — 0-95%, default 50%
 - `ParamDescriptor::time_ms(name, short, min, max, default)` — custom time param
 - `ParamDescriptor::gain_db(name, short, min, max, default)` — custom gain param
+
+`.with_default(v)` overrides a factory's default with the effect's own sweet spot (chorus: `ParamDescriptor::depth().with_default(60.0)`). The descriptor default is what a fresh plugin starts at and what a pedal knob at noon selects, and `XxxParams::default()` must match it (`crates/sonido-effects/tests/default_parity.rs`).
 
 ### OnePole Filter
 
@@ -1002,7 +1062,7 @@ The `FixedDelayLine<const N: usize>` uses const generics for stack allocation, a
 Several mechanisms prevent DC offset accumulation:
 
 1. **Leaky integrators**: The triangle oscillator uses a leak of `1 - min(f / fs, 0.1)` instead of `1.0` as the integrator coefficient, ensuring any DC accumulation decays away
-2. **Allpass structure**: The Schroeder allpass (`output = -input + delayed`) naturally cancels DC content
+2. **Allpass structure**: The Schroeder allpass (`y[n] = v[n−D] − g·v[n]`) has unity gain at every frequency, DC included, so it adds no DC gain to a feedback loop (Freeverb's `y = −x + v[n−D]` shortcut has gain `g/(1−g)` at DC; see [Allpass Diffusion](#allpass-diffusion))
 3. **Feedback clamping**: Comb, allpass, and reverb FDN feedback are clamped below 1.0 (maximum 0.99), ensuring energy always decays
 
 ### Float Precision

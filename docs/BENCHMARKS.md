@@ -107,50 +107,50 @@ the analysis benchmarks sweep FFT/signal sizes instead:
 
 ## Results
 
-Measured 2026-10-22 on an Intel i5-6300U (2 cores / 4 threads, 2.4 GHz base, 3.0 GHz turbo), Fedora 45, rustc 1.99, the `bench` profile (fat LTO), on a working tree based on commit `d8abf56`, with the machine otherwise idle. Criterion medians.
+Measured 2026-10-22 on an Intel i5-6300U (2 cores / 4 threads, 2.4 GHz base, 3.0 GHz turbo), Fedora 45, rustc 1.99, the `bench` profile (fat LTO), on a working tree based on commit `d8abf56`, with the machine otherwise idle. Criterion medians. These desktop numbers predate the level contract and the DSP fixes of the next commit (true Schroeder allpasses in the delay's diffusion, per-loop RT60 feedback and Dattorro output taps in the plate and spring reverbs, the new voiced defaults); the Cortex-M7 column does not.
 
 ### Every effect
 
-`all_effects` runs each registered effect at its default parameters through the registry's `Adapter<K, SmoothedPolicy>` (the plugin and editor path): one stereo 256-frame block of a 440 Hz sine at 48 kHz. "One core" is the share of a single core that real-time processing at 48 kHz takes. The last column is the measured Cortex-M7 cost (next section). Effects marked "(pedal)" are the eight the pedal firmware offers (`PEDAL_EFFECT_IDS`).
+`all_effects` runs each registered effect at its default parameters through the registry's `Adapter<K, SmoothedPolicy>` (the plugin and editor path): one stereo 256-frame block of a 440 Hz sine at 48 kHz. "One core" is the share of a single core that real-time processing at 48 kHz takes. The last column is the measured Cortex-M7 worst block on the rig path (next section), the number the pedal budgets with. Effects marked "(pedal)" are the eight the pedal's jam offers (`PEDAL_EFFECT_IDS`).
 
-| Effect | 256 frames | ns/frame | One core at 48 kHz | Cortex-M7, measured mean |
+| Effect | 256 frames | ns/frame | One core at 48 kHz | Cortex-M7, worst block |
 |---|---|---|---|---|
-| tuner | 183.99 µs | 718.7 | 3.45% | 27.5% |
-| reverb (pedal) | 179.76 µs | 702.2 | 3.37% | 53.2% |
-| cabinet | 92.52 µs | 361.4 | 1.73% | 25.0% |
-| amp | 88.61 µs | 346.1 | 1.66% | 34.1% |
-| drone | 81.65 µs | 318.9 | 1.53% | 20.1% |
-| harmonic_habitat | 81.12 µs | 316.9 | 1.52% | 32.1% |
-| tape | 54.84 µs | 214.2 | 1.03% | 25.1% |
-| time_stretch | 49.55 µs | 193.6 | 0.93% | 9.9% |
-| plate_reverb | 44.93 µs | 175.5 | 0.84% | 15.1% |
-| vibrato | 40.41 µs | 157.9 | 0.76% | 16.6% |
-| multiband_comp | 33.60 µs | 131.2 | 0.63% | 17.1% |
-| bitcrusher (pedal) | 31.81 µs | 124.3 | 0.60% | 9.2% |
-| distortion (pedal) | 30.43 µs | 118.9 | 0.57% | 10.2% |
-| compressor | 27.26 µs | 106.5 | 0.51% | 13.9% |
-| pitch_shift | 24.94 µs | 97.4 | 0.47% | 7.6% |
-| texture | 24.06 µs | 94.0 | 0.45% | 3.7% |
-| delay (pedal) | 20.97 µs | 81.9 | 0.39% | 7.0% |
-| chorus (pedal) | 18.64 µs | 72.8 | 0.35% | 6.8% |
-| flanger | 18.10 µs | 70.7 | 0.34% | 6.3% |
-| limiter | 13.71 µs | 53.6 | 0.26% | 5.1% |
-| phaser (pedal) | 13.64 µs | 53.3 | 0.26% | 7.1% |
-| wah | 12.72 µs | 49.7 | 0.24% | 7.9% |
-| spring_reverb | 12.33 µs | 48.2 | 0.23% | 5.7% |
-| gate | 11.94 µs | 46.6 | 0.22% | 7.1% |
-| preamp | 7.75 µs | 30.3 | 0.15% | 3.3% |
-| tremolo | 7.61 µs | 29.7 | 0.14% | 4.5% |
-| eq | 7.09 µs | 27.7 | 0.13% | 3.6% |
-| deesser | 7.08 µs | 27.7 | 0.13% | 3.4% |
-| transient_shaper | 6.17 µs | 24.1 | 0.12% | 2.7% |
-| stage | 6.03 µs | 23.6 | 0.11% | 3.2% |
-| glitch | 6.03 µs | 23.6 | 0.11% | 2.5% |
-| filter (pedal) | 5.92 µs | 23.1 | 0.11% | 3.3% |
-| shelving_eq | 4.70 µs | 18.4 | 0.09% | 2.5% |
-| ringmod (pedal) | 4.21 µs | 16.4 | 0.08% | 2.6% |
-| stereo_widener | 3.20 µs | 12.5 | 0.06% | 1.9% |
-| looper | 2.78 µs | 10.9 | 0.05% | 1.1% |
+| tuner | 183.99 µs | 718.7 | 3.45% | 63.7% |
+| reverb (pedal) | 179.76 µs | 702.2 | 3.37% | 61.7% |
+| cabinet | 92.52 µs | 361.4 | 1.73% | 27.1% |
+| amp | 88.61 µs | 346.1 | 1.66% | 41.0% |
+| drone | 81.65 µs | 318.9 | 1.53% | 21.1% |
+| harmonic_habitat | 81.12 µs | 316.9 | 1.52% | 35.5% |
+| tape | 54.84 µs | 214.2 | 1.03% | 30.3% |
+| time_stretch | 49.55 µs | 193.6 | 0.93% | 14.3% |
+| plate_reverb | 44.93 µs | 175.5 | 0.84% | 22.7% |
+| vibrato | 40.41 µs | 157.9 | 0.76% | 16.1% |
+| multiband_comp | 33.60 µs | 131.2 | 0.63% | 18.3% |
+| bitcrusher (pedal) | 31.81 µs | 124.3 | 0.60% | 4.1% |
+| distortion (pedal) | 30.43 µs | 118.9 | 0.57% | 12.5% |
+| compressor | 27.26 µs | 106.5 | 0.51% | 14.1% |
+| pitch_shift | 24.94 µs | 97.4 | 0.47% | 10.4% |
+| texture | 24.06 µs | 94.0 | 0.45% | 6.0% |
+| delay (pedal) | 20.97 µs | 81.9 | 0.39% | 10.3% |
+| chorus (pedal) | 18.64 µs | 72.8 | 0.35% | 9.5% |
+| flanger | 18.10 µs | 70.7 | 0.34% | 8.7% |
+| limiter | 13.71 µs | 53.6 | 0.26% | 7.5% |
+| phaser (pedal) | 13.64 µs | 53.3 | 0.26% | 8.5% |
+| wah | 12.72 µs | 49.7 | 0.24% | 7.2% |
+| spring_reverb | 12.33 µs | 48.2 | 0.23% | 9.2% |
+| gate | 11.94 µs | 46.6 | 0.22% | 7.5% |
+| preamp | 7.75 µs | 30.3 | 0.15% | 7.8% |
+| tremolo | 7.61 µs | 29.7 | 0.14% | 5.3% |
+| eq | 7.09 µs | 27.7 | 0.13% | 5.2% |
+| deesser | 7.08 µs | 27.7 | 0.13% | 4.5% |
+| transient_shaper | 6.17 µs | 24.1 | 0.12% | 4.9% |
+| stage | 6.03 µs | 23.6 | 0.11% | 4.7% |
+| glitch | 6.03 µs | 23.6 | 0.11% | 4.4% |
+| filter (pedal) | 5.92 µs | 23.1 | 0.11% | 4.4% |
+| shelving_eq | 4.70 µs | 18.4 | 0.09% | 3.5% |
+| ringmod (pedal) | 4.21 µs | 16.4 | 0.08% | 4.3% |
+| stereo_widener | 3.20 µs | 12.5 | 0.06% | 2.9% |
+| looper | 2.78 µs | 10.9 | 0.05% | 2.4% |
 
 The distortion, amp and tape rows predate the soft-clipper fix later the same day (`soft_clip_ad` and `tape_sat_ad` rewritten to stay precise near zero). Re-run alongside the other 33 on a busier machine, those three moved by −8%, +6% and +7% relative to the rest of that run.
 
@@ -158,56 +158,75 @@ All 36 fit easily on the desktop. The heaviest, the tuner (YIN pitch detection o
 
 ### Cortex-M7, measured on a Daisy Seed
 
-Measured 2026-10-22 on a Daisy Seed (STM32H750, Cortex-M7 at 480 MHz, the `Performance` clock profile) with `crates/sonido-daisy/examples/bench_kernels.rs`, loaded into AXI SRAM over SWD (`probe-rs run`; the same memory placement as the bootloader's BOOT_SRAM mode), D-cache on, kernel state heap-allocated in SDRAM as on the pedal. Each kernel processes `XxxParams::default()` (equal to its descriptor defaults) on a 220 Hz sine: 8 warm-up blocks, then 128 timed 32-sample stereo blocks, read with the DWT cycle counter. The budget is 320,000 cycles per block (32 samples at 48 kHz). These are bare kernel costs; the firmware adds the codec DMA, the graph and control handling on top, measured in [Embedded](EMBEDDED.md#chain-configurations).
+Measured 2026-10-22 on a Daisy Seed (STM32H750, Cortex-M7 at 480 MHz, the `Performance` clock profile) with `crates/sonido-daisy/examples/bench_kernels.rs`, loaded into AXI SRAM over SWD (`probe-rs run`; the same memory placement as the bootloader's BOOT_SRAM mode), D-cache on, effect state heap-allocated in SDRAM as on the pedal, built with the firmware's shipping profile (fat LTO, size-optimized HAL). The budget is 320,000 cycles per block (32 samples at 48 kHz).
 
-This table is the second full run that day, after the soft-clipper fix. Against the first, the distortion's mean rose 2.4% and its worst block 14% (32,223 → 36,677 cycles), the amp's mean 16% and the tape's 7%; the 33 kernels whose code did not change moved by −8% to +5% (tremolo −8%, gate +5%), which is how far a rebuild alone shifts them through code layout. `sonido_platform::cycle_table` takes the worse of the two runs for the pedal's kernels.
+The benchmark makes two passes over all 36 effects, each 8 warm-up blocks then 128 timed 32-sample stereo blocks of a 220 Hz sine, read with the DWT cycle counter. The first times the bare kernel on `XxxParams::default()` (`kernel=<name> mean=… worst=…` lines). The second times the **rig path**: the effect as `EffectRegistry::create` builds it (the smoothed adapter `PatchPlayer` runs on the pedal), one `process_block_stereo` per block, every parameter re-set to its own value every 15th block like the pedal's 100 Hz control tick (`rig=<name> mean=… worst=…` lines). The rig path costs 2–13 k cycles more per effect than the bare kernel, and it is what a rig runs, so its worst block is what the pedal budgets with.
 
-| Kernel | Mean cycles / block | Mean % | Worst block | Worst % | ×25 estimate |
-|---|---|---|---|---|---|
-| reverb (pedal) | 170,364 | 53.2% | 175,730 | 54.9% | 84% |
-| amp | 109,034 | 34.1% | 117,339 | 36.7% | 42% |
-| harmonic_habitat | 102,646 | 32.1% | 107,061 | 33.5% | 38% |
-| tuner | 88,050 | 27.5% | 199,899 | 62.5% | 86% |
-| tape | 80,459 | 25.1% | 95,424 | 29.8% | 26% |
-| cabinet | 79,989 | 25.0% | 80,044 | 25.0% | 43% |
-| drone | 64,351 | 20.1% | 64,976 | 20.3% | 38% |
-| multiband_comp | 54,641 | 17.1% | 55,317 | 17.3% | 16% |
-| vibrato | 53,033 | 16.6% | 57,622 | 18.0% | 19% |
-| plate_reverb | 48,429 | 15.1% | 50,666 | 15.8% | 21% |
-| compressor | 44,578 | 13.9% | 44,693 | 14.0% | 13% |
-| distortion (pedal) | 32,555 | 10.2% | 36,677 | 11.5% | 14% |
-| time_stretch | 31,683 | 9.9% | 40,888 | 12.8% | 23% |
-| bitcrusher (pedal) | 29,474 | 9.2% | 29,551 | 9.2% | 15% |
-| wah | 25,233 | 7.9% | 25,280 | 7.9% | 6% |
-| pitch_shift | 24,240 | 7.6% | 27,657 | 8.6% | 12% |
-| gate | 22,625 | 7.1% | 23,241 | 7.3% | 6% |
-| phaser (pedal) | 22,593 | 7.1% | 22,631 | 7.1% | 6% |
-| delay (pedal) | 22,359 | 7.0% | 24,445 | 7.6% | 10% |
-| chorus (pedal) | 21,659 | 6.8% | 23,209 | 7.3% | 9% |
-| flanger | 20,271 | 6.3% | 20,442 | 6.4% | 8% |
-| spring_reverb | 18,371 | 5.7% | 20,735 | 6.5% | 6% |
-| limiter | 16,396 | 5.1% | 19,284 | 6.0% | 6% |
-| tremolo | 14,333 | 4.5% | 14,370 | 4.5% | 4% |
-| texture | 11,805 | 3.7% | 12,137 | 3.8% | 11% |
-| eq | 11,546 | 3.6% | 11,593 | 3.6% | 3% |
-| deesser | 10,869 | 3.4% | 10,925 | 3.4% | 3% |
-| preamp | 10,634 | 3.3% | 10,652 | 3.3% | 4% |
-| filter (pedal) | 10,517 | 3.3% | 10,557 | 3.3% | 3% |
-| stage | 10,325 | 3.2% | 10,365 | 3.2% | 3% |
-| transient_shaper | 8,565 | 2.7% | 8,617 | 2.7% | 3% |
-| ringmod (pedal) | 8,245 | 2.6% | 8,298 | 2.6% | 2% |
-| shelving_eq | 7,965 | 2.5% | 7,999 | 2.5% | 2% |
-| glitch | 7,962 | 2.5% | 9,677 | 3.0% | 3% |
-| stereo_widener | 6,165 | 1.9% | 6,213 | 1.9% | 2% |
-| looper | 3,451 | 1.1% | 3,451 | 1.1% | 1% |
+The table is the rig path's worst block, as recorded in `sonido_platform::cycle_table::EFFECT_CYCLES` (`crates/sonido-platform/src/cycle_table.rs`), which stores each rounded up to the next 1,000 cycles:
 
-The first run's build, flashed into QSPI over DFU through the Electrosmith bootloader (v6.4) and read over USB serial instead of loaded over SWD, matched its SWD numbers within 1% (reverb mean 170,166 vs 170,298 cycles; tuner worst 200,911 vs 202,253).
+| Effect | Worst block (cycles) | % of budget | `EFFECT_CYCLES` |
+|---|---|---|---|
+| tuner | 203,837 | 63.7% | 204,000 |
+| reverb (pedal) | 197,300 | 61.7% | 198,000 |
+| amp | 131,223 | 41.0% | 132,000 |
+| harmonic_habitat | 113,621 | 35.5% | 114,000 |
+| tape | 96,905 | 30.3% | 97,000 |
+| cabinet | 86,600 | 27.1% | 87,000 |
+| plate_reverb | 72,552 | 22.7% | 73,000 |
+| drone | 67,628 | 21.1% | 68,000 |
+| multiband_comp | 58,476 | 18.3% | 59,000 |
+| vibrato | 51,646 | 16.1% | 52,000 |
+| time_stretch | 45,723 | 14.3% | 46,000 |
+| compressor | 45,099 | 14.1% | 46,000 |
+| distortion (pedal) | 40,023 | 12.5% | 41,000 |
+| pitch_shift | 33,272 | 10.4% | 34,000 |
+| delay (pedal) | 33,003 | 10.3% | 34,000 |
+| chorus (pedal) | 30,392 | 9.5% | 31,000 |
+| spring_reverb | 29,582 | 9.2% | 30,000 |
+| flanger | 27,940 | 8.7% | 28,000 |
+| phaser (pedal) | 27,301 | 8.5% | 28,000 |
+| preamp | 25,092 | 7.8% | 26,000 |
+| limiter | 24,074 | 7.5% | 25,000 |
+| gate | 24,054 | 7.5% | 25,000 |
+| wah | 23,152 | 7.2% | 24,000 |
+| texture | 19,148 | 6.0% | 20,000 |
+| tremolo | 16,883 | 5.3% | 17,000 |
+| eq | 16,590 | 5.2% | 17,000 |
+| transient_shaper | 15,608 | 4.9% | 16,000 |
+| stage | 14,926 | 4.7% | 15,000 |
+| deesser | 14,245 | 4.5% | 15,000 |
+| filter (pedal) | 14,082 | 4.4% | 15,000 |
+| glitch | 13,971 | 4.4% | 14,000 |
+| ringmod (pedal) | 13,642 | 4.3% | 14,000 |
+| bitcrusher (pedal) | 13,151 | 4.1% | 14,000 |
+| shelving_eq | 11,172 | 3.5% | 12,000 |
+| stereo_widener | 9,151 | 2.9% | 10,000 |
+| looper | 7,754 | 2.4% | 8,000 |
 
-Every kernel fits a block on its own, worst block included; the reverb (53% mean, 55% worst) is the heaviest pedal effect. The worst three-slot pedal chain, reverb + distortion + bitcrusher, sums to 72.6% of the budget on mean cost and 75.6% on each kernel's worst block; the whole pedal running it in a Hothouse measured 78.1% mean and 89% at its slowest callback ([Embedded](EMBEDDED.md#chain-configurations)).
+A rebuild alone moves an unchanged effect by up to ±8% through code layout, which the 80% rule's margin absorbs. An earlier run's build, flashed into QSPI over DFU through the Electrosmith bootloader (v6.4) and read over USB serial instead of loaded over SWD, matched its SWD numbers within 1%.
 
-The tuner's mean and worst differ because its pitch analysis is periodic. The first on-device run found it doing a whole analysis inside one block: 9,166,077 cycles, 29× that block's budget (an audible dropout every 43 ms on the pedal). It now spreads the analysis one lag per decimated sample across each hop and analyzes its ring in place, which brought the worst block to 63%.
+Every effect fits a block on its own, worst block included; the reverb (62%) is the heaviest jam effect and the tuner (64%) the heaviest overall.
 
-**The ×25 estimate, checked.** The last column is the estimate described below (desktop ns/frame × 25 against the per-sample budget). Its ratio to the measured mean has a median of 1.14 and runs from 0.76 (wah) to 3.13 (tuner): 28 of the 36 kernels land within the ±50% the model claims. Of the eight outside it, all on the pessimistic side, pitch shift, reverb and bitcrusher (1.54–1.62) barely miss; the model overstates the rest by 1.7–3.1×: cabinet 1.7, drone 1.9, time stretch 2.4, texture and tuner 3.1, kernels whose work is periodic, grain-based or convolution. Use the measured table; keep the model for kernels not yet measured.
+**The pedal's rule.** One rule decides whether a rig runs on the pedal, shared by the editor's export check (`sonido_patch::validate_for_pedal`) and the pedal itself (which refuses rigs sent over USB and skips jam effects that would break it): the `EFFECT_CYCLES` of a rig's effects plus `NODE_OVERHEAD_CYCLES` (400) per node must stay within `CHAIN_FRACTION` (80%) of the block budget (`chain_cycles`, `chain_fits`); the editor warns past `WARN_FRACTION` (70%). The heaviest three-effect jams that fit are reverb and distortion with filter, ringmod or bitcrusher (79–80%); reverb, distortion and delay (86%) does not. The pedal running distortion → reverb → ringmod in a Hothouse measured 74% mean and 83–85% at its slowest callbacks, with no block over budget ([Embedded](EMBEDDED.md#chain-configurations)).
+
+The tuner's mean and worst differ because its pitch analysis is periodic. The first on-device run found it doing a whole analysis inside one block: 9,166,077 cycles, 29× that block's budget (an audible dropout every 43 ms on the pedal). It now spreads the analysis one lag per decimated sample across each hop and analyzes its ring in place, which brought the worst block to about 63%.
+
+**The ×25 estimate, checked.** The first on-device run (bare kernels, before the rig-path pass existed) checked the estimate described below (desktop ns/frame × 25 against the per-sample budget) against each kernel's measured mean: the ratio had a median of 1.14 and ran from 0.76 (wah) to 3.13 (tuner), with 28 of the 36 kernels within the ±50% the model claims. Of the eight outside it, all on the pessimistic side, pitch shift, reverb and bitcrusher (1.54–1.62) barely missed; the model overstated the rest by 1.7–3.1×: cabinet 1.7, drone 1.9, time stretch 2.4, texture and tuner 3.1, kernels whose work is periodic, grain-based or convolution. Use the measured table; keep the model for kernels not yet measured.
+
+### Updating the cycle table
+
+`EFFECT_CYCLES` is generated from a `bench_kernels` log, never edited by hand. After changing a kernel (or anything on the rig path), with an SWD probe on the Seed:
+
+```bash
+cd crates/sonido-daisy
+cargo build --release --example bench_kernels
+probe-rs run --chip STM32H750IBKx --protocol swd \
+    target/thumbv7em-none-eabihf/release/examples/bench_kernels | tee bench.log
+cd ../..
+python3 scripts/update_cycle_table.py crates/sonido-daisy/bench.log
+```
+
+`scripts/update_cycle_table.py` reads every `rig=<name> mean=… worst=…` line, rewrites each `EFFECT_CYCLES` entry to that effect's worst block rounded up to the next 1,000 cycles (keeping the exact figure in the row's comment), and stamps today's date into the module docs. It stops if the log lacks an effect in the table or names one the table lacks. The USB-serial output (DFU flash, no probe) carries only the bare-kernel pass, so it cannot feed the script. `EFFECT_SDRAM` (each effect's heap as the registry builds it) is measured on the host and kept by hand.
 
 ### Stereo, oversampling, chain
 
@@ -225,16 +244,16 @@ Run `cargo bench -p sonido-effects` to reproduce (`--bench all_effects` for the 
 
 For measured cost on the Daisy Seed itself, the firmware example
 `crates/sonido-daisy/examples/bench_kernels.rs` reads the Cortex-M7 DWT cycle
-counter per kernel and prints the results over USB serial (see
-[EMBEDDED.md](EMBEDDED.md)).
+counter per effect, bare kernel and rig path (see
+[above](#cortex-m7-measured-on-a-daisy-seed) and [EMBEDDED.md](EMBEDDED.md)).
 
 ## Cortex-M7 Cycle Budget Estimation
 
 Desktop numbers can be scaled to a rough STM32H750 (Daisy Seed) estimate for
-planning before measuring on hardware. All 36 kernels are now measured on a
-Daisy Seed ([above](#cortex-m7-measured-on-a-daisy-seed)); against those
-measurements this model's median error is +14%, and 28 of 36 kernels fall
-inside its ±50% (the other eight are overestimates).
+planning before measuring on hardware. All 36 effects are now measured on a
+Daisy Seed ([above](#cortex-m7-measured-on-a-daisy-seed)); against the first
+run's bare-kernel means this model's median error was +14%, and 28 of 36
+kernels fell inside its ±50% (the other eight were overestimates).
 
 ### Method
 
@@ -252,7 +271,7 @@ Est. cycles/sample = desktop_ns/sample × (desktop_GHz / cortex_GHz) × arch_pen
 
 ### Optimization Paths for Tight Chains
 
-1. Keep the reverb (53% measured) away from other heavy kernels: amp, cabinet, Harmonic Habitat, tape
+1. Keep the reverb (62% worst block measured) away from other heavy kernels: amp, cabinet, Harmonic Habitat, tape
 2. Reduce Phaser stages (cost scales with the number of allpass stages)
 3. Use OnePole instead of a biquad for simple filtering
 4. Lower the sample rate to 44.1 kHz (~8% more cycles per sample)

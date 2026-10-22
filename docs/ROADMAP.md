@@ -134,9 +134,9 @@ Effect plugins support host-negotiated window resize via atomic `PendingResize` 
 
 ### Multi-Effect CLAP Plugin
 
-**Status:** Headless core complete; editor GUI in progress
+**Status:** Headless core and rig-browser editor complete
 
-The graph player (`crates/sonido-plugin/src/graph_player.rs`, `com.sonido.graph-player`) runs a whole exported `Patch` as one plugin via `PatchPlayer`: six macro params, morph position/speed, input and master gain, bypass. Its state is the patch JSON the GUI exports ("Export as CLAP patch"). The rig is edited in the GUI, not inside the plugin; the plugin's own Cabinet editor is being built.
+The graph player (`crates/sonido-plugin/src/graph_player.rs`, `com.sonido.graph-player`) runs a whole exported `Patch` as one plugin via `PatchPlayer`, the runtime the pedal firmware also plays rigs through: six macro params, morph position/speed, input and master gain, bypass. Its state is the patch JSON the GUI exports ("Export as CLAP patch"). Its editor (`graph_editor.rs`) is a RIG cabinet with a rig selector over the factory rigs (`sonido_rigs::factory_rigs`, the same six the pedal ships) and the rig library folder the GUI exports to. The rig itself is edited in the GUI, not inside the plugin.
 
 ### Benchmark Baseline Tracking in CI
 
@@ -264,7 +264,7 @@ Informed by analysis of DigiTech's design philosophy (Tom Cram era): musicality 
 
 **Estimated scope:** Mostly creative work (designing the presets). ~200 LOC for category browser UI.
 
-**Status:** Started. 5 chains ship in `presets/` (clean boost, guitar crunch, tape delay, subtle chorus, full chain) and 8 factory presets in `crates/sonido-config/src/factory_presets.rs`, which the graph-player plugin also lists as built-in rigs; the 20–30 target and the category browser remain.
+**Status:** Started. 5 chains ship in `presets/` (clean boost, guitar crunch, tape delay, subtle chorus, full chain) and 8 factory presets in `crates/sonido-config/src/factory_presets.rs`; six factory rigs (`crates/sonido-rigs`) ship on the pedal and in the graph player. The 20–30 target and the category browser remain.
 
 ---
 
@@ -403,11 +403,11 @@ See ADR-025 in `docs/DESIGN_DECISIONS.md` for full architectural rationale.
 
 ---
 
-### Morph Pedal
+### Pedal Firmware (Rig Player)
 
-**Status:** Complete (firmware header calls it "Morph Pedal v2")
+**Status:** Complete; host tools for the USB rig link remain
 
-Morph pedal firmware on Hothouse/Daisy Seed (`crates/sonido-daisy/examples/sonido_pedal.rs`). Three slots, each holding one of 8 effects or bypass. T1 selects the node being edited; T2 selects A edit / B edit / Morph; T3 selects the topology (linear 1→2→3, parallel split, fan 1→[2,3]). Sound A and Sound B are captured per node; Morph mode ramps between those parameter snapshots with FS1/FS2 (K5 morph speed 0.1–5 s, K6 master −60..+12 dB). Topology is set by T3, not morphed. LED 2 shows morph position as PWM in Morph mode, output level otherwise, and blinks for confirmations. The firmware does not load exported patches yet.
+Pedal firmware on Hothouse/Daisy Seed (`crates/sonido-daisy/examples/sonido_pedal.rs`), a rig player: every sound is a `Patch` played by `PatchPlayer` with registry-built effects, as in the graph-player plugin. The rig list is the jam (three slots, each one of 8 effects or empty; T1 selects the slot, T3 the topology: linear 1→2→3, parallel split, fan 1→[2,3]), up to 15 rigs in the QSPI rig bank, and the six factory rigs (`crates/sonido-rigs`); FS holds step through it and it powers on into the last rig played. T2 selects A / B / Morph for any rig; on a rig the knobs are its six macros, in the jam they edit the selected slot's A or B (Morph: K5 morph time 0.1–5 s, K6 master −60..+12 dB). The jam, active rig and tapped tempo are saved to a flash state sector; the USB rig link (`sonido_patch::link`) reads, writes and activates bank rigs while it plays. LED 2 blinks the rig's position or a refusal's error code, shows the morph position as PWM in Morph mode and the output level otherwise. See `docs/EMBEDDED.md`.
 
 ---
 
@@ -432,7 +432,7 @@ CPU budget targets for the most expensive effects, informed by embedded real-tim
 
 ### Embedded Hardening
 
-**Status:** Groundwork only. `sonido-daisy` has `ExpressionInput` (calibration, deadzone, slew limiting; `expression.rs`), a USB-MIDI packet parser (`midi.rs`), and tap tempo (`tap_tempo.rs`); the shipping pedal firmware uses none of them yet. Everything below is still open.
+**Status:** Groundwork only. `sonido-daisy` has `ExpressionInput` (calibration, deadzone, slew limiting; `expression.rs`) and a USB-MIDI packet parser (`midi.rs`), which the shipping pedal firmware does not use yet; it does use tap tempo (`tap_tempo.rs`) and knob hysteresis (`controls.rs`). Everything else below is still open.
 
 Hardware interface features required for production pedal deployment on Hothouse/Daisy Seed.
 
@@ -449,7 +449,7 @@ Hardware interface features required for production pedal deployment on Hothouse
 **Pot calibration:**
 - Real pots read 0.003–0.991, not 0.0–1.0. Per-pot min/max calibration stored in flash
 - Dead zone configuration: ignore movement below threshold (prevents jitter near boundaries)
-- Hysteresis: require N-step change before updating parameter (ADC noise rejection)
+- Hysteresis: done — `ControlBuffer` holds a knob's value until the reading leaves a 0.15%-of-travel band (`KNOB_HYSTERESIS`)
 
 **Control curves:**
 - Per-control response shaping: linear, logarithmic, reverse logarithmic, S-curve, custom lookup table

@@ -176,7 +176,7 @@ The MORPH band crossfades the whole rig between two poses, A and B. Every effect
 - **Left-click A or B**: park the rig at that pose and *sculpt* it; every knob you turn is recorded into it. The readout says `editing A` / `editing B`.
 - **Right-click (or double-click) A or B**: grab the current sound into that pose.
 - **Drag the LED bar**: perform; the readout shows `A→B nn%`.
-- **RAMP / MOM / LATCH**: the mode for the **A⇄B** trigger (and the pedal footswitch). Ramp glides, Momentary holds B while pressed, and Latch toggles. **A⇄B** is enabled once some effect has distinct poses.
+- **RAMP / MOM / LATCH**: the mode for the **A⇄B** trigger, saved in the patch (the pedal ignores it: its footswitches ramp toward A or B while held, at the patch's morph speed). Ramp glides, Momentary holds B while pressed, and Latch toggles. **A⇄B** is enabled once some effect has distinct poses.
 
 Interpolation is per parameter and curve-aware (`curve_lerp`). Linear parameters interpolate linearly, logarithmic ones (frequencies) geometrically, and snap/stepped ones switch at the midpoint. Per-effect bypass switches at `t = 0.5`. Locked effects are left alone.
 
@@ -226,7 +226,7 @@ The **Export** menu projects the rig to a canonical `sonido_patch::Patch` and of
 | Windows | `%APPDATA%\sonido\patches` |
 
 - **Save patch JSON…**: the same patch, anywhere.
-- **Pedal (Daisy)**: the rig is validated against the pedal's supported effects and its CPU-cycle and SDRAM budgets. The menu shows `✓ fits pedal budget` or `✗ exceeds pedal limits` with each finding. When it fits, you can choose **Save pedal binary (.bin)…** (a 4 KB patch sector) or **Flash to pedal (DFU)** (native only; put the pedal in bootloader by holding both footswitches about 3 s, and the patch is flashed to slot 0). The shipping pedal firmware does not read the patch bank yet, so a flashed rig is stored but not played ([PATCH_PLATFORM.md](PATCH_PLATFORM.md), workstream D).
+- **Pedal (Daisy)**: the rig is validated against the pedal's supported effects and its CPU-cycle and SDRAM budgets. The menu shows `✓ fits pedal budget` or `✗ exceeds pedal limits` with each finding. When it fits, you can choose **Save pedal binary (.bin)…** (a 4 KB patch sector) or **Flash to pedal (DFU)** (native only; put the pedal in bootloader by holding both footswitches about 3 s, and the patch is flashed to slot 0 of the pedal's rig bank). The pedal checks it against the same rule and lists it after it restarts; hold a footswitch to step to it ([EMBEDDED.md](EMBEDDED.md#the-pedal-rig-player), [PATCH_PLATFORM.md](PATCH_PLATFORM.md)).
 
 The result appears in the header.
 

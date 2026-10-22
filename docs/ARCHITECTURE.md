@@ -19,13 +19,14 @@ build without `std` (with `alloc`).
 Applications
   sonido-cli ──────▶ core, registry, analysis, io, config, synth, graph-dsl, patch
   sonido-gui ──────▶ core, effects, gui-core, registry, graph-dsl, patch, platform, io
-  sonido-plugin ───▶ core, effects, registry, patch, gui-core      (CLAP/VST3 bundle)
+  sonido-plugin ───▶ core, effects, registry, config, patch, rigs, gui-core   (CLAP/VST3 bundle)
   sonido-daisy ────▶ core, effects, registry, patch, platform*     (firmware, no_std;
-                                                                    excluded from the workspace)
+                     build script: rigs                             excluded from the workspace)
 Libraries
   sonido-gui-core ─▶ core, registry              widgets, Cabinet, ParamBridge
   sonido-graph-dsl ▶ core, registry, config      text DSL → ProcessingGraph
-  sonido-config ───▶ core, registry              presets + paths            [std]
+  sonido-rigs ─────▶ core, registry, patch      the factory rigs           [std]
+  sonido-config ───▶ core, registry, patch       presets + paths            [std]
   sonido-io ───────▶ core                        WAV + cpal audio I/O       [std]
   sonido-analysis ─▶ core                        FFT, spectral analysis     [std]
   sonido-registry ─▶ core, effects               effect factory             [no_std]
@@ -47,13 +48,14 @@ The foundation crate providing DSP primitives. Designed for `no_std` environment
 **Why a separate core crate?** Every DSP system needs the same building blocks: delay lines, filters, LFOs, parameter smoothing. By isolating these into `sonido-core` with `no_std` support, the same primitives compile for desktop (x86_64) and embedded (ARM Cortex-M7) targets without conditional compilation in the effects. This mirrors the layered architecture used in commercial DSP frameworks like JUCE's `dsp` module and Faust's core library, but with Rust's zero-cost abstractions ensuring no runtime overhead from the abstraction boundary.
 
 **Key components:**
-- `Effect` trait: Object-safe interface all effects implement
+- `Effect` trait: Object-safe interface all effects implement (`snap_params()` jumps every smoothed parameter to its target, for a freshly built rig)
+- `level`: the level contract — `Level` (trim + wet/dry correlation), `blend()` (correlation-normalized constant-power mix), `NOMINAL_PEAK_DBFS`
 - `SmoothedParam`: Zipper-free parameter changes with exponential/linear smoothing
 - `InterpolatedDelay` / `FixedDelayLine`: Delay buffers with fractional interpolation
 - `Biquad`: IIR filter building block for EQ, lowpass, highpass, etc.
 - `StateVariableFilter`: Multi-output filter (LP, HP, BP simultaneously)
 - `CombFilter`: Comb filter with damping for reverb algorithms
-- `AllpassFilter`: Schroeder allpass for diffusion
+- `AllpassFilter`: true Schroeder allpass (unity gain at every frequency) for diffusion
 - `Lfo`: Low-frequency oscillator for modulation effects (5 waveforms)
 - `EnvelopeFollower`: Amplitude envelope detection for dynamics
 - `Oversampled`: Generic 2x/4x/8x oversampling wrapper for anti-aliasing
@@ -95,9 +97,11 @@ All 36 effects have kernel-architecture implementations in `crates/sonido-effect
 
 2. **`DspKernel`** (`XxxKernel`) — owns ONLY DSP state (filters, delay buffers, ADAA processors, LFO phases). Receives `&Params` by reference each sample. No `SmoothedParam`, no platform types.
 
-3. **`Adapter<K, SmoothedPolicy>`** — bridges kernel to `Effect + ParameterInfo`. Owns per-parameter `SmoothedParam` instances configured from `KernelParams::smoothing()`. Advances smoothers per sample, writes into a params snapshot, passes to `kernel.process_stereo()`.
+3. **`Adapter<K, SmoothedPolicy>`** — bridges kernel to `Effect + ParameterInfo`. Owns per-parameter `SmoothedParam` instances configured from `KernelParams::smoothing()`. Advances smoothers per sample, writes into a params snapshot, passes to `kernel.process_stereo()`, and applies the kernel's level trim to the output when it has no mix control.
 
-**Desktop/plugin** uses `Adapter<K, SmoothedPolicy>` (the registry creates `Adapter<XxxKernel, SmoothedPolicy>` for all 36 effects). **Embedded** uses `Adapter<K, DirectPolicy>` (`Adapter::new_direct`) — the same `Effect + ParameterInfo` interface with no smoothing overhead. The shipping pedal firmware (`crates/sonido-daisy/examples/sonido_pedal.rs`) wraps all 8 of its kernels this way inside a `ProcessingGraph` on an SDRAM heap; only a few single-effect test examples (`single_delay.rs`, `single_reverb.rs`) call the kernel directly with `XxxParams::from_knobs()`. (The firmware's `patch_loader.rs`, not yet wired into the pedal, uses the smoothing adapter.)
+**Every target that plays rigs** uses `Adapter<K, SmoothedPolicy>`: the registry creates `Adapter<XxxKernel, SmoothedPolicy>` for all 36 effects, and the plugins, the editor, the CLI and the pedal firmware all build effects through it. The pedal (`crates/sonido-daisy/examples/sonido_pedal.rs`) plays every rig through `sonido_patch::PatchPlayer` with registry-built effects (`patch_loader::make_effect`) on an SDRAM heap, so a rig sounds the same as in the graph-player plugin. `Adapter<K, DirectPolicy>` (`Adapter::new_direct`) — the same `Effect + ParameterInfo` interface with no smoothing — remains for firmware examples that drive one kernel (`single_effect.rs`, `graph_audio_test.rs`); `single_delay.rs` and `single_reverb.rs` call the kernel directly with `XxxParams::from_knobs()`.
+
+**Level contract.** Every kernel declares `const LEVEL: Level` (`crates/sonido-core/src/level.rs`), taken from the generated table `crates/sonido-effects/src/calibration.rs`: a trim and, for an effect with a mix control, the measured correlation of its wet signal with the dry input. Kernels mix with `Self::blend` / `Self::blend_stereo`, a sine/cosine constant-power law normalized for that correlation, so at its defaults every effect plays at the loudness of its input and its mix control does not change that loudness. The table is generated by `cargo run -p sonido-effects --example calibrate --release` (a strummed reference guitar at −20 dBFS peaks, integrated LUFS) and held by `tests/level_contract.rs`. See `docs/KERNEL_ARCHITECTURE.md`.
 
 `SmoothingStyle` tiers: `None` (snap), `Fast` (5ms), `Standard` (10ms), `Slow` (20ms), `Interpolated` (50ms), `Custom(ms)`.
 
@@ -117,6 +121,7 @@ Spectral analysis tools for reverse engineering hardware and signal analysis. Re
 - `ThdAnalyzer` / `ImdAnalyzer`: Harmonic and intermodulation distortion measurement
 - `ConstantQTransform` / `Chromagram`, `MelSpectrogram`, `StftAnalyzer`: Time-frequency analysis
 - `LufsMeter`, `StereoCorrelation`, `detect_pitch`: Loudness, stereo and pitch measurement
+- `loudness::effect_gain_db` and `signals` (`reference_guitar`, `strummed_guitar`): the measurement behind the level contract — the loudness change an effect makes to a synthetic strummed guitar peaking at −20 dBFS, in integrated LUFS
 
 **Advanced Spectral Analysis:**
 - `FilterBank`: Multi-band bandpass filter bank with 4th-order Butterworth filters
@@ -229,7 +234,8 @@ CLI-first configuration and preset management. Requires `std`.
 - `EffectChain`: Runtime effect chain builder
 - `validation`: Effect type and parameter validation
 - `paths`: Platform-specific preset directories (user, system)
-- `factory_presets`: Built-in presets for common use cases
+- `factory_presets`: Built-in presets for common use cases (`sonido presets`; the graph player's built-in rigs come from `sonido-rigs`, not from these)
+- `patch`: `preset_to_patch` — convert a preset into a `sonido-patch` rig
 
 **Usage:**
 ```rust
@@ -248,6 +254,10 @@ preset.effects = vec![
 preset.save(&user_presets_dir().join("my_preset.toml"))?;
 ```
 
+### sonido-rigs
+
+The factory rigs: six `sonido_patch::Patch`es built from registry effects (`factory_rigs()`: Shimmer Cathedral, Fuzz Lab, Space Echo, Granular Drift, Harmonic Habitat, Amp Stack). One set serves the pedal (its `build.rs` encodes them into the firmware image) and the graph-player plugin's rig library. Every rig maps K1–K3 to its own controls, K4 to input gain, K5 to morph time and K6 to master volume around a level-matching trim, generated into `src/trims.rs` by `cargo run -p sonido-rigs --example calibrate --release`; `tests/factory.rs` holds every rig at the dry guitar's loudness, to the pedal's CPU and memory rule, and to a binary round trip. Requires `std`.
+
 ### sonido-platform
 
 Hardware abstraction layer for multi-target deployment. Provides `no_std` compatible traits for physical controls and parameter mapping.
@@ -260,10 +270,9 @@ Hardware abstraction layer for multi-target deployment. Provides `no_std` compat
 - `ControlId`: Namespaced control identifiers (hardware, GUI, MIDI, automation)
 - `ControlType`: Control kinds (Knob, Toggle3Way, Toggle2Way, Footswitch, Led)
 - `ControlState`: Control value with change tracking
-- `knob_mapping` (`knob_map`, `knob_to_param`): Which Hothouse knob drives which parameter, per effect
-- `param_map` (`adc_to_param`, `adc_to_param_biased`): Scale-aware ADC-to-parameter conversion
-- `noon` (`noon_value`): "12 o'clock" sweet-spot values for the biased knob mapping
-- `cycle_table`: per-effect CPU (worst block, measured on a Daisy Seed) and SDRAM cost for export-time pedal budgeting
+- `knob_mapping` (`knob_map`, `knob_to_param`): Which Hothouse knob drives which parameter, per effect, plus per-effect knob floors
+- `param_map` (`adc_to_param`, `adc_to_param_biased`): Scale-aware ADC-to-parameter conversion; the biased form puts the parameter's default (its voiced sweet spot) at noon
+- `cycle_table`: per-effect CPU (rig-path worst block, measured on a Daisy Seed; regenerated by `scripts/update_cycle_table.py`) and SDRAM cost, and the one rule (`chain_fits`) the editor's export check and the pedal both apply
 
 **Control ID Namespaces:**
 - `0x00XX`: Hardware controls (knobs, switches)
@@ -334,6 +343,7 @@ CLAP audio plugin adapter via the `clack` safe wrapper. Everything ships as ONE 
 - `main_thread.rs`: CLAP params, state save/load (JSON), GUI extension, audio ports
 - `shared.rs`: `SonidoShared` — lock-free atomic parameter store shared across threads
 - `graph_player.rs`: Graph-player plugin — runs an exported `Patch` (six macros, morph, input/master gain)
+- `graph_editor.rs`: the graph player's editor — a RIG selector over the factory rigs (`sonido_rigs::factory_rigs`) and the rig library folder
 - `bin/sonido-preview.rs`: Opens one plugin's GUI in a window without a DAW (`--snapshot` for PNGs)
 
 **Shared infrastructure:**
@@ -455,8 +465,8 @@ high-level chain management and exposes a dual API (ADR-027):
 audio processor uses the slot-indexed API (and `new_dag()` for graphs built in the
 node editor); the CLI uses `new_linear()` + `add_effect()` for chains and `new()`
 for `--graph` DSL topologies; the graph-player plugin's `PatchPlayer`
-(`sonido-patch`) owns one. The single-effect plugins own one effect directly, and
-the pedal firmware drives a `ProcessingGraph` directly.
+(`sonido-patch`) owns one, and so does the pedal firmware's, which plays every rig
+through the same `PatchPlayer`. The single-effect plugins own one effect directly.
 `sonido-io` re-exports `GraphEngine` for backwards compatibility.
 
 ### CLI Stereo Output
@@ -632,7 +642,7 @@ Key design decisions for `no_std`:
 
 Parameters use `SmoothedParam` to avoid zipper noise.
 
-**Why per-sample smoothing?** When a user turns a knob, the parameter changes in discrete steps. Without smoothing, gain changes produce audible clicks ("zipper noise") and filter cutoff changes produce crackles. The `SmoothedParam` (`crates/sonido-core/src/param.rs`) implements a one-pole IIR lowpass filter on the parameter value itself: `current = current + coeff * (target - current)`. The coefficient is derived from the desired smoothing time: `coeff = 1 - exp(-1 / (time_ms/1000 * sample_rate))`. After one time constant, the value reaches 63% of the way to the target; after 5 time constants (~99.3%), it is effectively settled.
+**Why per-sample smoothing?** When a user turns a knob, the parameter changes in discrete steps. Without smoothing, gain changes produce audible clicks ("zipper noise") and filter cutoff changes produce crackles. The `SmoothedParam` (`crates/sonido-core/src/param.rs`) implements a one-pole IIR lowpass filter on the parameter value itself: `current = current + coeff * (target - current)`. The coefficient is derived from the desired smoothing time: `coeff = 1 - exp(-1 / (time_ms/1000 * sample_rate))`. After one time constant, the value reaches 63% of the way to the target; after 5 time constants (~99.3%), it is effectively settled. It then snaps to the target exactly, once within one part in a million of the target's magnitude or once a step no longer moves the f32 value (a large value such as a 4 kHz cutoff would otherwise stall a few representable steps short and smooth forever), and a settled parameter's `advance()` returns at once.
 
 **Why exponential rather than linear?** Exponential smoothing (`SmoothedParam`) is the default because it has constant computational cost (one multiply-add per sample) and naturally decelerates as it approaches the target, producing smooth-sounding transitions. Linear smoothing (`LinearSmoothedParam`) is also available for cases like crossfades where a predictable, constant-rate transition is needed.
 
@@ -670,14 +680,17 @@ The `sonido-platform` crate provides abstractions for hardware deployment:
 | FOOTSWITCH_1-2 | Momentary | Pressed / Released |
 | LED_1-2 | Status LED | On / Off |
 
-**Toggle mapping in the shipping firmware (`sonido_pedal.rs`):**
+**The shipping firmware (`sonido_pedal.rs`)** is a rig player: it steps through
+the jam, up to 15 rigs in its QSPI flash bank and the six factory rigs
+(`sonido-rigs`), and plays each through `sonido_patch::PatchPlayer`. On a rig the
+six knobs are its macros; in the jam they edit the selected slot.
 ```
-TOGGLE_1: Node being edited (1 / 2 / 3)
-TOGGLE_2: Mode (A edit / B edit / Morph)
-TOGGLE_3: Topology (linear 1→2→3 / parallel / fan 1→[2,3])
+TOGGLE_1: Jam slot being edited (1 / 2 / 3)
+TOGGLE_2: Mode (A / B / Morph), for every rig
+TOGGLE_3: Jam topology (linear 1→2→3 / parallel / fan 1→[2,3])
 ```
-Each of the 3 nodes holds one of 8 effects (chorus, phaser, distortion,
-bitcrusher, delay, reverb, ringmod, filter) or bypass.
+Each of the jam's 3 slots holds one of 8 effects (chorus, phaser, distortion,
+bitcrusher, delay, reverb, ringmod, filter) or nothing.
 
 See `docs/EMBEDDED.md` for detailed pin mappings and design patterns.
 
@@ -779,7 +792,7 @@ Both bridges transport raw parameter values (f32 → u32 bit-cast → AtomicU32)
 Smoothing happens *inside* the effect after `set_param()`: the kernel's
 `Adapter<K, SmoothedPolicy>` calls the parameter's `SmoothedParam::set_target()`,
 and `advance()` produces the smoothed value per sample in the process loop
-(`DirectPolicy` adapters on the pedal skip this). The bridge never sees smoothed
+(`DirectPolicy` adapters, used only by single-kernel firmware examples, skip this). The bridge never sees smoothed
 values.
 
 ### Plugin Wrapper Contract

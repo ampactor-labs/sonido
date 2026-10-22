@@ -4,15 +4,15 @@ Complete parameter reference for all Sonido effects.
 
 ## Kernel Architecture
 
-All 36 effects have kernel-architecture implementations in `crates/sonido-effects/src/kernels/`. Each effect defines `XxxKernel` (`DspKernel` impl) and `XxxParams` (`KernelParams` impl). The registry creates `Adapter<XxxKernel, SmoothedPolicy>` — all consumers (GUI, CLI, plugin) use kernel-backed effects transparently.
+All 36 effects have kernel-architecture implementations in `crates/sonido-effects/src/kernels/`. Each effect defines `XxxKernel` (`DspKernel` impl) and `XxxParams` (`KernelParams` impl). The registry creates `Adapter<XxxKernel, SmoothedPolicy>` — all consumers (GUI, CLI, plugins and the pedal firmware, which plays every rig through `PatchPlayer`) use kernel-backed effects transparently.
 
 The classic per-effect `Effect` structs have been removed; every effect is kernel-only.
 
 ```rust
-// Desktop/plugin: Adapter<K, SmoothedPolicy> handles smoothing
+// Plugins, editor, CLI and pedal (what the registry builds): Adapter<K, SmoothedPolicy>
 let adapter = Adapter::new(DistortionKernel::new(48000.0), 48000.0);
 
-// Embedded (pedal firmware): Adapter<K, DirectPolicy>, no smoothing overhead
+// Single-kernel firmware examples (single_effect.rs): Adapter<K, DirectPolicy>, no smoothing
 let adapter = Adapter::new_direct(DistortionKernel::new(48000.0), 48000.0);
 
 // Single-effect test examples only: call the kernel directly
@@ -49,7 +49,11 @@ sonido process in.wav --effect lowpass --param cutoff=2000  # Same effect
 
 ## Output Level Convention
 
-Every effect exposes an `output` level parameter in dB, default 0.0 dB. Most use the range -6 to +6 dB; the exceptions are distortion (-24 to +6 dB), tape (-12 to +12 dB, default -6.0 dB), and drone, glitch, texture, and time_stretch (-60 to +6 dB). Effects with a separate gain-staging control keep it in addition to `output`: preamp `gain` (0 to 40 dB), stage `gain` (-40 to +12 dB), amp `master` (-60 to 0 dB, default -6.0 dB), and compressor `makeup` (0 to 24 dB). `output` is usually the last writable parameter, but not always (distortion, filter, and compressor place other controls after it), and several effects append diagnostic parameters flagged `HIDDEN | READ_ONLY` (compressor `Gain Reduction`, gate `Gate Open`, chorus/flanger/phaser/tremolo `LFO Phase`, tuner `Detected Hz`/`Cents`) that report state for metering and cannot be set. See `docs/DSP_QUALITY_STANDARD.md` for the full quality rules and compliance table.
+Every effect exposes an `output` level parameter in dB, default 0.0 dB. Most use the range -6 to +6 dB; the exceptions are distortion (-24 to +6 dB), tape (-12 to +12 dB, default -6.0 dB), and drone, glitch, texture, and time_stretch (-60 to +6 dB). Effects with a separate gain-staging control keep it in addition to `output`: preamp `gain` (0 to 40 dB, default 15.0 dB), stage `gain` (-40 to +12 dB), amp `master` (-60 to 0 dB, default -6.0 dB), and compressor `makeup` (0 to 24 dB). `output` is usually the last writable parameter, but not always (distortion, filter, and compressor place other controls after it), and several effects append diagnostic parameters flagged `HIDDEN | READ_ONLY` (compressor `Gain Reduction`, gate `Gate Open`, chorus/flanger/phaser/tremolo `LFO Phase`, tuner `Detected Hz`/`Cents`) that report state for metering and cannot be set.
+
+**Level contract** (`crates/sonido-core/src/level.rs`): at its defaults every effect plays at the loudness of its input, and its mix control does not change that loudness. Each kernel declares `const LEVEL: Level` (`DspKernel::LEVEL`), taken from the generated table in `crates/sonido-effects/src/calibration.rs`. `Level { trim, mix_correlation: Option<f32> }` holds a gain and, for an effect with a mix control, the measured correlation `ρ` between its wet signal and the dry input. Kernels with a mix control blend through `Self::blend` / `Self::blend_stereo`: the wet is multiplied by `trim`, then dry and wet are combined with sine/cosine constant-power gains (`cos(πm/2)`, `sin(πm/2)`) normalized by the blend's power for that correlation, `1/√(1 + ρ·sin(πm))`, so the blend's loudness is the same at every mix setting (`ρ = 0`, as for reverbs and echoes, is the plain constant-power crossfade; `ρ = 1`, as for saturation, keeps amplitude like a linear one). Effects without a mix control get the trim applied to their output by the `Adapter` (`output_trim` in `crates/sonido-core/src/kernel/adapter.rs`). Because the trim is fixed, gain-type controls are relative to their defaults: the preamp at its default 15 dB `gain` plays at the input's loudness, and more gain is louder.
+
+The table is measured, never hand-tuned: `cargo run -p sonido-effects --example calibrate --release` plays a reference strummed guitar (`sonido_analysis::signals::reference_guitar`, peaking at `NOMINAL_PEAK_DBFS` = -20 dBFS) through every effect, fully wet when it has a mix control and at its defaults otherwise, measures integrated loudness (LUFS, ITU-R BS.1770-4), and regenerates `calibration.rs`. `crates/sonido-effects/tests/level_contract.rs` holds every effect to it: within 0.5 dB of the dry loudness in that measurement and, for an effect with a mix control, within 1.5 dB at 0, 25, 50, and 75% mix and at its default mix. The looper and tuner are uncalibrated utilities (unity `Level`). Rerun the calibrate example after changing a kernel's sound or defaults. See `docs/DSP_QUALITY_STANDARD.md` for the full quality rules and compliance table.
 
 ---
 
@@ -66,8 +70,8 @@ The distortion applies a static nonlinear transfer function (waveshaper) to the 
 
 | Parameter | Description | Default | Range |
 |-----------|-------------|---------|-------|
-| `drive` | Drive amount in dB | 8.0 | 0-40 |
-| `tone` | Tone tilt in dB (boost/cut at 1 kHz) | 0.0 | -12 to 12 |
+| `drive` | Drive amount in dB | 26.0 | 0-40 |
+| `tone` | Tone tilt in dB (boost/cut at 1 kHz) | 1.5 | -12 to 12 |
 | `output` | Output level in dB | 0.0 | -24 to 6 |
 | `shape` | Waveshape type (0=Soft Clip, 1=Hard Clip, 2=Foldback, 3=Asymmetric) | 0 | 0-3 |
 | `mix` | Wet/dry mix % | 100.0 | 0-100 |
@@ -156,18 +160,18 @@ Multi-voice modulated delay chorus with feedback and tempo sync.
 
 **How chorus works**: A chorus effect creates the illusion of multiple instruments playing in unison by mixing the dry signal with copies that have slightly varying pitch. The pitch variation is achieved by modulating a short delay time with an LFO. When a delay time changes over time, it effectively time-stretches or compresses the signal, producing a Doppler-like pitch shift.
 
-**Implementation** (`crates/sonido-effects/src/kernels/chorus.rs`): Four `InterpolatedDelay` lines, each with its own LFO, provide 2-4 modulated voices. The configurable base delay (5-25 ms, default 15 ms) sets the centre of modulation. Following the Boss Dimension D approach, the LFOs never lock together: voice 1 is a sine at the base rate, voice 2 a sine at the base rate offset by 90°, voice 3 a sine at rate x 0.73, and voice 4 a triangle at rate x 1.17. A feedback path recirculates each voice's output for resonant tones.
+**Implementation** (`crates/sonido-effects/src/kernels/chorus.rs`): Four `InterpolatedDelay` lines, each with its own LFO, provide 2-4 modulated voices. The configurable base delay (5-25 ms, default 10 ms) sets the centre of modulation. Following the Boss Dimension D approach, the LFOs never lock together: voice 1 is a sine at the base rate, voice 2 a sine at the base rate offset by 90°, voice 3 a sine at rate x 0.73, and voice 4 a triangle at rate x 1.17. A feedback path recirculates each voice's output for resonant tones.
 
 **Stereo processing**: Voice 1 is fed from the left input and voice 2 from the right; voices 3 and 4 (when enabled) take the mid signal. A pan matrix spreads them: with 2 voices, V1 is 80% L / 20% R and V2 the mirror; with 3, V1 left, V2 right, V3 centre; with 4, V1 hard left, V2 hard right, V3 centre-left, V4 centre-right. The wet mix then passes a soft limiter before the output level.
 
 | Parameter | Description | Default | Range |
 |-----------|-------------|---------|-------|
-| `rate` | LFO rate in Hz | 1.0 | 0.1-10 |
-| `depth` | Modulation depth % | 50.0 | 0-100 |
+| `rate` | LFO rate in Hz | 0.8 | 0.1-10 |
+| `depth` | Modulation depth % | 60.0 | 0-100 |
 | `mix` | Wet/dry mix % | 50.0 | 0-100 |
 | `voices` | Number of chorus voices | 2 | 2-4 |
 | `feedback` | Feedback amount % | 0.0 | 0-70 |
-| `base_delay` | Base delay in ms | 15.0 | 5-25 |
+| `base_delay` | Base delay in ms | 10.0 | 5-25 |
 | `sync` | Tempo sync on/off | off | off, on |
 | `division` | Note division (when synced) | eighth | whole, half, quarter, eighth, etc. |
 | `output` | Output level in dB | 0.0 | -6 to 6 |
@@ -195,22 +199,22 @@ sonido process in.wav --effect chorus \
 
 Feedback delay with optional ping-pong stereo mode.
 
-**Architecture** (`crates/sonido-effects/src/kernels/delay.rs`): Two `InterpolatedDelay` lines (left/right, up to 2 s) whose feedback path runs through a one-pole lowpass (`feedback_lp`), a biquad highpass (`feedback_hp`), and an optional two-stage Schroeder allpass diffuser (13 ms and 7 ms) for smeared, tape-like repeats. The delay time uses `Slow` (20 ms) smoothing to avoid zipper noise and pitch clicks when changed during playback.
+**Architecture** (`crates/sonido-effects/src/kernels/delay.rs`): Two `InterpolatedDelay` lines (left/right, up to 2 s) whose feedback path runs through a one-pole lowpass (`feedback_lp`), a biquad highpass (`feedback_hp`), and an optional diffuser of two true Schroeder allpasses (13 ms and 7 ms; `AllpassFilter` in `crates/sonido-core/src/allpass.rs`, feedback = diffusion × 0.6) for smeared, tape-like repeats. The allpasses have unity gain at every frequency, so diffusion inside the feedback loop never raises the loop gain. The delay time uses `Slow` (20 ms) smoothing to avoid zipper noise and pitch clicks when changed during playback.
 
 **Ping-pong mode**: When enabled, the feedback path crosses channels -- the left delay line's output feeds back into the right delay line, and vice versa. This creates alternating left-right echoes that "bounce" across the stereo field. The effect reports `is_true_stereo() -> true` only when ping-pong is active.
 
-**Gain compensation**: The wet signal is scaled by `(1-feedback)` to exactly cancel comb-filter peak gain at resonance. At fb=0.4 (default), compensation = 0.6; the output at resonance equals the input. At high feedback the wet signal is quieter but the decay tail is longer. The `output` parameter provides makeup gain if needed.
+**Gain compensation**: The wet signal is scaled by `(1-feedback)` to exactly cancel comb-filter peak gain at resonance. At fb=0.35 (default), compensation = 0.65; the wet signal at resonance equals the input. At high feedback the wet signal is quieter but the decay tail is longer. The calibrated level trim then sets the wet signal's loudness (see [Output Level Convention](#output-level-convention)), and the `output` parameter provides makeup gain if needed.
 
-**Feedback stability**: The feedback parameter tops out at 95% to prevent runaway oscillation. At feedback=0.95, each echo is 95% of the previous, so the signal decays by ~0.45 dB per repeat. Complete decay below -60 dB takes approximately 130 repeats.
+**Feedback stability**: The feedback parameter tops out at 95% to prevent runaway oscillation. At feedback=0.95, each echo is 95% of the previous, so the signal decays by ~0.45 dB per repeat. Complete decay below -60 dB takes about 135 repeats (fewer in practice, since the feedback filters also take energy out on every pass).
 
 | Parameter | Description | Default | Range |
 |-----------|-------------|---------|-------|
-| `time` | Delay time in ms | 300.0 | 1-2000 |
-| `feedback` | Feedback amount % | 40.0 | 0-95 |
-| `mix` | Wet/dry mix % | 50.0 | 0-100 |
+| `time` | Delay time in ms | 380.0 | 1-2000 |
+| `feedback` | Feedback amount % | 35.0 | 0-95 |
+| `mix` | Wet/dry mix % | 35.0 | 0-100 |
 | `ping_pong` | Ping-pong stereo mode (0=off, 1=on) | 0 | 0-1 |
-| `feedback_lp` | Feedback lowpass frequency in Hz | 20000.0 | 200-20000 |
-| `feedback_hp` | Feedback highpass frequency in Hz | 20.0 | 20-2000 |
+| `feedback_lp` | Feedback lowpass frequency in Hz | 6000.0 | 200-20000 |
+| `feedback_hp` | Feedback highpass frequency in Hz | 80.0 | 20-2000 |
 | `diffusion` | Diffusion amount % | 0.0 | 0-100 |
 | `sync` | Tempo sync on/off | off | off, on |
 | `division` | Note division (when synced) | quarter | whole, half, quarter, eighth, etc. |
@@ -238,8 +242,8 @@ Multimode RBJ biquad filter — LPF, HPF, BPF, and Notch — followed by a soft 
 
 | Parameter | Description | Default | Range |
 |-----------|-------------|---------|-------|
-| `cutoff` | Cutoff/center frequency in Hz | 1000.0 | 20-20000 |
-| `resonance` | Resonance (Q factor) | 0.707 | 0.1-20 |
+| `cutoff` | Cutoff/center frequency in Hz | 2200.0 | 20-20000 |
+| `resonance` | Resonance (Q factor) | 3.0 | 0.1-20 |
 | `output` | Output level in dB | 0.0 | -6 to 6 |
 | `type` | Filter mode: 0=LPF, 1=HPF, 2=BPF, 3=Notch | 0 | 0-3 |
 
@@ -273,13 +277,13 @@ Simulates the complex pitch modulation of analog tape machines with 6 independen
 
 | Parameter | Description | Default | Range |
 |-----------|-------------|---------|-------|
-| `depth` | Overall depth % | 100.0 | 0-400 |
+| `depth` | Overall depth % | 50.0 | 0-400 |
 | `mix` | Wet/dry mix % | 100.0 | 0-100 |
 | `output` | Output level in dB | 0.0 | -6 to 6 |
 
 ### Tips
 
-- **Subtle**: depth=50 - Adds gentle movement
+- **Subtle**: depth=50 (default) - Adds gentle movement
 - **Medium**: depth=100 - Classic tape sound
 - **Heavy**: depth=200 - Obvious warble effect
 - **Extreme**: depth=400 - Maximum wow/flutter
@@ -334,13 +338,13 @@ Clean preamp/gain stage (`crates/sonido-effects/src/kernels/preamp.rs`): boost-o
 
 | Parameter | Description | Default | Range |
 |-----------|-------------|---------|-------|
-| `gain` | Input gain in dB | 0.0 | 0-40 |
+| `gain` | Input gain in dB | 15.0 | 0-40 |
 | `tone` | Presence EQ in dB (peaking, 3 kHz, Q 0.8) | 0.0 | -12 to 12 |
 | `output` | Output level in dB | 0.0 | -6 to 6 |
 
 ### Tips
 
-Use before other effects to boost quiet signals, or after to control output level. The tone parameter adds bite (positive) or darkens the upper mids (negative) before downstream effects.
+Use before other effects to boost quiet signals, or after to control output level. The preamp has no mix control, so the Adapter applies its calibrated level trim to the output: at the default 15 dB `gain` it plays at the input's loudness, and `gain` above or below 15 dB is a boost or cut relative to that (see [Output Level Convention](#output-level-convention)). The tone parameter adds bite (positive) or darkens the upper mids (negative) before downstream effects.
 
 ### Example
 
@@ -380,19 +384,19 @@ Damping maps logarithmically to the per-line lowpass cutoff: `200 * 100^(1 - dam
 
 **Diffusion**: The FDN output passes through four modulated allpasses per channel (feedback 0.6, 0.15 ms modulation depth), on Freeverb's allpass tunings — 556, 441, 341, 225 samples on the left, offset by +23 samples on the right (579, 464, 364, 248).
 
-**Gain compensation:** The FDN output is scaled by `sqrt(1-feedback)` — moderate compensation that keeps the wet level roughly constant as decay grows, rather than the exact `(1-fb)` used by single-comb effects (delay, flanger). See `docs/DSP_FUNDAMENTALS.md` (Feedback Resonance Compensation) and ADR-019.
+**Gain compensation:** The FDN output is scaled by `sqrt(1-feedback)` — moderate compensation that keeps the wet level roughly constant as decay grows, rather than the exact `(1-fb)` used by single-comb effects (delay, flanger). See `docs/DSP_FUNDAMENTALS.md` (Feedback Resonance Compensation) and ADR-019. The calibrated level trim then sets the wet signal's loudness (see [Output Level Convention](#output-level-convention)).
 
 **Stereo width**: A mid/side matrix scales the side signal of the wet mix. At width=0% both channels receive the mid (mono); at 100% the wet L/R pass unchanged.
 
 | Parameter | Description | Default | Range |
 |-----------|-------------|---------|-------|
-| `room_size` | Room size % (sets early-reflection spacing and FDN feedback) | 50.0 | 0-100 |
-| `decay` | Decay time % (reverb tail length) | 50.0 | 0-100 |
-| `damping` | HF damping % (0=bright, 100=dark) | 50.0 | 0-100 |
-| `predelay` | Pre-delay time in ms | 10.0 | 0-100 |
-| `mix` | Wet/dry mix % | 50.0 | 0-100 |
+| `room_size` | Room size % (sets early-reflection spacing and FDN feedback) | 60.0 | 0-100 |
+| `decay` | Decay time % (reverb tail length) | 55.0 | 0-100 |
+| `damping` | HF damping % (0=bright, 100=dark) | 45.0 | 0-100 |
+| `predelay` | Pre-delay time in ms | 20.0 | 0-100 |
+| `mix` | Wet/dry mix % | 35.0 | 0-100 |
 | `width` | Stereo width % | 100.0 | 0-100 |
-| `er_level` | Early reflections level % | 50.0 | 0-100 |
+| `er_level` | Early reflections level % | 40.0 | 0-100 |
 | `output` | Output level in dB | 0.0 | -6 to 6 |
 
 ### Tips
@@ -468,7 +472,7 @@ Noise gate with threshold and hold.
 | Parameter | Description | Default | Range |
 |-----------|-------------|---------|-------|
 | `threshold` | Threshold in dB | -40.0 | -80 to 0 |
-| `attack` | Attack time in ms | 1.0 | 0.1-50 |
+| `attack` | Attack time in ms | 5.0 | 0.1-50 |
 | `release` | Release time in ms | 100.0 | 10-1000 |
 | `hold` | Hold time in ms | 50.0 | 0-500 |
 | `range` | Gate range (maximum attenuation) in dB | -80.0 | -80 to 0 |
@@ -500,14 +504,14 @@ Classic flanger with modulated short delay.
 
 **Implementation** (`crates/sonido-effects/src/kernels/flanger.rs`): Base delay of 5 ms with up to 5 ms of LFO modulation (total range 1-10 ms). The feedback path feeds the delayed output back into the delay input, which deepens the comb filter notches and creates a more resonant, metallic character. At high feedback values the comb filter rings strongly, producing pitched metallic tones. With `tzf` on, the dry path is delayed by the 5 ms sweep midpoint and the wet delay sweeps through it, giving the through-zero null of tape flanging. The kernel always reports that 5 ms (240 samples at 48 kHz) as latency.
 
-**Gain compensation**: The wet signal is scaled by `(1-feedback)` to exactly cancel comb-filter peak gain at resonance frequencies. At fb=0.5 (default), compensation = 0.5; the wet signal at resonance equals the dry signal. This keeps the flanger within the -1 dBFS peak ceiling at all feedback settings.
+**Gain compensation**: The wet signal is scaled by `(1-|feedback|)` to exactly cancel comb-filter peak gain at resonance frequencies (negative feedback is compensated by its magnitude). At fb=0.5 (default), compensation = 0.5; the wet signal at resonance equals the dry signal, so raising feedback adds resonance rather than level. The calibrated level trim then sets the wet signal's loudness (see [Output Level Convention](#output-level-convention)).
 
 **Stereo**: The right channel LFO is phase-offset by 90 degrees from the left. This means the comb filter notches sweep at different times in each channel, creating a spatial motion effect. Each channel has its own delay line and feedback state.
 
 | Parameter | Description | Default | Range |
 |-----------|-------------|---------|-------|
 | `rate` | LFO rate in Hz | 0.5 | 0.05-5 |
-| `depth` | Modulation depth % | 35.0 | 0-100 |
+| `depth` | Modulation depth % | 50.0 | 0-100 |
 | `feedback` | Feedback amount % (negative = inverted polarity) | 50.0 | -95 to 95 |
 | `mix` | Wet/dry mix % | 50.0 | 0-100 |
 | `tzf` | Through-zero flanging on/off | off | off, on |
@@ -551,21 +555,21 @@ Multi-stage allpass phaser with LFO modulation.
 ```
 a = (tan(pi * fc / fs) - 1) / (tan(pi * fc / fs) + 1)
 ```
-When the allpass-shifted signal is mixed with the original, a notch appears at the frequency where the phase difference equals 180 degrees. Each pair of allpass stages produces one notch, so 6 stages (the default) creates 3 notches.
+When the allpass-shifted signal is mixed with the original, a notch appears at the frequency where the phase difference equals 180 degrees. Each pair of allpass stages produces one notch, so 4 stages (the default) create 2 notches.
 
-**Gain compensation**: The wet signal is scaled by `(1-feedback)` via `gain::feedback_wet_compensation()`. Although the allpass cascade has unity magnitude (unlike true comb filters), this conservative compensation keeps the phaser well within the -1 dBFS peak ceiling at all feedback settings.
+**Gain compensation**: The wet signal is scaled by `(1-feedback)` via `gain::feedback_wet_compensation()`. Although the allpass cascade has unity magnitude (unlike true comb filters), this conservative compensation keeps feedback resonance from raising the wet level. The calibrated level trim then sets the wet signal's loudness (see [Output Level Convention](#output-level-convention)).
 
-**Frequency sweep**: The center frequencies use exponential mapping for a natural-sounding sweep: `freq = min_freq * (max_freq/min_freq)^(lfo * depth)`. This ensures equal time is spent per octave rather than per Hz, matching human pitch perception. The default sweep range is 200 Hz to 4000 Hz. Each stage is slightly offset by a factor of `1 + stage_index * 0.1`, spreading the notches for a richer effect. Allpass coefficients are recomputed every 32 samples, and the left and right channels run independent allpass chains driven by LFOs 90° apart.
+**Frequency sweep**: The center frequencies use exponential mapping for a natural-sounding sweep: `freq = min_freq * (max_freq/min_freq)^(lfo * depth)`. This ensures equal time is spent per octave rather than per Hz, matching human pitch perception. The default sweep range is 300 Hz to 3000 Hz. Each stage is slightly offset by a factor of `1 + stage_index * 0.1`, spreading the notches for a richer effect. Allpass coefficients are recomputed every 32 samples, and the left and right channels run independent allpass chains driven by LFOs 90° apart.
 
 | Parameter | Description | Default | Range |
 |-----------|-------------|---------|-------|
-| `rate` | LFO rate in Hz | 0.3 | 0.05-5 |
-| `depth` | Frequency sweep range % | 50.0 | 0-100 |
-| `stages` | Number of allpass stages | 6 | 2-12 |
-| `feedback` | Feedback/resonance % | 50.0 | 0-95 |
+| `rate` | LFO rate in Hz | 0.45 | 0.05-5 |
+| `depth` | Frequency sweep range % | 70.0 | 0-100 |
+| `stages` | Number of allpass stages (steps of 2) | 4 | 2-12 |
+| `feedback` | Feedback/resonance % | 30.0 | 0-95 |
 | `mix` | Wet/dry mix % | 50.0 | 0-100 |
-| `min_freq` | Minimum sweep frequency in Hz | 200.0 | 20-2000 |
-| `max_freq` | Maximum sweep frequency in Hz | 4000.0 | 200-20000 |
+| `min_freq` | Minimum sweep frequency in Hz | 300.0 | 20-2000 |
+| `max_freq` | Maximum sweep frequency in Hz | 3000.0 | 200-20000 |
 | `sync` | Tempo sync on/off | off | off, on |
 | `division` | Note division (when synced) | eighth | whole, half, quarter, eighth, etc. |
 | `output` | Output level in dB | 0.0 | -6 to 6 |
@@ -611,7 +615,9 @@ Input → EnvelopeFollower (auto-wah) → Target Frequency → SVF Bandpass → 
 
 ### Gain Normalization
 
-The wah uses an SVF bandpass filter whose peak gain at the center frequency equals Q. Without compensation, high-resonance settings (Q=5-10) would produce +14 to +20 dB of gain at the center frequency. The implementation normalizes the bandpass output by dividing by Q, ensuring unity peak gain regardless of the resonance setting. The normalized signal is then blended 80% wet / 20% dry, preserving the body of the original signal as real wah pedals do.
+The wah uses an SVF bandpass filter whose peak gain at the center frequency equals Q. Without compensation, high-resonance settings (Q=5-10) would produce +14 to +20 dB of gain at the center frequency. The implementation normalizes the bandpass output by dividing by Q, so the peak gain stays at unity whatever the resonance setting. The normalized signal is then blended 80% wet / 20% dry (fixed; the wah has no mix control), preserving the body of the original signal as real wah pedals do.
+
+A unity-peak bandpass passes only a narrow band, so this signal is quieter than the input. Overall loudness is set by the level contract instead: the Adapter applies the wah's calibrated level trim to its output, so at defaults it plays at the input's loudness (see [Output Level Convention](#output-level-convention)).
 
 ### Modes
 
@@ -734,7 +740,7 @@ Lo-fi bit depth and sample rate reduction with jitter.
 | Parameter | Description | Default | Range |
 |-----------|-------------|---------|-------|
 | `bits` | Bit depth | 8.0 | 2-16 |
-| `downsample` | Downsample factor | 1.0 | 1-64 |
+| `downsample` | Downsample factor | 4.0 | 1-64 |
 | `jitter` | Hold time randomization % | 0.0 | 0-100 |
 | `mix` | Wet/dry mix % | 100.0 | 0-100 |
 | `output` | Output level in dB | 0.0 | -6 to 6 |
@@ -761,8 +767,8 @@ Ring modulation with sine, triangle, and square carriers.
 
 | Parameter | Description | Default | Range |
 |-----------|-------------|---------|-------|
-| `frequency` | Carrier frequency in Hz | 220.0 | 20-2000 |
-| `depth` | Modulation depth % | 50.0 | 0-100 |
+| `frequency` | Carrier frequency in Hz | 300.0 | 20-2000 |
+| `depth` | Modulation depth % | 100.0 | 0-100 |
 | `waveform` | Carrier waveform (0=Sine, 1=Triangle, 2=Square) | 0 | 0-2 |
 | `mix` | Wet/dry mix % | 50.0 | 0-100 |
 | `output` | Output level in dB | 0.0 | -6 to 6 |
@@ -820,7 +826,7 @@ Implementation: `crates/sonido-effects/src/kernels/stage.rs`
 | `bass_mono` | Enable LR4 bass mono crossover | Off | Off/On |
 | `bass_freq` | Bass mono crossover frequency in Hz | 120.0 | 20-500 |
 | `haas` | Haas delay time in ms | 0.0 | 0-30 |
-| `haas_side` | Which channel gets the Haas delay | R | L/R |
+| `haas_side` | Which channel gets the Haas delay | L | L/R |
 | `output` | Output level in dB | 0.0 | -6 to 6 |
 
 ### M/S Width
@@ -875,7 +881,7 @@ Input → [mode switch] → Record: write to LoopBuffer, pass dry
                        → Stop: pass dry
 ```
 
-Uses `LoopBuffer` (`crates/sonido-core/src/loop_buffer.rs`) with a fixed 2,880,000-sample capacity per channel (60 s at 48 kHz). Mode transitions are detected per-sample via `params.mode` vs cached state.
+Uses `LoopBuffer` (`crates/sonido-core/src/loop_buffer.rs`) with a fixed 2,880,000-sample capacity per channel (60 s at 48 kHz). Mode transitions are detected per-sample via `params.mode` vs cached state. The looper is an uncalibrated utility (unity `Level`, see [Output Level Convention](#output-level-convention)): its wet signal is whatever was recorded, so its mix is a plain constant-power crossfade with no level trim.
 
 **Parameters:**
 
@@ -1231,12 +1237,16 @@ Dattorro-inspired plate algorithm with input diffusion and modulated tank.
 **Signal flow** (`crates/sonido-effects/src/kernels/plate_reverb.rs`):
 
 ```text
-Input → Bandwidth LP → Pre-delay → 4 Input Diffusers (allpass)
-      → Tank: [Mod Allpass L] ←→ [Delay + Damp] ←→ [Mod Allpass R]
-      → wet_L / wet_R (true stereo) → Mix → Output
+Input → mono sum → Bandwidth LP → Pre-delay → 4 Input Diffusers (allpass)
+      → Tank: two cross-coupled halves, each [Mod Allpass → Delay → Damp], feedback × decay gain
+      → Dattorro output taps: wet_L = tank0 − tank1, wet_R = tank1 − tank0 → Mix → Output
 ```
 
-Models the classic EMT 140 plate reverb: highly diffuse, colorless tail with smooth decay and natural density. True stereo output with decorrelated L/R tank taps. Reports a tail of `decay × 3 × sample_rate` samples (6 s at the 2 s default), so hosts keep processing while the plate rings out.
+Models the classic EMT 140 plate reverb: highly diffuse, colorless tail with smooth decay and natural density. The input is summed to mono, band-limited by a one-pole `bandwidth` filter (200 Hz at 0% up to 20 kHz at 100%), pre-delayed, and smeared by four series input allpasses (feedback 0.1–0.85 from `diffusion`). The tank has two halves; each runs a slowly modulated allpass (feedback 0.7) into a delay line with one-pole damping (20 kHz at 0% `damping` down to 200 Hz at 100%), and each half's delay output feeds the other half's input. All allpasses are true Schroeder allpasses (`crates/sonido-core/src/allpass.rs`), unity gain at every frequency, so the decay gain alone sets the tank's loop gain (the damping filters only take away highs).
+
+**Decay** is an RT60 in seconds: the cross-feedback gain per pass is `10^(-3 · loop_len / (decay · sample_rate))`, where `loop_len` is one tank half (the average of the two halves' delay plus allpass lengths), so the tail falls 60 dB in `decay` seconds at any `size` (gain capped at 0.995). `size` scales the tank delays from 0.5× (0%) to 2× (100%).
+
+**Output taps**: Dattorro-style, each channel adds a tap from its own tank half and subtracts one from the other (at 44.1 kHz: L = half 0 at 533 samples − half 1 at 1257; R = half 1 at 889 − half 0 at 1711; scaled by 0.25), so the two channels share the tail's energy but not its waveform. The dry path stays stereo. Reports a tail of `decay × 3 × sample_rate` samples (6 s at the 2 s default), so hosts keep processing while the plate rings out.
 
 **Parameters:**
 
@@ -1296,11 +1306,16 @@ Allpass dispersion chain — models physical spring reverb character.
 **Signal flow** (`crates/sonido-effects/src/kernels/spring_reverb.rs`):
 
 ```text
-Input → Drip (soft clip) → 6 Dispersion Allpasses (tension-tuned)
-      → Feedback Delay + One-Pole Damp → Mix → Output
+Input → mono sum → Drip (soft clip) → (+ feedback) → 6 Dispersion Allpasses → Soft Limit
+      → One-Pole Damp → Feedback Delay ─┬→ wet → Mix (with mono dry) → Output (L = R)
+                                        └→ × decay gain → back to the allpass input
 ```
 
-Models the distinctive boingy, splashy character of a physical spring reverb unit. The wet signal is mono. Reports a tail of `decay × 3 × sample_rate` samples (6 s at the 2 s default). References: Välimäki et al., "Physics-Based Model of a Spring Reverb Unit", DAFx-06 (2006).
+Models the distinctive boingy, splashy character of a physical spring reverb unit. Six true Schroeder allpasses in series disperse the signal; their lengths are fixed, and `tension` sets their feedback (0.7 at 0% down to 0.49 at 100%). The chain feeds a one-pole damping filter (20 kHz at 0% `damping` down to 200 Hz at 100%) and a feedback delay (4800 samples at 44.1 kHz, about 109 ms, at the 2 s default, scaled by `decay / 2`) whose output is the wet signal and, scaled by the decay gain, recirculates to the chain input. A soft limiter (ceiling 1.5) inside the loop guards against runaway.
+
+**Decay** is an RT60 in seconds: the gain per trip around the loop is `10^(-3 · loop_len / (decay · sample_rate))` (capped at 0.99), where `loop_len` is the allpass chain plus the feedback delay, so the tail falls 60 dB in `decay` seconds.
+
+The input is summed to mono and the output is mono: both channels carry the same dry + wet blend. Reports a tail of `decay × 3 × sample_rate` samples (6 s at the 2 s default). References: Välimäki et al., "Physics-Based Model of a Spring Reverb Unit", DAFx-06 (2006).
 
 **Parameters:**
 

@@ -41,10 +41,10 @@ opt-in wrapper, not part of any shipping signal path.
 
 | Metric | Value (s) |
 |--------|----------:|
-| RT60 | 3.50 |
-| EDT (early decay) | 0.42 |
-| T30 | 1.75 |
-| Fit correlation | 0.998 |
+| RT60 | 3.38 |
+| EDT (early decay) | 0.36 |
+| T30 | 1.69 |
+| Fit correlation | 0.997 |
 
 ## Distortion — output spectrum
 

@@ -67,8 +67,8 @@ mod tests {
 ### Integration Tests
 
 Integration tests are in `tests/` directories within crates. Every crate except
-sonido-daisy, sonido-gui, sonido-gui-core and sonido-platform has a `tests/integration.rs`
-or equivalent; the larger suites are:
+sonido-daisy, sonido-gui and sonido-gui-core has a `tests/integration.rs` or equivalent;
+the larger suites are:
 
 | File | Covers |
 |------|--------|
@@ -76,10 +76,16 @@ or equivalent; the larger suites are:
 | `crates/sonido-effects/tests/quality_standard.rs` | [DSP Quality Standard](DSP_QUALITY_STANDARD.md) rules for every registered effect |
 | `crates/sonido-effects/tests/compliance.rs` | Finite output, DC offset, reset safety, sample-rate changes, parameter clamping |
 | `crates/sonido-effects/tests/extreme_params.rs` | Min/max parameters and 8 kHz / 192 kHz sample rates |
-| `crates/sonido-effects/tests/param_contracts.rs` | Parameter range access, unity gain, curve conventions |
+| `crates/sonido-effects/tests/param_contracts.rs` | Full parameter range reachable (within 1% of range), scale conventions, monotonic curves, macro exclusion only on mix and output |
+| `crates/sonido-effects/tests/level_contract.rs` | The [level contract](#level-reference): with the reference guitar (-20 dBFS peaks, integrated LUFS), every effect fully wet (or at its defaults, without a mix control) within ±0.5 dB of the dry loudness, and at 0/25/50/75% mix and its default mix within ±1.5 dB. Skips the looper and tuner. Fails when `calibration.rs` is stale |
+| `crates/sonido-effects/tests/reverb_decay.rs` | Plate (Decay 1/4/9 s) and spring (1/2.5/4.5 s) reverbs reach the RT60 their Decay names, within 25% (Schroeder energy-decay curve, T30 doubled); reverb, plate, spring and Harmonic Habitat fully wet within ±1.5 dB of the dry loudness |
+| `crates/sonido-effects/tests/default_parity.rs` | `XxxParams::default()` equals every descriptor default, for every kernel |
 | `crates/sonido-effects/tests/properties.rs` | Property-based (proptest) checks over all effects |
 | `crates/sonido-effects/tests/aliasing.rs` | ADAA nonlinearities vs naive clipping |
-| `crates/sonido-effects/tests/noon_mapping.rs`, `dag_rebuild_stress.rs` | Host-side checks of firmware paths (noon presets, DAG rebuild) |
+| `crates/sonido-effects/tests/noon_mapping.rs` | The pedal's knob mapping (`sonido_platform::param_map::adc_to_param_biased`) over every writable parameter of every registered effect: knob 0/1 reach min/max and noon selects the default (stepped: the default step), both within 1% of range; the mapping never reverses |
+| `crates/sonido-effects/tests/dag_rebuild_stress.rs` | Host-side stress of the firmware's DAG-rebuild path with a tracking allocator: finite, bounded output, bounded spillover, no heap growth |
+| `crates/sonido-platform/tests/knob_calibration.rs` | Each jam effect (`PEDAL_EFFECT_IDS`, mapped by `knob_to_param`) with every knob at noon within ±1.5 dB of the dry guitar (integrated LUFS); each knob alone at an end within -15..+8 dB (K6, the level knob: -30..+13 dB), output finite |
+| `crates/sonido-rigs/tests/factory.rs` | Every factory rig round-trips the binary format with all six macros mapped and named, passes the pedal's CPU and memory rule (`sonido_platform::cycle_table`) with no errors, and with every knob at noon plays the reference guitar within ±0.5 dB of the dry loudness halfway through its morph and within ±3 dB at A and B. Fails when `trims.rs` is stale |
 | `crates/sonido-core/tests/properties.rs` | Property-based checks of core primitives |
 | `crates/sonido-patch/tests/roundtrip.rs` | Patch encode/decode round trips |
 | `crates/sonido-plugin/tests/plugin_inventory.rs` | Every registered effect ships in the plugin bundle, and vice versa |
@@ -206,6 +212,22 @@ REGENERATE_GOLDEN=1 cargo test --test regression -p sonido-effects
 ```
 
 After regenerating, verify the new output sounds correct before committing the updated golden files.
+
+## Generated Level Tables
+
+Two tables are generated from measurements rather than edited by hand, and a test fails
+when either is out of date:
+
+| Table | Regenerate with | Checked by |
+|-------|-----------------|------------|
+| `crates/sonido-effects/src/calibration.rs` (each kernel's `Level`: trim and wet/dry correlation) | `cargo run -p sonido-effects --example calibrate --release` | `crates/sonido-effects/tests/level_contract.rs` |
+| `crates/sonido-rigs/src/trims.rs` (factory rig master trims, dB) | `cargo run -p sonido-rigs --example calibrate --release` | `crates/sonido-rigs/tests/factory.rs` |
+
+When `level_contract` or the rigs' `factory` test fails after a DSP or default change,
+re-run the generator rather than adjusting a gain by hand. Order matters: calibrate the
+effects first, then the rigs (rig trims are measured on calibrated effects), and
+regenerate the golden files after the effects' calibration, since the trims are part of
+the output they capture. Both generators print the measured gains as they run.
 
 ## no_std Compatibility Testing
 
@@ -370,6 +392,14 @@ Run tests in a single thread to isolate issues:
 cargo test -- --test-threads=1
 ```
 
+### Stale Generated Tables
+
+`level_contract` (sonido-effects) or `factory` (sonido-rigs) failing after a DSP or
+default change usually means a generated level table is out of date, and the failure
+message names the generator to run; see [Generated Level Tables](#generated-level-tables).
+A `regression` failure after an intentional change means the golden files need
+regenerating (above).
+
 ## Documentation Tests
 
 Rustdoc examples are also tested:
@@ -417,6 +447,7 @@ When adding a new effect or feature:
 - [ ] Sample rate changes work
 - [ ] Block processing matches sample-by-sample
 - [ ] Reset clears internal state
+- [ ] New effect calibrated (`calibrate` example) and `level_contract` passes
 - [ ] no_std compatible (for core crates)
 
 ## Library Consumer Testing
@@ -522,8 +553,8 @@ let stats = analyze_dynamics(&samples, 1024, -60.0); // window, silence threshol
 #### Default Parameter Sanity
 
 Every effect created at 48 kHz with default parameters must produce finite output for
-normalized input. Output is not guaranteed to stay within [-1, 1]: see the gain
-staging table below for measured peaks.
+normalized input. Output is not guaranteed to stay within [-1, 1]: levels are matched in
+loudness, not peak (see the [level reference](#level-reference) below).
 
 ```rust
 use sonido_registry::EffectRegistry;
@@ -609,54 +640,37 @@ alone does not prove this, so review hot paths for `Vec`/`Box` creation.
 
 - [ ] No allocation inside `process()` / `process_stereo()`
 
-### Gain Staging Reference
+### Level Reference
 
-Measured default-parameter gain for every registered effect (created with
-`EffectRegistry::create`, measured 2026-10-22):
-a 440 Hz sine at amplitude 1.0 (0 dBFS peak), fed identically to both channels of
-`process_stereo()` for 2 s at 48 kHz, with the first 0.5 s discarded. Gain is the
-left-channel output RMS relative to the input RMS. Every effect has an `Output`
-parameter (dB) for trimming level; values are signal-dependent, so expect different
-numbers for other material.
+Every effect except the looper and tuner is held to one level contract
+(`sonido_core::level`, [ADR-031](DESIGN_DECISIONS.md#adr-031-one-measured-level-contract)):
+at its defaults it plays at the loudness of its input, and its mix control does not
+change that loudness. The reference is `sonido_analysis::signals::reference_guitar`, a
+strummed guitar peaking at -20 dBFS (`NOMINAL_PEAK_DBFS`), measured as integrated LUFS
+(ITU-R BS.1770-4). Levels are matched in loudness, not peak, and for that reference:
+other material and input levels (into a saturating effect especially) measure
+differently.
 
-| Effect (registry id) | Gain (dB) | Output peak |
-|----------------------|-----------|-------------|
-| Distortion (`distortion`) | -2.4 | 0.62 |
-| Compressor (`compressor`) | -12.7 | 0.23 |
-| Chorus (`chorus`) | -5.5 | 0.90 |
-| Flanger (`flanger`) | -4.8 | 0.99 |
-| Phaser (`phaser`) | -5.2 | 1.00 |
-| Delay (`delay`) | -0.3 | 1.00 |
-| Filter (`filter`) | -0.2 | 0.97 |
-| Vibrato (`vibrato`) | -0.0 | 1.00 |
-| Tape Saturation (`tape`) | -3.9 | 0.49 |
-| Clean Preamp (`preamp`) | -0.1 | 0.98 |
-| Reverb (`reverb`) | +0.6 | 3.45 |
-| Tremolo (`tremolo`) | -2.4 | 1.00 |
-| Noise Gate (`gate`) | +0.0 | 1.00 |
-| Wah (`wah`) | -13.6 | 0.21 |
-| Parametric EQ (`eq`) | -0.1 | 0.98 |
-| Limiter (`limiter`) | -6.3 | 0.48 |
-| Bitcrusher (`bitcrusher`) | -0.0 | 1.00 |
-| Ring Modulator (`ringmod`) | -2.3 | 0.93 |
-| Stage (`stage`) | +0.0 | 1.00 |
-| Looper (`looper`) | +0.0 | 1.00 |
-| Amp (`amp`) | -16.0 | 0.13 |
-| Cabinet (`cabinet`) | +4.1 | 1.61 |
-| De-esser (`deesser`) | +0.0 | 1.00 |
-| Drone (`drone`) | +0.9 | 1.65 |
-| Glitch (`glitch`) | -0.9 | 1.00 |
-| Multiband Compressor (`multiband_comp`) | -11.1 | 0.28 |
-| Pitch Shift (`pitch_shift`) | -1.8 | 0.81 |
-| Plate Reverb (`plate_reverb`) | +7.0 | 2.67 |
-| Shelving EQ (`shelving_eq`) | -0.0 | 1.00 |
-| Spring Reverb (`spring_reverb`) | +0.3 | 1.25 |
-| Stereo Widener (`stereo_widener`) | +0.0 | 1.00 |
-| Texture (`texture`) | -4.2 | 1.00 |
-| Time Stretch (`time_stretch`) | -10.1 | 0.49 |
-| Transient Shaper (`transient_shaper`) | +0.0 | 1.00 |
-| Tuner (`tuner`) | +0.0 | 1.00 |
-| Harmonic Habitat (`harmonic_habitat`) | -3.9 | 0.67 |
+Measured 2026-10-22 with
+`cargo test --release -p sonido-effects --test level_contract -- --nocapture`, which
+prints the full table: all 34 calibrated effects are within 0.05 dB of the dry loudness
+fully wet, or at their defaults when they have no mix control. Across the mix control,
+every effect stays within ±0.1 dB except these (dB against the dry loudness):
+
+| Effect (registry id) | 25% mix | 50% mix | 75% mix | Default mix |
+|----------------------|---------|---------|---------|-------------|
+| Harmonic Habitat (`harmonic_habitat`) | +0.5 | +0.7 | +0.5 | +0.7 |
+| Plate Reverb (`plate_reverb`) | +0.3 | +0.4 | +0.3 | +0.4 |
+| Phaser (`phaser`) | +0.2 | +0.3 | +0.2 | +0.3 |
+| Reverb (`reverb`) | -0.2 | -0.3 | -0.2 | -0.3 |
+| Delay (`delay`) | -0.1 | -0.2 | -0.3 | -0.1 |
+| Flanger (`flanger`) | +0.2 | +0.2 | +0.2 | +0.2 |
+
+Two more tables print with `--nocapture`: each jam effect's gain with every knob at noon
+and with each knob at its ends
+(`cargo test --release -p sonido-platform --test knob_calibration -- --nocapture`), and
+each factory rig's gain at morph A, halfway and B
+(`cargo test --release -p sonido-rigs --test factory -- --nocapture`).
 
 ---
 
