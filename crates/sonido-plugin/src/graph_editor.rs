@@ -8,7 +8,8 @@
 //! audio thread. The patch is the plugin's saved state, so the project
 //! remembers the choice.
 //!
-//! The library is the factory rigs (every factory preset, as a patch) plus
+//! The library is the factory rigs (the ones the pedal ships,
+//! [`sonido_rigs::factory_rigs`]) plus
 //! the rig folder the Sonido editor exports to (Export ▸ CLAP;
 //! [`sonido_config::paths::rig_library_dir`]), rescanned every couple of
 //! seconds while the editor is open.
@@ -63,13 +64,13 @@ impl RigLibrary {
         lib
     }
 
-    /// The built-in rigs: every factory preset, converted once.
+    /// The built-in rigs: the pedal's factory rigs.
     fn factory() -> Vec<RigEntry> {
-        sonido_config::factory_patches(&EffectRegistry::new())
+        sonido_rigs::factory_rigs()
             .into_iter()
-            .map(|c| RigEntry {
-                label: format!("{} (factory)", c.patch.name),
-                patch: c.patch,
+            .map(|patch| RigEntry {
+                label: format!("{} (factory)", patch.name),
+                patch,
             })
             .collect()
     }
@@ -385,7 +386,7 @@ mod tests {
     #[test]
     fn library_starts_with_every_factory_rig() {
         let factory = RigLibrary::factory();
-        assert_eq!(factory.len(), sonido_config::factory_preset_names().len());
+        assert_eq!(factory.len(), sonido_rigs::factory_rigs().len());
         assert!(factory.iter().all(|e| !e.patch.nodes.is_empty()));
         let lib = RigLibrary::new();
         assert_eq!(&lib.entries[..factory.len()], &factory[..]);

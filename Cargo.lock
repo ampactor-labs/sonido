@@ -4310,6 +4310,7 @@ dependencies = [
  "sonido-gui-core",
  "sonido-patch",
  "sonido-registry",
+ "sonido-rigs",
  "tracing",
 ]
 

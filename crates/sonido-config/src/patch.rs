@@ -147,16 +147,6 @@ pub fn build_edges(topology: &str, n: usize) -> Result<Vec<PatchEdge>, PresetPat
     }
 }
 
-/// Every factory preset as a patch (linear unless the preset says
-/// otherwise), each named after its preset. The graph player ships these as
-/// its built-in rigs.
-pub fn factory_patches(registry: &EffectRegistry) -> Vec<PatchConversion> {
-    crate::factory_presets()
-        .iter()
-        .filter_map(|p| preset_to_patch(p, &p.name, None, registry).ok())
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -211,9 +201,8 @@ mod tests {
             crate::factory_preset_names().len(),
             "a factory preset failed to parse"
         );
-        let converted = factory_patches(&registry);
-        assert_eq!(converted.len(), presets.len());
-        for c in &converted {
+        for p in &presets {
+            let c = preset_to_patch(p, &p.name, None, &registry).expect("converts");
             assert!(c.warnings.is_empty(), "{}: {:?}", c.patch.name, c.warnings);
         }
     }

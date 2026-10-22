@@ -17,6 +17,7 @@ sonido-effects = { workspace = true, features = ["std"] }
 sonido-registry = { workspace = true, features = ["std"] }
 sonido-config = { workspace = true, features = ["std"] }
 sonido-patch = { workspace = true, features = ["std"] }
+sonido-rigs = { workspace = true }
 
 arc-swap = "1.8"
 parking_lot = "0.12"

@@ -59,7 +59,7 @@ pub use factory_presets::{
     FACTORY_PRESET_NAMES, factory_preset_names, factory_presets, get_factory_preset,
     is_factory_preset,
 };
-pub use patch::{PatchConversion, PresetPatchError, factory_patches, preset_to_patch};
+pub use patch::{PatchConversion, PresetPatchError, preset_to_patch};
 pub use paths::{
     ensure_user_config_dir, ensure_user_presets_dir, find_preset, list_all_presets,
     list_system_presets, list_user_presets, preset_name_from_path, system_presets_dir,
