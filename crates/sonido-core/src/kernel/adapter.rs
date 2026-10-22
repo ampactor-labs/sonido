@@ -562,7 +562,8 @@ impl<K: DspKernel, S: SmoothingPolicy> Effect for Adapter<K, S> {
 impl<K: DspKernel, S: SmoothingPolicy> TailReporting for Adapter<K, S> {
     /// Delegate to the kernel's tail duration.
     ///
-    /// Returns 0 for most effects. Reverb, delay, and looper kernels override
+    /// Returns 0 for most effects. The delay, looper, drone, and reverb kernels
+    /// (reverb, plate, spring, Harmonic Habitat) override
     /// [`DspKernel::tail_samples()`] to report their ring-out duration.
     fn tail_samples(&self) -> usize {
         self.kernel.tail_samples()

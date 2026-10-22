@@ -191,7 +191,7 @@ fn wav_write_empty_buffer() {
 
     let (loaded, loaded_spec) = read_wav(file.path()).unwrap();
     assert_eq!(loaded_spec.sample_rate, 48000);
-    assert!(loaded.is_empty());
+    assert_eq!(loaded.len(), 0);
 }
 
 #[test]
@@ -223,7 +223,7 @@ fn wav_stereo_write_empty_buffer() {
     write_wav_stereo(file.path(), &samples, spec).unwrap();
 
     let (loaded, _) = read_wav_stereo(file.path()).unwrap();
-    assert!(loaded.is_empty());
+    assert_eq!(loaded.len(), 0);
 }
 
 #[test]
@@ -401,7 +401,7 @@ fn stereo_from_mono_duplicates() {
     assert_eq!(stereo.left, mono);
     assert_eq!(stereo.right, mono);
     assert_eq!(stereo.len(), 3);
-    assert!(!stereo.is_empty());
+    assert_ne!(stereo.len(), 0);
 }
 
 #[test]

@@ -4,17 +4,23 @@
 //! can't run in real time. Keyed by stable effect UID
 //! ([`sonido_registry::EFFECT_UIDS`](../sonido_registry/constant.EFFECT_UIDS.html)).
 //!
-//! # ⚠ These are ESTIMATES, not measurements
+//! # Measured on a Daisy Seed
 //!
-//! Real per-effect cycle counts must come from the device — desktop benchmark
-//! µs/sample do **not** translate to Cortex-M7 cycles (different ISA, caches,
-//! FPU). The values below are conservative (biased high, relative complexity
-//! from `docs/BENCHMARKS.md`) so validation *warns* rather than under-reports.
+//! Cycles are the **worst** 32-sample block of each kernel measured on a Daisy
+//! Seed (STM32H750 at 480 MHz) by `crates/sonido-daisy/examples/bench_kernels.rs`
+//! on 2026-10-22, rounded up to the next 1,000: 8 warm-up blocks, then 128
+//! timed blocks of a 220 Hz sine, kernel state in SDRAM as on the pedal.
+//! Each entry is the worse of two runs of different builds, because a rebuild
+//! alone moves unchanged kernels by up to ±8% (code layout); the distortion's
+//! is from the second run only, after its antiderivative changed.
+//! SDRAM is each kernel's measured heap at 48 kHz (`docs/EMBEDDED.md`). Both
+//! are bare kernel costs; the firmware's audio and control work comes on top,
+//! which is what [`WARN_FRACTION`] leaves room for.
 //!
-//! Regenerate on hardware once available: run a `bench_kernels`-style DWT cycle
-//! probe per pedal effect and replace [`EFFECT_CYCLES`]. Until then, effects
-//! missing from the table degrade gracefully — the validator flags the estimate
-//! as a lower bound.
+//! (These replaced desktop-derived estimates that were up to 2.8× too low —
+//! the reverb was put at 64 k cycles, measured 179 k — so validation would
+//! have passed patches near the deadline.) Re-run `bench_kernels` after
+//! changing a pedal kernel and update [`EFFECT_CYCLES`].
 
 /// Audio-block cycle budget: 480 MHz × (32 samples / 48 kHz) ≈ 320 k cycles.
 pub const CYCLE_BUDGET_PER_BLOCK: u32 = 320_000;
@@ -25,33 +31,33 @@ pub const SDRAM_BUDGET_BYTES: u32 = 64 * 1024 * 1024;
 /// Warn once a patch's estimated cost crosses this fraction of the budget.
 pub const WARN_FRACTION: f32 = 0.70;
 
-/// `(effect_uid, estimated_cycles_per_block)` — ESTIMATES, see module docs.
+/// `(effect_uid, worst_cycles_per_block)` — measured, see module docs.
 ///
-/// UIDs are the eight curated pedal effects. Ordered by rough cost.
+/// UIDs are the eight curated pedal effects.
 pub const EFFECT_CYCLES: &[(u16, u32)] = &[
-    (1, 16_000),  // distortion — ADAA waveshaping
-    (17, 12_000), // bitcrusher — cheap, sample/bit reduction
-    (18, 14_000), // ringmod — carrier osc + multiply
-    (7, 18_000),  // filter — SVF
-    (3, 26_000),  // chorus — dual modulated delay
-    (5, 30_000),  // phaser — 4-stage allpass + LFO
-    (6, 40_000),  // delay — interpolated delay + filtered feedback
-    (11, 64_000), // reverb — comb/allpass bank, the heavyweight
+    (1, 37_000),   // distortion — worst 36,677
+    (17, 31_000),  // bitcrusher — worst 30,157
+    (18, 9_000),   // ringmod — worst 8,298
+    (7, 11_000),   // filter — worst 10,836
+    (3, 24_000),   // chorus — worst 23,220
+    (5, 23_000),   // phaser — worst 22,631
+    (6, 25_000),   // delay — worst 24,445
+    (11, 179_000), // reverb — worst 178,701, the heavyweight
 ];
 
-/// `(effect_uid, estimated_sdram_bytes)` — ESTIMATES, see module docs.
+/// `(effect_uid, sdram_bytes)` — each kernel's measured heap at 48 kHz.
 pub const EFFECT_SDRAM: &[(u16, u32)] = &[
-    (1, 0),           // distortion — no large buffer
-    (17, 0),          // bitcrusher
-    (18, 0),          // ringmod
-    (7, 0),           // filter
-    (3, 64 * 1024),   // chorus — modulation delay lines
-    (5, 8 * 1024),    // phaser — short allpass delays
-    (6, 768 * 1024),  // delay — long stereo delay line
-    (11, 512 * 1024), // reverb — comb/allpass buffers
+    (1, 0),        // distortion
+    (17, 0),       // bitcrusher
+    (18, 0),       // ringmod
+    (7, 0),        // filter
+    (3, 23_040),   // chorus — 4 modulated delay lines
+    (5, 0),        // phaser — allpass stages inline
+    (6, 775_680),  // delay — 2 s stereo lines + diffusion allpasses
+    (11, 116_700), // reverb — FDN lines, allpasses, early reflections, predelay
 ];
 
-/// Estimated cycles/block for an effect UID, or `None` if unmeasured.
+/// Worst-case cycles/block for an effect UID, or `None` if unmeasured.
 pub fn effect_cycles(uid: u16) -> Option<u32> {
     EFFECT_CYCLES
         .iter()
@@ -59,7 +65,7 @@ pub fn effect_cycles(uid: u16) -> Option<u32> {
         .map(|(_, c)| *c)
 }
 
-/// Estimated SDRAM bytes for an effect UID, or `None` if unknown.
+/// SDRAM bytes for an effect UID, or `None` if unknown.
 pub fn effect_sdram(uid: u16) -> Option<u32> {
     EFFECT_SDRAM
         .iter()

@@ -9,9 +9,10 @@
 //! ```
 //!
 //! where `F` is the first antiderivative of the waveshaping function `f`.
-//! When consecutive inputs are nearly identical (`|x[n] − x[n−1]| < ε`),
-//! the midpoint fallback `f((x[n] + x[n−1]) / 2)` is used to avoid
-//! numerical instability from division by near-zero.
+//! When consecutive inputs are nearly identical
+//! (`|x[n] − x[n−1]| ≤ ε·(1 + max(|x[n]|, |x[n−1]|))`), the midpoint fallback
+//! `f((x[n] + x[n−1]) / 2)` is used to avoid numerical instability from
+//! division by near-zero.
 //!
 //! This is equivalent to applying a rectangular-window anti-aliasing filter
 //! in the continuous-time domain, significantly reducing aliased harmonics
@@ -64,10 +65,11 @@
 ///
 /// # Epsilon and Midpoint Fallback
 ///
-/// When `|x[n] − x[n−1]| < 1e−5`, the finite-difference quotient becomes
-/// numerically unstable.  The processor falls back to evaluating the
-/// waveshaper at the midpoint `(x[n] + x[n−1]) / 2`, which is the
-/// L'Hôpital limit of the ADAA formula as `x[n] → x[n−1]`.
+/// When `|x[n] − x[n−1]| ≤ 1e−3 · (1 + max(|x[n]|, |x[n−1]|))`, the
+/// finite-difference quotient is dominated by `F`'s rounding error. The
+/// processor falls back to evaluating the waveshaper at the midpoint
+/// `(x[n] + x[n−1]) / 2`, which is the L'Hôpital limit of the ADAA formula
+/// as `x[n] → x[n−1]` and differs from it by about `Δ²·f''/24`.
 ///
 /// # Parameterized Waveshapers
 ///
@@ -100,16 +102,15 @@ where
     prev_ad: f32,
 }
 
-/// Minimum input difference for the finite-difference quotient.
+/// Minimum input difference for the finite-difference quotient, relative to
+/// `1 + max(|x₁|, |x₀|)`.
 ///
-/// Below this threshold, the ADAA formula `(F(x₁) − F(x₀)) / (x₁ − x₀)`
-/// suffers from catastrophic cancellation and the processor falls back to
-/// the midpoint evaluation `f((x₁ + x₀) / 2)`.
-///
-/// Set above `f32` machine epsilon to avoid catastrophic cancellation in
-/// the finite-difference quotient at low signal levels (e.g., stereo
-/// soft-clip artifacts near zero crossings).
-const ADAA_EPSILON: f32 = 1e-5;
+/// `F`'s rounding error grows with `|x|`, and the quotient divides it by
+/// `x₁ − x₀`, so the cutoff scales with the input. Below it the processor
+/// uses the midpoint `f((x₁ + x₀) / 2)`. At 1e−3 the soft clipper stays at
+/// least 93 dB above its own rounding noise from −60 to −6 dBFS and
+/// 82–880 Hz; the old absolute 1e−5 left about 55 dB.
+const ADAA_EPSILON: f32 = 1e-3;
 
 impl<F, AF> Adaa1<F, AF>
 where
@@ -139,15 +140,16 @@ where
     /// Computes the first-order ADAA output:
     ///
     /// ```text
-    /// y = (F(x) − F(x_prev)) / (x − x_prev)     if |x − x_prev| > ε
+    /// y = (F(x) − F(x_prev)) / (x − x_prev)     if |x − x_prev| > ε·(1 + max(|x|, |x_prev|))
     /// y = f((x + x_prev) / 2)                     otherwise (midpoint fallback)
     /// ```
     #[inline]
     pub fn process(&mut self, x: f32) -> f32 {
         let ad = (self.antiderivative)(x);
         let diff = x - self.prev_x;
+        let tol = ADAA_EPSILON * (1.0 + x.abs().max(self.prev_x.abs()));
 
-        let result = if diff.abs() > ADAA_EPSILON {
+        let result = if diff.abs() > tol {
             // Normal ADAA: finite-difference of antiderivative
             (ad - self.prev_ad) / diff
         } else {
@@ -343,5 +345,95 @@ mod tests {
             (last - expected).abs() < 1e-5,
             "DC preservation: got {last}, expected {expected}"
         );
+    }
+
+    /// SNR of `Adaa1` against exact f64 ADAA of the same f32 inputs, for a
+    /// sine of `amp` at `freq` Hz (48 kHz, one second).
+    fn adaa_snr_db<F, AF>(
+        mut adaa: Adaa1<F, AF>,
+        exact_ad: impl Fn(f64) -> f64,
+        exact_f: impl Fn(f64) -> f64,
+        amp: f64,
+        freq: f64,
+    ) -> f64
+    where
+        F: Fn(f32) -> f32,
+        AF: Fn(f32) -> f32,
+    {
+        let input = |n: i32| {
+            (amp * libm::sin(2.0 * core::f64::consts::PI * freq * n as f64 / 48_000.0)) as f32
+                as f64
+        };
+        let (mut signal, mut noise) = (0.0, 0.0);
+        for n in 0..48_000 {
+            let (x0, x1) = (input(n - 1), input(n));
+            let y = f64::from(adaa.process(x1 as f32));
+            let exact = if x1 != x0 {
+                (exact_ad(x1) - exact_ad(x0)) / (x1 - x0)
+            } else {
+                exact_f(x1)
+            };
+            if n > 0 {
+                signal += exact * exact;
+                noise += (y - exact) * (y - exact);
+            }
+        }
+        10.0 * libm::log10(signal / noise.max(1e-300))
+    }
+
+    #[test]
+    fn test_adaa_quiet_input_stays_clean() {
+        // Regression: soft_clip_ad was ln(2·cosh x), which sits near ln 2 for
+        // quiet input, so F(x₁) − F(x₀) lost its low bits to the constant.
+        // A −40 dBFS guitar-range sine came out ~16–27 dB above its own
+        // rounding noise: audible grit on every soft-clipping kernel.
+        let ln_cosh = |x: f64| libm::log(libm::cosh(x));
+        for amp in [0.001, 0.01, 0.1, 0.5] {
+            for freq in [82.0, 220.0, 880.0] {
+                let snr = adaa_snr_db(
+                    Adaa1::new(soft_clip, soft_clip_ad),
+                    ln_cosh,
+                    libm::tanh,
+                    amp,
+                    freq,
+                );
+                assert!(
+                    snr > 85.0,
+                    "soft clip at {amp} × {freq} Hz: SNR {snr:.1} dB"
+                );
+            }
+        }
+        // Tape: 1 − e^(−2x) above zero, −1 + e^(1.8x) below.
+        let tape_ad = |x: f64| {
+            if x >= 0.0 {
+                x + (libm::exp(-2.0 * x) - 1.0) / 2.0
+            } else {
+                -x + (libm::exp(1.8 * x) - 1.0) / 1.8
+            }
+        };
+        let tape_f = |x: f64| {
+            if x >= 0.0 {
+                1.0 - libm::exp(-2.0 * x)
+            } else {
+                -1.0 + libm::exp(1.8 * x)
+            }
+        };
+        let tape_ws = |x: f32| {
+            if x >= 0.0 {
+                1.0 - libm::expf(-2.0 * x)
+            } else {
+                -1.0 + libm::expf(1.8 * x)
+            }
+        };
+        for amp in [0.001, 0.01, 0.1, 0.5] {
+            let snr = adaa_snr_db(
+                Adaa1::new(tape_ws, tape_sat_ad),
+                tape_ad,
+                tape_f,
+                amp,
+                220.0,
+            );
+            assert!(snr > 85.0, "tape at {amp}: SNR {snr:.1} dB");
+        }
     }
 }

@@ -2,9 +2,13 @@
 //!
 //! Owns the compiled [`GraphEngine`], a [`MacroMap`] over the six knobs, a
 //! [`ChainMorph`] for A/B, the morph position/speed, the graph-level gains, and
-//! a whole-rig bypass. This is the single runtime the graph-player plugin and
-//! the firmware patch player both wrap — so a patch sounds identical in the
-//! DAW and on the pedal.
+//! a whole-rig bypass. The graph-player plugin (`sonido-plugin`) wraps it.
+//!
+//! The Daisy firmware does **not** use `PatchPlayer`: it drives a
+//! `ProcessingGraph` directly, and its `patch_loader` module builds a patch
+//! with [`build_graph_from_patch`] alone, without the macro, morph or gain
+//! stages here. What host and pedal share is the effect kernels, the [`Patch`]
+//! format, and the graph build.
 //!
 //! Per control tick the order is **morph, then macros** (macros win on overlap),
 //! exactly as the design specifies; a macro that targets the morph position
@@ -124,6 +128,12 @@ impl PatchPlayer {
     /// Number of effect slots.
     pub fn slot_count(&self) -> usize {
         self.engine.slot_count()
+    }
+
+    /// Pass the host's tempo and transport to every effect in the rig, so
+    /// tempo-synced LFOs and delays follow it.
+    pub fn set_tempo_context(&mut self, ctx: &sonido_core::TempoContext) {
+        self.engine.set_tempo_context(ctx);
     }
 
     /// Borrow the underlying engine (e.g. for latency reporting).

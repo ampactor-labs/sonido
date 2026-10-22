@@ -9,7 +9,7 @@
 //! ```rust,ignore
 //! let mut expr = ExpressionInput::new();
 //!
-//! // In control task (50 Hz):
+//! // In control task (100 Hz):
 //! let raw = adc.blocking_read(&mut expr_channel) as f32 / 65535.0;
 //! expr.update(raw);
 //!
@@ -63,7 +63,7 @@ impl ExpressionInput {
 
     /// Update with a new raw ADC reading (normalized 0.0–1.0).
     ///
-    /// Call at the control poll rate (~50 Hz). Applies deadzone, range
+    /// Call at the control poll rate (~100 Hz). Applies deadzone, range
     /// mapping, slew limiting, and IIR smoothing in sequence.
     pub fn update(&mut self, raw_normalized: f32) {
         self.raw = raw_normalized;

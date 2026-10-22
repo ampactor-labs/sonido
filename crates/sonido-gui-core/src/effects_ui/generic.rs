@@ -1,7 +1,9 @@
 //! Unified UI panel that renders any effect's full parameter set.
 //!
-//! [`GenericPanel`] renders every visible parameter using [`bridged_knob_with_morph`]
-//! for continuous parameters and [`bridged_combo`] for stepped/enum parameters. It
+//! [`GenericPanel`] renders every visible parameter with the same controls as
+//! the plugin cabinet's deck, in the effect's family color:
+//! [`bridged_knob_accent`] for continuous parameters (plus A/B morph ticks)
+//! and the cabinet's [`selector`] for stepped/enum parameters. It
 //! discovers parameter metadata at render time via the [`ParamBridge`], so it
 //! works for any effect ID and always shows *all* params — keeping the node's
 //! "N params" badge honest and every parameter reachable for macros and morph.
@@ -9,21 +11,25 @@
 //! This is the panel returned by [`create_panel`](super::create_panel) for every
 //! effect except the looper (which has a bespoke transport panel).
 
+use crate::cabinet::{SELECTOR_ROW_H, selector, selector_width};
 use crate::effects_ui::{EffectPanel, MorphMarkers};
-use crate::theme::SonidoTheme;
-use crate::widgets::{bridged_combo, bridged_knob_with_morph, param_macro_menu};
+use crate::theme::{Family, SonidoTheme};
+use crate::widgets::{bridged_knob_accent, draw_morph_markers, param_macro_menu};
 use crate::{ParamBridge, ParamIndex, SlotIndex};
 use egui::Ui;
 use sonido_core::ParamFlags;
 
-/// Fixed column width (px) reserved for each knob + its label/LED readout.
-const KNOB_CELL_WIDTH: f32 = 64.0;
+/// Fixed column width (px) reserved for each knob + its value and label.
+const KNOB_CELL_WIDTH: f32 = 80.0;
+
+/// Knob ring diameter (px), as on the plugin cabinet's deck.
+const KNOB_DIAMETER: f32 = 56.0;
 
 /// Unified UI panel for any registered effect.
 ///
-/// Renders all visible parameters as a wrapping bank of knobs, using
-/// [`bridged_combo`] for stepped (enum) parameters and
-/// [`bridged_knob_with_morph`] for continuous parameters. Parameters flagged
+/// Renders all visible parameters as a wrapping bank of knobs, using the
+/// cabinet's [`selector`] for stepped (enum) parameters and
+/// [`bridged_knob_accent`] for continuous parameters. Parameters flagged
 /// `READ_ONLY` or `HIDDEN` are skipped.
 ///
 /// The display name and short name are derived from the effect ID at
@@ -124,31 +130,23 @@ impl GenericPanel {
             }
         }
 
+        // Same controls as the plugin cabinet's deck, in the effect's family
+        // color: selectors flowed first, then a wrapping bank of knobs.
+        let accent = Family::of_effect(&self.effect_id).accent();
         ui.vertical(|ui| {
-            // Stepped (combo) params in a horizontal row
             if !stepped.is_empty() {
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
                     for &i in &stepped {
-                        let desc = bridge.param_descriptor(slot, ParamIndex(i));
-                        let label_str = desc.as_ref().map_or("Param", |d| d.short_name);
-                        ui.label(
-                            egui::RichText::new(format!("{label_str}:"))
-                                .font(egui::FontId::monospace(10.0))
-                                .color(theme.colors.text_secondary),
+                        let Some(desc) = bridge.param_descriptor(slot, ParamIndex(i)) else {
+                            continue;
+                        };
+                        let (cell, _) = ui.allocate_exact_size(
+                            egui::vec2(selector_width(&desc), SELECTOR_ROW_H),
+                            egui::Sense::hover(),
                         );
-
-                        let id_salt = format!("{}_{}", self.effect_id, i);
-                        if let Some(ref d) = desc {
-                            let resp = if let Some(labels) = d.step_labels {
-                                bridged_combo(ui, bridge, slot, ParamIndex(i), &id_salt, labels)
-                            } else {
-                                let count = (d.max - d.min).round() as usize + 1;
-                                let generated: Vec<String> =
-                                    (0..count).map(|n| n.to_string()).collect();
-                                let refs: Vec<&str> =
-                                    generated.iter().map(String::as_str).collect();
-                                bridged_combo(ui, bridge, slot, ParamIndex(i), &id_salt, &refs)
-                            };
+                        if let Some(resp) =
+                            selector(ui, cell, bridge, slot, ParamIndex(i), &desc, accent, &theme)
+                        {
                             // Right-click a stepped param → map it to a macro
                             // (Snap curve, chosen from the descriptor at bind time).
                             param_macro_menu(&resp, slot, ParamIndex(i));
@@ -156,28 +154,29 @@ impl GenericPanel {
                         ui.add_space(8.0);
                     }
                 });
-                ui.add_space(8.0);
+                ui.add_space(4.0);
             }
 
             // Continuous params as knobs, wrapping to fit the panel width. Each
-            // knob carries its own LED readout and (via the bridge) its A/B morph
-            // ring markers, so the whole effect reads as one bank of knobs.
+            // knob shows its value as the host formats it and, while an A/B
+            // morph is set up, the A/B ghost ticks on its ring.
             if !continuous.is_empty() {
                 ui.horizontal_wrapped(|ui| {
                     for &i in &continuous {
-                        let label = bridge
-                            .param_descriptor(slot, ParamIndex(i))
-                            .map_or("", |d| d.short_name);
                         ui.vertical(|ui| {
                             ui.set_width(KNOB_CELL_WIDTH);
-                            let resp = bridged_knob_with_morph(
+                            let resp = bridged_knob_accent(
                                 ui,
                                 bridge,
                                 slot,
                                 ParamIndex(i),
-                                label,
-                                markers(i),
+                                accent,
+                                KNOB_DIAMETER,
                             );
+                            if let Some(m) = markers(i) {
+                                let desc = bridge.param_descriptor(slot, ParamIndex(i));
+                                draw_morph_markers(ui, &resp, KNOB_DIAMETER, desc.as_ref(), m);
+                            }
                             // Right-click a knob → map it to a performance macro.
                             param_macro_menu(&resp, slot, ParamIndex(i));
                         });

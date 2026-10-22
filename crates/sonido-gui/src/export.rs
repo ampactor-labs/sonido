@@ -53,17 +53,10 @@ pub fn patch_to_json(patch: &Patch) -> Result<String, serde_json::Error> {
     serde_json::to_string_pretty(patch)
 }
 
-/// The sidecar directory the graph-player CLAP plugin scans for patches:
-/// `$XDG_DATA_HOME/sonido/patches` (falling back to `~/.local/share/...`).
-///
-/// macOS/Windows path conventions are a follow-up; the value is created on first
-/// export.
+/// The rig library the graph-player plugin lists
+/// ([`sonido_config::paths::rig_library_dir`]); created on first export.
 pub fn clap_patches_dir() -> Option<PathBuf> {
-    let base = std::env::var_os("XDG_DATA_HOME")
-        .map(PathBuf::from)
-        .filter(|p| !p.as_os_str().is_empty())
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/share")))?;
-    Some(base.join("sonido").join("patches"))
+    sonido_config::paths::rig_library_dir()
 }
 
 /// Sanitize a patch name into a safe file stem.

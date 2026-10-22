@@ -21,9 +21,11 @@
 //! # Usage Tiers
 //!
 //! - **Tier 1**: Blinky (validate toolchain + flash)
-//! - **Tier 2**: Kernel benchmarks (DWT cycle counts for all registered effects)
+//! - **Tier 2**: Kernel benchmarks (DWT cycle counts for 19 of the 36 effect kernels)
 //! - **Tier 3**: Audio passthrough (validate codec + DMA)
 //! - **Tier 4**: Single effect processing (first real DSP on hardware)
+//! - **Full pedal**: `sonido_pedal` — three-slot `ProcessingGraph` over the
+//!   eight `sonido_registry::PEDAL_EFFECT_IDS` effects
 
 #![no_std]
 

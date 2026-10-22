@@ -3,7 +3,7 @@
 [![CI](https://github.com/ampactor-labs/sonido/actions/workflows/ci.yml/badge.svg)](https://github.com/ampactor-labs/sonido/actions/workflows/ci.yml)
 [![License: AGPL-3.0 + Commercial](https://img.shields.io/badge/License-AGPL--3.0%20%2B%20Commercial-blue.svg)](LICENSE)
 
-A Rust framework for audio signal processing whose effect kernels run unchanged in CLAP plugins, a browser node-graph editor and guitar-pedal firmware. CLAP is an open plugin format for audio workstations; the pedal is an Electrosmith Daisy Seed (a 480 MHz Cortex-M7) in a Hothouse enclosure. The 36 effects are kernels that allocate and smooth nothing while processing; the pedal wraps them in an adapter that applies knob values at once, desktop in one that smooths them. The distortion on the pedal is the distortion in the plugin.
+A Rust framework for audio signal processing whose effect kernels run unchanged in CLAP and VST3 plugins, a browser node-graph editor and guitar-pedal firmware. CLAP is an open plugin format for audio workstations; the pedal is an Electrosmith Daisy Seed (a 480 MHz Cortex-M7) in a Hothouse enclosure. The 36 effects are kernels that allocate and smooth nothing while processing; the pedal wraps them in an adapter that applies knob values at once, desktop in one that smooths them. The distortion kernel on the pedal is the same code as the one in the plugin, compiled for a different target. What differs is the input and output around it: the pedal sums its input to mono, clips at 0 dBFS on the way to its codec, and reaches parameters through its own knob curves, so a pedal and a plugin set to the same values can still sound different at the edges.
 
 **Status: working.** The API may change; nothing is published to crates.io, so the git dependency under Usage is the only install, and the ARM firmware is built and checked by flashing it by hand, since CI does not build it.
 
@@ -64,7 +64,7 @@ effect.effect_set_param(0, 15.0); // drive, dB
 let output = effect.process(input_sample);
 ```
 
-Both blocks compile against this commit (checked by hand on 2026-09-27); CI does not compile them, see Testing.
+Both blocks compile against this commit (checked by hand on 2026-10-22); CI does not compile them, see Testing.
 
 ## How it works
 
@@ -85,24 +85,24 @@ The distortion, tape and amp kernels use first-order ADAA (antiderivative anti-a
 
 A rig is a directed acyclic graph (DAG): effects are nodes and audio connections are edges, so parallel legs and merges are ordinary topology. `ProcessingGraph` compiles a rig with Kahn's topological sort and buffer liveness analysis (`crates/sonido-core/src/graph/processing.rs`), so a 20-node linear chain runs on two ping-ponged buffers instead of twenty (`crates/sonido-core/src/graph/buffer.rs`). The same topology is scriptable through `sonido-graph-dsl`, with `split(...)` for parallel legs: `split(distortion:drive=20 | chorus; phaser | flanger) | reverb`.
 
-Longer write-ups: [docs/KERNEL_ARCHITECTURE.md](docs/KERNEL_ARCHITECTURE.md) (the three layers), [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) (the crate graph and data flow), [docs/DESIGN_DECISIONS.md](docs/DESIGN_DECISIONS.md) (30 architecture decision records), [docs/EMBEDDED.md](docs/EMBEDDED.md) (Daisy hardware, memory budgets, flashing over USB DFU, the device firmware update protocol), [docs/EFFECTS_REFERENCE.md](docs/EFFECTS_REFERENCE.md) (all 36 effects and their parameters), [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md) (library, CLI, GUI and WebAssembly walkthroughs).
+Longer write-ups: [docs/KERNEL_ARCHITECTURE.md](docs/KERNEL_ARCHITECTURE.md) (the three layers), [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) (the crate graph and data flow), [docs/DESIGN_DECISIONS.md](docs/DESIGN_DECISIONS.md) (30 architecture decision records), [docs/EMBEDDED.md](docs/EMBEDDED.md) (Daisy hardware, memory budgets, flashing over USB DFU, the device firmware update protocol), [docs/EFFECTS_REFERENCE.md](docs/EFFECTS_REFERENCE.md) (all 36 effects and their parameters), [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md) (library, CLI, GUI and WebAssembly walkthroughs), [docs/DESIGN_SYSTEM.md](docs/DESIGN_SYSTEM.md) (the look every Sonido UI shares: tokens, effect families, the plugin cabinet, the CRT pass).
 
 ## Benchmarks
 
-Per-effect cost on an Intel i5-6300U at 3.0 GHz turbo, from [docs/BENCHMARKS.md](docs/BENCHMARKS.md): a generated test signal in 256-sample mono blocks at 48 kHz through `Adapter<K, SmoothedPolicy>` at the "typical" parameter values listed there, timed with the criterion harness. Reproduce with `cargo bench -p sonido-effects`. The five most expensive measured effects, then the cheapest for scale:
+Per-effect cost on an Intel i5-6300U (3.0 GHz turbo), measured 2026-10-22 and recorded with the method in [docs/BENCHMARKS.md](docs/BENCHMARKS.md): every one of the 36 effects at its default parameters, one stereo 256-frame block of a 440 Hz sine at 48 kHz, through `Adapter<K, SmoothedPolicy>` (the plugin and editor path), timed with criterion. Reproduce with `cargo bench -p sonido-effects --bench all_effects`. The five most expensive, then the cheapest for scale:
 
-| Effect | 256 samples | ns/sample | One core at 48 kHz |
+| Effect | 256 frames | ns/frame | One core at 48 kHz |
 |---|---|---|---|
-| Vibrato | 113.43 µs | 443.1 | 2.1% |
-| Eq (3-band) | 113.06 µs | 441.6 | 2.1% |
-| Compressor | 80.02 µs | 312.6 | 1.5% |
-| Phaser (6-stage) | 78.25 µs | 305.6 | 1.5% |
-| Reverb | 49.22 µs | 192.3 | 0.92% |
-| CleanPreamp | 2.47 µs | 9.6 | 0.05% |
+| Tuner | 183.99 µs | 718.7 | 3.45% |
+| Reverb | 179.76 µs | 702.2 | 3.37% |
+| Cabinet | 92.52 µs | 361.4 | 1.73% |
+| Amp | 88.61 µs | 346.1 | 1.66% |
+| Drone | 81.65 µs | 318.9 | 1.53% |
+| Looper | 2.78 µs | 10.9 | 0.05% |
 
-The bench covers 19 of the 36 effects. The document records numbers for 15 of them and lists Limiter, Bitcrusher, RingMod and Stage as TBD; the other 17 effects have no benchmark. So the claim is the narrow one: each of the fifteen measured effects takes at most 2.1% of one core at 48 kHz on that laptop chip. Where it costs more: true-stereo processing runs 1.5 to 1.8 times the mono cost per channel for Flanger, Delay, Reverb and Phaser (Chorus is the exception at 0.65), and 8x oversampling of the distortion costs 6.14 times the base rate against 1.52 for 4x. The stereo and oversampling tables are in the same file.
+So every effect takes at most 3.5% of one core at 48 kHz on that laptop chip; the full table is in the same file (the amp's row predates a soft-clipper precision fix later that day, which added about 6% to it). Mono costs the same as stereo (the adapter runs the stereo kernel either way, within 2%; ping-pong delay 1.17×), and oversampling the distortion costs 2.11×, 3.86× and 7.50× the base rate at 2×, 4× and 8×.
 
-The Cortex-M7 figures in that file are estimates derived from the desktop numbers: ns/sample multiplied by 25 (a 3.0/0.48 GHz clock ratio times a 4x architecture penalty) with a stated uncertainty of ±50%. Under that model Eq lands at 110.4% and Vibrato at 110.8% of the 48 kHz budget on their own. No on-device number exists yet (see Limitations).
+On the pedal's chip all 36 kernels are measured too: `crates/sonido-daisy/examples/bench_kernels.rs` on a Daisy Seed (Cortex-M7 at 480 MHz), loaded over SWD, timing 128 32-sample blocks per kernel with the cycle counter against the 320,000-cycle block budget (2026-10-22, full table in the same file). Every kernel fits a block alone, worst block included. The reverb is the heaviest pedal effect at 53% (55% worst block); the heaviest three-slot pedal chain, reverb + distortion + bitcrusher, is 72.6% of the budget in kernel cost, 75.6% summing worst blocks. The whole pedal running that chain in a Hothouse, audio and controls included, measured 78% on average and 89% at its slowest callback, with none over budget ([docs/EMBEDDED.md](docs/EMBEDDED.md#chain-configurations)). The ×25 desktop-to-M7 estimate the repo used before (median +14% against these measurements, 28 of 36 within its ±50%) remains documented there for kernels added later.
 
 ### Sound quality
 
@@ -130,18 +130,38 @@ crates/
   sonido-gui-core    shared egui (GUI toolkit) widgets, theme, parameter bridge
   sonido-gui         the node-graph editor, native and WebAssembly (wasm32)
   sonido-cli         the `sonido` command
-  sonido-plugin      the CLAP adapter; each plugin is an example
+  sonido-plugin      the CLAP adapter; every plugin in one bundle
 docs/                guides, measurements, decision records
-presets/             five factory preset chains (TOML)
+presets/             five example preset chains (TOML); the 8 factory presets live in sonido-config
 scripts/             bundle-clap.sh, bundle-vst3.sh, demo and QA scripts
 ```
 
 Fifteen crates: fourteen are workspace members, and `sonido-daisy` is excluded because its own `.cargo/config.toml` pins the build to `thumbv7em-none-eabihf`. Seven build without the standard library: six carry `#![cfg_attr(not(feature = "std"), no_std)]` and `sonido-daisy` is `#![no_std]` outright; math goes through `libm`. The applications on top:
 
 - CLI, 12 subcommands (`process`, `realtime`, `generate`, `analyze`, `compare`, `devices`, `effects`, `info`, `play`, `presets`, `daisy`, `patch`): offline processing through a chain or graph string, live input, signal generation, spectrum and impulse-response analysis. `cargo install --path crates/sonido-cli`.
-- GUI (`cargo run -p sonido-gui --release`): the node editor with six macro knobs, whole-rig A/B morph, undo, and export to a CLAP preset, a JSON patch, a pedal binary sector or a DFU flash.
-- Plugins: 21 CLAP plugins built as examples of `sonido-plugin`, 20 single-effect plus `sonido-graph-player`, which runs a whole exported rig as one plugin. `make plugins` installs them to `~/.clap/`.
+- GUI (`cargo run -p sonido-gui --release`): the node editor with six macro knobs, whole-rig A/B morph, undo, and export to a CLAP preset, a JSON patch, a pedal binary sector or a DFU flash (no pedal firmware plays a flashed rig yet; see Limitations).
+- Plugins: one `sonido.clap` bundle holding 37 plugins: all 36 effects, plus `Sonido Graph Player`, which runs a whole rig as one plugin, picked from its built-in factory rigs or the rigs the editor exports. A matching `sonido.vst3` shim exposes the same set as VST3. Every plugin draws the same cabinet UI, lit in its family's color, with live meters and a scope of its own signal. See Plugins below.
 - Pedal firmware: `sonido_pedal` for the Cleveland Music Co. Hothouse: three slots drawn from eight effects (`PEDAL_EFFECT_IDS`), three topologies (linear, parallel, fan) selected with a toggle, 48 kHz in 32-sample blocks (`BLOCK_SIZE` in `crates/sonido-daisy/src/lib.rs`).
+
+## Plugins
+
+![Six of the 36 plugin cabinets, one per effect family](docs/img/cabinets.png)
+
+`make plugins` builds the bundle and installs `~/.clap/sonido.clap`; `make plugins-vst3` also builds the VST3 shim and installs `~/.vst3/sonido.vst3`. Rescan plugins in the host afterwards. Each plugin keeps its own ID (`com.sonido.<effect>`), which is what a host saves in a project.
+
+On Linux the plugin window needs the X11 and OpenGL development files, and the VST3 shim needs a C++ compiler and cmake. On Fedora:
+
+```sh
+sudo dnf install mesa-libGL-devel libX11-devel gcc-c++ cmake
+```
+
+The editor, the CLI and the full test suite additionally need the ALSA headers (`alsa-lib-devel`): on Linux, cpal (the audio I/O library) always builds its ALSA backend, and on a PipeWire system `pipewire-alsa` carries that audio into PipeWire. Debian package names are under `SYSTEM_DEPS` in [.github/workflows/ci.yml](.github/workflows/ci.yml). To keep these off a base system, run the build inside a `toolbox` or `distrobox` container; the plugins it produces load in a host outside it.
+
+The graph player lists its factory rigs (every factory preset as a rig) and the rigs in the rig library folder, which the editor's Export ▸ CLAP writes to: `~/.local/share/sonido/patches` on Linux (`$XDG_DATA_HOME` if set), `~/Library/Application Support/sonido/patches` on macOS, `%APPDATA%\sonido\patches` on Windows. Choosing a rig in its RIG selector asks the host to restart the plugin, which rebuilds the rig off the audio thread; the rig is saved with the project.
+
+Why the VST3 needs C++: the shim is [clap-wrapper](https://github.com/free-audio/clap-wrapper), a VST3 front end that finds `sonido.clap` by name at load time and hosts it, so Sonido's DSP and UI exist once, in the CLAP. Building it pulls the VST3 SDK, which is C++. Two ways around the toolchain were considered and not taken. The release workflow already builds the shim per platform, so a script could download it instead of compiling it; that saves a one-time C++ build at the cost of a network dependency and a binary nobody built locally. Writing VST3 natively in Rust would remove C++ entirely, but means maintaining a second plugin-format adapter beside the CLAP one. Because the shim is a loader, a VST3 install only works next to the matching `.clap`: install both.
+
+To see a plugin's UI without a host, `cargo run -p sonido-plugin --bin sonido-preview -- <effect>` opens the same editor in a window, driven by a test signal.
 
 ## Deploy
 
@@ -153,17 +173,19 @@ Releases come from [.github/workflows/release.yml](.github/workflows/release.yml
 
 ```sh
 cargo test --workspace                           # what CI runs; on Linux it needs the SYSTEM_DEPS packages
-cargo test -p sonido-core                        # 484 unit, 27 integration, 4 property tests, 58 doctests
-cargo test -p sonido-effects                     # 360 unit tests plus 126 across nine integration targets
+cargo test -p sonido-core                        # 485 unit, 27 integration, 4 property tests, 59 doctests
+cargo test -p sonido-effects                     # 365 unit tests plus 128 across ten integration targets
 cargo test --no-default-features -p sonido-core  # the no_std build
 ```
 
-There are 1,899 `#[test]` functions in the tree (`grep -rho '#\[test\]' crates | wc -l`, 2026-09-27), 1,864 outside the excluded ARM crate, and no `#[ignore]`. The shape of the suite says more than the count:
+There are 1,928 `#[test]` functions in the tree (`grep -rho '#\[test\]' crates | wc -l`, 2026-10-22), 1,893 outside the excluded ARM crate, and no `#[ignore]`. The shape of the suite says more than the count:
 
 - Golden-file regression pins the output of 32 of the 36 effects against checked-in references and fails on a mean squared error (MSE) above 1e-6, a signal-to-noise ratio (SNR) below 60 dB or a spectral correlation under 0.9999, each threshold explained next to the constant that sets it (`crates/sonido-effects/tests/regression.rs`). Drone, glitch, texture and time_stretch have no golden file.
 - An aliasing suite fails the distortion, preamp, amp and tape kernels when inharmonic energy exceeds 5% of the total, which is what ADAA is supposed to buy (`crates/sonido-effects/tests/aliasing.rs`).
 - Property tests (proptest) push every registered effect through random parameter sets and require finite, bounded output and a clean reset; the core primitives get stability and convergence properties, and the patch format gets lossless round-trips and a decoder that never panics on random bytes.
 - The registry asserts its own inventory, which is where the number 36 in this README comes from (`crates/sonido-registry/src/lib.rs`).
+- The targets start from the same settings: every kernel's params `Default` must equal its descriptors' defaults, the values the plugin, editor and pedal adapters start from (`crates/sonido-effects/tests/default_parity.rs`).
+- Every registered effect must ship as a plugin with a stable ID (`crates/sonido-plugin/tests/plugin_inventory.rs`), and every shipped preset must convert to a rig with every parameter resolved and in range (`crates/sonido-config/src/patch.rs`, `crates/sonido-config/tests/preset_files.rs`).
 
 On every push and pull request to `main`, [.github/workflows/ci.yml](.github/workflows/ci.yml) runs `cargo fmt --all --check`, `cargo clippy --workspace --all-targets` with `RUSTFLAGS=-D warnings`, `cargo test --workspace` on Ubuntu, macOS and Windows, and a `wasm32-unknown-unknown` build of the editor. Behind `workflow_dispatch`, [.github/workflows/ci-manual.yml](.github/workflows/ci-manual.yml) adds `--no-default-features` tests for the six `no_std` crates, `cargo doc` with warnings denied, the cargo-deny dependency policy, criterion benchmarks compared with critcmp, llvm-cov coverage, and the CLAP conformance checker clap-validator 0.3.2 over every bundled plugin.
 
@@ -171,17 +193,18 @@ Not tested: the ARM path (`sonido-daisy` is outside the workspace, no workflow t
 
 ## Limitations
 
-The on-device numbers have not been measured. [docs/BENCHMARKS.md](docs/BENCHMARKS.md) estimates Cortex-M7 cost by multiplying desktop measurements by 25 (a 3.0/0.48 GHz clock ratio times a 4x architecture penalty) and states its own uncertainty at ±50%; under that model the 3-band Eq lands at 110.4% of the 48 kHz budget and Vibrato at 110.8%, so neither fits alone. The measurement would come from the firmware crate's kernel benchmark example, which reads the Cortex-M7's DWT cycle counter (a hardware counter of clock cycles) around one 32-sample block per kernel and prints each result against the 320,000-cycle block budget over USB serial; it has to be flashed to a Hothouse, which no CI runner can do. Until that table exists, every ARM performance statement in this repository is a hypothesis.
+The on-device numbers were measured by hand (2026-10-22): kernel costs on a bare Daisy Seed, then the whole pedal (audio DMA, graph, controls) running in a Hothouse under guitar, read from the firmware's own load meter. No CI runner can repeat either measurement, so a kernel change can regress the pedal unnoticed until someone flashes it, and a rebuild alone moves unchanged kernels by up to ±8% through code layout. The benchmark (`crates/sonido-daisy/examples/bench_kernels.rs`) reads the Cortex-M7's DWT cycle counter (a hardware counter of clock cycles) per 32-sample block and reports each kernel's mean and worst block over SWD (probe-rs, no bootloader needed) or USB serial.
 
-Two effects blow the memory budget. AXI SRAM, the chip's main working memory, is 512 KB, about 480 KB of it usable once the bootloader has copied the firmware into it (BOOT_SRAM mode). The delay's two-second stereo lines cost about 772 KB and the looper's sixty-second buffer about 23 MB, so both must live in the external SDRAM, where every access costs 4 to 8 wait states. Restricted to the effects that fit AXI, the worst three-slot combination (chorus, reverb and tape) is about 144 KB. Per-effect heap is measured from kernel `new()` allocations in [docs/EMBEDDED.md](docs/EMBEDDED.md).
+Memory is not the constraint on the pedal; CPU is. AXI SRAM, the chip's main working memory, is 512 KB, about 480 KB of it usable once the bootloader has copied the firmware into it (BOOT_SRAM mode), and it holds the code. The firmware therefore puts its whole heap in the 64 MB external SDRAM, where every access costs 4 to 8 wait states: the delay's two-second stereo lines take about 776 KB, the reverb about 117 KB, and the worst three-slot pedal combination (delay, reverb and chorus) about 0.9 MB. Per-effect heap is measured from kernel `new()` allocations in [docs/EMBEDDED.md](docs/EMBEDDED.md).
 
 The other gaps:
 
 - The ARM target is not in CI. `sonido-daisy` is excluded from the workspace and no workflow targets `thumbv7em-none-eabihf`; I check the pedal firmware and the benchmark harness (`crates/sonido-daisy/examples/bench_kernels.rs`) only by flashing them on my desk.
 - The pedal firmware exposes 8 of the 36 effects (`PEDAL_EFFECT_IDS` in `crates/sonido-registry/src/lib.rs`).
+- A rig flashed from the editor does nothing yet. The export writes it to the pedal's patch bank in QSPI flash, but the shipping firmware (`sonido_pedal`) runs its own three-slot chain and three built-in presets; the patch loader (`crates/sonido-daisy/src/patch_loader.rs`) compiles but no firmware calls it, and its QSPI read path has not run on hardware.
 - No shipping path oversamples. Aliasing control rests on ADAA in the distortion, tape and amp kernels, and the aliasing suite measures only those three plus the preamp; no other kernel is measured for aliasing.
 - VST3 is unvalidated in CI. The shims come from clap-wrapper (`scripts/bundle-vst3.sh`) and only clap-validator runs in a workflow, so only CLAP has a validation record.
-- 17 of the 36 effects have no benchmark, and 4 have no golden regression file.
+- 4 of the 36 effects (drone, glitch, texture, time_stretch) have no golden regression file.
 - No crates.io release, no pinned MSRV (minimum supported Rust version), and the benchmark job has no regression gate.
 - The browser build has no file system: presets stay in memory, the export menu downloads the JSON patch and the pedal sector, and DFU flashing and writing to the CLAP folder need the native app (`crates/sonido-gui/src/app.rs`).
 
@@ -189,8 +212,7 @@ It is one person's DSP framework with an unstable API, and it does not try to be
 
 ## Roadmap
 
-- Replace the Cortex-M7 estimate table with numbers from the pedal. The harness (`bench_kernels.rs`) exists; what is missing is a session at the desk with the Hothouse, since no runner has the hardware.
-- The v0.3 list in [docs/ROADMAP.md](docs/ROADMAP.md): MIDI CC mapping with an expression pedal (not started; the platform traits exist), a curated preset library (5 chains ship of a planned 20 to 30), and level-dependent waveshaping in the distortion (the envelope follower already modulates drive; blending the transfer function itself remains).
+- The v0.3 list in [docs/ROADMAP.md](docs/ROADMAP.md): MIDI CC mapping with an expression pedal (not started; the platform traits exist), a curated preset library (5 chains ship in `presets/` and 8 factory presets in `sonido-config`, which the graph player also offers as rigs, of a planned 20 to 30), and level-dependent waveshaping in the distortion (the envelope follower already modulates drive; blending the transfer function itself remains).
 
 ## License
 

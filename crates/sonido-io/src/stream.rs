@@ -544,7 +544,9 @@ fn find_input_device(host: &Host, name_or_index: &str) -> Result<Device> {
 /// - A numeric index (e.g., "0", "1")
 /// - An exact device name
 /// - A partial device name (case-insensitive fuzzy match)
-fn find_output_device(host: &Host, name_or_index: &str) -> Result<Device> {
+///
+/// The CLI's `--output` and the editor's `--output` both resolve through this.
+pub fn find_output_device(host: &Host, name_or_index: &str) -> Result<Device> {
     let devices: Vec<_> = host
         .output_devices()
         .map_err(|e| Error::Stream(e.to_string()))?

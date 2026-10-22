@@ -9,10 +9,11 @@ use clack_extensions::params::PluginAudioProcessorParams;
 use clack_extensions::tail::{PluginTailImpl, TailLength};
 use clack_plugin::events::EventFlags;
 use clack_plugin::events::event_types::{
-    ParamGestureBeginEvent, ParamGestureEndEvent, ParamValueEvent,
+    ParamGestureBeginEvent, ParamGestureEndEvent, ParamValueEvent, TransportEvent, TransportFlags,
 };
 use clack_plugin::prelude::*;
 use clack_plugin::utils::Cookie;
+use sonido_core::TempoContext;
 use sonido_registry::{EffectRegistry, EffectWithParams};
 
 /// Audio-thread processor wrapping a sonido effect.
@@ -22,6 +23,8 @@ use sonido_registry::{EffectRegistry, EffectWithParams};
 pub struct SonidoAudioProcessor<'a> {
     shared: &'a SonidoShared,
     effect: Box<dyn EffectWithParams + Send>,
+    /// Host tempo and transport, refreshed from each block's transport event.
+    tempo: TempoContext,
 }
 
 impl<'a> PluginAudioProcessor<'a, SonidoShared, SonidoMainThread<'a>> for SonidoAudioProcessor<'a> {
@@ -31,9 +34,10 @@ impl<'a> PluginAudioProcessor<'a, SonidoShared, SonidoMainThread<'a>> for Sonido
         shared: &'a SonidoShared,
         audio_config: PluginAudioConfiguration,
     ) -> Result<Self, PluginError> {
+        let sample_rate = audio_config.sample_rate as f32;
         let registry = EffectRegistry::new();
         let mut effect = registry
-            .create(shared.effect_id(), audio_config.sample_rate as f32)
+            .create(shared.effect_id(), sample_rate)
             .ok_or(PluginError::Message("Failed to create effect"))?;
 
         // Initialize effect parameters from shared atomic state.
@@ -41,13 +45,21 @@ impl<'a> PluginAudioProcessor<'a, SonidoShared, SonidoMainThread<'a>> for Sonido
 
         // Cache latency so the main thread can report it to the host.
         shared.set_latency_samples(effect.latency_samples() as u32);
+        shared.set_sample_rate(sample_rate);
 
-        Ok(Self { shared, effect })
+        Ok(Self {
+            shared,
+            effect,
+            tempo: TempoContext {
+                sample_rate,
+                ..TempoContext::default()
+            },
+        })
     }
 
     fn process(
         &mut self,
-        _process: Process,
+        process: Process,
         mut audio: Audio,
         events: Events,
     ) -> Result<ProcessStatus, PluginError> {
@@ -57,13 +69,12 @@ impl<'a> PluginAudioProcessor<'a, SonidoShared, SonidoMainThread<'a>> for Sonido
         // Sync GUI-originated parameter changes back to the effect and host.
         self.sync_gui_changes(events.output);
 
-        // When bypassed via GUI toggle, pass audio through unprocessed.
-        if self.shared.is_bypassed() {
-            return Ok(ProcessStatus::ContinueIfNotQuiet);
-        }
+        // Tempo-synced LFOs and delays follow the host transport.
+        self.sync_transport(process.transport);
 
-        // Process audio through the effect.
-        self.process_audio(&mut audio)?;
+        // Bypass (GUI toggle) still runs the meters and scope, on dry audio.
+        let bypassed = self.shared.is_bypassed();
+        self.process_audio(&mut audio, bypassed)?;
 
         Ok(ProcessStatus::ContinueIfNotQuiet)
     }
@@ -77,6 +88,57 @@ impl<'a> PluginAudioProcessor<'a, SonidoShared, SonidoMainThread<'a>> for Sonido
     }
 }
 
+/// The tempo context after this block's transport event, or `None` if
+/// nothing changed.
+///
+/// Hosts send the transport with every block while it is known; without one
+/// the last tempo stands and the transport counts as stopped.
+pub(crate) fn next_tempo(
+    current: &TempoContext,
+    transport: Option<&TransportEvent>,
+) -> Option<TempoContext> {
+    let ctx = match transport {
+        Some(t) => TempoContext {
+            bpm: if t.flags.contains(TransportFlags::HAS_TEMPO) && t.tempo > 0.0 {
+                t.tempo as f32
+            } else {
+                current.bpm
+            },
+            is_playing: t.flags.contains(TransportFlags::IS_PLAYING),
+            beat_position: t.song_pos_beats.to_float() as f32,
+            sample_rate: current.sample_rate,
+        },
+        None => TempoContext {
+            is_playing: false,
+            ..*current
+        },
+    };
+    (ctx != *current).then_some(ctx)
+}
+
+/// Turn any channel pair into one buffer to process in place.
+///
+/// Separate input/output buffers get the input copied across first, an
+/// output with no input is silenced, and an input with no output has nowhere
+/// to go. After this every layout is processed, bypassed or metered the same
+/// way.
+pub(crate) fn in_place(pair: ChannelPair<'_, f32>) -> Option<&mut [f32]> {
+    match pair {
+        ChannelPair::InPlace(buf) => Some(buf),
+        ChannelPair::InputOutput(input, output) => {
+            let n = input.len().min(output.len());
+            output[..n].copy_from_slice(&input[..n]);
+            output[n..].fill(0.0);
+            Some(output)
+        }
+        ChannelPair::OutputOnly(output) => {
+            output.fill(0.0);
+            Some(output)
+        }
+        ChannelPair::InputOnly(_) => None,
+    }
+}
+
 impl SonidoAudioProcessor<'_> {
     /// Detect GUI-originated parameter changes and sync them to the effect
     /// and host.
@@ -87,6 +149,14 @@ impl SonidoAudioProcessor<'_> {
     /// `ParamValueEvent` so the host updates its controls/automation.
     fn sync_gui_changes(&mut self, output: &mut OutputEvents) {
         for i in 0..self.shared.param_count() {
+            // Read-only diagnostics flow the other way: the kernel writes them
+            // and the GUI reads them. Writing them back would clobber the
+            // kernel's value and announce a change to the host every block.
+            if self.shared.is_read_only(i) {
+                self.shared.set_value(i, self.effect.effect_get_param(i));
+                continue;
+            }
+
             let flags = self.shared.take_gesture_flags(i);
             let has_begin = flags & GESTURE_BEGIN != 0;
             let has_end = flags & GESTURE_END != 0;
@@ -140,7 +210,9 @@ impl SonidoAudioProcessor<'_> {
                 && let Some(param_id) = ev.param_id()
             {
                 let id = param_id.get();
-                if let Some(index) = self.shared.index_by_id(id) {
+                if let Some(index) = self.shared.index_by_id(id)
+                    && !self.shared.is_read_only(index)
+                {
                     let value = ev.value() as f32;
                     self.shared.set_value(index, value);
                     self.effect.effect_set_param(index, value);
@@ -149,69 +221,52 @@ impl SonidoAudioProcessor<'_> {
         }
     }
 
-    /// Process stereo audio through the effect.
-    fn process_audio(&mut self, audio: &mut Audio) -> Result<(), PluginError> {
-        for mut port_pair in audio {
-            let channels = port_pair.channels()?;
+    /// Refresh the effect's tempo context from the block's transport event.
+    fn sync_transport(&mut self, transport: Option<&TransportEvent>) {
+        if let Some(ctx) = next_tempo(&self.tempo, transport) {
+            self.tempo = ctx;
+            self.effect.set_tempo_context(&ctx);
+        }
+    }
 
-            // Extract f32 channels, skip f64-only ports.
-            let Some(mut channels) = channels.into_f32() else {
+    /// Process (or, bypassed, pass through) every audio port, feeding the
+    /// GUI's meters and scope on the way.
+    fn process_audio(&mut self, audio: &mut Audio, bypassed: bool) -> Result<(), PluginError> {
+        let tap = self.shared.tap();
+        for mut port_pair in audio {
+            // Skip f64-only ports.
+            let Some(mut channels) = port_pair.channels()?.into_f32() else {
                 continue;
             };
 
-            let pair_count = channels.channel_pair_count();
-            match pair_count {
+            match channels.channel_pair_count() {
                 0 => {}
                 1 => {
-                    // Mono: process single channel.
-                    if let Some(pair) = channels.channel_pair(0) {
-                        self.process_channel_pair(pair);
+                    if let Some(buf) = channels.channel_pair(0).and_then(in_place) {
+                        tap.input(buf, buf);
+                        if !bypassed {
+                            self.effect.process_block_inplace(buf);
+                        }
+                        tap.output(buf, buf);
                     }
                 }
                 _ => {
-                    // Stereo: get L and R channel pairs.
-                    let left = channels.channel_pair(0);
-                    let right = channels.channel_pair(1);
-
-                    match (left, right) {
-                        (
-                            Some(ChannelPair::InputOutput(left_in, left_out)),
-                            Some(ChannelPair::InputOutput(right_in, right_out)),
-                        ) => {
-                            self.effect
-                                .process_block_stereo(left_in, right_in, left_out, right_out);
-                        }
-                        (Some(ChannelPair::InPlace(left)), Some(ChannelPair::InPlace(right))) => {
+                    let left = channels.channel_pair(0).and_then(in_place);
+                    let right = channels.channel_pair(1).and_then(in_place);
+                    if let (Some(left), Some(right)) = (left, right) {
+                        let n = left.len().min(right.len());
+                        let (left, right) = (&mut left[..n], &mut right[..n]);
+                        tap.input(left, right);
+                        if !bypassed {
                             self.effect.process_block_stereo_inplace(left, right);
                         }
-                        _ => {
-                            // Asymmetric layout — process channels independently.
-                            if let Some(pair) = channels.channel_pair(0) {
-                                self.process_channel_pair(pair);
-                            }
-                            if let Some(pair) = channels.channel_pair(1) {
-                                self.process_channel_pair(pair);
-                            }
-                        }
+                        tap.output(left, right);
                     }
                 }
             }
         }
 
         Ok(())
-    }
-
-    /// Process a single channel pair (mono fallback).
-    fn process_channel_pair(&mut self, pair: ChannelPair<f32>) {
-        match pair {
-            ChannelPair::InputOutput(input, output) => {
-                self.effect.process_block(input, output);
-            }
-            ChannelPair::InPlace(buf) => {
-                self.effect.process_block_inplace(buf);
-            }
-            _ => {}
-        }
     }
 }
 
@@ -224,20 +279,14 @@ impl PluginAudioProcessorParams for SonidoAudioProcessor<'_> {
 
 // ── Tail Extension ──────────────────────────────────────────────────────────
 
-/// Report the effect's tail length to the host.
-///
-/// The tail is the number of samples the effect continues to produce
-/// meaningful output after its input goes silent (e.g., reverb decay,
-/// delay repeats). We use the effect's reported `latency_samples` as a
-/// conservative lower bound; effects with significant tails (reverb, delay)
-/// will provide a non-zero value via this path.
+/// Report the effect's ring-out to the host: how long it keeps producing
+/// output after its input goes silent (reverb decay, delay repeats, a recorded
+/// loop). Asked of the live effect, so it tracks the current decay settings.
 impl PluginTailImpl for SonidoAudioProcessor<'_> {
     fn get(&self) -> TailLength {
-        let samples = self.shared.latency_samples();
-        if samples == 0 {
-            TailLength::Finite(0)
-        } else {
-            TailLength::Finite(samples)
+        match u32::try_from(self.effect.tail_samples()) {
+            Ok(samples) if samples < u32::MAX => TailLength::Finite(samples),
+            _ => TailLength::Infinite,
         }
     }
 }

@@ -1,15 +1,17 @@
 //! Pluggable audio backend abstraction.
 //!
 //! This module defines the [`AudioBackend`] trait, which decouples sonido's audio
-//! processing pipeline from any specific platform audio API. The default implementation
-//! wraps [cpal](https://crates.io/crates/cpal) (feature `"cpal-backend"`), but the
-//! trait is designed so that alternative backends can be swapped in:
+//! processing pipeline from any specific platform audio API. The only
+//! implementation today is [`CpalBackend`](crate::cpal_backend::CpalBackend),
+//! which wraps [cpal](https://crates.io/crates/cpal) (always compiled; cpal is a
+//! required dependency). The trait leaves room for other backends:
 //!
-//! - **Desktop**: cpal (ALSA, CoreAudio, WASAPI) — the default
+//! - **Desktop**: cpal (ALSA, CoreAudio, WASAPI) — implemented
 //! - **Plugin hosts**: Host-provided buffers (CLAP/VST3) — no backend needed
-//! - **Embedded**: DMA/I2S interrupt-driven I/O
-//! - **WASM**: WebAudio AudioWorklet
-//! - **Testing**: Deterministic mock backend for CI
+//! - **Embedded**: DMA/I2S interrupt-driven I/O — the Daisy firmware does this
+//!   itself in `sonido-daisy`, without this trait
+//! - **WASM**: WebAudio, through cpal's web host
+//! - **Testing**: a deterministic mock backend — not written yet
 //!
 //! ## Architecture
 //!

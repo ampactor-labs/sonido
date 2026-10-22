@@ -18,7 +18,7 @@ MI = |mean(amplitude * exp(i * phase))|
 
 If amplitude is uniformly distributed across all phases, the vectors cancel and MI approaches 0. If amplitude concentrates at a preferred phase, the vectors reinforce and MI is large.
 
-**Kullback-Leibler Divergence** (Tort et al., 2010): Phase is binned into 18 bins of 20 degrees each (`cfc.rs:7`). The mean amplitude in each bin forms a distribution. The KL divergence between this distribution and a uniform distribution measures coupling strength:
+**Kullback-Leibler Divergence** (Tort et al., 2010): Phase is binned into 18 bins of 20 degrees each (`NUM_PHASE_BINS` in `cfc.rs`). The mean amplitude in each bin forms a distribution. The KL divergence between this distribution and a uniform distribution measures coupling strength:
 
 ```
 MI = KL(P || U) / log(N_bins)
@@ -96,7 +96,7 @@ sonido analyze spectrogram courtship.wav -o chirps.csv --fft-size 512 --hop 32
 
 ```bash
 # Welch averaging for precise frequency estimation
-sonido analyze spectrum fish.wav --welch --overlap 0.8 --fft-size 65536 --peaks 3
+sonido analyze spectrum fish.wav --method welch --overlap 0.8 --fft-size 65536 --peaks 3
 ```
 
 ## Slime Mold (Physarum polycephalum)
@@ -128,7 +128,7 @@ wavfile.write('physarum.wav', sample_rate, normalized.astype(np.float32))
 
 ```bash
 # Spectrum of oscillation frequencies
-sonido analyze spectrum physarum.wav --welch --peaks 5
+sonido analyze spectrum physarum.wav --method welch --peaks 5
 # Peak at "0.02 Hz" indicates 50-second shuttle streaming rhythm
 
 # Time-frequency analysis

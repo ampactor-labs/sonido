@@ -12,8 +12,8 @@ cargo test --workspace
 cargo test -p sonido-core
 cargo test -p sonido-effects
 
-# Run a specific test
-cargo test test_reverb_basic
+# Run tests whose name contains a filter string
+cargo test -p sonido-effects reverb
 
 # Run tests with output
 cargo test -- --nocapture
@@ -43,31 +43,47 @@ Tests in Sonido follow Rust conventions with inline unit tests and separate inte
 Each module contains a `#[cfg(test)]` block with unit tests:
 
 ```rust
-// In crates/sonido-effects/src/kernels/reverb.rs
+// In crates/sonido-effects/src/kernels/reverb.rs (abridged)
 #[cfg(test)]
 mod tests {
     use super::*;
     use sonido_core::kernel::Adapter;
-    use sonido_core::Effect;
+    use sonido_core::{Effect, ParameterInfo};
 
+    /// The kernel must wrap into an `Adapter` and function as an `Effect`.
     #[test]
-    fn test_reverb_basic() {
-        let mut reverb = Adapter::new(ReverbKernel::new(48000.0), 48000.0);
-        let output = reverb.process(0.5);
-        assert!(output.is_finite());
+    fn adapter_wraps_as_effect() {
+        let mut adapter = Adapter::new(ReverbKernel::new(48000.0), 48000.0);
+        adapter.reset();
+        let output = adapter.process(0.3);
+        assert!(
+            output.is_finite(),
+            "Adapter output must be finite, got {output}"
+        );
     }
 }
 ```
 
 ### Integration Tests
 
-Integration tests are in `tests/` directories within crates:
+Integration tests are in `tests/` directories within crates. Every crate except
+sonido-daisy, sonido-gui, sonido-gui-core and sonido-platform has a `tests/integration.rs`
+or equivalent; the larger suites are:
 
-```
-crates/sonido-config/tests/integration.rs
-```
-
-Integration tests verify end-to-end functionality across modules.
+| File | Covers |
+|------|--------|
+| `crates/sonido-effects/tests/regression.rs` | Golden-file output comparison (below) |
+| `crates/sonido-effects/tests/quality_standard.rs` | [DSP Quality Standard](DSP_QUALITY_STANDARD.md) rules for every registered effect |
+| `crates/sonido-effects/tests/compliance.rs` | Finite output, DC offset, reset safety, sample-rate changes, parameter clamping |
+| `crates/sonido-effects/tests/extreme_params.rs` | Min/max parameters and 8 kHz / 192 kHz sample rates |
+| `crates/sonido-effects/tests/param_contracts.rs` | Parameter range access, unity gain, curve conventions |
+| `crates/sonido-effects/tests/properties.rs` | Property-based (proptest) checks over all effects |
+| `crates/sonido-effects/tests/aliasing.rs` | ADAA nonlinearities vs naive clipping |
+| `crates/sonido-effects/tests/noon_mapping.rs`, `dag_rebuild_stress.rs` | Host-side checks of firmware paths (noon presets, DAG rebuild) |
+| `crates/sonido-core/tests/properties.rs` | Property-based checks of core primitives |
+| `crates/sonido-patch/tests/roundtrip.rs` | Patch encode/decode round trips |
+| `crates/sonido-plugin/tests/plugin_inventory.rs` | Every registered effect ships in the plugin bundle, and vice versa |
+| `crates/sonido-plugin/tests/state_roundtrip.rs`, `buffer_sizes.rs` | Plugin state save/restore and buffer-size robustness |
 
 ## Test Categories
 
@@ -84,6 +100,9 @@ Every effect should verify:
 Example pattern:
 
 ```rust
+// Adapter's set_param comes from the ParameterInfo trait:
+// use sonido_core::{Effect, ParameterInfo};
+
 #[test]
 fn test_distortion_basic() {
     let mut effect = Adapter::new(DistortionKernel::new(48000.0), 48000.0);
@@ -171,7 +190,7 @@ fn test_reverb_stereo_decorrelation() {
 
 ## Golden File Regression Tests
 
-The `crates/sonido-effects/tests/regression.rs` test compares effect output against reference WAV files stored in `tests/golden/`. This catches unintended DSP changes.
+The `crates/sonido-effects/tests/regression.rs` test compares effect output against reference outputs stored in `crates/sonido-effects/tests/golden/` (75 `.golden` text files, one sample per line). This catches unintended DSP changes.
 
 Three metrics must pass for each effect:
 - **MSE < 1e-6** (sample-level accuracy)
@@ -190,17 +209,14 @@ After regenerating, verify the new output sounds correct before committing the u
 
 ## no_std Compatibility Testing
 
-Core crates must work without the standard library.
+Six crates must work without the standard library: sonido-core, sonido-effects,
+sonido-synth, sonido-registry, sonido-platform and sonido-patch (`no_std + alloc`).
 
 ### Running no_std Tests
 
 ```bash
-# Test no_std compatibility for core crates
-cargo test --no-default-features -p sonido-core
-cargo test --no-default-features -p sonido-effects
-cargo test --no-default-features -p sonido-registry
-cargo test --no-default-features -p sonido-platform
-cargo test --no-default-features -p sonido-synth
+make test-nostd   # core, effects, synth, registry, platform
+cargo test --no-default-features -p sonido-patch   # also run by the manual CI check job
 ```
 
 ### no_std Test Requirements
@@ -252,29 +268,28 @@ fn generate_test_signal(size: usize, sample_rate: f32) -> Vec<f32> {
 
 ## Continuous Integration
 
-All tests run automatically on pull requests via GitHub Actions.
+`.github/workflows/ci.yml` runs on every push and pull request to `main`.
 
 ### CI Test Matrix
 
-| Platform | Tests | no_std |
-|----------|-------|--------|
-| Linux (Ubuntu) | Full workspace | sonido-core, sonido-effects, sonido-synth, sonido-registry, sonido-platform |
+| Job | Platform | What runs |
+|-----|----------|-----------|
+| `lint` | Linux (ubuntu-latest) | `cargo fmt --all --check`, `cargo clippy --workspace --all-targets` (warnings denied via `RUSTFLAGS`) |
+| `test` | Linux, macOS, Windows | `cargo test --workspace` |
+| `wasm` | Linux | `cargo build --target wasm32-unknown-unknown -p sonido-gui` |
 
-CI runs on `ubuntu-latest` only. The four jobs are: lint, test, no_std check, and wasm check. Benchmarks, coverage, and plugin validation run via manual dispatch (`gh workflow run ci-manual.yml`).
+no_std tests, docs with `-D warnings`, cargo-deny, benchmarks, coverage and CLAP
+validation run in `ci-manual.yml` on manual dispatch
+(`gh workflow run ci-manual.yml -f job=<check|bench|coverage|plugin|all>`).
+See [CONTRIBUTING.md](CONTRIBUTING.md#continuous-integration).
 
 ### Running CI Checks Locally
 
 ```bash
-# Run the same checks as CI
-cargo fmt --all -- --check
-cargo clippy --workspace --lib --bins --tests --benches -- -D warnings
-cargo test --workspace
-cargo test --no-default-features -p sonido-core
-cargo test --no-default-features -p sonido-effects
-cargo test --no-default-features -p sonido-synth
-cargo test --no-default-features -p sonido-registry
-cargo test --no-default-features -p sonido-platform
-RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
+# Same commands as the manual `check` job (minus wasm and cargo-deny)
+make ci
+make test-nostd
+cargo test --no-default-features -p sonido-patch
 ```
 
 ## Common Test Patterns
@@ -319,8 +334,8 @@ fn test_factory_presets() {
 fn test_delay_reset() {
     let registry = EffectRegistry::new();
     let mut delay = registry.create("delay", 48000.0).unwrap();
-    delay.effect_set_param(0, 100.0);  // time = 100ms
-    delay.effect_set_param(1, 0.5);    // feedback = 0.5
+    delay.effect_set_param(0, 100.0);  // time = 100 ms
+    delay.effect_set_param(1, 50.0);   // feedback = 50 %
 
     // Fill the delay buffer
     for _ in 0..10000 {
@@ -344,7 +359,7 @@ fn test_delay_reset() {
 cargo test -- --nocapture
 
 # Run a single test with backtrace
-RUST_BACKTRACE=1 cargo test test_reverb_basic -- --nocapture
+RUST_BACKTRACE=1 cargo test -p sonido-effects adapter_wraps_as_effect -- --nocapture
 ```
 
 ### Test Isolation
@@ -414,7 +429,7 @@ For CLI and GUI manual testing, see [CLI_TESTING.md](CLI_TESTING.md).
 
 | Profile | Crates | Feature Flags | Target |
 |---------|--------|--------------|--------|
-| Embedded (no_std) | core, effects, synth, registry, platform | `default-features = false` | Daisy Seed, Hothouse |
+| Embedded (no_std) | core, effects, synth, registry, platform, patch | `default-features = false` | Daisy Seed, Hothouse |
 | Desktop Library | core, effects, synth, registry, config | default (std) | Plugin hosts, DAWs |
 | Full Desktop | all crates | default (std) | Standalone apps |
 
@@ -422,7 +437,7 @@ For CLI and GUI manual testing, see [CLI_TESTING.md](CLI_TESTING.md).
 
 #### no_std Compilation (Embedded Profile)
 
-Verify the five no_std crates compile without the standard library:
+Verify the six no_std crates compile without the standard library:
 
 ```bash
 cargo check --no-default-features -p sonido-core
@@ -430,6 +445,7 @@ cargo check --no-default-features -p sonido-effects
 cargo check --no-default-features -p sonido-synth
 cargo check --no-default-features -p sonido-registry
 cargo check --no-default-features -p sonido-platform
+cargo check --no-default-features -p sonido-patch
 ```
 
 #### Full Workspace
@@ -437,7 +453,7 @@ cargo check --no-default-features -p sonido-platform
 ```bash
 cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all -- --check
-cargo doc --workspace --no-deps --all-features
+RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
 cargo test --workspace --doc
 ```
 
@@ -471,13 +487,12 @@ assert!(idx.is_some());
 #### WAV File Processing
 
 ```rust
-use sonido_io::{WavReader, WavWriter};
+use sonido_io::read_wav;
 use sonido_core::Effect;
 use sonido_registry::EffectRegistry;
 
-let reader = WavReader::open("input.wav").unwrap();
-let spec = reader.spec();
-let samples: Vec<f32> = reader.into_samples().map(|s| s.unwrap()).collect();
+// read_wav mixes multi-channel files down to mono; read_wav_stereo keeps L/R
+let (samples, spec) = read_wav("input.wav").unwrap();
 
 let registry = EffectRegistry::new();
 let mut chorus = registry.create("chorus", spec.sample_rate as f32).unwrap();
@@ -490,11 +505,13 @@ let output: Vec<f32> = samples.iter().map(|&s| chorus.process(s)).collect();
 #### Analysis Pipeline
 
 ```rust
-use sonido_analysis::{spectrum, dynamics};
+use sonido_analysis::{Window, analyze_dynamics, magnitude_spectrum};
+use sonido_analysis::spectrum::find_peaks;
 
 let samples = vec![0.0_f32; 48000]; // 1 second at 48kHz
-let peaks = spectrum::find_peaks(&samples, 48000.0, 5);
-let stats = dynamics::analyze(&samples);
+let mag = magnitude_spectrum(&samples[..4096], 4096, Window::Hann);
+let peaks = find_peaks(&mag, 48000.0, -60.0, 50.0); // threshold dB, min spacing Hz
+let stats = analyze_dynamics(&samples, 1024, -60.0); // window, silence threshold dB
 ```
 
 - [ ] Spectrum analysis produces valid frequency peaks
@@ -504,14 +521,16 @@ let stats = dynamics::analyze(&samples);
 
 #### Default Parameter Sanity
 
-Every effect at `::new(48000.0)` with default parameters must produce output within [-1, 1] for normalized input.
+Every effect created at 48 kHz with default parameters must produce finite output for
+normalized input. Output is not guaranteed to stay within [-1, 1]: see the gain
+staging table below for measured peaks.
 
 ```rust
 use sonido_registry::EffectRegistry;
 use sonido_core::Effect;
 
 let registry = EffectRegistry::new();
-for desc in registry.list() {
+for desc in registry.all_effects() {
     let mut effect = registry.create(desc.id, 48000.0).unwrap();
 
     for i in 0..48000 {
@@ -523,7 +542,6 @@ for desc in registry.list() {
 ```
 
 - [ ] No effect produces NaN or Inf with default parameters
-- [ ] Dual-mono effects stay within reasonable bounds (~[-2, 2]) for unit input
 
 #### Boundary and Extreme Values
 
@@ -534,7 +552,7 @@ use sonido_registry::EffectRegistry;
 use sonido_core::Effect;
 
 let registry = EffectRegistry::new();
-for desc in registry.list() {
+for desc in registry.all_effects() {
     let mut effect = registry.create(desc.id, 48000.0).unwrap();
 
     // Set all params to minimum
@@ -576,43 +594,69 @@ assert!(output.abs() < 1e-6, "non-silent output from silent input");
 #### Faster-than-Realtime
 
 Every effect must process audio faster than realtime at 48kHz. Benchmark target:
-process 1M samples in less than 1M/48000 = 20.8ms.
+process 1M samples in less than 1M/48000 = 20.8 s (equivalently, under 20.8 µs per
+sample; a 256-sample block under 5.3 ms).
 
 - [ ] All effects process faster than realtime
 - [ ] Block sizes 64/128/256/512/1024 all pass
 
 #### No Allocation in Process Path
 
-Effects in no_std mode should not require an allocator for basic single-sample processing.
-The `process()` and `process_stereo()` methods must not allocate.
+The no_std crates link `alloc` (sonido-core, sonido-effects and sonido-synth declare
+`extern crate alloc`) so kernels can allocate delay lines and buffers at construction.
+The `process()` and `process_stereo()` methods must not allocate; no_std compilation
+alone does not prove this, so review hot paths for `Vec`/`Box` creation.
 
-- [ ] no_std compilation proves no hidden allocator dependency in core paths
+- [ ] No allocation inside `process()` / `process_stereo()`
 
 ### Gain Staging Reference
 
-Default gain behavior for each effect with unit-amplitude input:
+Measured default-parameter gain for every registered effect (created with
+`EffectRegistry::create`, measured 2026-10-22):
+a 440 Hz sine at amplitude 1.0 (0 dBFS peak), fed identically to both channels of
+`process_stereo()` for 2 s at 48 kHz, with the first 0.5 s discarded. Gain is the
+left-channel output RMS relative to the input RMS. Every effect has an `Output`
+parameter (dB) for trimming level; values are signal-dependent, so expect different
+numbers for other material.
 
-| Effect | Default Gain | Output Control | Notes |
-|--------|-------------|----------------|-------|
-| CleanPreamp | 0 dB | `output` param | Transparent at defaults |
-| Distortion | +3.7 dB | `level` param | Signal-dependent; clipping adds energy |
-| Tape | ~0 dB | `output` param | Gain-compensated after saturation |
-| Compressor | -4.5 dB | `makeup` param | Safety-first default; use makeup to restore |
-| Gate | 0 dB | -- | Pass-through when open, silence when closed |
-| Eq | 0 dB | band gain params | Flat at defaults (all gains 0 dB) |
-| Filter | 0 dB | -- | Unity passband gain |
-| Wah | ~0 dB | `output` param | Bandpass normalized by Q |
-| Tremolo | -3 dB avg | `depth` param | Amplitude modulation reduces average level |
-| Chorus | ~0 dB | `output` param | Wet/dry mix preserves level |
-| Flanger | ~0 dB | `output` param | Comb filtering causes signal-dependent variation |
-| Phaser | ~0 dB | `output` param | Allpass summing, ~unity average |
-| Vibrato | 0 dB | `mix` param | Pitch shift only, no amplitude change |
-| Delay | 0-2.5 dB | `output` param | Feedback adds energy; signal-dependent |
-| Reverb | ~0 dB | `output` param | Mix control balances dry/wet |
-| Limiter | 0 dB | `ceiling` param | Brickwall limiting to ceiling level |
-| Bitcrusher | 0 dB | `output` param | Bit reduction + downsampling |
-| RingMod | ~0 dB | `output` param | Ring modulation, signal-dependent |
-| Stage | 0 dB | `output` param | Stereo imaging, no amplitude change |
+| Effect (registry id) | Gain (dB) | Output peak |
+|----------------------|-----------|-------------|
+| Distortion (`distortion`) | -2.4 | 0.62 |
+| Compressor (`compressor`) | -12.7 | 0.23 |
+| Chorus (`chorus`) | -5.5 | 0.90 |
+| Flanger (`flanger`) | -4.8 | 0.99 |
+| Phaser (`phaser`) | -5.2 | 1.00 |
+| Delay (`delay`) | -0.3 | 1.00 |
+| Filter (`filter`) | -0.2 | 0.97 |
+| Vibrato (`vibrato`) | -0.0 | 1.00 |
+| Tape Saturation (`tape`) | -3.9 | 0.49 |
+| Clean Preamp (`preamp`) | -0.1 | 0.98 |
+| Reverb (`reverb`) | +0.6 | 3.45 |
+| Tremolo (`tremolo`) | -2.4 | 1.00 |
+| Noise Gate (`gate`) | +0.0 | 1.00 |
+| Wah (`wah`) | -13.6 | 0.21 |
+| Parametric EQ (`eq`) | -0.1 | 0.98 |
+| Limiter (`limiter`) | -6.3 | 0.48 |
+| Bitcrusher (`bitcrusher`) | -0.0 | 1.00 |
+| Ring Modulator (`ringmod`) | -2.3 | 0.93 |
+| Stage (`stage`) | +0.0 | 1.00 |
+| Looper (`looper`) | +0.0 | 1.00 |
+| Amp (`amp`) | -16.0 | 0.13 |
+| Cabinet (`cabinet`) | +4.1 | 1.61 |
+| De-esser (`deesser`) | +0.0 | 1.00 |
+| Drone (`drone`) | +0.9 | 1.65 |
+| Glitch (`glitch`) | -0.9 | 1.00 |
+| Multiband Compressor (`multiband_comp`) | -11.1 | 0.28 |
+| Pitch Shift (`pitch_shift`) | -1.8 | 0.81 |
+| Plate Reverb (`plate_reverb`) | +7.0 | 2.67 |
+| Shelving EQ (`shelving_eq`) | -0.0 | 1.00 |
+| Spring Reverb (`spring_reverb`) | +0.3 | 1.25 |
+| Stereo Widener (`stereo_widener`) | +0.0 | 1.00 |
+| Texture (`texture`) | -4.2 | 1.00 |
+| Time Stretch (`time_stretch`) | -10.1 | 0.49 |
+| Transient Shaper (`transient_shaper`) | +0.0 | 1.00 |
+| Tuner (`tuner`) | +0.0 | 1.00 |
+| Harmonic Habitat (`harmonic_habitat`) | -3.9 | 0.67 |
 
 ---
 

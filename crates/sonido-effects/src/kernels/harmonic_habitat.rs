@@ -133,7 +133,7 @@ impl Default for HarmonicHabitatParams {
             memory_pct: 65.0,
             mode: 3.0,
             width_pct: 100.0,
-            mix_pct: 35.0,
+            mix_pct: 50.0,
             output_db: 0.0,
         }
     }
@@ -181,6 +181,7 @@ kernel_params! {
                 max: 100.0,
                 default: 55.0,
                 step: 1.0,
+                flags: ParamFlags::AUTOMATABLE,
                 ..ParamDescriptor::mix()
             }
             .with_id(ParamId(3600), "hab_room_size"),
@@ -196,6 +197,7 @@ kernel_params! {
                 max: 100.0,
                 default: 60.0,
                 step: 1.0,
+                flags: ParamFlags::AUTOMATABLE,
                 ..ParamDescriptor::mix()
             }
             .with_id(ParamId(3601), "hab_decay"),
@@ -211,6 +213,7 @@ kernel_params! {
                 max: 100.0,
                 default: 45.0,
                 step: 1.0,
+                flags: ParamFlags::AUTOMATABLE,
                 ..ParamDescriptor::mix()
             }
             .with_id(ParamId(3602), "hab_damping"),
@@ -234,6 +237,7 @@ kernel_params! {
                 max: 100.0,
                 default: 45.0,
                 step: 1.0,
+                flags: ParamFlags::AUTOMATABLE,
                 ..ParamDescriptor::mix()
             }
             .with_id(ParamId(3604), "hab_harmonicity"),
@@ -249,6 +253,7 @@ kernel_params! {
                 max: 100.0,
                 default: 60.0,
                 step: 1.0,
+                flags: ParamFlags::AUTOMATABLE,
                 ..ParamDescriptor::mix()
             }
             .with_id(ParamId(3605), "hab_tracking"),
@@ -264,6 +269,7 @@ kernel_params! {
                 max: 100.0,
                 default: 65.0,
                 step: 1.0,
+                flags: ParamFlags::AUTOMATABLE,
                 ..ParamDescriptor::mix()
             }
             .with_id(ParamId(3606), "hab_memory"),
@@ -289,6 +295,7 @@ kernel_params! {
                 max: 100.0,
                 default: 100.0,
                 step: 1.0,
+                flags: ParamFlags::AUTOMATABLE,
                 ..ParamDescriptor::mix()
             }
             .with_id(ParamId(3608), "hab_width"),

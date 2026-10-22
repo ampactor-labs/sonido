@@ -31,9 +31,11 @@ Amplitude of each harmonic relative to the fundamental:
 |        7 |      7000 |      -17.8 |
 |        8 |      8000 |     -118.4 |
 
-Kernels run at base rate here; the desktop/plugin path wraps each kernel in
-`Oversampled<N>` (`crates/sonido-core/src/oversample.rs`, windowed-sinc up/downsampling)
-to keep these harmonics from aliasing back into the audible band.
+Kernels run at base rate here, as they do on every shipping path (plugin, CLI,
+pedal) — none wraps kernels in `Oversampled<N>`. Aliasing of these harmonics is
+held down in the kernel itself by first-order ADAA (antiderivative anti-aliasing)
+waveshaping; `Oversampled<N>` (`crates/sonido-core/src/oversample.rs`) is an
+opt-in wrapper, not part of any shipping signal path.
 
 ## Reverb — measured decay (Schroeder RT60)
 

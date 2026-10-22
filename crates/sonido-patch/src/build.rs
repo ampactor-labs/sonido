@@ -1,7 +1,8 @@
 //! Build a runnable [`GraphEngine`] from a [`Patch`].
 //!
 //! This is the one place that turns the canonical patch into a live DAG, shared
-//! by the firmware patch player and the graph-player plugin. Effect construction
+//! by the firmware's `patch_loader` and the graph-player plugin (via
+//! [`PatchPlayer`](crate::PatchPlayer)). Effect construction
 //! is injected as a closure, so the firmware can link only its curated subset
 //! (keeping the 480 KB binary small) while the plugin uses the full registry —
 //! `build_graph_from_patch` itself pulls in neither `sonido-registry` nor the

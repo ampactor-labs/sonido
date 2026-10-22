@@ -3,7 +3,7 @@
 //! `LimiterKernel` owns DSP state (circular delay buffers, gain reduction
 //! envelope, cached coefficients). Parameters are received via `&LimiterParams`
 //! each sample. Deployed via [`Adapter`](sonido_core::kernel::Adapter) for
-//! desktop/plugin, or called directly on embedded targets.
+//! desktop/plugin, or via `Adapter::new_direct` (no smoothing) on embedded targets.
 //!
 //! # Algorithm
 //!
@@ -50,7 +50,10 @@
 //! let adapter = Adapter::new(LimiterKernel::new(48000.0), 48000.0);
 //! let mut effect: Box<dyn Effect> = Box::new(adapter);
 //!
-//! // Embedded / Daisy Seed (direct — no smoothing, ADCs are hardware-filtered)
+//! // Embedded / Daisy Seed — zero-smoothing adapter, as the pedal firmware uses
+//! let effect = Adapter::new_direct(LimiterKernel::new(48000.0), 48000.0);
+//!
+//! // Or drive the kernel directly with a typed params struct (no adapter)
 //! let mut kernel = LimiterKernel::new(48000.0);
 //! let params = LimiterParams::from_knobs(adc_thresh, adc_ceil, adc_release, adc_look, adc_out);
 //! let (left, right) = kernel.process_stereo(input_l, input_r, &params);
@@ -120,7 +123,7 @@ fn compute_release_coeff(release_ms: f32, sample_rate: f32) -> f32 {
 /// | 1 | `ceiling_db` | dB | −30–0 | −0.3 |
 /// | 2 | `release_ms` | ms | 10–500 | 100.0 |
 /// | 3 | `lookahead_ms` | ms | 0–10 | 5.0 |
-/// | 4 | `output_db` | dB | −20–+20 | 0.0 |
+/// | 4 | `output_db` | dB | −6–+6 | 0.0 |
 #[derive(Debug, Clone, Copy)]
 pub struct LimiterParams {
     /// Threshold in decibels. Gain reduction engages above this level.
@@ -144,7 +147,7 @@ pub struct LimiterParams {
     pub lookahead_ms: f32,
     /// Final output level trim in decibels.
     ///
-    /// Range: −20.0 to +20.0 dB.
+    /// Range: −6.0 to +6.0 dB.
     pub output_db: f32,
 }
 
@@ -783,7 +786,7 @@ mod tests {
         assert_eq!(adapter.param_info(4).unwrap().name, "Output");
         assert!(adapter.param_info(5).is_none());
 
-        // ParamIds must match the classic Limiter effect exactly.
+        // ParamIds must match the original pre-kernel Limiter effect exactly.
         assert_eq!(adapter.param_info(0).unwrap().id, ParamId(1600));
         assert_eq!(adapter.param_info(1).unwrap().id, ParamId(1601));
         assert_eq!(adapter.param_info(2).unwrap().id, ParamId(1602));

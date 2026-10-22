@@ -2,7 +2,7 @@
 //!
 //! Patches and firmware reach the pedal as data over `dfu-util`. The pedal must
 //! be in its STM32 bootloader (VID:PID `0483:df11`) first — hold both
-//! footswitches ~1.5 s, or press BOOT+RESET on the Seed.
+//! footswitches ~3 s, or press BOOT+RESET on the Seed.
 //!
 //! The parsing and argument-construction logic is split out as pure functions so
 //! it is unit-tested without spawning anything; only [`flash_patch`]/[`flash_firmware`]
@@ -67,7 +67,7 @@ impl std::fmt::Display for DfuError {
             ),
             Self::NoDevice => write!(
                 f,
-                "no pedal in bootloader mode — hold both footswitches ~1.5 s \
+                "no pedal in bootloader mode — hold both footswitches ~3 s \
                  (or press BOOT+RESET), then retry"
             ),
             Self::Failed(e) => write!(f, "dfu-util failed: {e}"),
@@ -243,7 +243,7 @@ Found DFU: [0483:df11] ver=2200, devnum=12, cfg=1, intf=0, path="1-2", alt=1, na
 
     #[test]
     fn empty_output_yields_nothing() {
-        assert!(parse_dfu_list("no devices found").is_empty());
+        assert_eq!(parse_dfu_list("no devices found").len(), 0);
     }
 
     #[test]

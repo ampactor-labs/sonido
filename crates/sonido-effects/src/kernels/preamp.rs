@@ -3,7 +3,7 @@
 //! `PreampKernel` owns DSP state (tone biquad filter, sample rate, cached
 //! coefficient tracking). Parameters are received via `&PreampParams` each
 //! sample. Deployed via [`Adapter`](sonido_core::kernel::Adapter) for
-//! desktop/plugin, or called directly on embedded targets.
+//! desktop/plugin, or via `Adapter::new_direct` (no smoothing) on embedded targets.
 //!
 //! # Signal Flow
 //!
@@ -56,7 +56,10 @@
 //! let adapter = Adapter::new(PreampKernel::new(48000.0), 48000.0);
 //! let mut effect: Box<dyn Effect> = Box::new(adapter);
 //!
-//! // Embedded / Daisy Seed (direct — no smoothing, ADCs are hardware-filtered)
+//! // Embedded / Daisy Seed — zero-smoothing adapter, as the pedal firmware uses
+//! let effect = Adapter::new_direct(PreampKernel::new(48000.0), 48000.0);
+//!
+//! // Or drive the kernel directly with a typed params struct (no adapter)
 //! let mut kernel = PreampKernel::new(48000.0);
 //! let params = PreampParams::from_knobs(adc_gain, adc_tone, adc_output);
 //! let (left, right) = kernel.process_stereo(input_l, input_r, &params);
@@ -101,7 +104,7 @@ const TONE_Q: f32 = 0.8;
 /// |-------|-------|------|-------|---------|
 /// | 0 | `gain_db` | dB | 0–40 | 0.0 |
 /// | 1 | `tone_db` | dB | −12–12 | 0.0 |
-/// | 2 | `output_db` | dB | −20–20 | 0.0 |
+/// | 2 | `output_db` | dB | −6–+6 | 0.0 |
 #[derive(Debug, Clone, Copy)]
 pub struct PreampParams {
     /// Input gain before the soft-clip stage, in decibels.
@@ -115,7 +118,7 @@ pub struct PreampParams {
     pub tone_db: f32,
     /// Output level trim after all processing, in decibels.
     ///
-    /// Range: −20.0–20.0 dB. Default 0.0 (unity).
+    /// Range: −6.0–+6.0 dB. Default 0.0 (unity).
     pub output_db: f32,
 }
 
@@ -412,7 +415,7 @@ mod tests {
             "index 3 should be None"
         );
 
-        // Verify ParamId values match classic effect
+        // Verify ParamId values match original pre-kernel effect
         let gain_desc = PreampParams::descriptor(0).unwrap();
         assert_eq!(gain_desc.id, ParamId(100), "gain must be ParamId(100)");
 

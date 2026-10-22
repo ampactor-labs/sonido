@@ -4,19 +4,20 @@ This guide walks you through creating your first audio effect with Sonido.
 
 ## Prerequisites
 
-- Rust 1.85 or later (Edition 2024)
-- For real-time audio: platform audio drivers (ALSA on Linux, CoreAudio on macOS, WASAPI on Windows)
+- A current stable Rust toolchain (the workspace is edition 2024, so 1.85 or later; CI builds with `stable`)
+- On Linux, system headers for the GUI, CLI and plugins: `alsa-lib-devel` for audio I/O (cpal's ALSA backend), `mesa-libGL-devel` and `libX11-devel` for the GUI and plugins, plus `gcc-c++` and `cmake` if you build the VST3 shim. See [CONTRIBUTING.md](CONTRIBUTING.md#development-setup). The DSP library crates need none of them. macOS and Windows use CoreAudio/WASAPI with nothing extra to install.
 
 ## Installation
 
 ### As a Library
 
-Add the crates you need to your `Cargo.toml`:
+Add the crates you need to your `Cargo.toml` as git dependencies:
 
 ```toml
 [dependencies]
-sonido-core = "0.1"      # Core traits and primitives
-sonido-effects = "0.1"   # Effect implementations
+sonido-core = { git = "https://github.com/ampactor-labs/sonido" }      # Core traits and primitives
+sonido-effects = { git = "https://github.com/ampactor-labs/sonido" }   # Effect kernels
+sonido-registry = { git = "https://github.com/ampactor-labs/sonido" }  # Create effects by name
 ```
 
 ### CLI Tool
@@ -48,10 +49,21 @@ sonido-gui
 
 See [GUI.md](GUI.md) for detailed GUI documentation.
 
+### Plugins (CLAP / VST3)
+
+One plugin bundle carries all 36 effects plus the graph player:
+
+```bash
+make plugins        # builds dist-clap/sonido.clap and installs ~/.clap/sonido.clap
+make plugins-vst3   # also builds dist-vst3/sonido.vst3 (clap-wrapper shim that loads
+                    # sonido.clap) and installs ~/.vst3/sonido.vst3; needs cmake + a C++ compiler
+```
+
 ### Walkthrough (recommended)
 
-Run the full guided tour -- builds, generates signals, processes all 36 effects,
-runs analysis, and prints listening guidance:
+Run the full guided tour -- builds the CLI, checks that all 36 effects are registered,
+generates and verifies the demo WAVs, runs analysis, A/B comparison and preset demos,
+and prints listening guidance:
 
 ```bash
 ./scripts/walkthrough.sh           # Full walkthrough with narration
@@ -60,12 +72,14 @@ runs analysis, and prints listening guidance:
 
 # Or via make:
 make walkthrough
-make verify
+make verify-demos
 ```
 
 ### Generate Demos
 
-Generate all demo WAV files (5 source signals + 22 effect demos):
+Generate all demo WAV files into `demos/` (5 source signals, 22 effect demos — 21
+single-effect renders plus a full chain — and 7 graph-topology demos). The script
+calls the release CLI binary, so build it first with `cargo build -p sonido-cli --release`:
 
 ```bash
 ./scripts/generate_demos.sh
@@ -205,9 +219,9 @@ sonido process input.wav --effect distortion --param drive=15
 # Explicit output filename
 sonido process input.wav output.wav --effect distortion --param drive=15
 
-# Effect chain
+# Effect chain (parameter values are in each parameter's own unit: feedback is %)
 sonido process input.wav \
-    --chain "preamp:gain=6|distortion:drive=12|delay:time=300,feedback=0.4"
+    --chain "preamp:gain=6|distortion:drive=12|delay:time=300,feedback=40"
 ```
 
 Real-time processing:
@@ -216,8 +230,8 @@ Real-time processing:
 # List available audio devices
 sonido devices
 
-# Process live audio
-sonido realtime --effect chorus --param rate=2 --param depth=0.6
+# Process live audio (chorus depth is 0-100 %)
+sonido realtime --effect chorus --param rate=2 --param depth=60
 ```
 
 ## Working with WAV Files
@@ -262,8 +276,8 @@ For embedded systems without standard library, use kernels directly (no adapter 
 
 ```toml
 [dependencies]
-sonido-core = { version = "0.1", default-features = false }
-sonido-effects = { version = "0.1", default-features = false }
+sonido-core = { git = "https://github.com/ampactor-labs/sonido", default-features = false }
+sonido-effects = { git = "https://github.com/ampactor-labs/sonido", default-features = false }
 ```
 
 ```rust
@@ -272,12 +286,18 @@ sonido-effects = { version = "0.1", default-features = false }
 use sonido_effects::kernels::{FilterKernel, FilterParams};
 use sonido_core::kernel::DspKernel;
 
-fn audio_callback(kernel: &mut FilterKernel, adc_cutoff: f32, adc_resonance: f32) {
+fn audio_callback(
+    kernel: &mut FilterKernel,
+    adc_cutoff: f32,
+    adc_resonance: f32,
+    input_l: f32,
+    input_r: f32,
+) -> (f32, f32) {
     // Map ADC readings (0.0-1.0) directly to parameter ranges
     let params = FilterParams::from_knobs(adc_cutoff, adc_resonance, 0.5, 0.0);
 
     // Process sample-by-sample — no allocation, no smoothing
-    let (left, right) = kernel.process_stereo(input_l, input_r, &params);
+    kernel.process_stereo(input_l, input_r, &params)
 }
 ```
 
@@ -399,10 +419,10 @@ fn main() {
     println!("Crest factor: {:.2}", crest_factor(&signal));
 
     // Filter bank for audio frequency band extraction
-    let sub_bass = FrequencyBand::new(20.0, 60.0);
-    let bass = FrequencyBand::new(60.0, 250.0);
-    let mid = FrequencyBand::new(250.0, 4000.0);
-    let presence = FrequencyBand::new(4000.0, 8000.0);
+    let sub_bass = FrequencyBand::new("sub_bass", 20.0, 60.0);
+    let bass = FrequencyBand::new("bass", 60.0, 250.0);
+    let mid = FrequencyBand::new("mid", 250.0, 4000.0);
+    let presence = FrequencyBand::new("presence", 4000.0, 8000.0);
     let bands = [sub_bass, bass, mid, presence];
     let mut bank = FilterBank::new(sample_rate, &bands);
     let extracted = bank.extract(&signal);
@@ -421,6 +441,8 @@ All runnable examples with their `cargo run` commands:
 
 | Example | Crate | Command |
 |---------|-------|---------|
+| Effect chaining (static `.chain()` and dynamic dispatch) | sonido-effects | `cargo run -p sonido-effects --example chain_demo` |
+| DSP measurement report (run from the repo root; rewrites `docs/DSP_MEASUREMENTS.md` and `docs/img/distortion-spectrum.svg`) | sonido-effects | `cargo run --release -p sonido-effects --example dsp_report` |
 | Synthesis (oscillators, envelopes, FM) | sonido-synth | `cargo run -p sonido-synth --example synthesis_demo` |
 | Modulation (mod matrix, LFO routing) | sonido-synth | `cargo run -p sonido-synth --example modulation_demo` |
 | Tempo sync (BPM, note divisions) | sonido-core | `cargo run -p sonido-core --example tempo_sync_demo` |
@@ -467,23 +489,21 @@ This is faster than `trunk build` and sufficient to verify the wasm target compi
 
 ### What Works on Wasm
 
-- Full effect chain with all 36 effects
-- Real-time audio via cpal's wasm backend (WebAudio API)
-- WAV file loading via browser file picker (`rfd::AsyncFileDialog`)
-- Parameter automation and preset management
-- All effect parameter panels, knobs, and meters
-- Effect chain add/remove/reorder
+- The node-graph editor with all 36 effects
+- Real-time audio via cpal's wasm backend (WebAudio API); audio resumes on the first user gesture (browser autoplay policy)
+- WAV file loading via browser file picker (`rfd::AsyncFileDialog`; files over 5,760,000 total samples — 60 s of 48 kHz stereo — are rejected)
+- Session save/load as browser download/upload
+- Export of patch JSON and the pedal `.bin` sector as downloads
 
 ### What Doesn't Work on Wasm
 
-- **File system access**: Presets cannot be saved to the local filesystem from the browser. Preset management operates in memory only.
-- **Audio device selection**: The browser manages the audio output device. Device selection UI is hidden on wasm.
-- **CLAP plugin loading**: Plugins are native-only shared libraries. The wasm target has no plugin host.
+- **Direct file system access**: sessions and exports go through browser downloads/uploads, not paths on disk.
+- **CLAP-folder export and USB DFU flashing**: the Export menu's CLAP sidecar write and pedal flash need the native app.
 - **Synchronous file dialogs**: `rfd::FileDialog` (blocking) is replaced by `rfd::AsyncFileDialog` on wasm.
 
 ### Architecture Notes
 
-The same source file compiles to both targets using cfg gates:
+The same source file compiles to both targets using cfg gates (illustrative):
 
 ```rust
 // Native-only code (threads, filesystem, blocking I/O):
@@ -501,14 +521,14 @@ Key per-target differences:
 |---------|--------|------|
 | Time | `std::time::Instant` | `web_time::Instant` |
 | File dialogs | `rfd::FileDialog` (sync) | `rfd::AsyncFileDialog` |
-| WAV parsing | `hound` from filesystem | `hound` from byte slice |
+| WAV parsing | `sonido-io` (`hound`) from filesystem | `hound` from byte slice |
 | Audio | cpal with OS backend | cpal wasm backend (WebAudio) |
 | Threads | `std::thread::spawn` | Not used (wasm is single-threaded) |
-| Logging | `tracing-subscriber` fmt | `tracing-wasm` → browser console |
+| Logging | `tracing-subscriber` fmt | `eframe::WebLogger` → browser console |
 
 ### CI Deployment
 
-The wasm build can be deployed to GitHub Pages via manual workflow dispatch. The workflow is in `.github/workflows/pages.yml` (triggered with `gh workflow run pages.yml`).
+`.github/workflows/pages.yml` deploys the wasm build to GitHub Pages on every push to `main` that touches `crates/**` (or the workflow itself), and on manual dispatch (`gh workflow run pages.yml`).
 
 ---
 

@@ -4,7 +4,7 @@
 //! state machine, exponential coefficients, linear caches). Parameters are
 //! received via `&GateParams` each sample. Deployed via
 //! [`Adapter`](sonido_core::kernel::Adapter) for desktop/plugin, or
-//! called directly on embedded targets.
+//! via `Adapter::new_direct` (no smoothing) on embedded targets.
 //!
 //! # Signal Flow
 //!
@@ -37,7 +37,10 @@
 //! let adapter = Adapter::new(GateKernel::new(48000.0), 48000.0);
 //! let mut effect: Box<dyn Effect> = Box::new(adapter);
 //!
-//! // Embedded / Daisy Seed (direct — no smoothing)
+//! // Embedded / Daisy Seed — zero-smoothing adapter, as the pedal firmware uses
+//! let effect = Adapter::new_direct(GateKernel::new(48000.0), 48000.0);
+//!
+//! // Or drive the kernel directly with a typed params struct (no adapter)
 //! let mut kernel = GateKernel::new(48000.0);
 //! let params = GateParams::from_knobs(thresh, atk, rls, hold, range, hyst, sc, out);
 //! let (l, r) = kernel.process_stereo(input_l, input_r, &params);
@@ -97,11 +100,12 @@ enum GateState {
 /// | 4 | `range_db` | dB | −80–0 | −80.0 |
 /// | 5 | `hysteresis_db` | dB | 0–12 | 3.0 |
 /// | 6 | `sidechain_freq_hz` | Hz | 20–500 | 80.0 |
-/// | 7 | `output_db` | dB | −20–+6 | 0.0 |
+/// | 7 | `output_db` | dB | −6–+6 | 0.0 |
+/// | 8 | `gate_open` | index | 0–1 | 0 (READ_ONLY) |
 ///
 /// # Notes on ParamId assignment
 ///
-/// The classic `Gate` effect uses non-sequential ParamIds to preserve
+/// The original pre-kernel `Gate` effect used non-sequential ParamIds to preserve
 /// backwards compatibility with automation data. These must be replicated
 /// exactly in this kernel:
 ///
@@ -157,7 +161,7 @@ pub struct GateParams {
 
     /// Output level in decibels.
     ///
-    /// Range: −20.0–+6.0 dB (default 0.0). Applied after the gate gain.
+    /// Range: −6.0–+6.0 dB (default 0.0). Applied after the gate gain.
     pub output_db: f32,
 
     /// READ_ONLY diagnostic: 1.0 when gate is open/opening, 0.0 when closed.
@@ -199,7 +203,7 @@ impl GateParams {
     /// | `range` | 4 | `range_db` | −80–0 dB |
     /// | `hyst` | 5 | `hysteresis_db` | 0–12 dB |
     /// | `sc_hpf` | 6 | `sidechain_freq_hz` | 20–500 Hz (log) |
-    /// | `out` | 7 | `output_db` | −20–+6 dB |
+    /// | `out` | 7 | `output_db` | −6–+6 dB |
     #[allow(clippy::too_many_arguments)]
     pub fn from_knobs(
         thresh: f32,
@@ -218,7 +222,7 @@ impl GateParams {
 kernel_params! {
     GateParams, this {
         // ── [0] Threshold ───────────────────────────────────────────────
-        // ParamId(400), "gate_thresh" — matches classic gate.rs [0]
+        // ParamId(400), "gate_thresh" — matches original pre-kernel gate.rs [0]
         [0] ParamDescriptor {
                 name: "Threshold",
                 short_name: "Thresh",
@@ -227,6 +231,7 @@ kernel_params! {
                 max: 0.0,
                 default: -40.0,
                 step: 1.0,
+                flags: ParamFlags::AUTOMATABLE,
                 ..ParamDescriptor::mix()
             }
             .with_id(ParamId(400), "gate_thresh"),
@@ -235,7 +240,7 @@ kernel_params! {
             set: |v| this.threshold_db = v;
 
         // ── [1] Attack ──────────────────────────────────────────────────
-        // ParamId(401), "gate_attack" — matches classic gate.rs [1]
+        // ParamId(401), "gate_attack" — matches original pre-kernel gate.rs [1]
         [1] ParamDescriptor {
                 name: "Attack",
                 short_name: "Atk",
@@ -244,6 +249,7 @@ kernel_params! {
                 max: 50.0,
                 default: 1.0,
                 step: 0.1,
+                flags: ParamFlags::AUTOMATABLE,
                 ..ParamDescriptor::mix()
             }
             .with_id(ParamId(401), "gate_attack"),
@@ -252,7 +258,7 @@ kernel_params! {
             set: |v| this.attack_ms = v;
 
         // ── [2] Release ─────────────────────────────────────────────────
-        // ParamId(402), "gate_release" — matches classic gate.rs [2]
+        // ParamId(402), "gate_release" — matches original pre-kernel gate.rs [2]
         [2] ParamDescriptor::time_ms("Release", "Rel", 10.0, 1000.0, 100.0)
                 .with_id(ParamId(402), "gate_release"),
             smoothing: SmoothingStyle::Standard, // release — timing param
@@ -260,7 +266,7 @@ kernel_params! {
             set: |v| this.release_ms = v;
 
         // ── [3] Hold ────────────────────────────────────────────────────
-        // ParamId(403), "gate_hold" — matches classic gate.rs [3]
+        // ParamId(403), "gate_hold" — matches original pre-kernel gate.rs [3]
         [3] ParamDescriptor::time_ms("Hold", "Hold", 0.0, 500.0, 50.0)
                 .with_id(ParamId(403), "gate_hold"),
             smoothing: SmoothingStyle::Standard, // hold — timing param
@@ -268,7 +274,7 @@ kernel_params! {
             set: |v| this.hold_ms = v;
 
         // ── [4] Range (floor) ───────────────────────────────────────────
-        // ParamId(405), "gate_range" — NOTE: 405 not 404; matches classic gate.rs [4]
+        // ParamId(405), "gate_range" — NOTE: 405 not 404; matches original pre-kernel gate.rs [4]
         [4] ParamDescriptor {
                 name: "Range",
                 short_name: "Range",
@@ -277,6 +283,7 @@ kernel_params! {
                 max: 0.0,
                 default: -80.0,
                 step: 1.0,
+                flags: ParamFlags::AUTOMATABLE,
                 ..ParamDescriptor::mix()
             }
             .with_id(ParamId(405), "gate_range"),
@@ -285,7 +292,7 @@ kernel_params! {
             set: |v| this.range_db = v;
 
         // ── [5] Hysteresis ──────────────────────────────────────────────
-        // ParamId(406), "gate_hysteresis" — matches classic gate.rs [5]
+        // ParamId(406), "gate_hysteresis" — matches original pre-kernel gate.rs [5]
         [5] ParamDescriptor {
                 name: "Hysteresis",
                 short_name: "Hyst",
@@ -294,6 +301,7 @@ kernel_params! {
                 max: 12.0,
                 default: 3.0,
                 step: 0.1,
+                flags: ParamFlags::AUTOMATABLE,
                 ..ParamDescriptor::mix()
             }
             .with_id(ParamId(406), "gate_hysteresis"),
@@ -302,7 +310,7 @@ kernel_params! {
             set: |v| this.hysteresis_db = v;
 
         // ── [6] SC HPF Freq ─────────────────────────────────────────────
-        // ParamId(407), "gate_sc_hpf", Logarithmic — matches classic gate.rs [6]
+        // ParamId(407), "gate_sc_hpf", Logarithmic — matches original pre-kernel gate.rs [6]
         [6] ParamDescriptor {
                 name: "SC HPF Freq",
                 short_name: "SC HPF",
@@ -311,6 +319,7 @@ kernel_params! {
                 max: 500.0,
                 default: 80.0,
                 step: 1.0,
+                flags: ParamFlags::AUTOMATABLE,
                 ..ParamDescriptor::mix()
             }
             .with_id(ParamId(407), "gate_sc_hpf")
@@ -320,7 +329,7 @@ kernel_params! {
             set: |v| this.sidechain_freq_hz = v;
 
         // ── [7] Output ──────────────────────────────────────────────────
-        // ParamId(404), "gate_output" — NOTE: 404 not 408; matches classic gate.rs [7]
+        // ParamId(404), "gate_output" — NOTE: 404 not 408; matches original pre-kernel gate.rs [7]
         [7] sonido_core::gain::output_param_descriptor().with_id(ParamId(404), "gate_output"),
             smoothing: SmoothingStyle::Standard, // output level
             get: this.output_db,
@@ -947,7 +956,7 @@ mod tests {
     }
 
     /// The adapter's ParameterInfo must expose the same descriptors as the
-    /// classic Gate effect — including the non-sequential ParamId values.
+    /// original pre-kernel Gate effect — including the non-sequential ParamId values.
     #[test]
     fn adapter_param_info_matches() {
         let kernel = GateKernel::new(48000.0);
@@ -965,7 +974,7 @@ mod tests {
         }
         assert!(adapter.param_info(9).is_none());
 
-        // Names match classic gate.rs
+        // Names match original pre-kernel gate.rs
         let expected = [
             "Threshold",
             "Attack",
@@ -986,7 +995,7 @@ mod tests {
         }
 
         // ParamId values — critical for automation backwards compatibility.
-        // These must match classic gate.rs impl_params! exactly.
+        // These must match original pre-kernel gate.rs impl_params! exactly.
         assert_eq!(adapter.param_info(0).unwrap().id, ParamId(400)); // Threshold
         assert_eq!(adapter.param_info(1).unwrap().id, ParamId(401)); // Attack
         assert_eq!(adapter.param_info(2).unwrap().id, ParamId(402)); // Release

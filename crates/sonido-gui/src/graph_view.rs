@@ -14,6 +14,7 @@ use egui_snarl::{InPin, InPinId, NodeId, OutPin, OutPinId, Snarl};
 
 use sonido_core::graph::{GraphEngine, MAX_SPLIT_TARGETS, ProcessingGraph};
 use sonido_core::{ParamDescriptor, ParamFlags, SmoothingStyle};
+use sonido_gui_core::theme::Family;
 use sonido_gui_core::theme::SonidoTheme;
 use sonido_gui_core::widgets::glow;
 use sonido_registry::{EffectCategory, EffectRegistry};
@@ -918,24 +919,10 @@ impl Default for GraphView {
     }
 }
 
-/// Returns a category-based color from the arcade CRT theme palette.
-///
-/// Mapping:
-/// - Dynamics  -> cyan (info / signal labels)
-/// - Distortion -> red (danger / clip)
-/// - Modulation -> magenta (modulation category)
-/// - Filter    -> yellow (caution / filter)
-/// - TimeBased -> purple (delay / reverb)
-/// - Utility   -> amber (brand primary / default)
-fn category_color(cat: EffectCategory, theme: &SonidoTheme) -> Color32 {
-    match cat {
-        EffectCategory::Dynamics => theme.colors.cyan,
-        EffectCategory::Distortion => theme.colors.red,
-        EffectCategory::Modulation => theme.colors.magenta,
-        EffectCategory::Filter => theme.colors.yellow,
-        EffectCategory::TimeBased => theme.colors.purple,
-        EffectCategory::Utility => theme.colors.amber,
-    }
+/// A node's color: its effect family's accent, the same light the effect's
+/// plugin cabinet uses (see `docs/DESIGN_SYSTEM.md`).
+fn category_color(cat: EffectCategory) -> Color32 {
+    Family::from_category(cat).accent()
 }
 
 /// Color for structural nodes (Input, Output, Split, Merge) — uses theme dim.
@@ -993,7 +980,7 @@ impl SonidoViewer<'_> {
     /// structural color for Input/Output/Split/Merge).
     fn node_accent(&self, node: &SonidoNode) -> Color32 {
         match node {
-            SonidoNode::Effect { category, .. } => category_color(*category, &self.theme),
+            SonidoNode::Effect { category, .. } => category_color(*category),
             _ => structural_color(&self.theme),
         }
     }
@@ -1216,7 +1203,7 @@ impl SnarlViewer<SonidoNode> for SonidoViewer<'_> {
         {
             let dim = self.theme.colors.text_secondary;
             let is_selected = *self.selected_node == Some(node);
-            let accent = category_color(*category, &self.theme);
+            let accent = category_color(*category);
 
             // Resolve slot index for this effect node.
             let mut slot_idx = 0usize;
@@ -1372,7 +1359,7 @@ impl SnarlViewer<SonidoNode> for SonidoViewer<'_> {
                 if desc.name.to_lowercase().contains(&filter_lower)
                     || desc.id.contains(&filter_lower)
                 {
-                    let cat_color = category_color(desc.category, &self.theme);
+                    let cat_color = category_color(desc.category);
                     if ui
                         .button(RichText::new(desc.name).color(cat_color))
                         .clicked()

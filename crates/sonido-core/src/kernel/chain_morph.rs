@@ -1,18 +1,17 @@
-//! A/B morph across a whole effect chain — the one engine the GUI, plugin, and
-//! pedal share.
+//! A/B morph across a whole effect chain.
 //!
 //! [`ChainMorph`] holds a per-slot [`MorphSpace`] (1-D, corners A and B) plus a
-//! lock and A/B bypass state. Capture and apply are closure-based, so the same
-//! struct drives a GUI `ParamBridge`, a plugin `GraphEngine`, or raw firmware
-//! parameter writes — and because every consumer interpolates through
-//! [`curve_lerp`](super::morph::curve_lerp), they all agree value-for-value.
-//!
-//! This replaces the three previously independent morph implementations (GUI
-//! linear-only `apply_lerped`, the pedal's `interpolate_and_apply`, and ad-hoc
-//! plugin code), and in doing so gives the GUI and pedal the per-parameter
+//! lock and A/B bypass state. Capture and apply are closure-based, so the
+//! struct is not tied to one engine: it can drive a GUI `ParamBridge`, a
+//! `GraphEngine`, or raw firmware parameter writes, and it interpolates
+//! through [`curve_lerp`](super::morph::curve_lerp) with per-parameter
 //! [`Logarithmic`](super::morph::MorphCurve::Logarithmic) and
-//! [`Snap`](super::morph::MorphCurve::Snap) curves they lacked: morphing a
-//! cutoff 100 Hz ↔ 10 kHz now passes through 1 kHz at `t = 0.5`, not 5.05 kHz.
+//! [`Snap`](super::morph::MorphCurve::Snap) curves: morphing a cutoff
+//! 100 Hz ↔ 10 kHz passes through 1 kHz at `t = 0.5`, not 5.05 kHz.
+//!
+//! Today its only consumer is `sonido_patch::PatchPlayer` (the graph-player
+//! plugin). The GUI editor and the Daisy pedal firmware each keep their own
+//! A/B morph code.
 
 #[cfg(not(feature = "std"))]
 use alloc::vec::Vec;

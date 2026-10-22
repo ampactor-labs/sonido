@@ -3,8 +3,8 @@
 //! `TapeKernel` owns DSP state (ADAA processors, LFOs, delay lines, hysteresis
 //! registers, biquad filters, envelope followers, one-pole filters). Parameters
 //! are received via `&TapeParams` each sample. Deployed via
-//! [`Adapter`](sonido_core::kernel::Adapter) for desktop/plugin, or called
-//! directly on embedded targets.
+//! [`Adapter`](sonido_core::kernel::Adapter) for desktop/plugin, or via `Adapter::new_direct`
+//! (no smoothing) on embedded targets.
 //!
 //! # Signal Flow
 //!
@@ -63,7 +63,10 @@
 //! let adapter = Adapter::new(TapeKernel::new(48000.0), 48000.0);
 //! let mut effect: Box<dyn Effect> = Box::new(adapter);
 //!
-//! // Embedded / Daisy Seed (direct)
+//! // Embedded / Daisy Seed — zero-smoothing adapter, as the pedal firmware uses
+//! let effect = Adapter::new_direct(TapeKernel::new(48000.0), 48000.0);
+//!
+//! // Or drive the kernel directly with a typed params struct (no adapter)
 //! let mut kernel = TapeKernel::new(48000.0);
 //! let params = TapeParams::from_knobs(0.25, 0.3, 0.8, 0.0, 0.3, 0.2, 0.15, 0.3, 0.5, 0.3);
 //! let (left, right) = kernel.process_stereo(input_l, input_r, &params);
@@ -74,8 +77,8 @@ use sonido_core::kernel_params;
 use sonido_core::math::soft_limit;
 use sonido_core::{
     Adaa1, Biquad, Cached, EnvelopeFollower, InterpolatedDelay, Lfo, LfoWaveform, OnePole,
-    ParamDescriptor, ParamId, ParamScale, ParamUnit, db_to_linear, lowpass_coefficients,
-    peaking_eq_coefficients, tape_sat_ad,
+    ParamDescriptor, ParamFlags, ParamId, ParamScale, ParamUnit, db_to_linear,
+    lowpass_coefficients, peaking_eq_coefficients, tape_sat_ad,
 };
 
 /// ADAA processor type alias for function-pointer waveshapers.
@@ -279,6 +282,7 @@ kernel_params! {
                 max: 24.0,
                 default: 6.0,
                 step: 0.5,
+                flags: ParamFlags::AUTOMATABLE,
                 ..ParamDescriptor::mix()
             }
             .with_id(ParamId(1400), "tape_drive"),
@@ -294,6 +298,7 @@ kernel_params! {
                 max: 100.0,
                 default: 30.0,
                 step: 1.0,
+                flags: ParamFlags::AUTOMATABLE,
                 ..ParamDescriptor::mix()
             }
             .with_id(ParamId(1401), "tape_saturation"),
@@ -309,6 +314,7 @@ kernel_params! {
                 max: 20000.0,
                 default: 12000.0,
                 step: 100.0,
+                flags: ParamFlags::AUTOMATABLE,
                 ..ParamDescriptor::mix()
             }
             .with_id(ParamId(1403), "tape_hf_rolloff")
@@ -325,6 +331,7 @@ kernel_params! {
                 max: 0.2,
                 default: 0.0,
                 step: 0.01,
+                flags: ParamFlags::AUTOMATABLE,
                 ..ParamDescriptor::mix()
             }
             .with_id(ParamId(1404), "tape_bias"),
@@ -340,6 +347,7 @@ kernel_params! {
                 max: 1.0,
                 default: 0.3,
                 step: 0.01,
+                flags: ParamFlags::AUTOMATABLE,
                 ..ParamDescriptor::mix()
             }
             .with_id(ParamId(1405), "tape_wow"),
@@ -355,6 +363,7 @@ kernel_params! {
                 max: 1.0,
                 default: 0.2,
                 step: 0.01,
+                flags: ParamFlags::AUTOMATABLE,
                 ..ParamDescriptor::mix()
             }
             .with_id(ParamId(1406), "tape_flutter"),
@@ -370,6 +379,7 @@ kernel_params! {
                 max: 0.5,
                 default: 0.15,
                 step: 0.01,
+                flags: ParamFlags::AUTOMATABLE,
                 ..ParamDescriptor::mix()
             }
             .with_id(ParamId(1407), "tape_hysteresis"),
@@ -385,6 +395,7 @@ kernel_params! {
                 max: 1.0,
                 default: 0.3,
                 step: 0.01,
+                flags: ParamFlags::AUTOMATABLE,
                 ..ParamDescriptor::mix()
             }
             .with_id(ParamId(1408), "tape_head_bump"),
@@ -400,6 +411,7 @@ kernel_params! {
                 max: 200.0,
                 default: 80.0,
                 step: 1.0,
+                flags: ParamFlags::AUTOMATABLE,
                 ..ParamDescriptor::mix()
             }
             .with_id(ParamId(1409), "tape_bump_freq")
@@ -409,7 +421,8 @@ kernel_params! {
             set: |v| this.bump_freq_hz = v;
 
         [9] ParamDescriptor::gain_db("Output", "Out", -12.0, 12.0, -6.0)
-                .with_id(ParamId(1402), "tape_output"),
+                .with_id(ParamId(1402), "tape_output")
+                .with_flags(ParamFlags::AUTOMATABLE.union(ParamFlags::MACRO_EXCLUDE)),
             smoothing: SmoothingStyle::Standard, // output
             get: this.output_db,
             set: |v| this.output_db = v;

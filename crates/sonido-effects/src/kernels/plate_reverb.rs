@@ -38,7 +38,10 @@
 //! let adapter = Adapter::new(PlateReverbKernel::new(48000.0), 48000.0);
 //! let mut effect: Box<dyn Effect> = Box::new(adapter);
 //!
-//! // Embedded / Daisy Seed (direct — no smoothing, ADCs are hardware-filtered)
+//! // Embedded / Daisy Seed — zero-smoothing adapter, as the pedal firmware uses
+//! let effect = Adapter::new_direct(PlateReverbKernel::new(48000.0), 48000.0);
+//!
+//! // Or drive the kernel directly with a typed params struct (no adapter)
 //! let mut kernel = PlateReverbKernel::new(48000.0);
 //! let params = PlateReverbParams::from_knobs(adc_decay, adc_damp, adc_predelay,
 //!                                            adc_bw, adc_diff, adc_size, adc_mix, adc_out);
@@ -50,8 +53,8 @@ use sonido_core::fast_math::fast_sin_turns;
 use sonido_core::kernel::{DspKernel, KernelParams, SmoothingStyle};
 use sonido_core::kernel_params;
 use sonido_core::{
-    AllpassFilter, InterpolatedDelay, Interpolation, OnePole, ParamDescriptor, ParamId, ParamUnit,
-    flush_denormal, wet_dry_mix_stereo,
+    AllpassFilter, InterpolatedDelay, Interpolation, OnePole, ParamDescriptor, ParamFlags, ParamId,
+    ParamUnit, flush_denormal, wet_dry_mix_stereo,
 };
 
 // ── Constants ───────────────────────────────────────────────────────────────
@@ -140,8 +143,8 @@ fn decay_to_feedback(decay_s: f32, sr: f32) -> f32 {
 /// | 3 | `bandwidth_pct` | % | 0–100 | 80.0 |
 /// | 4 | `diffusion_pct` | % | 0–100 | 70.0 |
 /// | 5 | `size_pct` | % | 0–100 | 50.0 |
-/// | 6 | `mix_pct` | % | 0–100 | 30.0 |
-/// | 7 | `output_db` | dB | −60–+6 | 0.0 |
+/// | 6 | `mix_pct` | % | 0–100 | 50.0 |
+/// | 7 | `output_db` | dB | −6–+6 | 0.0 |
 #[derive(Debug, Clone, Copy)]
 pub struct PlateReverbParams {
     /// Decay time in seconds (0.1–10 s).
@@ -182,7 +185,7 @@ pub struct PlateReverbParams {
     /// Wet/dry mix as a percentage (0% = dry, 100% = wet).
     pub mix_pct: f32,
 
-    /// Output level in decibels (−60 to +6 dB).
+    /// Output level in decibels (−6 to +6 dB).
     pub output_db: f32,
 }
 
@@ -195,7 +198,7 @@ impl Default for PlateReverbParams {
             bandwidth_pct: 80.0,
             diffusion_pct: 70.0,
             size_pct: 50.0,
-            mix_pct: 30.0,
+            mix_pct: 50.0,
             output_db: 0.0,
         }
     }
@@ -237,6 +240,7 @@ kernel_params! {
                 max: 100.0,
                 default: 50.0,
                 step: 1.0,
+                flags: ParamFlags::AUTOMATABLE,
                 ..ParamDescriptor::mix()
             }
             .with_id(ParamId(2701), "plate_damping"),
@@ -260,6 +264,7 @@ kernel_params! {
                 max: 100.0,
                 default: 80.0,
                 step: 1.0,
+                flags: ParamFlags::AUTOMATABLE,
                 ..ParamDescriptor::mix()
             }
             .with_id(ParamId(2703), "plate_bandwidth"),
@@ -275,6 +280,7 @@ kernel_params! {
                 max: 100.0,
                 default: 70.0,
                 step: 1.0,
+                flags: ParamFlags::AUTOMATABLE,
                 ..ParamDescriptor::mix()
             }
             .with_id(ParamId(2704), "plate_diffusion"),
@@ -290,6 +296,7 @@ kernel_params! {
                 max: 100.0,
                 default: 50.0,
                 step: 1.0,
+                flags: ParamFlags::AUTOMATABLE,
                 ..ParamDescriptor::mix()
             }
             .with_id(ParamId(2705), "plate_size"),
@@ -526,6 +533,12 @@ impl DspKernel for PlateReverbKernel {
 
     fn is_true_stereo(&self) -> bool {
         true
+    }
+
+    /// Same ring-out as the [`TailReporting`](sonido_core::TailReporting) impl
+    /// below; the adapter (and so every plugin host) asks through this trait.
+    fn tail_samples(&self) -> usize {
+        <Self as sonido_core::TailReporting>::tail_samples(self)
     }
 
     fn process_stereo(&mut self, left: f32, right: f32, params: &Self::Params) -> (f32, f32) {

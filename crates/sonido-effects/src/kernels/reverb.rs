@@ -3,8 +3,8 @@
 //! `ReverbKernel` owns DSP state (FDN delay lines, damping filters, allpass
 //! diffusers, predelay lines, ER tapped delay). Parameters are received via
 //! `&ReverbParams` each sample. Deployed via
-//! [`Adapter`](sonido_core::kernel::Adapter) for desktop/plugin, or called
-//! directly on embedded targets.
+//! [`Adapter`](sonido_core::kernel::Adapter) for desktop/plugin, or via `Adapter::new_direct`
+//! (no smoothing) on embedded targets.
 //!
 //! # Architecture
 //!
@@ -38,7 +38,8 @@
 //!   Reverberators", AES Convention Paper 3030, 1991.
 //! - Jon Dattorro, "Effect Design, Part 1: Reverberator and Other Filters",
 //!   J. Audio Eng. Soc., Vol. 45, No. 9, 1997.
-//! - Jezar, Freeverb — delay tunings and comb filter structure.
+//! - Jezar, Freeverb — delay tunings (its comb and allpass lengths) and the
+//!   room-size feedback constants.
 //!
 //! # Deployment
 //!
@@ -47,9 +48,14 @@
 //! let adapter = Adapter::new(ReverbKernel::new(48000.0), 48000.0);
 //! let mut effect: Box<dyn Effect> = Box::new(adapter);
 //!
-//! // Embedded / Daisy Seed (direct — no smoothing, ADCs are hardware-filtered)
+//! // Embedded / Daisy Seed — zero-smoothing adapter, as the pedal firmware uses
+//! let effect = Adapter::new_direct(ReverbKernel::new(48000.0), 48000.0);
+//!
+//! // Or drive the kernel directly with a typed params struct (no adapter)
 //! let mut kernel = ReverbKernel::new(48000.0);
-//! let params = ReverbParams::from_knobs(adc_room, adc_decay, adc_damp, adc_mix, adc_output);
+//! let params = ReverbParams::from_knobs(
+//!     adc_room, adc_decay, adc_damp, adc_predelay, adc_mix, adc_width, adc_er, adc_output,
+//! );
 //! let (left, right) = kernel.process_stereo(input_l, input_r, &params);
 //! ```
 
@@ -58,11 +64,11 @@ use sonido_core::fast_math::fast_sin_turns;
 use sonido_core::kernel::{DspKernel, KernelParams, SmoothingStyle};
 use sonido_core::kernel_params;
 use sonido_core::{
-    InterpolatedDelay, Interpolation, ModulatedAllpass, OnePole, ParamDescriptor, ParamId,
-    ParamUnit, fast_db_to_linear, flush_denormal, wet_dry_mix_stereo,
+    InterpolatedDelay, Interpolation, ModulatedAllpass, OnePole, ParamDescriptor, ParamFlags,
+    ParamId, ParamUnit, fast_db_to_linear, flush_denormal, wet_dry_mix_stereo,
 };
 
-// ── Constants (identical to classic Reverb) ─────────────────────────────────
+// ── Constants ───────────────────────────────────────────────────────────────
 
 /// FDN delay tunings at 44.1 kHz reference (from Freeverb, mutually prime).
 const FDN_TUNINGS_44K: [usize; 8] = [1116, 1188, 1277, 1356, 1422, 1491, 1557, 1617];
@@ -73,7 +79,7 @@ const FDN_MOD_RATES: [f32; 8] = [0.3, 0.4, 0.5, 0.7, 0.8, 1.0, 1.1, 1.3];
 /// Modulation depth for FDN delay lines (ms).
 const FDN_MOD_DEPTH_MS: f32 = 0.3;
 
-/// Allpass diffusion delay times at 44.1 kHz reference.
+/// Allpass diffusion delay times at 44.1 kHz reference (Freeverb's allpass tunings).
 const ALLPASS_TUNINGS_44K: [usize; 4] = [556, 441, 341, 225];
 
 /// Right-channel allpass delay times (offset for stereo decorrelation).
@@ -308,6 +314,7 @@ kernel_params! {
                 max: 100.0,
                 default: 50.0,
                 step: 1.0,
+                flags: ParamFlags::AUTOMATABLE,
                 ..ParamDescriptor::mix()
             }
             .with_id(ParamId(1500), "rev_room_size"),
@@ -323,6 +330,7 @@ kernel_params! {
                 max: 100.0,
                 default: 50.0,
                 step: 1.0,
+                flags: ParamFlags::AUTOMATABLE,
                 ..ParamDescriptor::mix()
             }
             .with_id(ParamId(1501), "rev_decay"),
@@ -338,6 +346,7 @@ kernel_params! {
                 max: 100.0,
                 default: 50.0,
                 step: 1.0,
+                flags: ParamFlags::AUTOMATABLE,
                 ..ParamDescriptor::mix()
             }
             .with_id(ParamId(1502), "rev_damping"),
@@ -366,6 +375,7 @@ kernel_params! {
                 max: 100.0,
                 default: 100.0,
                 step: 1.0,
+                flags: ParamFlags::AUTOMATABLE,
                 ..ParamDescriptor::mix()
             }
             .with_id(ParamId(1505), "rev_width"),
@@ -381,6 +391,7 @@ kernel_params! {
                 max: 100.0,
                 default: 50.0,
                 step: 1.0,
+                flags: ParamFlags::AUTOMATABLE,
                 ..ParamDescriptor::mix()
             }
             .with_id(ParamId(1508), "rev_er_level"),
@@ -571,7 +582,7 @@ impl ReverbKernel {
     /// Recompute `feedback`, `fdn_compensation`, `er_room_scale`, and damping
     /// cutoff when room/decay/damping parameters change by more than 0.001.
     ///
-    /// Uses the Freeverb feedback formula:
+    /// Feedback mapping built on Freeverb's room constants (0.28 / 0.7):
     /// - `scaled_room = 0.28 + room × 0.7`  (range 0.28..0.98)
     /// - `feedback    = scaled_room + decay × (0.98 − scaled_room)`
     ///
@@ -962,7 +973,7 @@ mod tests {
             "Adapter param count must match ReverbParams::COUNT"
         );
 
-        // Verify ParamIds match the classic Reverb effect exactly.
+        // Verify ParamIds match the original pre-kernel Reverb effect exactly.
         assert_eq!(adapter.param_info(0).unwrap().id, ParamId(1500)); // room_size
         assert_eq!(adapter.param_info(1).unwrap().id, ParamId(1501)); // decay
         assert_eq!(adapter.param_info(2).unwrap().id, ParamId(1502)); // damping

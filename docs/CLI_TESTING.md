@@ -18,28 +18,15 @@ cargo build
 ### 0.2 Install CLI
 
 ```bash
-make dev-install
+make install    # cargo install --path crates/sonido-cli
 ```
 
 - [ ] `sonido --version` prints version string
 
-> All commands below use the `sonido` shorthand. If you skip dev-install, substitute
+> All commands below use the `sonido` shorthand. If you skip the install, substitute
 > `cargo run -p sonido-cli --` for `sonido` throughout.
 
-### 0.3 WAV Inspection Tool
-
-Sonido includes a built-in `info` command for WAV inspection. No external tools required.
-
-```bash
-sonido info demos/sine_440.wav
-```
-
-- [ ] Shows sample rate, channels, bit depth, duration, sample count
-
-> `soxi` (from the `sox` package) is an optional alternative for stereo verification,
-> but `sonido info` covers most inspection needs.
-
-### 0.4 Generate Test Audio
+### 0.3 Generate Test Audio
 
 ```bash
 mkdir -p demos
@@ -48,9 +35,22 @@ sonido generate sweep demos/sweep.wav --duration 3.0
 sonido generate noise demos/noise.wav --duration 2.0 --amplitude 0.3
 ```
 
-- [ ] `demos/sine_440.wav` exists (96000 samples at 48kHz)
+- [ ] `demos/sine_440.wav` exists (mono, 96000 frames at 48kHz)
 - [ ] `demos/sweep.wav` exists
 - [ ] `demos/noise.wav` exists
+
+### 0.4 WAV Inspection Tool
+
+Sonido includes a built-in `info` command for WAV inspection. No external tools required.
+
+```bash
+sonido info demos/sine_440.wav
+```
+
+- [ ] Shows format and bit depth, channels, sample rate, duration and frame count, file size
+
+> `soxi` (from the `sox` package) is an optional alternative for stereo verification,
+> but `sonido info` covers most inspection needs.
 
 ### 0.5 Verify Audio Devices
 
@@ -73,7 +73,7 @@ sonido --help
 sonido --version
 ```
 
-- [ ] Help shows all 10 commands: process, realtime, play, generate, analyze, compare, devices, effects, presets, info
+- [ ] Help shows all 12 commands: process, realtime, generate, analyze, compare, devices, effects, info, play, presets, daisy, patch
 
 ### 1.2 List Effects
 
@@ -90,7 +90,7 @@ sonido effects distortion
 sonido effects reverb
 ```
 
-- [ ] Shows parameters with names, ranges, defaults, and units
+- [ ] Shows each parameter's short name, full name, default and range (with units)
 
 ### 1.4 Effect Examples
 
@@ -106,16 +106,17 @@ sonido effects --examples
 sonido info demos/sine_440.wav
 ```
 
-- [ ] Reports: format, sample rate (48000), channels (1 or 2), bit depth, duration (~2.0s), sample count
+- [ ] Reports: format and bit depth, channels (1), sample rate (48000), duration (2.000s, 96000 frames), file size
 
 ---
 
 ## Phase 2: CLI — Effect Processing
 
-### 2.1 Default Params (All 19 Effects)
+### 2.1 Default Params
 
-Every effect must produce audible output with zero `--param` flags. This validates
-the default-alignment work. Play each output and confirm the effect is clearly present.
+Every effect must process with zero `--param` flags. The table covers the 19 classic
+effects, whose defaults should make the effect clearly audible: play each output and
+confirm it.
 
 Pass = exits OK + auto-named output exists + audible effect when played.
 
@@ -141,6 +142,22 @@ Pass = exits OK + auto-named output exists + audible effect when played.
 | 18 | `sonido process demos/sine_440.wav --effect ringmod` | `demos/sine_440_ringmod.wav` | [ ] |
 | 19 | `sonido process demos/sine_440.wav --effect stage` | `demos/sine_440_stage.wav` | [ ] |
 
+The other 17 of the 36 registered effects only need to exit OK with an auto-named output
+(some, such as `tuner` and `looper`, pass audio through at their defaults):
+
+```bash
+for e in looper amp cabinet deesser drone glitch multiband_comp pitch_shift plate_reverb \
+         shelving_eq spring_reverb stereo_widener texture time_stretch transient_shaper \
+         tuner harmonic_habitat; do
+  sonido process demos/sine_440.wav --effect "$e" > /dev/null && echo "PASS: $e"
+done
+```
+
+- [ ] All 17 print PASS
+
+Values are in each parameter's display unit, with percentages as 0–100 (see
+[CLI Guide: Parameter Values](CLI_GUIDE.md#parameter-values)).
+
 ### 2.2 Custom Params
 
 Explicit `--param` flags. Validates param parsing and non-default behavior.
@@ -153,41 +170,41 @@ Explicit `--param` flags. Validates param parsing and non-default behavior.
 | 4 | `sonido process demos/noise.wav --effect gate --param threshold=-40` | `demos/noise_gate_threshold=-40.wav` | [ ] |
 | 5 | `sonido process demos/sine_440.wav --effect eq --param low_gain=6` | `demos/sine_440_eq_low_gain=6.wav` | [ ] |
 | 6 | `sonido process demos/noise.wav --effect filter --param cutoff=2000` | `demos/noise_filter_cutoff=2000.wav` | [ ] |
-| 7 | `sonido process demos/sine_440.wav --effect wah --param sensitivity=0.8` | `demos/sine_440_wah_sensitivity=0.8.wav` | [ ] |
-| 8 | `sonido process demos/sine_440.wav --effect tremolo --param rate=5 --param depth=0.8` | `demos/sine_440_tremolo_rate=5_depth=0.8.wav` | [ ] |
-| 9 | `sonido process demos/sine_440.wav --effect chorus --param rate=2 --param depth=0.5` | `demos/sine_440_chorus_rate=2_depth=0.5.wav` | [ ] |
-| 10 | `sonido process demos/sine_440.wav --effect flanger --param rate=0.5 --param depth=0.7` | `demos/sine_440_flanger_rate=0.5_depth=0.7.wav` | [ ] |
-| 11 | `sonido process demos/sine_440.wav --effect phaser --param rate=0.3 --param depth=0.8` | `demos/sine_440_phaser_rate=0.3_depth=0.8.wav` | [ ] |
-| 12 | `sonido process demos/sine_440.wav --effect vibrato --param depth=0.5` | `demos/sine_440_vibrato_depth=0.5.wav` | [ ] |
-| 13 | `sonido process demos/sine_440.wav --effect delay --param time=300 --param feedback=0.4` | `demos/sine_440_delay_time=300_feedback=0.4.wav` | [ ] |
+| 7 | `sonido process demos/sine_440.wav --effect wah --param sensitivity=80` | `demos/sine_440_wah_sensitivity=80.wav` | [ ] |
+| 8 | `sonido process demos/sine_440.wav --effect tremolo --param rate=5 --param depth=80` | `demos/sine_440_tremolo_rate=5_depth=80.wav` | [ ] |
+| 9 | `sonido process demos/sine_440.wav --effect chorus --param rate=2 --param depth=50` | `demos/sine_440_chorus_rate=2_depth=50.wav` | [ ] |
+| 10 | `sonido process demos/sine_440.wav --effect flanger --param rate=0.5 --param depth=70` | `demos/sine_440_flanger_rate=0.5_depth=70.wav` | [ ] |
+| 11 | `sonido process demos/sine_440.wav --effect phaser --param rate=0.3 --param depth=80` | `demos/sine_440_phaser_rate=0.3_depth=80.wav` | [ ] |
+| 12 | `sonido process demos/sine_440.wav --effect vibrato --param depth=50` | `demos/sine_440_vibrato_depth=50.wav` | [ ] |
+| 13 | `sonido process demos/sine_440.wav --effect delay --param time=300 --param feedback=40` | `demos/sine_440_delay_time=300_feedback=40.wav` | [ ] |
 | 14 | `sonido process demos/sine_440.wav --effect tape --param drive=12` | `demos/sine_440_tape_drive=12.wav` | [ ] |
-| 15 | `sonido process demos/sine_440.wav --effect reverb --param mix=0.5 --param room_size=0.8` | `demos/sine_440_reverb_mix=0.5_room_size=0.8.wav` | [ ] |
+| 15 | `sonido process demos/sine_440.wav --effect reverb --param mix=50 --param room_size=80` | `demos/sine_440_reverb_mix=50_room_size=80.wav` | [ ] |
 | 16 | `sonido process demos/sine_440.wav --effect limiter --param threshold=-12 --param ceiling=-0.5` | `demos/sine_440_limiter_threshold=-12_ceiling=-0.5.wav` | [ ] |
 | 17 | `sonido process demos/sine_440.wav --effect bitcrusher --param bit_depth=6 --param downsample=4` | `demos/sine_440_bitcrusher_bit_depth=6_downsample=4.wav` | [ ] |
-| 18 | `sonido process demos/sine_440.wav --effect ringmod --param frequency=220 --param depth=1` | `demos/sine_440_ringmod_frequency=220_depth=1.wav` | [ ] |
+| 18 | `sonido process demos/sine_440.wav --effect ringmod --param frequency=220 --param depth=100` | `demos/sine_440_ringmod_frequency=220_depth=100.wav` | [ ] |
 | 19 | `sonido process demos/sine_440.wav --effect stage --param width=160 --param haas_delay=12` | `demos/sine_440_stage_width=160_haas_delay=12.wav` | [ ] |
 
-### 2.3 New Exposed Params
+### 2.3 Further Params
 
-These params were added in the CLI UX overhaul. Each must be accepted without error.
+Each must be accepted without error.
 
 | # | Command | What It Tests | Pass |
 |---|---------|---------------|------|
 | 1 | `sonido process demos/noise.wav --effect compressor --param knee=0` | Hard knee (0 dB) | [ ] |
-| 2 | `sonido process demos/sine_440.wav --effect delay --param ping_pong=1` | Ping-pong stereo mode | [ ] |
-| 3 | `sonido process demos/sine_440.wav --effect vibrato --param mix=0.5` | Vibrato wet/dry mix | [ ] |
+| 2 | `sonido process demos/sine_440.wav --effect delay --param ping_pong=on` | Ping-pong stereo mode | [ ] |
+| 3 | `sonido process demos/sine_440.wav --effect vibrato --param mix=50` | Vibrato wet/dry mix | [ ] |
 | 4 | `sonido process demos/sine_440.wav --effect tape --param output=-6 --param hf_rolloff=4000 --param bias=0.1` | Tape output, HF rolloff, bias | [ ] |
-| 5 | `sonido process demos/sine_440.wav --effect preamp --param output=-3 --param headroom=10` | Preamp output level, headroom | [ ] |
-| 6 | `sonido process demos/sine_440.wav --effect reverb --param stereo_width=0 --param type=hall` | Stereo width, reverb type | [ ] |
+| 5 | `sonido process demos/sine_440.wav --effect preamp --param output=-3 --param tone=3` | Preamp output level, tone | [ ] |
+| 6 | `sonido process demos/sine_440.wav --effect reverb --param stereo_width=0 --param er_level=20` | Stereo width, early-reflection level | [ ] |
 | 7 | `sonido process demos/sine_440.wav --effect chorus --param output=-3` | Universal output param | [ ] |
 | 8 | `sonido process demos/sine_440.wav --effect distortion --param waveshape=foldback` | Foldback waveshape mode | [ ] |
 | 9 | `sonido process demos/sine_440.wav --effect distortion --param waveshape=asymmetric` | Asymmetric waveshape mode | [ ] |
-| 10 | `sonido process demos/sine_440.wav --effect distortion --param foldback_threshold=0.5` | Foldback threshold | [ ] |
-| 11 | `sonido process demos/sine_440.wav --effect phaser --param stereo_spread=80` | Phaser stereo spread | [ ] |
+| 10 | `sonido process demos/sine_440.wav --effect distortion --param dynamics=50` | Distortion dynamics | [ ] |
+| 11 | `sonido process demos/sine_440.wav --effect phaser --param stages=12` | Phaser stage count | [ ] |
 | 12 | `sonido process demos/sine_440.wav --effect tremolo --param waveform=square` | Tremolo square waveform | [ ] |
 | 13 | `sonido process demos/sine_440.wav --effect tremolo --param waveform=triangle` | Tremolo triangle waveform | [ ] |
 | 14 | `sonido process demos/sine_440.wav --effect wah --param mode=manual --param frequency=800` | Wah manual mode | [ ] |
-| 15 | `sonido process demos/noise.wav --effect filter --param resonance=90` | Filter high-Q resonance | [ ] |
+| 15 | `sonido process demos/noise.wav --effect filter --param resonance=10` | Filter high-Q resonance (range 0.1–20) | [ ] |
 | 16 | `sonido process demos/sine_440.wav --effect eq --param low_gain=6 --param mid_gain=-3 --param high_gain=3` | EQ multi-band | [ ] |
 
 ### 2.4 Stereo Output Verification
@@ -246,9 +263,9 @@ Verify aliases resolve to the same effect:
 
 ```bash
 sonido process demos/noise.wav --effect lowpass --param cutoff=2000
-sonido process demos/sine_440.wav --effect vibrato --param depth=0.5
+sonido process demos/sine_440.wav --effect multivibrato --param depth=50
 sonido process demos/noise.wav --effect noisegate --param threshold=-40
-sonido process demos/sine_440.wav --effect autowah --param sensitivity=0.8
+sonido process demos/sine_440.wav --effect autowah --param sensitivity=80
 sonido process demos/sine_440.wav --effect parametriceq --param low_gain=6
 sonido process demos/sine_440.wav --effect crusher --param bit_depth=8
 sonido process demos/sine_440.wav --effect ring --param frequency=300
@@ -265,7 +282,7 @@ sonido process demos/sine_440.wav \
 
 # Complex 5-effect chain
 sonido process demos/sine_440.wav \
-    --chain "preamp:gain=6|distortion:drive=12|compressor:threshold=-20|delay:time=300|reverb:mix=0.3"
+    --chain "preamp:gain=6|distortion:drive=12|compressor:threshold=-20|delay:time=300|reverb:mix=30"
 
 # Chain with whitespace (should be trimmed)
 sonido process demos/sine_440.wav \
@@ -331,7 +348,7 @@ sonido process demos/sine_440.wav --preset crunch
 sonido presets paths
 ```
 
-- [ ] Shows factory and user preset directories
+- [ ] Shows the user preset, system preset and config directories (factory presets are built in)
 
 ### 3.5 Save and Delete User Preset
 
@@ -345,27 +362,29 @@ sonido presets delete test_preset --force
 - [ ] Show displays the saved chain
 - [ ] Delete succeeds
 
-### 3.6 Copy Preset
+### 3.6 Copy Factory Preset
+
+`copy` takes a factory preset as its source.
 
 ```bash
-sonido presets save my_preset --chain "chorus:rate=1.5|delay:time=300"
-sonido presets copy my_preset --name my_preset_backup
-sonido presets show my_preset_backup
-sonido presets delete my_preset --force
-sonido presets delete my_preset_backup --force
+sonido presets copy crunch --name my_crunch
+sonido presets show my_crunch
+sonido presets delete my_crunch --force
 ```
 
 - [ ] Copy succeeds
-- [ ] Backup preset shows identical chain
-- [ ] Cleanup deletes both
+- [ ] Copy shows the same chain as `sonido presets show crunch`
+- [ ] Cleanup deletes it
 
-### 3.7 Export Factory Presets
+### 3.7 Factory Presets
 
 ```bash
 sonido presets list --factory
+sonido presets export-factory /tmp/factory_presets
 ```
 
-- [ ] Lists only factory presets (not user presets)
+- [ ] `list --factory` lists only factory presets (not user presets)
+- [ ] `export-factory` writes one TOML file per factory preset (8)
 
 ---
 
@@ -504,7 +523,7 @@ sonido analyze dynamics demos/noise.wav
 
 ```bash
 sonido generate sweep /tmp/sweep_dry.wav --duration 3.0
-sonido process /tmp/sweep_dry.wav /tmp/sweep_wet.wav --effect reverb --param mix=1
+sonido process /tmp/sweep_dry.wav /tmp/sweep_wet.wav --effect reverb --param mix=100
 sonido analyze ir /tmp/sweep_dry.wav /tmp/sweep_wet.wav -o /tmp/ir.wav --rt60
 ```
 
@@ -529,14 +548,14 @@ sonido analyze cqt demos/sine_440.wav -o /tmp/cqt.csv
 ```bash
 sonido analyze bandpass demos/noise.wav --low 100 --high 500 -o /tmp/bandpassed.wav
 sonido analyze hilbert demos/sine_440.wav --amp-output /tmp/envelope.wav
-sonido analyze hilbert demos/sine_440.wav --envelope
-sonido analyze hilbert demos/sine_440.wav --phase
+sonido analyze hilbert demos/sine_440.wav --envelope /tmp/envelope2.wav
+sonido analyze hilbert demos/sine_440.wav --phase /tmp/phase.wav
 ```
 
 - [ ] Bandpassed output contains only 100-500Hz content
 - [ ] Hilbert envelope output exists
-- [ ] `--envelope` works as alias for `--amp-output` (prints amplitude envelope data)
-- [ ] `--phase` works as alias for `--phase-output` (prints instantaneous phase data)
+- [ ] `--envelope` works as alias for `--amp-output` (writes `/tmp/envelope2.wav`)
+- [ ] `--phase` works as alias for `--phase-output` (writes `/tmp/phase.wav`)
 
 ### 5.7 PAC and Comodulogram
 
@@ -557,7 +576,7 @@ sonido compare demos/sine_440.wav demos/sine_440_distortion.wav --detailed
 sonido analyze compare demos/sine_440.wav demos/sine_440_reverb.wav
 ```
 
-- [ ] Reports spectral differences between dry and wet signals
+- [ ] Reports time-domain, spectral and per-band differences between dry and wet signals
 - [ ] `analyze compare` works as alias for `compare` and produces comparison metrics
 
 ### 5.9 Spectrogram
@@ -569,17 +588,19 @@ sonido analyze spectrogram demos/sine_440.wav -o /tmp/spec.csv
 - [ ] Spectrogram CSV generated at `/tmp/spec.csv`
 - [ ] 440Hz bin shows consistent energy across time frames
 
-### 5.10 Transfer Function Extras
+### 5.10 IR Extraction Options
 
 ```bash
 sonido generate sweep /tmp/tf_dry.wav --duration 3.0
 sonido process /tmp/tf_dry.wav /tmp/tf_wet.wav --effect filter --param cutoff=1000
-sonido analyze ir /tmp/tf_dry.wav /tmp/tf_wet.wav -o /tmp/tf.wav --format csv
-sonido analyze ir /tmp/tf_dry.wav /tmp/tf_wet.wav -o /tmp/tf2.wav --format csv --window-size 4096
+sonido analyze ir /tmp/tf_dry.wav /tmp/tf_wet.wav -o /tmp/tf.csv --format csv
+sonido analyze ir /tmp/tf_dry.wav /tmp/tf_wet.wav -o /tmp/tf2.csv --format csv --window-size 4096
+sonido analyze transfer /tmp/tf_dry.wav /tmp/tf_wet.wav --group-delay --smooth 3 -o /tmp/tf.json
 ```
 
-- [ ] `--format csv` produces CSV output
+- [ ] `--format csv` writes `sample_index,amplitude` CSV to the `-o` path
 - [ ] `--window-size 4096` produces valid results with different FFT resolution
+- [ ] `analyze transfer` writes a JSON response with group delay
 
 ### 5.11 IMD Analysis
 
@@ -589,7 +610,7 @@ sonido analyze imd demos/sine_440.wav
 
 - [ ] Auto-detects test frequencies when `--freq1` and `--freq2` are omitted
 - [ ] Intermodulation distortion analysis completes
-- [ ] Reports IMD percentage
+- [ ] Reports the IMD ratio (percent and dB)
 
 ---
 
@@ -600,7 +621,7 @@ Requires audio devices. Press Ctrl+C to stop each test.
 ### 6.1 Single Effect
 
 ```bash
-sonido realtime --effect reverb --param mix=0.3
+sonido realtime --effect reverb --param mix=30
 ```
 
 - [ ] Audio passes through with reverb applied
@@ -643,7 +664,7 @@ sonido realtime --effect reverb --mono
 ### 6.6 Realtime with Preset
 
 ```bash
-sonido realtime --preset my_chorus
+sonido realtime --preset 80s_chorus
 ```
 
 - [ ] Loads preset and processes live audio with preset chain
@@ -673,94 +694,58 @@ cargo run -p sonido-gui
 
 ### 7.2 Initial State
 
-- [ ] Audio status indicator visible (green = OK, red = error)
+- [ ] No red audio error in the header (an audio failure shows its message and a Retry button)
 - [ ] Input/output meters present
-- [ ] All 19 effect buttons visible in chain strip
+- [ ] Graph editor shows the Input and Output nodes
 
-### 7.3 Effect Panel Walkthrough
+### 7.3 Graph Editing
 
-Click each effect button and test its panel:
+- [ ] Right-click the canvas: a searchable menu lists the registered effects (36)
+- [ ] Add an effect and wire it between Input and Output; audio continues through it
+- [ ] Right-click a node: Remove and Duplicate work
+- [ ] Click a node: its parameter panel appears
 
-| Effect | Selects | Panel Renders | Knobs Respond | Bypass Toggles | Pass |
-|--------|---------|--------------|---------------|----------------|------|
-| Preamp | [ ] | [ ] | [ ] | [ ] | [ ] |
-| Distortion | [ ] | [ ] | [ ] | [ ] | [ ] |
-| Compressor | [ ] | [ ] | [ ] | [ ] | [ ] |
-| Gate | [ ] | [ ] | [ ] | [ ] | [ ] |
-| EQ | [ ] | [ ] | [ ] | [ ] | [ ] |
-| Filter | [ ] | [ ] | [ ] | [ ] | [ ] |
-| Wah | [ ] | [ ] | [ ] | [ ] | [ ] |
-| Tremolo | [ ] | [ ] | [ ] | [ ] | [ ] |
-| Chorus | [ ] | [ ] | [ ] | [ ] | [ ] |
-| Flanger | [ ] | [ ] | [ ] | [ ] | [ ] |
-| Phaser | [ ] | [ ] | [ ] | [ ] | [ ] |
-| Vibrato | [ ] | [ ] | [ ] | [ ] | [ ] |
-| Delay | [ ] | [ ] | [ ] | [ ] | [ ] |
-| Tape | [ ] | [ ] | [ ] | [ ] | [ ] |
-| Reverb | [ ] | [ ] | [ ] | [ ] | [ ] |
-| Limiter | [ ] | [ ] | [ ] | [ ] | [ ] |
-| Bitcrusher | [ ] | [ ] | [ ] | [ ] | [ ] |
-| RingMod | [ ] | [ ] | [ ] | [ ] | [ ] |
-| Stage | [ ] | [ ] | [ ] | [ ] | [ ] |
+### 7.4 Effect Panel
 
-### 7.4 Knob Interaction
+For a few effects of different families (e.g. distortion, compressor, tremolo, reverb):
 
-For any effect panel:
-
-- [ ] Drag knob: value changes smoothly
+- [ ] Panel renders all of the effect's parameters (compare `sonido effects <name>`)
+- [ ] Drag knob: value changes smoothly, readout updates in real time
 - [ ] Double-click knob: resets to default value
-- [ ] Value display updates in real-time
+- [ ] Enum parameters (e.g. tremolo waveform Sine/Triangle/Square/SampleHold, wah mode Auto/Manual) switch correctly
+- [ ] ACTIVE/BYPASSED toggle in the panel header bypasses the effect; audio is dry when bypassed
 
-### 7.5 Bypass
+### 7.5 A/B Morph
 
-- [ ] Double-click effect button: toggles bypass
-- [ ] Bypass LED changes color (green = active, dim = bypassed)
-- [ ] Audio is dry when bypassed
+- [ ] Capture A, change parameters, capture B
+- [ ] Crossfader interpolates between the two snapshots
 
-### 7.6 Effect-Specific Panel Verification
-
-#### Compressor
-- [ ] Gain reduction meter displays (should now work — was a TODO, now fixed)
-- [ ] Threshold, ratio, attack, release, makeup knobs present
-
-#### Phaser
-- [ ] Stages selector works (2/4/6/8/10/12)
-
-#### Tremolo
-- [ ] Wave selector works (Sine/Triangle/Square/S&H)
-
-#### Wah
-- [ ] Mode toggle works (Auto/Manual)
-
-#### EQ
-- [ ] Three bands (Low/Mid/High) each with Frequency, Gain, Q
-
-### 7.7 Metering
+### 7.6 Metering
 
 - [ ] Input meter responds to audio input
 - [ ] Output meter shows processed signal level
 - [ ] Meter ballistics look smooth (not jumpy)
 
-### 7.8 Preset Management
+### 7.7 Export
 
-- [ ] Open preset selector
-- [ ] Select a factory preset — parameters update
-- [ ] Modify a parameter — asterisk (*) appears for unsaved changes
-- [ ] Save preset — enter name, confirm save
-- [ ] Saved preset appears in list
+- [ ] Export menu: "Save patch JSON…" writes a patch file
+- [ ] "Save pedal binary (.bin)…" is enabled only when the patch passes pedal validation
 
-### 7.9 Performance
+### 7.8 Performance
 
-- [ ] Status bar shows sample rate, buffer size, latency
+- [ ] Status bar shows sample rate, latency, CPU usage, and `Daisy: N/3`
 - [ ] No audio glitches during parameter changes
-- [ ] CPU usage reasonable (check status bar)
 
-Test lower buffer:
+Test lower buffer (default is 2048) and single-effect mode:
 ```bash
 cargo run -p sonido-gui -- --buffer-size 128
+cargo run -p sonido-gui -- --effect distortion
 ```
 
 - [ ] Launches and runs at lower latency
+- [ ] `--effect` opens the simplified single-effect UI
+
+See [GUI Documentation](GUI.md) for the full interface reference.
 
 ---
 
@@ -772,7 +757,7 @@ cargo run -p sonido-gui -- --buffer-size 128
 cargo test -p sonido-effects --test regression
 ```
 
-- [ ] All 44 regression tests pass
+- [ ] All 70 regression tests pass
 
 ### 8.2 Full Test Suite
 
@@ -844,7 +829,7 @@ cargo test -p sonido-effects --test regression && echo "PASS: regression"
 cargo test --workspace && echo "PASS: all tests"
 ```
 
-- [ ] All 13 lines print PASS
+- [ ] All 14 lines print PASS
 
 ---
 

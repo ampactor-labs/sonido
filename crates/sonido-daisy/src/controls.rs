@@ -1,6 +1,6 @@
 //! Lock-free shared control buffer for async control → real-time audio communication.
 //!
-//! [`ControlBuffer`] is the bridge between the asynchronous control task (writer, ~50 Hz)
+//! [`ControlBuffer`] is the bridge between the asynchronous control task (writer, ~100 Hz)
 //! and the real-time audio callback (reader, ~1500 Hz). It uses atomic operations with
 //! `Relaxed` ordering — safe on single-core Cortex-M7 where all memory accesses are
 //! sequentially consistent within the core.
@@ -10,7 +10,7 @@
 //! ```text
 //! ┌─────────────────┐      ControlBuffer      ┌──────────────────┐
 //! │  Control task    │ ──── write_knob() ────▶ │  Audio callback  │
-//! │  (Embassy, 50Hz) │ ──── write_toggle() ──▶ │  (DMA, 1500Hz)   │
+//! │  (Embassy, 100Hz)│ ──── write_toggle() ──▶ │  (DMA, 1500Hz)   │
 //! │                  │ ◀── read_led() ──────── │  write_led()     │
 //! └─────────────────┘                          └──────────────────┘
 //! ```
@@ -89,7 +89,7 @@ pub struct ControlBuffer<
     leds: [AtomicU32; LEDS],
     /// Expression pedal value as f32 bits (0.0–1.0 normalized).
     ///
-    /// Written by the hothouse control task at ~50 Hz; read by the audio
+    /// Written by the hothouse control task at ~100 Hz; read by the audio
     /// callback. Non-generic: there is always 0 or 1 expression input.
     expression: AtomicU32,
 }
@@ -288,7 +288,7 @@ impl<const KNOBS: usize, const TOGGLES: usize, const FOOTSWITCHES: usize, const 
 
     /// Writes a normalized expression pedal value (0.0–1.0).
     ///
-    /// Called by the hothouse control task at ~50 Hz with the pre-processed
+    /// Called by the hothouse control task at ~100 Hz with the pre-processed
     /// output from [`ExpressionInput::value()`](crate::expression::ExpressionInput::value).
     ///
     /// # Parameters

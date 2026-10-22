@@ -155,10 +155,8 @@ async fn main(spawner: embassy_executor::Spawner) {
                     foot_was_pressed = fs_pressed;
 
                     // Read all 6 knobs and apply via EffectSlot
-                    let mut knob_vals = [0.0f32; NUM_KNOBS];
-                    for k in 0..NUM_KNOBS {
-                        knob_vals[k] = CONTROLS.read_knob(k);
-                    }
+                    let knob_vals: [f32; NUM_KNOBS] =
+                        core::array::from_fn(|k| CONTROLS.read_knob(k));
                     slot.apply_knobs(&knob_vals);
                 }
 

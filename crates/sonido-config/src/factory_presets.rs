@@ -49,8 +49,8 @@ type = "distortion"
 bypassed = true
 [effects.params]
 drive = "15"
-tone = "4000"
-level = "-6"
+tone = "0"
+output = "-6"
 
 [[effects]]
 type = "compressor"
@@ -104,8 +104,8 @@ gain = "3"
 type = "distortion"
 [effects.params]
 drive = "12"
-tone = "5000"
-level = "-3"
+tone = "2"
+output = "-3"
 
 [[effects]]
 type = "compressor"
@@ -133,8 +133,8 @@ gain = "6"
 type = "distortion"
 [effects.params]
 drive = "30"
-tone = "4500"
-level = "-6"
+tone = "-2"
+output = "-6"
 
 [[effects]]
 type = "compressor"
@@ -215,7 +215,7 @@ gain = "2"
 [[effects]]
 type = "tape"
 [effects.params]
-drive = "60"
+drive = "9"
 saturation = "70"
 
 [[effects]]
@@ -329,8 +329,8 @@ gain = "3"
 type = "distortion"
 [effects.params]
 drive = "8"
-tone = "6000"
-level = "-2"
+tone = "3"
+output = "-2"
 
 [[effects]]
 type = "delay"

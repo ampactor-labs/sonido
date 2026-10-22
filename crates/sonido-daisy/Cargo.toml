@@ -8,8 +8,9 @@ publish = false
 
 [features]
 ## Enables `Adapter`/`DirectPolicy` re-exports, `adc_to_param`, and DSP-dependent library modules.
-## Required for DSP examples (single_effect, sonido_pedal, hothouse_diag).
-## Not needed for simple examples (blinky, passthrough) that don't use alloc.
+## Required by the examples that use these modules (graph_audio_test, qspi_read_test,
+## single_reverb, single_delay, single_effect, sonido_pedal — see `required-features` below).
+## Not needed for the others (blinky, passthrough, bench_kernels, hothouse_diag, ...).
 alloc = []
 ## Enables `HothousePlatform` (`PlatformController` impl backed by `ControlBuffer`).
 ## Pulls in `sonido-platform`.

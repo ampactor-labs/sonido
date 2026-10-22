@@ -10,6 +10,19 @@
 //! - [`Effect`] - Object-safe trait for all audio effects
 //! - [`EffectExt`] - Extension trait for effect chaining
 //! - [`Chain`] - Zero-cost effect chain combinator
+//! - [`EffectWithParams`] - `Effect` + [`ParameterInfo`] as one boxable trait object
+//!
+//! ## Kernel Architecture
+//!
+//! - [`DspKernel`] / [`KernelParams`] - Pure DSP separated from parameter ownership;
+//!   every effect in `sonido-effects` is a kernel
+//! - [`Adapter`] - Wraps a kernel as an `Effect`, with per-sample smoothing
+//!   ([`SmoothedPolicy`]) or direct writes ([`DirectPolicy`], used on the Daisy pedal)
+//!
+//! ## Graph Routing
+//!
+//! - [`ProcessingGraph`] - DAG of effects compiled to a zero-allocation schedule
+//! - [`GraphEngine`] - Higher-level wrapper with linear-chain helpers and file processing
 //!
 //! ## Parameter Smoothing
 //!
@@ -83,7 +96,8 @@
 //! # Design Principles
 //!
 //! - **Real-time safe**: No allocations in audio processing paths
-//! - **No dependencies on std**: Pure `no_std` with `libm` for math
+//! - **`no_std` capable**: builds without `std` (only `alloc` + `libm`); the
+//!   default `std` feature is optional
 //! - **Object-safe traits**: Dynamic dispatch when needed
 //! - **Zero-cost abstractions**: Static dispatch chains optimize away
 //!

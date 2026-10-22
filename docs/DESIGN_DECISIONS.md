@@ -12,7 +12,7 @@ Architecture Decision Records (ADRs) for the Sonido DSP framework. Each record c
 - [ADR-006: SmoothedParam Smoothing Strategy](#adr-006-smoothedparam-smoothing-strategy)
 - [ADR-007: Transposed Direct Form II for Biquad Filters](#adr-007-transposed-direct-form-ii-for-biquad-filters)
 - [ADR-008: SVF Alongside Biquad](#adr-008-svf-alongside-biquad)
-- [ADR-009: Separate Reverb Tanks for Stereo](#adr-009-separate-reverb-tanks-for-stereo)
+- [ADR-009: Separate Reverb Tanks for Stereo](#adr-009-separate-reverb-tanks-for-stereo) *(superseded by the FDN reverb)*
 - [ADR-010: f32 Throughout](#adr-010-f32-throughout)
 - [ADR-011: Effect Registry Pattern](#adr-011-effect-registry-pattern)
 - [ADR-012: Platform Abstraction with ControlId Namespaces](#adr-012-platform-abstraction-with-controlid-namespaces)
@@ -24,12 +24,12 @@ Architecture Decision Records (ADRs) for the Sonido DSP framework. Each record c
 - [ADR-018: Feedback-Adaptive Reverb Gain Compensation](#adr-018-feedback-adaptive-reverb-gain-compensation) *(superseded by ADR-019)*
 - [ADR-019: Generalized Feedback Compensation](#adr-019-generalized-feedback-compensation)
 - [ADR-020: Fast Math Approximations for Embedded DSP](#adr-020-fast-math-approximations-for-embedded-dsp)
-- [ADR-021: Block Processing Overrides](#adr-021-block-processing-overrides)
+- [ADR-021: Block Processing Overrides](#adr-021-block-processing-overrides) *(superseded by ADR-028)*
 - [ADR-022: Parameter System Hardening for Plugin Integration](#adr-022-parameter-system-hardening-for-plugin-integration)
 - [ADR-023: Pluggable Audio Backend Abstraction](#adr-023-pluggable-audio-backend-abstraction)
 - [ADR-024: CLAP Plugin Architecture](#adr-024-clap-plugin-architecture)
 - [ADR-025: DAG Routing Engine](#adr-025-dag-routing-engine)
-- [ADR-026: Multi-Effect Chain CLAP Plugin](#adr-026-multi-effect-chain-clap-plugin)
+- [ADR-026: Multi-Effect Chain CLAP Plugin](#adr-026-multi-effect-chain-clap-plugin) *(superseded by the graph player)*
 - [ADR-027: GraphEngine as Universal Chain Host](#adr-027-graphengine-as-universal-chain-host)
 - [ADR-028: Kernel Architecture — DSP/Parameter Separation](#adr-028-kernel-architecture--dspparameter-separation)
 - [ADR-029: Hardware Serves the Kernel — Embedded Design Principle](#adr-029-hardware-serves-the-kernel--embedded-design-principle)
@@ -264,7 +264,7 @@ Provide two smoothing strategies:
 - Situations requiring a predictable, exact transition time
 - The final value is reached exactly (no asymptotic tail)
 
-The coefficient formula for exponential smoothing (`param.rs:146-151`):
+The coefficient formula for exponential smoothing (`SmoothedParam::recalculate_coeff` in `param.rs`):
 
 ```rust
 self.coeff = 1.0 - expf(-1.0 / samples);
@@ -331,7 +331,7 @@ The SVF is preferred over the biquad in specific situations:
 
 1. **Audio-rate modulation**: The SVF's state variables represent physical quantities (integrator outputs) that remain meaningful when parameters change. An envelope follower modulating a filter cutoff at audio rate is stable with the SVF but may click with a biquad.
 
-2. **Multi-output**: A single SVF computation yields lowpass, highpass, bandpass, and notch outputs simultaneously (`svf.rs:105-119`). This is useful for crossover networks, multiband effects, or UI visualizations.
+2. **Multi-output**: A single SVF computation yields lowpass, highpass, bandpass, and notch outputs simultaneously (`StateVariableFilter::process_all` in `svf.rs`). This is useful for crossover networks, multiband effects, or UI visualizations.
 
 3. **Frequency accuracy at high frequencies**: The `tan()` frequency warping in the SVF provides better frequency accuracy near Nyquist compared to the bilinear transform used in RBJ biquad coefficients.
 
@@ -349,8 +349,10 @@ Both topologies are available because each has strengths:
 
 ## ADR-009: Separate Reverb Tanks for Stereo
 
-**Status:** Accepted
+**Status:** Superseded
 **Source:** `crates/sonido-effects/src/kernels/reverb.rs`
+
+> **Note (2026-10-22):** The reverb is no longer a pair of Freeverb comb/allpass tanks. `ReverbKernel` is now one 8-line FDN with a Hadamard feedback matrix, on Freeverb's comb lengths (`FDN_TUNINGS_44K`), followed by separate L/R allpass diffusion chains (`ALLPASS_TUNINGS_44K` / `ALLPASS_TUNINGS_44K_R`, the 23-sample offset survives there) and a 14-tap early-reflection delay. The params are now `room_size_pct`, `decay_pct`, `damping_pct`, `predelay_ms`, `mix_pct`, `width_pct` (index 5), `er_level_pct`, `output_db`; there is no `reverb_type` param. See the header of `reverb.rs` and `docs/EFFECTS_REFERENCE.md`. The record below describes the original design.
 
 ### Context
 
@@ -676,6 +678,8 @@ Original reverb-only quadratic compensation (`1 - x² * 0.88`). Superseded by AD
 **Status:** Accepted
 **Source:** `crates/sonido-core/src/gain.rs`, `crates/sonido-effects/src/kernels/reverb.rs`
 
+> **Note (2026-10-22):** The reverb's parallel comb bank was later replaced by an 8-line Hadamard FDN (see the note on ADR-009). It keeps the `sqrt(1 − feedback)` wet compensation, now as `fdn_compensation` in `reverb.rs`. The peak measurements below are from the 15-effect era.
+
 ### Context
 
 After applying `sqrt(1-fb)` wet-signal compensation to delay, flanger, phaser, and reverb, measurement showed 2/4 still exceeded the -1 dBFS peak ceiling on 440 Hz sine:
@@ -762,8 +766,10 @@ Profiling identified transcendental calls as the dominant cost in: LFO tick, com
 
 ## ADR-021: Block Processing Overrides
 
-**Status:** Accepted
+**Status:** Superseded by ADR-028
 **Source:** `crates/sonido-effects/src/kernels/distortion.rs`, `kernels/compressor.rs`, `kernels/chorus.rs`, `kernels/delay.rs`, `kernels/reverb.rs`
+
+> **Note (2026-10-22):** These overrides were written on the pre-kernel effect structs. After the kernel migration (ADR-028) no kernel overrides `DspKernel::process_block_stereo`; all 36 use the trait's default per-sample loop (`crates/sonido-core/src/kernel/traits.rs`). The record below describes the original design.
 
 ### Context
 
@@ -925,8 +931,10 @@ Introduce an `AudioBackend` trait in `sonido-io` that abstracts over platform au
 
 ## ADR-024: CLAP Plugin Architecture
 
-**Status:** Accepted
+**Status:** Accepted; packaging superseded
 **Source:** `crates/sonido-plugin/src/lib.rs`, `crates/sonido-plugin/src/audio.rs`, `crates/sonido-plugin/src/gui.rs`, `crates/sonido-plugin/src/main_thread.rs`, `crates/sonido-plugin/src/shared.rs`
+
+> **Note (2026-10-22):** Plugins no longer ship one binary per effect. `crates/sonido-plugin/examples/sonido.rs` exports `SonidoEntry` from `crates/sonido-plugin/src/bundle.rs`, whose CLAP factory lists all 36 effects (`bundle::CATALOG`, IDs `com.sonido.<effect-id>`) plus the graph player, built into one `sonido.clap`; `scripts/bundle-vst3.sh` wraps it in a clap-wrapper `sonido.vst3` shim. The plugin GUI is now the design system's Cabinet (`crates/sonido-gui-core/src/cabinet.rs`, `docs/DESIGN_SYSTEM.md`) rather than the shared effect panels, and the window size limits are 560×380 to 1920×1080, opening at the Cabinet's preferred size. `#![allow(unsafe_code)]` is no longer confined to `gui.rs` (the egui bridge and bundle entry also carry scoped allows). The record below describes the original design.
 
 ### Context
 
@@ -946,7 +954,12 @@ The simplest mapping — each plugin is exactly one `Effect` + one `ParameterInf
 
 The `sonido_effect_entry!` macro generates the complete CLAP plugin entry point from a single invocation:
 ```rust
-sonido_effect_entry!(Distortion, "sonido.distortion", "Sonido Distortion");
+sonido_effect_entry! {
+    effect_id: "distortion",
+    clap_id: "com.sonido.distortion",
+    name: "Sonido Distortion",
+    features: [AUDIO_EFFECT, DISTORTION, STEREO],
+}
 ```
 This expands to the CLAP descriptor, factory, `PluginAudioProcessor` impl, parameter handling (`get_count`, `get_info`, `get_value`, `set_value`, `value_to_text`, `text_to_value`), and GUI bridge — roughly 300 lines of boilerplate per plugin, generated zero-cost at compile time.
 
@@ -1051,6 +1064,8 @@ The multi-effect CLAP plugin, synth-effects hybrid, and spectral parallel proces
 
 ### Migration Path
 
+> **Note (2026-10-22):** The DAG visual editor now exists: `sonido-gui` is a node-graph editor. `ProcessStep` has since gained `ProcessSubGraph`, `FeedbackDelay`, and `SampleAndHold` (`crates/sonido-core/src/graph/schedule.rs`).
+
 All consumers now use `GraphEngine` (CLI, GUI) or `ProcessingGraph` directly (plugin chain). `ProcessingEngine` and the `ChainManager` effect chain have been removed. DAG visual editor is a future feature; current consumers use linear chains through `GraphEngine::new_linear()` / `from_chain()`.
 
 ### Alternatives Considered
@@ -1073,7 +1088,9 @@ All consumers now use `GraphEngine` (CLI, GUI) or `ProcessingGraph` directly (pl
 
 ## ADR-026: Multi-Effect Chain CLAP Plugin
 
-**Status:** Accepted
+**Status:** Superseded
+
+> **Note (2026-10-22):** The chain plugin (`ChainPlugin`, `ChainShared`, `ClapParamId`, the 512-ID slot space) no longer exists. Its role is filled by the graph player (`crates/sonido-plugin/src/graph_player.rs`, `com.sonido.graph-player`), which plays an exported `Patch` through `PatchPlayer` with a fixed parameter set (six macros, morph position/speed, input/master gain, bypass); the rig is edited in `sonido-gui`, not in the plugin. The record below describes the original design.
 
 ### Context
 
@@ -1116,6 +1133,8 @@ Pre-allocate a flat parameter space: **16 slots × 32 params = 512 CLAP paramete
 ## ADR-027: GraphEngine as Universal Chain Host
 
 **Status:** Accepted
+
+> **Note (2026-10-22):** The CLAP consumer described here (`ChainAudioProcessor`, `slot_map`) went away with the chain plugin (see ADR-026). `crates/sonido-plugin/src/audio.rs` now hosts a single effect. The GUI (`crates/sonido-gui/src/audio_processor.rs`) and CLI still use `GraphEngine`.
 
 ### Context
 
@@ -1210,7 +1229,7 @@ Introduce a three-layer kernel architecture:
 
 - `crates/sonido-core/src/kernel/traits.rs` — `DspKernel`, `KernelParams`, `SmoothingStyle`
 - `crates/sonido-core/src/kernel/adapter.rs` — `Adapter<K, P>`
-- `crates/sonido-effects/src/kernels/` — 19 kernel implementations (one per effect)
+- `crates/sonido-effects/src/kernels/` — kernel implementations, one per effect (19 at the time of this ADR, 36 as of 2026-10-22)
 - `crates/sonido-registry/src/lib.rs` — registry creates `Adapter<XxxKernel, SmoothedPolicy>`
 - `docs/KERNEL_ARCHITECTURE.md` — full architecture reference, patterns, and new-effect checklist
 
@@ -1221,6 +1240,8 @@ Introduce a three-layer kernel architecture:
 **Status:** Accepted
 
 **Date:** 2026-03-09
+
+> **Note (2026-10-22):** The shipping pedal firmware (`crates/sonido-daisy/examples/sonido_pedal.rs`) maps knobs through `sonido_platform::param_map` / `knob_mapping` (ADR-030) into `Adapter::new_direct` wrappers rather than calling `from_knobs()`; `from_knobs()` is used by the single-effect examples such as `single_reverb.rs`. There is no `audio_input_diag` example; the diagnostic examples in `crates/sonido-daisy/examples/` include `hothouse_diag`, `tone_out`, `square_out`, and `passthrough`.
 
 ### Context
 
@@ -1264,7 +1285,7 @@ The kernel architecture (ADR-028) was designed so the same kernel runs identical
 ### References
 
 - `crates/sonido-core/src/kernel/traits.rs` — `DspKernel::process_stereo()`, `KernelParams::from_knobs()`
-- `crates/sonido-daisy/examples/single_effect.rs` — reference `from_knobs()` usage on hardware
+- `crates/sonido-daisy/examples/single_reverb.rs` — reference `from_knobs()` usage on hardware
 - `docs/EMBEDDED.md` — Hardware Context governing principle, tier validation system
 - ADR-028 — Kernel Architecture (the system this principle protects)
 
@@ -1273,6 +1294,8 @@ The kernel architecture (ADR-028) was designed so the same kernel runs identical
 **Status:** Accepted
 
 **Date:** 2026-03-15
+
+> **Note (2026-10-22):** The noon mapping moved from `sonido-daisy` to `sonido-platform` (still embedded-side, not in `sonido-core`): `adc_to_param()` and `adc_to_param_biased()` live in `crates/sonido-platform/src/param_map.rs`, the noon table in `crates/sonido-platform/src/noon.rs` (`noon_value`), and `crates/sonido-daisy/src/noon_presets.rs` re-exports it.
 
 ### Context
 
@@ -1318,7 +1341,7 @@ Per-effect noon values are centralized in `noon_presets::noon_value(effect_id, p
 ### Consequences
 
 - `ParamDescriptor` defines the full musical range — effect authors don't need to think about hardware mapping.
-- Adding noon alignment for a new effect requires one line in `noon_presets.rs`.
+- Adding noon alignment for a new effect requires one line in the noon table (now `sonido-platform/src/noon.rs`).
 - The `noon_aligned()` builder method remains available for ad-hoc use but is not applied to production descriptors.
 - `adc_to_param()` (linear mapping) remains available for effects that don't need biased mapping.
 
@@ -1333,8 +1356,8 @@ Additionally, noon preset values for mix parameters were changed from 100% (plug
 
 ### References
 
-- `crates/sonido-daisy/src/param_map.rs` — `adc_to_param_biased()`, `interpolate_scaled()`
-- `crates/sonido-daisy/src/noon_presets.rs` — per-effect sweet-spot values
-- `crates/sonido-platform/src/param_map.rs` — `adc_to_param_biased()`, noon mapping logic
+- `crates/sonido-platform/src/param_map.rs` — `adc_to_param()`, `adc_to_param_biased()`, noon mapping logic
+- `crates/sonido-platform/src/noon.rs` — per-effect sweet-spot values (`noon_value`)
+- `crates/sonido-daisy/src/noon_presets.rs` — re-exports `noon_value` for the firmware
 - ADR-028 — Kernel Architecture (parameter ownership)
 - ADR-029 — Hardware Serves the Kernel (design priority)

@@ -19,7 +19,10 @@
 //!     └── render: egui_glow::Painter → OpenGL
 //!     │
 //!     ▼
-//! sonido-gui-core EffectPanel (unchanged)
+//! sonido-gui-core Cabinet (the design system's plugin layout)
+//!     │
+//!     ▼
+//! crt: offscreen scene → phosphor persistence → bloom + glass composite
 //! ```
 //!
 //! # Why not egui-baseview?
@@ -30,7 +33,9 @@
 //! mouse-driven with only shift-modifier support. This bridge cuts the
 //! dependency and gives sonido full control over its rendering pipeline.
 
+mod crt;
 mod handler;
+mod snapshot;
 mod translate;
 
-pub use handler::open_parented;
+pub use handler::{open_blocking, open_parented};

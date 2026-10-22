@@ -51,7 +51,7 @@ mod wav;
 pub use graph_engine::{GraphEngine, GraphSnapshot, SnapshotEntry};
 pub use stream::{
     AudioDevice, AudioStream, StreamConfig, default_device, find_device_by_index,
-    find_device_fuzzy, list_devices,
+    find_device_fuzzy, find_output_device, list_devices,
 };
 pub use wav::{
     StereoSamples, WavFormat, WavInfo, WavSpec, read_wav, read_wav_info, read_wav_stereo,

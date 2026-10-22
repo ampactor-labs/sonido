@@ -1,7 +1,11 @@
 //! Gain staging helpers for the universal output level contract.
 //!
-//! Every effect in sonido exposes an output level parameter as the *last* index
-//! in its [`ParameterInfo`](crate::ParameterInfo) implementation. This module
+//! Every effect in sonido exposes an output level parameter ("Output") in its
+//! [`ParameterInfo`](crate::ParameterInfo) implementation — usually the last
+//! user-facing index, though some kernels place it earlier (distortion,
+//! filter, compressor) and several append READ_ONLY diagnostics after it.
+//! Most use [`output_param_descriptor`] (−6 to +6 dB); a few define their own
+//! range (distortion, tape, drone, glitch, texture, time-stretch). This module
 //! provides the shared vocabulary for that contract: a standard
 //! [`SmoothedParam`] constructor, dB get/set helpers,
 //! and a canonical [`ParamDescriptor`].
@@ -22,7 +26,7 @@
 //! the audio path) but exposes a dB interface for parameter get/set. The range
 //! is [`OUTPUT_MIN_DB`] to [`OUTPUT_MAX_DB`] (−6 to +6 dB), clamped on set.
 
-use crate::{ParamDescriptor, SmoothedParam, db_to_linear, linear_to_db};
+use crate::{ParamDescriptor, ParamFlags, SmoothedParam, db_to_linear, linear_to_db};
 
 /// Minimum output level in dB.
 ///
@@ -54,9 +58,12 @@ pub fn output_level_db(param: &SmoothedParam) -> f32 {
 
 /// Standard [`ParamDescriptor`] for output level.
 ///
-/// Use as the **last** `ParameterInfo` index for every effect.
+/// Range −6 to +6 dB, default 0 dB. Conventionally the last user-facing
+/// `ParameterInfo` index (see the module docs for the exceptions). Flagged
+/// [`MACRO_EXCLUDE`](ParamFlags::MACRO_EXCLUDE) so macro auto-assignment skips it.
 pub fn output_param_descriptor() -> ParamDescriptor {
     ParamDescriptor::gain_db("Output", "Out", OUTPUT_MIN_DB, OUTPUT_MAX_DB, 0.0)
+        .with_flags(ParamFlags::AUTOMATABLE.union(ParamFlags::MACRO_EXCLUDE))
 }
 
 /// Exact wet-signal compensation for feedback comb resonance.

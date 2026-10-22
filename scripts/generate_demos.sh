@@ -50,28 +50,30 @@ echo ""
 echo "=== Processing through effects ==="
 
 # Demo table: stem source effect params_csv
+# Values are in each parameter's own units (dB, Hz, ms, 0-100 %, Q, step
+# label or index) -- `sonido effects <name>` lists names and ranges.
 DEMOS_TABLE=(
-    "distortion_soft    src_sine_440   distortion     drive=12,waveshape=softclip,tone=4000,level=-6"
-    "distortion_hard    src_sine_440   distortion     drive=20,waveshape=hardclip,tone=3000,level=-8"
+    "distortion_soft    src_sine_440   distortion     drive=12,waveshape=softclip,tone=0,output=-6"
+    "distortion_hard    src_sine_440   distortion     drive=20,waveshape=hardclip,tone=-3,output=-8"
     "compressor         src_perc_adsr  compressor     threshold=-18,ratio=4,attack=10,release=100,makeup=6"
     "gate               src_sine_440   gate           threshold=-20,attack=1,release=50,hold=20"
-    "chorus             src_saw_chord  chorus         rate=1.5,depth=0.6,mix=0.5"
-    "flanger            src_sine_440   flanger        rate=0.4,depth=0.7,feedback=0.6,mix=0.5"
-    "phaser             src_saw_chord  phaser         rate=0.3,depth=0.8,stages=6,feedback=0.7,mix=0.5"
-    "tremolo            src_sine_440   tremolo        rate=6,depth=0.8,waveform=sine"
-    "vibrato            src_saw_chord  vibrato        depth=0.6"
+    "chorus             src_saw_chord  chorus         rate=1.5,depth=60,mix=50"
+    "flanger            src_sine_440   flanger        rate=0.4,depth=70,feedback=60,mix=50"
+    "phaser             src_saw_chord  phaser         rate=0.3,depth=80,stages=6,feedback=70,mix=50"
+    "tremolo            src_sine_440   tremolo        rate=6,depth=80,waveform=sine"
+    "vibrato            src_saw_chord  vibrato        depth=200"
     "filter_lowpass     src_sweep      filter         cutoff=2000,resonance=4"
-    "wah                src_saw_chord  wah            frequency=800,resonance=5,sensitivity=0.7,mode=auto"
+    "wah                src_saw_chord  wah            frequency=800,resonance=5,sensitivity=70,mode=auto"
     "eq                 src_sweep      eq             mid_freq=1000,mid_gain=8,mid_q=2"
-    "reverb_room        src_perc_adsr  reverb         type=room,decay=0.4,damping=0.5,mix=0.4"
-    "reverb_hall        src_perc_adsr  reverb         type=hall,decay=0.8,damping=0.3,mix=0.5"
-    "delay              src_perc_adsr  delay          time=375,feedback=0.5,mix=0.4"
-    "tape               src_saw_chord  tape           drive=8,saturation=0.6"
+    "reverb_room        src_perc_adsr  reverb         room_size=35,decay=40,damping=50,mix=40"
+    "reverb_hall        src_perc_adsr  reverb         room_size=90,decay=80,damping=30,predelay=25,mix=50"
+    "delay              src_perc_adsr  delay          time=375,feedback=50,mix=40"
+    "tape               src_saw_chord  tape           drive=8,saturation=60"
     "preamp             src_sine_440   preamp         gain=8"
     "limiter            src_saw_chord  limiter        threshold=-12,ceiling=-0.5,release=80,lookahead=5"
-    "bitcrusher         src_sine_440   bitcrusher     bit_depth=6,downsample=4,mix=1"
-    "ringmod            src_sine_440   ringmod        frequency=220,depth=1,waveform=sine,mix=0.6"
-    "stage              src_saw_chord  stage          width=160,haas_delay=12"
+    "bitcrusher         src_sine_440   bitcrusher     bit_depth=6,downsample=4,mix=100"
+    "ringmod            src_sine_440   ringmod        frequency=220,depth=100,waveform=sine,mix=60"
+    "stage              src_saw_chord  stage          width=160,haas=12"
 )
 
 TOTAL=${#DEMOS_TABLE[@]}
@@ -97,7 +99,7 @@ done
 # Full effect chain: preamp -> distortion -> chorus -> delay -> reverb
 echo "  [chain] Full effect chain..."
 "$SONIDO" process "$DEMOS/src_saw_chord.wav" "$DEMOS/fx_full_chain.wav" \
-    --chain "preamp:gain=6|distortion:drive=10,waveshape=softclip,level=-6|chorus:rate=1,depth=0.4,mix=0.3|delay:time=300,feedback=0.3,mix=0.25|reverb:type=hall,decay=0.6,mix=0.3"
+    --chain "preamp:gain=6|distortion:drive=10,waveshape=softclip,output=-6|chorus:rate=1,depth=40,mix=30|delay:time=300,feedback=30,mix=25|reverb:room_size=85,decay=60,mix=30"
 
 echo ""
 echo "=== Graph topology demos ==="
@@ -108,15 +110,15 @@ echo "  [graph] Parallel compression..."
 
 echo "  [graph] Wet/dry reverb..."
 "$SONIDO" process "$DEMOS/src_saw_chord.wav" "$DEMOS/graph_wetdry_reverb.wav" \
-    --graph "split(reverb:decay=0.9,mix=1.0; -) | limiter"
+    --graph "split(reverb:decay=90,mix=100; -) | limiter"
 
 echo "  [graph] Diamond delay..."
 "$SONIDO" process "$DEMOS/src_saw_chord.wav" "$DEMOS/graph_diamond_delay.wav" \
-    --graph "split(delay:time=250; delay:time=500) | reverb:mix=0.3"
+    --graph "split(delay:time=250; delay:time=500) | reverb:mix=30"
 
 echo "  [graph] Hendrix chain..."
 "$SONIDO" process "$DEMOS/src_saw_chord.wav" "$DEMOS/graph_hendrix_chain.wav" \
-    --graph "preamp:gain=8 | distortion:drive=25 | chorus:rate=0.8 | delay:time=400 | reverb:decay=0.8"
+    --graph "preamp:gain=8 | distortion:drive=25 | chorus:rate=0.8 | delay:time=400 | reverb:decay=80"
 
 echo "  [graph] Dual path..."
 "$SONIDO" process "$DEMOS/src_saw_chord.wav" "$DEMOS/graph_dual_path.wav" \
@@ -124,11 +126,11 @@ echo "  [graph] Dual path..."
 
 echo "  [graph] Three-way split..."
 "$SONIDO" process "$DEMOS/src_saw_chord.wav" "$DEMOS/graph_three_way.wav" \
-    --graph "split(distortion:drive=30; chorus:depth=6; reverb:mix=1.0) | limiter"
+    --graph "split(distortion:drive=30; chorus:depth=60; reverb:mix=100) | limiter"
 
 echo "  [graph] Nested split..."
 "$SONIDO" process "$DEMOS/src_saw_chord.wav" "$DEMOS/graph_nested_split.wav" \
-    --graph "split(split(distortion; chorus); reverb:mix=1.0) | limiter"
+    --graph "split(split(distortion; chorus); reverb:mix=100) | limiter"
 
 echo ""
 echo "=== Done ==="

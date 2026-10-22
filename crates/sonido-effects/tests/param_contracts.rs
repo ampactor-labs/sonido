@@ -296,3 +296,35 @@ fn adc_to_param_curve_monotonic() {
         violations,
     );
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Test 5: Macro exclusion
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// `MACRO_EXCLUDE` is set exactly on the non-musical controls: the wet/dry
+/// "Mix" and the output level. Musical params that reuse
+/// `ParamDescriptor::mix()` as a percent template must not inherit it.
+#[test]
+fn macro_exclude_only_on_mix_and_output() {
+    let registry = EffectRegistry::new();
+    let mut violations = Vec::new();
+    for id in all_ids() {
+        let effect = registry.create(&id, SAMPLE_RATE).unwrap();
+        for i in 0..effect.effect_param_count() {
+            let d = effect.effect_param_info(i).unwrap();
+            let is_utility = d.name == "Mix" || d.name == "Output";
+            let excluded = d.flags.contains(ParamFlags::MACRO_EXCLUDE);
+            if is_utility != excluded {
+                violations.push(format!(
+                    "{id}[{i}] {:?}: MACRO_EXCLUDE = {excluded}",
+                    d.name
+                ));
+            }
+        }
+    }
+    assert_no_violations(
+        "macro_exclude_only_on_mix_and_output",
+        "mix/output must be MACRO_EXCLUDE; musical params must not",
+        violations,
+    );
+}

@@ -404,7 +404,7 @@ impl EffectRegistry {
                 id: "reverb",
                 name: "Reverb",
                 short_name: "VERB",
-                description: "Freeverb-style algorithmic reverb",
+                description: "8-line Hadamard FDN reverb on Freeverb delay tunings",
                 category: EffectCategory::TimeBased,
                 param_count: 0,
             },
@@ -716,7 +716,7 @@ impl EffectRegistry {
                 id: "tuner",
                 name: "Tuner",
                 short_name: "Tunr",
-                description: "Chromatic tuner with YIN pitch detection and READ_ONLY diagnostic params",
+                description: "Chromatic tuner by YIN pitch detection, guitar and bass range (23 Hz up)",
                 category: EffectCategory::Utility,
                 param_count: 0,
             },
@@ -800,17 +800,17 @@ impl EffectRegistry {
 
     /// Find a parameter index by name for a given effect type.
     ///
-    /// Scans cached parameter descriptors — no allocation required.
+    /// Matches the name, short name or string ID, ignoring case, spaces,
+    /// dashes and underscores ([`ParamDescriptor::matches_key`]), so
+    /// `"room_size"`, `"Room Size"` and `"Room"` all find the reverb's Room
+    /// Size. Scans cached parameter descriptors — no allocation required.
     /// Returns `None` if the effect type or parameter name is not found.
     pub fn param_index_by_name(&self, effect_id: &str, param_name: &str) -> Option<usize> {
         let entry = self.entries.iter().find(|e| e.descriptor.id == effect_id)?;
-        let lower = param_name.to_lowercase();
-        for (i, desc) in entry.param_descriptors.iter().enumerate() {
-            if desc.name.to_lowercase() == lower || desc.short_name.to_lowercase() == lower {
-                return Some(i);
-            }
-        }
-        None
+        entry
+            .param_descriptors
+            .iter()
+            .position(|desc| desc.matches_key(param_name))
     }
 
     /// Returns the number of registered effects.
@@ -825,10 +825,11 @@ impl EffectRegistry {
 
     /// Default effect chain in signal-flow order (gain stage → dynamics → EQ → modulation → time → reverb).
     ///
-    /// Used by the GUI to initialize the effect chain. The ordering reflects
-    /// standard guitar pedalboard convention.
+    /// A suggested 15-effect pedalboard; the ordering reflects standard guitar
+    /// pedalboard convention. No front end currently builds its starting chain
+    /// from this list (only the registry tests call it).
     ///
-    /// Excluded from the default chain (available via "Add Effect" in the GUI):
+    /// The other registered effects are left out, for example:
     /// - `limiter` — typically a mastering/bus effect, not a pedalboard staple
     /// - `bitcrusher` — niche lo-fi effect, not part of a standard signal chain
     /// - `ringmod` — experimental/sound-design effect

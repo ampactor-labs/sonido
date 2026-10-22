@@ -1,8 +1,9 @@
 //! Daisy Seed preset management commands.
 //!
 //! Provides `sonido daisy export` and `sonido daisy inspect` for packing
-//! effect presets into the 4096-byte binary sectors that the Hothouse firmware
-//! reads from QSPI flash.
+//! effect presets into legacy 4096-byte `"SOND"` binary sectors. The shipping
+//! `sonido_pedal` firmware does not read these sectors; `sonido patch export`
+//! (canonical `sonido-patch` format) is the current path.
 //!
 //! # Binary format
 //!

@@ -1,8 +1,8 @@
 # Kernel Architecture
 
 Reference for Sonido's kernel architecture -- the three-layer separation of DSP math,
-parameter ownership, and runtime bridging. All 36 effects use this pattern exclusively.
-Classic `Effect` implementations have been removed as of v0.2.
+parameter ownership, and runtime bridging. All 36 effects use this pattern exclusively;
+the earlier per-effect `Effect` implementations have been removed.
 
 ---
 
@@ -28,26 +28,26 @@ The kernel architecture separates DSP math from parameter ownership:
             |  +---- Preset format (clone to save, restore to load)
             |  +---- Morph target (lerp between any two snapshots)
             |  +---- Serialization (indexed get/set, to/from_normalized)
-            |  +---- Hardware mapping (from_knobs for ADC, from_normalized for MIDI)
+            |  +---- Hardware mapping (descriptor-driven knob mapping, from_normalized)
             |  +---- Host bridge (CLAP normalized values -> from_normalized)
             |
             +----------+-----------------+
                        v
           +-------------------------------+
-          | Adapter<K, SmoothedPolicy>    |  (provided by sonido-core)
+          | Adapter<K, Policy>            |  (provided by sonido-core)
           |                               |
           |  impl Effect                  |  <- automatic
           |  impl ParameterInfo           |  <- automatic
           |  impl EffectWithParams        |  <- blanket impl, free
-          |  owns SmoothedParams          |  <- managed by adapter
+          |  owns SmoothedParams          |  <- SmoothedPolicy only
           |  load_snapshot()              |  <- preset recall
           |  snapshot()                   |  <- preset save
           +-------------------------------+
                        |
        +---------------+------------------+
        v               v                  v
-  DAG Graph        CLAP Plugin       Embedded Direct
-  (Box<dyn EWP>)   (SonidoShared)    (no adapter)
+  DAG Graph        CLAP Plugin       Embedded
+  (Box<dyn EWP>)   (SonidoShared)    (Adapter<K, DirectPolicy>)
 ```
 
 **Benefits:**
@@ -72,12 +72,12 @@ A `DspKernel` struct **MUST NOT** contain:
 - Parameter values (those belong in `Params`)
 
 A kernel struct contains ONLY: filter state, delay buffers, ADAA processors,
-LFO/oscillator phase, sample rate, cached coefficients.
+LFO/oscillator phase, tempo state (`TempoManager`), sample rate, cached coefficients.
 
 ### Parameter identity
 
-`ParamId` values and `string_id` strings in `KernelParams::descriptor()` **MUST** exactly
-match the original definitions. These are plugin host API contracts. Changing them silently
+`ParamId` values and `string_id` strings in `KernelParams::descriptor()` **MUST NOT**
+change once shipped. These are plugin host API contracts. Changing them silently
 breaks saved automation, presets, and MIDI mappings.
 
 ### Params are user-facing units
@@ -144,7 +144,8 @@ Use NaN as the sentinel for cache invalidation in `reset()`.
 
 ### Tempo-synced effects
 
-Effects with tempo sync (Delay, Tremolo) receive tempo via `set_tempo_context()`:
+Effects with tempo sync (Delay, Tremolo, Chorus, Flanger, Phaser) receive tempo via
+`set_tempo_context()`:
 
 ```rust
 pub struct DelayKernel {
@@ -156,7 +157,7 @@ impl DspKernel for DelayKernel {
     type Params = DelayParams;
 
     fn set_tempo_context(&mut self, ctx: &TempoContext) {
-        self.tempo.update(ctx);
+        self.tempo.set_bpm(ctx.bpm);
     }
 
     fn process_stereo(&mut self, l: f32, r: f32, params: &DelayParams) -> (f32, f32) {
@@ -192,21 +193,26 @@ The `ParamDescriptor` uses `STEPPED` flag and `with_step_labels()` for GUI displ
 
 ### Stereo LFO effects
 
-Effects with stereo spread (Tremolo, Chorus) that use paired LFOs:
+Effects with stereo spread use paired LFOs. Tremolo, for example, re-derives the
+right LFO's phase from the left one each sample:
 
 ```rust
 pub struct TremoloKernel {
     lfo_l: Lfo,
     lfo_r: Lfo,
+    tempo: TempoManager,
+    // ...
 }
 
 impl DspKernel for TremoloKernel {
     fn process_stereo(&mut self, l: f32, r: f32, params: &TremoloParams) -> (f32, f32) {
-        let spread_phase = params.stereo_spread / 100.0 * 0.5; // 0-50% = 0-180 deg
-        self.lfo_r.set_phase_offset(spread_phase);
+        // 0-100 % spread = 0-0.5 cycle (0-180 deg) offset for R
+        let spread_offset = params.stereo_spread_pct / 100.0 * 0.5;
+        let r_phase = (self.lfo_l.phase() + spread_offset).fract();
+        self.lfo_r.set_phase(r_phase);
 
-        let mod_l = self.lfo_l.next();
-        let mod_r = self.lfo_r.next();
+        let mod_l = self.lfo_l.advance();
+        let mod_r = self.lfo_r.advance();
         // ...
     }
 }
@@ -214,29 +220,31 @@ impl DspKernel for TremoloKernel {
 
 ### from_knobs() for embedded
 
-Every params struct has a `from_knobs()` that maps normalized 0.0--1.0 ADC readings:
+27 of the 36 params structs have a `from_knobs()` that takes one normalized
+0.0--1.0 reading per parameter, in index order, and maps it through the
+descriptors (most simply forward to `from_normalized()`):
 
 ```rust
 impl DelayParams {
-    pub fn from_knobs(time: f32, feedback: f32, mix: f32, tone: f32) -> Self {
-        Self {
-            time_ms: time * 1999.0 + 1.0,        // 1-2000 ms
-            feedback_pct: feedback * 95.0,         // 0-95%
-            mix_pct: mix * 100.0,                  // 0-100%
-            lpf_hz: 200.0 + tone * 19800.0,       // 200-20000 Hz
-            hpf_hz: 20.0,                          // fixed for embedded
-            sync: 0.0,                             // no sync on hardware
-            division: 0.0,
-            output_db: 0.0,
-        }
+    pub fn from_knobs(
+        time: f32, feedback: f32, mix: f32, ping_pong: f32, fb_lp: f32,
+        fb_hp: f32, diffusion: f32, sync: f32, division: f32, output: f32,
+    ) -> Self {
+        Self::from_normalized(&[
+            time, feedback, mix, ping_pong, fb_lp, fb_hp, diffusion, sync, division, output,
+        ])
     }
 }
 ```
 
-When using `Adapter<K, DirectPolicy>` (the preferred embedded path), parameter mapping
-is handled by `adc_to_param_biased()` in `sonido-daisy` instead of `from_knobs()`.
-This uses `ParamDescriptor` metadata to provide scale-aware mapping with a biased
-center point ("noon = sweet spot"). See ADR-030 and `docs/EMBEDDED.md` for details.
+(cabinet, deesser, drone, glitch, multiband_comp, pitch_shift, texture,
+time_stretch and tuner have none.) The shipping pedal firmware does not use
+`from_knobs()`: it wraps kernels in `Adapter<K, DirectPolicy>` and maps knobs with
+`sonido_platform::knob_mapping::knob_to_param()` (built on `adc_to_param_biased()` in
+`sonido-platform/src/param_map.rs`), which uses `ParamDescriptor` metadata for
+scale-aware mapping with a biased center point ("noon = sweet spot"). See ADR-030
+and `docs/EMBEDDED.md` for details. `from_knobs()` remains in use by the
+`single_delay` / `single_reverb` firmware examples.
 
 ### Preset morphing
 
@@ -246,7 +254,8 @@ let heavy = DistortionParams { drive_db: 35.0, mix_pct: 100.0, ..Default::defaul
 
 // Morph 40% of the way from clean to heavy
 let morphed = DistortionParams::lerp(&clean, &heavy, 0.4);
-// Stepped params (waveshape) snap at t=0.5 -- no fractional enum values
+// Stepped params (waveshape) snap at t=0.5 -- no fractional enum values;
+// logarithmic-scale params (frequencies) interpolate geometrically
 ```
 
 ### Preset save/restore via adapter
@@ -259,18 +268,18 @@ let saved: DistortionParams = adapter.snapshot();
 adapter.load_snapshot(&saved);
 adapter.reset();
 
-// Smooth transition to new preset (let smoothers glide)
+// Smooth transition to new preset (let smoothers glide; SmoothedPolicy only)
 adapter.load_snapshot(&saved);
 ```
 
 ### Normalized bridge (CLAP hosts, MIDI CC)
 
 ```rust
-// CLAP host sends normalized 0-1 values
-let params = DistortionParams::from_normalized(&[0.3, 0.5, 0.5, 0.0, 1.0]);
+// Normalized 0-1 values, one per parameter (distortion has 6)
+let params = DistortionParams::from_normalized(&[0.3, 0.5, 0.5, 0.0, 1.0, 0.0]);
 
 // Export back to normalized
-let mut normalized = [0.0f32; 5];
+let mut normalized = [0.0f32; 6];
 params.to_normalized(&mut normalized);
 ```
 
@@ -278,24 +287,23 @@ params.to_normalized(&mut normalized);
 
 ## Emergent Capabilities
 
-### Scene morphing on embedded hardware
+### Scene morphing
 
-Six knobs produce six `f32` values each frame. With `from_knobs()`, those become a typed
-`Params` struct that can be cloned. Two captures plus `lerp()` means continuous morphing
-between them. On the Hothouse (6 knobs, 3 toggles, 2 footswitches):
+Because a `Params` struct is a plain value, two captures plus `lerp()` give continuous
+morphing between them. The morph operates in parameter space (not control space): with
+`KernelParams::lerp()` or `curve_lerp()` + `MorphCurve::Logarithmic`, a 50% morph between
+200 Hz and 2000 Hz yields ~632 Hz (geometric midpoint), not 1100 Hz.
 
-1. Dial in first sound with knobs 1--5
-2. Press footswitch to capture Scene A
-3. Dial in second sound
-4. Press footswitch to capture Scene B
-5. Knob 6 morphs continuously between Scene A and Scene B
-
-The morph operates in parameter space (not control space), so non-linear parameter
-mappings are preserved. A 50% morph between 200 Hz and 2000 Hz yields ~632 Hz
-(geometric midpoint), not 1100 Hz (arithmetic midpoint of knob positions).
-
-Scene data is tiny (5 params x 4 bytes = 20 bytes per scene). Scenes persist across
-power cycles by writing to the Daisy Seed's QSPI flash (8 MB available).
+Where this is used today:
+- **`ChainMorph`** (`sonido-core/src/kernel/chain_morph.rs`) — per-slot `MorphSpace`
+  A/B morph with per-parameter curves and locks; used by `sonido_patch::PatchPlayer`
+  (the graph-player plugin).
+- **Standalone GUI** (`sonido-gui/src/morph_state.rs`) — its own A/B poses per
+  effect, interpolated with `curve_lerp` / `MorphCurve`.
+- **Pedal firmware** (`sonido_pedal.rs`) — captures an A and a B parameter set per node
+  and ramps between them in Morph mode (FS1/FS2, K5 = morph time). Its
+  `interpolate_and_apply` is plain linear interpolation with stepped params snapping at
+  t = 0.5 (no geometric frequency morph), and scenes are not yet persisted to QSPI.
 
 ### Cross-effect morphing
 
@@ -313,8 +321,9 @@ fn cross_effect_morph(t: f32) -> (DistortionParams, ReverbParams) {
 
 ### Expression pedal integration
 
-The morph source is just a `f32` -- it can come from an expression pedal, envelope
-follower, LFO, MIDI CC, or any other source. One line of code swaps the morph source.
+The morph position is just a `f32`, so any control source can drive it: an expression
+pedal, envelope follower, LFO, or MIDI CC. (`sonido-daisy` has an `ExpressionInput`
+reader, but the shipping pedal does not wire it to the morph yet.)
 
 ---
 
@@ -338,10 +347,28 @@ pub struct MyEffectParams {
 Rules:
 - **User-facing units** -- same as `ParamDescriptor::min/max/default` (dB, %, ms, index)
 - **`f32` only** -- no enums, no `SmoothedParam`, no atomics
-- **`Clone + Copy + Default + Send`**
+- **`Default + Clone + Send`** (required by `KernelParams`; the kernels also derive `Copy`)
 - **Field order = parameter index order** (convention)
 
 ### Step 3: Implement `KernelParams`
+
+The kernels implement it with the `kernel_params!` macro (`sonido-core`), which generates
+`COUNT`, `descriptor`, `smoothing`, `get` and `set` from one table:
+
+```rust
+sonido_core::kernel_params! {
+    MyEffectParams, this {
+        [0] ParamDescriptor::gain_db("Drive", "Drive", 0.0, 40.0, 12.0)
+                .with_id(ParamId(XXX), "myeffect_drive"),
+            smoothing: SmoothingStyle::Fast,
+            get: this.drive_db,
+            set: |v| this.drive_db = v;
+        // [1] mix, [2] output ...
+    }
+}
+```
+
+The equivalent hand-written impl:
 
 ```rust
 impl KernelParams for MyEffectParams {
@@ -396,9 +423,9 @@ impl DspKernel for MyEffectKernel {
         }
 
         // Unit conversion
-        let drive = db_to_gain(params.drive_db);
+        let drive = db_to_linear(params.drive_db);
         let mix = params.mix_pct / 100.0;
-        let output = db_to_gain(params.output_db);
+        let output = db_to_linear(params.output_db);
 
         // ... DSP math
     }
@@ -408,19 +435,18 @@ impl DspKernel for MyEffectKernel {
 }
 ```
 
-### Step 6: Add `from_knobs()`
+### Step 6: Add `from_knobs()` (optional)
 
 ```rust
 impl MyEffectParams {
     pub fn from_knobs(drive: f32, mix: f32, output: f32) -> Self {
-        Self {
-            drive_db: drive * 40.0,
-            mix_pct: mix * 100.0,
-            output_db: output * 40.0 - 20.0,
-        }
+        Self::from_normalized(&[drive, mix, output])
     }
 }
 ```
+
+The pedal maps knobs from descriptors instead; to put the effect on the pedal, add it to
+`sonido-platform`'s `knob_mapping.rs` and `noon.rs` (see `docs/EMBEDDED.md`).
 
 ### Step 7: Register in modules
 
@@ -443,15 +469,19 @@ self.register(
     EffectDescriptor {
         id: "my_effect",
         name: "My Effect",
+        short_name: "MYFX",
         description: "...",
         category: EffectCategory::Dynamics,
-        param_count: 3,
+        param_count: 0, // filled in by register() from the adapter
     },
     |sr| Box::new(Adapter::new(MyEffectKernel::new(sr), sr)),
 );
 ```
 
-Update test assertions for `registry.len()` and category counts.
+Also give it a new, never-reused UID in `EFFECT_UIDS` (the patch format stores effects
+by UID), update the test assertions for `registry.len()` and category counts, and add a
+`PluginSpec` to `crates/sonido-plugin/src/bundle.rs` `CATALOG`
+(`crates/sonido-plugin/tests/plugin_inventory.rs` fails until you do).
 
 ### Step 9: Write tests
 
@@ -504,8 +534,8 @@ the baseline, then verify the output sounds correct.
 ### Step 11: Update documentation
 
 - `docs/EFFECTS_REFERENCE.md` -- full effect entry with parameters and DSP theory
+- `docs/ARCHITECTURE.md` -- effect table and count
 - `README.md` -- update effect count
-- `CLAUDE.md` -- Key Files table (updated separately)
 
 ### Migration checklist
 
@@ -518,9 +548,10 @@ the baseline, then verify the output sounds correct.
 - [ ] Coefficient caches update only when relevant params change
 - [ ] `reset()` clears all DSP state (NaN sentinel for cache invalidation)
 - [ ] `set_sample_rate()` recalculates coefficients
-- [ ] `from_knobs()` constructor for embedded deployment
+- [ ] `from_knobs()` constructor (optional; for direct-kernel firmware examples)
 - [ ] Module registered in `kernels/mod.rs` and `lib.rs`
-- [ ] Registry entry added in `sonido-registry/src/lib.rs`
+- [ ] Registry entry + `EFFECT_UIDS` entry added in `sonido-registry/src/lib.rs`
+- [ ] Plugin `CATALOG` entry added in `sonido-plugin/src/bundle.rs`
 - [ ] Kernel unit tests (silence, NaN/Inf, basic processing)
 - [ ] Behavioral tests (parameter effects, 0% mix passes dry, etc.)
 - [ ] Adapter integration tests (Effect interface, ParameterInfo interface)
@@ -536,8 +567,10 @@ the baseline, then verify the output sounds correct.
 ```
 crates/sonido-core/src/kernel/
 +-- mod.rs          # Module root, doc comments, re-exports
-+-- traits.rs       # DspKernel, KernelParams, SmoothingStyle
-+-- adapter.rs      # Adapter<K, P> -- the only Effect implementor
++-- traits.rs       # DspKernel, KernelParams, SmoothingStyle, kernel_params!
++-- adapter.rs      # Adapter<K, P> -- the only Effect implementor for effects
++-- morph.rs        # MorphSpace, MorphCurve, MorphMode, curve_lerp
++-- chain_morph.rs  # ChainMorph -- per-slot A/B morph over a chain
 
 crates/sonido-effects/src/kernels/
 +-- mod.rs              # Module root, re-exports all 36 kernels
@@ -555,6 +588,7 @@ crates/sonido-effects/src/kernels/
 +-- flanger.rs          # FlangerKernel + FlangerParams
 +-- gate.rs             # GateKernel + GateParams
 +-- glitch.rs           # GlitchKernel + GlitchParams
++-- harmonic_habitat.rs # HarmonicHabitatKernel + HarmonicHabitatParams
 +-- limiter.rs          # LimiterKernel + LimiterParams
 +-- looper.rs           # LooperKernel + LooperParams
 +-- multiband_comp.rs   # MultibandCompKernel + MultibandCompParams
@@ -583,41 +617,38 @@ crates/sonido-effects/src/kernels/
 ## FAQ
 
 **Q: Can I use `DspKernel` directly in the DAG graph without the adapter?**
-Not currently. The graph operates on `dyn EffectWithParams`. The adapter overhead is
-negligible (~5 smoother advances per sample per effect) and the integration simplicity
-is worth it.
+No. The graph operates on `dyn EffectWithParams`. The adapter overhead is small (one
+smoother advance per parameter per sample with `SmoothedPolicy`, none with
+`DirectPolicy`) and the integration simplicity is worth it.
 
 **Q: What about block processing optimizations?**
-`Adapter<K, SmoothedPolicy>` calls `process_stereo()` per sample inside its block methods
-because it advances smoothers per sample. The `DspKernel` trait also has
-`process_block_stereo()` which takes a single params snapshot for the entire block -- this
-is for embedded use where params don't change mid-block.
+`Adapter<K, P>` calls `process_stereo()` per sample inside its block methods because it
+advances smoothers per sample. The `DspKernel` trait also has `process_block_stereo()`,
+which takes a single params snapshot for the entire block (its default is a per-sample
+loop; no kernel currently overrides it).
 
-**Q: What about the `impl_params!` macro?**
-`KernelParams` replaces the need for per-effect `impl_params!`. The `Adapter` uses
-`KernelParams` to implement `ParameterInfo` automatically. Eventually, a
-`#[derive(KernelParams)]` proc macro will eliminate the manual `get/set/descriptor/smoothing`
-match arms.
-
-**Q: What if something breaks when I delete the old effect?**
-Fix forward. If tests fail after deletion, update references to use the kernel type or the
-adapter. Common fixup: `use sonido_effects::Distortion` ->
-`use sonido_effects::kernels::DistortionKernel` (or use the registry, which is preferred).
+**Q: Do I hand-write `get`/`set`/`descriptor`/`smoothing`?**
+No -- use the `kernel_params!` macro (Step 3). The `Adapter` uses `KernelParams` to
+implement `ParameterInfo` automatically.
 
 **Q: How does the plugin integration work?**
-The CLAP plugin adapter gets kernels automatically through the registry.
-`SonidoShared::new()` calls `registry.create(effect_id, sr)` which returns
-`Adapter<K, SmoothedPolicy>`. The plugin's atomic parameter array writes to
-`Adapter::set_param()`, which sets the smoother target.
+The CLAP plugin gets kernels through the registry. `SonidoAudioProcessor` (`audio.rs`)
+calls `registry.create(effect_id, sr)`, which returns `Adapter<K, SmoothedPolicy>`;
+`SonidoShared` builds its atomic parameter store from the registry's descriptors. Each
+process call copies the atomic values into `Adapter::set_param()`, which sets the
+smoother target.
 
-**Q: How does embedded use work without the adapter?**
-On Daisy Seed / Hothouse, use kernels directly:
+**Q: How does embedded use work?**
+The shipping pedal (`sonido_pedal.rs`) wraps each kernel in `Adapter::new_direct()`
+(`DirectPolicy`: same `Effect + ParameterInfo` interface, no smoothing) inside a
+`ProcessingGraph`. Single-effect examples can also call a kernel directly:
 ```rust
-let mut kernel = DistortionKernel::new(SAMPLE_RATE);
-let params = DistortionParams::from_knobs(adc.read(0), adc.read(1), ...);
+let mut kernel = DelayKernel::new(SAMPLE_RATE);
+let params = DelayParams::from_knobs(k1, k2, k3, /* ... one per param */);
 let (l, r) = kernel.process_stereo(input_l, input_r, &params);
 ```
-No `SmoothedParam`. No `Vec`. No `Arc`. No allocation. Same DSP math as the desktop plugin.
+No `SmoothedParam`, no `Arc`, and no allocation in the audio path (delay buffers are
+allocated once in `new()`). Same DSP math as the desktop plugin.
 
 ---
 

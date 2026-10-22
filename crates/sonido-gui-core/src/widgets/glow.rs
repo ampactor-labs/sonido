@@ -159,3 +159,58 @@ pub fn scanlines(painter: &Painter, rect: Rect, theme: &SonidoTheme) {
         y += theme.scanlines.line_spacing;
     }
 }
+
+/// The white-hot core of a phosphor trace: the color pushed toward white.
+///
+/// Real neon and CRT phosphors saturate in the middle of the beam, so the
+/// core reads near-white while the halo carries the hue. This is what makes a
+/// line look lit rather than painted.
+pub fn hot_core(color: Color32) -> Color32 {
+    let mix = |c: u8| c + ((255 - c) as f32 * 0.55) as u8;
+    Color32::from_rgba_unmultiplied(mix(color.r()), mix(color.g()), mix(color.b()), color.a())
+}
+
+/// Paint a neon polyline: a wide colored halo, the line itself, and a
+/// white-hot core. With `reduced_fx` only the colored line is drawn.
+pub fn neon_polyline(
+    painter: &Painter,
+    points: &[Pos2],
+    color: Color32,
+    width: f32,
+    theme: &SonidoTheme,
+) {
+    if points.len() < 2 {
+        return;
+    }
+    if !theme.reduced_fx {
+        painter.add(egui::Shape::line(
+            points.to_vec(),
+            Stroke::new(
+                width + theme.glow.bloom_radius * 2.0,
+                bloom_color(color, theme),
+            ),
+        ));
+    }
+    painter.add(egui::Shape::line(
+        points.to_vec(),
+        Stroke::new(width, color),
+    ));
+    if !theme.reduced_fx && width >= 1.2 {
+        painter.add(egui::Shape::line(
+            points.to_vec(),
+            Stroke::new(width * 0.45, hot_core(color)),
+        ));
+    }
+}
+
+/// Paint a single neon segment (see [`neon_polyline`]).
+pub fn neon_line(
+    painter: &Painter,
+    start: Pos2,
+    end: Pos2,
+    color: Color32,
+    width: f32,
+    theme: &SonidoTheme,
+) {
+    neon_polyline(painter, &[start, end], color, width, theme);
+}

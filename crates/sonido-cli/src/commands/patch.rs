@@ -1,7 +1,8 @@
 //! Canonical patch (`sonido-patch`) export and inspection.
 //!
 //! `sonido patch export` packs a preset TOML or a DSL string into a single
-//! 4 KB `.bin` sector in the canonical format the firmware and GUI both speak.
+//! 4 KB `.bin` sector in the canonical format the GUI exports and the
+//! firmware's `patch_loader` decodes (the shipping `sonido_pedal` does not load it yet).
 //! Unlike the legacy `sonido daisy export`, effects are stored by **stable UID**
 //! (not list position) and the format carries macros, morph, and globals.
 //!
@@ -12,8 +13,8 @@ use std::path::{Path, PathBuf};
 
 use clap::{Args, Subcommand};
 use sonido_config::Preset;
-use sonido_patch::{MAX_NODES, Patch, PatchEdge, PatchEndpoint, PatchNode, SECTOR_SIZE, binary};
-use sonido_registry::{EffectRegistry, PEDAL_EFFECT_IDS, effect_by_uid, effect_uid};
+use sonido_patch::{Patch, SECTOR_SIZE, binary};
+use sonido_registry::{EffectRegistry, PEDAL_EFFECT_IDS, effect_by_uid};
 
 /// Canonical patch management.
 #[derive(Args)]
@@ -67,7 +68,14 @@ pub fn run(args: PatchArgs) -> anyhow::Result<()> {
             let registry = EffectRegistry::new();
             let preset = load_preset(preset.as_deref(), from_dsl.as_deref(), &registry)?;
             let patch_name = name.unwrap_or_else(|| preset.name.clone());
-            let patch = preset_to_patch(&preset, &patch_name, &topology, &registry)?;
+            // The shared conversion (sonido_config::patch): same parameter
+            // resolution as preset loading and the graph player's factory rigs.
+            let converted =
+                sonido_config::preset_to_patch(&preset, &patch_name, Some(&topology), &registry)?;
+            for warning in &converted.warnings {
+                eprintln!("Warning: {warning}");
+            }
+            let patch = converted.patch;
             export_patch(&patch, &output, pedal)
         }
         PatchCommand::Inspect { file } => inspect(&file),
@@ -95,124 +103,6 @@ fn load_preset(
         }
         _ => anyhow::bail!("Provide either a preset TOML path or --from-dsl, not both"),
     }
-}
-
-/// Convert a [`Preset`] into a [`Patch`], resolving stable UIDs and overlaying
-/// the preset's parameter values onto each effect's defaults.
-fn preset_to_patch(
-    preset: &Preset,
-    name: &str,
-    topology: &str,
-    registry: &EffectRegistry,
-) -> anyhow::Result<Patch> {
-    if preset.effects.len() > MAX_NODES {
-        anyhow::bail!(
-            "Patch supports at most {MAX_NODES} effects, '{}' has {}",
-            preset.name,
-            preset.effects.len()
-        );
-    }
-
-    let mut nodes = Vec::with_capacity(preset.effects.len());
-    for effect_cfg in &preset.effects {
-        let id = effect_cfg.effect_type.as_str();
-        let uid = effect_uid(id)
-            .ok_or_else(|| anyhow::anyhow!("Effect '{}' has no stable UID (unknown effect)", id))?;
-
-        let effect = registry
-            .create(id, 48_000.0)
-            .ok_or_else(|| anyhow::anyhow!("Effect '{}' not found in registry", id))?;
-
-        let param_count = effect.effect_param_count();
-        let mut params = Vec::with_capacity(param_count);
-        // Start from defaults.
-        for idx in 0..param_count {
-            params.push(
-                effect
-                    .effect_param_info(idx)
-                    .map(|d| d.default)
-                    .unwrap_or(0.0),
-            );
-        }
-        // Overlay preset values, matched by name / short name / string id.
-        for (key, val) in &effect_cfg.params {
-            let lower = key.to_lowercase();
-            let mut matched = false;
-            for idx in 0..param_count {
-                if let Some(desc) = effect.effect_param_info(idx) {
-                    let hit = desc.name.to_lowercase() == lower
-                        || desc.short_name.to_lowercase() == lower
-                        || desc.string_id == lower;
-                    if hit {
-                        match val.parse::<f32>() {
-                            Ok(v) => params[idx] = v.clamp(desc.min, desc.max),
-                            Err(_) => eprintln!(
-                                "Warning: could not parse '{key}={val}' as f32, leaving default"
-                            ),
-                        }
-                        matched = true;
-                        break;
-                    }
-                }
-            }
-            if !matched {
-                eprintln!("Warning: effect '{id}' has no parameter '{key}', ignoring");
-            }
-        }
-
-        nodes.push(PatchNode::new(uid, params));
-    }
-
-    let mut patch = Patch::new(name);
-    patch.edges = build_edges(topology, nodes.len())?;
-    patch.nodes = nodes;
-    Ok(patch)
-}
-
-/// Build the edge set for a named topology over `n` effect nodes.
-fn build_edges(topology: &str, n: usize) -> anyhow::Result<Vec<PatchEdge>> {
-    let mut edges = Vec::new();
-    match topology {
-        "linear" => {
-            // Reuse the chain builder's edge layout.
-            return Ok(Patch::linear_chain(
-                "",
-                (0..n)
-                    .map(|i| PatchNode::new((i + 1) as u16, Vec::new()))
-                    .collect(),
-            )
-            .edges);
-        }
-        "parallel" => {
-            if n == 0 {
-                edges.push(PatchEdge::new(PatchEndpoint::Input, PatchEndpoint::Output));
-            } else {
-                edges.push(PatchEdge::new(
-                    PatchEndpoint::Input,
-                    PatchEndpoint::Split(0),
-                ));
-                for i in 0..n {
-                    edges.push(PatchEdge::new(
-                        PatchEndpoint::Split(0),
-                        PatchEndpoint::Node(i as u8),
-                    ));
-                    edges.push(PatchEdge::new(
-                        PatchEndpoint::Node(i as u8),
-                        PatchEndpoint::Merge(0),
-                    ));
-                }
-                edges.push(PatchEdge::new(
-                    PatchEndpoint::Merge(0),
-                    PatchEndpoint::Output,
-                ));
-            }
-        }
-        other => anyhow::bail!(
-            "Unknown topology '{other}'. Use 'linear' or 'parallel' \
-             (arbitrary graphs are authored in the GUI)."
-        ),
-    }
-    Ok(edges)
 }
 
 // ---------------------------------------------------------------------------
@@ -327,6 +217,8 @@ fn inspect(file: &Path) -> anyhow::Result<()> {
 mod tests {
     use super::*;
     use sonido_config::{EffectConfig, Preset};
+    use sonido_patch::{MAX_NODES, PatchEndpoint};
+    use sonido_registry::effect_uid;
 
     fn pedal_uid(id: &str) -> u16 {
         effect_uid(id).unwrap()
@@ -338,7 +230,9 @@ mod tests {
             .with_effect(EffectConfig::new("distortion").with_param("drive", "20.0"))
             .with_effect(EffectConfig::new("reverb").with_param("mix", "30"));
         let registry = EffectRegistry::new();
-        let patch = preset_to_patch(&preset, "CLI Test", "linear", &registry).unwrap();
+        let patch = sonido_config::preset_to_patch(&preset, "CLI Test", Some("linear"), &registry)
+            .unwrap()
+            .patch;
 
         assert_eq!(patch.nodes.len(), 2);
         assert_eq!(patch.nodes[0].effect_uid, pedal_uid("distortion"));
@@ -352,7 +246,7 @@ mod tests {
 
     #[test]
     fn parallel_topology_has_split_and_merge() {
-        let edges = build_edges("parallel", 3).unwrap();
+        let edges = sonido_config::patch::build_edges("parallel", 3).unwrap();
         assert!(
             edges.iter().any(|e| matches!(e.from, PatchEndpoint::Input)
                 && matches!(e.to, PatchEndpoint::Split(0)))
@@ -365,7 +259,7 @@ mod tests {
 
     #[test]
     fn unknown_topology_rejected() {
-        assert!(build_edges("fan", 3).is_err());
+        assert!(sonido_config::patch::build_edges("fan", 3).is_err());
     }
 
     #[test]
@@ -375,6 +269,6 @@ mod tests {
             preset = preset.with_effect(EffectConfig::new("distortion"));
         }
         let registry = EffectRegistry::new();
-        assert!(preset_to_patch(&preset, "big", "linear", &registry).is_err());
+        assert!(sonido_config::preset_to_patch(&preset, "big", Some("linear"), &registry).is_err());
     }
 }

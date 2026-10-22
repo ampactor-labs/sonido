@@ -8,7 +8,7 @@
 //! - A `Kernel` struct (DSP state only — filters, delay lines, ADAA processors)
 //!
 //! Kernels are deployed via [`Adapter`](sonido_core::kernel::Adapter) for desktop/plugin
-//! use, or called directly on embedded targets.
+//! use, or via `Adapter::new_direct` (no smoothing) on embedded targets.
 
 pub mod amp;
 pub mod bitcrusher;

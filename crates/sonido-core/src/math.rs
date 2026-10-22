@@ -24,12 +24,12 @@
 //!
 //! | Waveshaper | Antiderivative | Notes |
 //! |------------|----------------|-------|
-//! | [`soft_clip`] (tanh) | [`soft_clip_ad`] | Numerically stable `ln(2·cosh)` |
+//! | [`soft_clip`] (tanh) | [`soft_clip_ad`] | `ln(cosh)`, overflow-safe, zero at the origin |
 //! | [`hard_clip`] | [`hard_clip_ad`] | Piecewise quadratic/linear |
 //! | [`foldback`] | [`foldback_ad`] | Piecewise parabolic (triangle-wave) |
 //! | tape positive | [`tape_sat_pos_ad`] | Exponential saturation |
 //! | tape negative | [`tape_sat_neg_ad`] | Asymmetric exponential |
-//! | tape combined | [`tape_sat_ad`] | Piecewise with continuity correction |
+//! | tape combined | [`tape_sat_ad`] | Piecewise, both branches zero at the origin |
 //! | [`asymmetric_clip`] | [`asymmetric_clip_ad`] | Piecewise `soft_clip_ad` |
 //!
 //! # Utilities
@@ -39,7 +39,7 @@
 //! - [`hz_to_omega`] - Frequency to angular frequency
 //! - [`ms_to_samples`] / [`samples_to_ms`] - Time conversions
 
-use libm::{expf, logf, tanhf};
+use libm::{expf, expm1f, logf, tanhf};
 
 /// Convert decibels to linear gain.
 ///
@@ -194,26 +194,31 @@ pub fn asymmetric_clip(x: f32) -> f32 {
 // ---------------------------------------------------------------------------
 //
 // Each `_ad` function is the first antiderivative of the corresponding
-// waveshaper above.  ADAA processors use F(x₁) − F(x₀) to approximate the
-// continuous-time convolution, so constant offsets are irrelevant.
+// waveshaper above, chosen so that F(0) = 0. ADAA divides F(x₁) − F(x₀) by
+// x₁ − x₀, so the constant doesn't change the result, but its rounding
+// does: an F that sits near ln 2 for quiet input loses its low bits to the
+// constant, and at −40 dBFS the quotient came out only ~20 dB above its own
+// rounding noise. With F(0) = 0 and no cancellation against a constant
+// (expm1/log1p), F's error scales with |x| and the quotient stays clean at
+// any level.
 //
 // Reference: Parker et al., "Reducing the Aliasing of Nonlinear Waveshaping
 // Using Continuous-Time Convolution", DAFx-2016.
 
-/// First antiderivative of [`soft_clip`] (`tanh`).
+/// First antiderivative of [`soft_clip`] (`tanh`): `ln(cosh(x))`.
 ///
-/// Computes `ln(2·cosh(x))` using the numerically stable identity:
+/// Below `|x| = 0.5`, where most guitar-level signal sits, it is the Taylor
+/// series through `x¹⁴` (truncation error at most 1.1e−8 relative, no
+/// transcendental calls). Above, it uses the identity
 ///
 /// ```text
-/// ln(2·cosh(x)) = |x| + ln(1 + exp(−2|x|))
+/// ln(cosh(x)) = |x| + ln(1 + exp(−2|x|)) − ln 2
 /// ```
 ///
-/// The direct formula `ln(cosh(x))` overflows for `|x| > ~89` because
-/// `cosh(x)` exceeds `f32::MAX`. This identity keeps the `exp` argument
-/// always ≤ 0, preventing overflow entirely.
-///
-/// Differs from the true `ln(cosh(x))` by a constant `ln(2)`, which
-/// cancels in ADAA's difference computation `F(x₁) − F(x₀)`.
+/// because the direct `ln(cosh(x))` overflows for `|x| > ~89`; this form
+/// keeps the exponent ≤ 0. The result is 0 at the origin and its rounding
+/// error scales with `max(1, |x|)`, which keeps ADAA's quotient clean at low
+/// levels (see the note above these functions).
 ///
 /// # Reference
 ///
@@ -221,7 +226,21 @@ pub fn asymmetric_clip(x: f32) -> f32 {
 #[inline]
 pub fn soft_clip_ad(x: f32) -> f32 {
     let abs_x = x.abs();
-    abs_x + logf(1.0 + expf(-2.0 * abs_x))
+    if abs_x < 0.5 {
+        // ln(cosh x) = x²/2 − x⁴/12 + x⁶/45 − 17x⁸/2520 + 31x¹⁰/14175
+        //              − 691x¹²/935550 + 10922x¹⁴/42567525 − …
+        let x2 = x * x;
+        x2 * (0.5
+            + x2 * (-1.0 / 12.0
+                + x2 * (1.0 / 45.0
+                    + x2 * (-17.0 / 2520.0
+                        + x2 * (31.0 / 14175.0
+                            + x2 * (-691.0 / 935_550.0 + x2 * (10_922.0 / 42_567_525.0)))))))
+    } else {
+        // Here F ≥ 0.12, so cancelling the ln 2 costs at most a few ulps of
+        // max(1, |x|): within what ADAA's relative cutoff allows for.
+        abs_x + logf(1.0 + expf(-2.0 * abs_x)) - core::f32::consts::LN_2
+    }
 }
 
 /// First antiderivative of [`hard_clip`].
@@ -252,8 +271,10 @@ pub fn hard_clip_ad(x: f32, threshold: f32) -> f32 {
 /// First antiderivative of the positive tape-saturation branch `1 − exp(−2x)`.
 ///
 /// ```text
-/// ∫(1 − exp(−2x)) dx = x + exp(−2x) / 2
+/// ∫(1 − exp(−2x)) dx = x + (exp(−2x) − 1) / 2
 /// ```
+///
+/// The constant is chosen so `F(0) = 0` (see the note above these functions).
 ///
 /// This is the positive-input branch of the asymmetric tape saturation
 /// transfer function used by `Tape`.
@@ -263,14 +284,16 @@ pub fn hard_clip_ad(x: f32, threshold: f32) -> f32 {
 /// Parker et al., DAFx-2016 (applied to exponential saturation curves).
 #[inline]
 pub fn tape_sat_pos_ad(x: f32) -> f32 {
-    x + expf(-2.0 * x) * 0.5
+    x + expm1f(-2.0 * x) * 0.5
 }
 
 /// First antiderivative of the negative tape-saturation branch `−1 + exp(1.8x)`.
 ///
 /// ```text
-/// ∫(−1 + exp(1.8x)) dx = −x + exp(1.8x) / 1.8
+/// ∫(−1 + exp(1.8x)) dx = −x + (exp(1.8x) − 1) / 1.8
 /// ```
+///
+/// The constant is chosen so `F(0) = 0` (see the note above these functions).
 ///
 /// This is the negative-input branch of the asymmetric tape saturation
 /// transfer function used by `Tape`.
@@ -280,7 +303,7 @@ pub fn tape_sat_pos_ad(x: f32) -> f32 {
 /// Parker et al., DAFx-2016 (applied to exponential saturation curves).
 #[inline]
 pub fn tape_sat_neg_ad(x: f32) -> f32 {
-    -x + expf(1.8 * x) / 1.8
+    -x + expm1f(1.8 * x) / 1.8
 }
 
 /// First antiderivative of the combined tape-saturation waveshaper.
@@ -293,17 +316,13 @@ pub fn tape_sat_neg_ad(x: f32) -> f32 {
 /// f(x) = −1 + exp(1.8x)   for x < 0
 /// ```
 ///
-/// A continuity correction of `1/2 − 1/1.8` is applied to the negative
-/// branch so that `F(0⁻) = F(0⁺)`.
+/// Both branches are 0 at the origin, so `F` is continuous there.
 #[inline]
 pub fn tape_sat_ad(x: f32) -> f32 {
     if x >= 0.0 {
         tape_sat_pos_ad(x)
     } else {
-        // Continuity: pos at 0 = 0 + 0.5 = 0.5
-        //             neg at 0 = 0 + 1/1.8 = 0.5556
-        //             correction = 0.5 - 1/1.8 = -1/18
-        tape_sat_neg_ad(x) + (0.5 - 1.0 / 1.8)
+        tape_sat_neg_ad(x)
     }
 }
 
@@ -360,20 +379,20 @@ pub fn foldback_ad(input: f32, threshold: f32) -> f32 {
 /// Piecewise antiderivative matching the asymmetric clipping function:
 ///
 /// ```text
-/// F(x) = ln(2·cosh(x))                        for x ≥ 0
-/// F(x) = (8/15)·ln(2·cosh(1.5x)) + (7/15)·ln2 for x < 0
+/// F(x) = ln(cosh(x))                 for x ≥ 0
+/// F(x) = (8/15)·ln(cosh(1.5x))        for x < 0
 /// ```
 ///
 /// The negative branch uses `(8/15)` because `asymmetric_clip` applies
 /// `tanh(1.5x) · 1.2 / 1.5 = 0.8 · tanh(1.5x)`, and the chain rule
-/// gives `0.8 / 1.5 = 8/15` as the antiderivative coefficient.
-/// The `(7/15)·ln2` term ensures continuity at `x = 0`.
+/// gives `0.8 / 1.5 = 8/15` as the antiderivative coefficient. Both
+/// branches are 0 at the origin, so `F` is continuous there.
 #[inline]
 pub fn asymmetric_clip_ad(x: f32) -> f32 {
     if x >= 0.0 {
         soft_clip_ad(x)
     } else {
-        (8.0 / 15.0) * soft_clip_ad(1.5 * x) + core::f32::consts::LN_2 * 7.0 / 15.0
+        (8.0 / 15.0) * soft_clip_ad(1.5 * x)
     }
 }
 
@@ -802,15 +821,20 @@ mod tests {
     #[test]
     fn test_soft_clip_ad_no_overflow() {
         // Large inputs that would overflow coshf
+        // ln(cosh(100)) = 100 − ln 2 to f32 precision.
+        let expected = 100.0 - core::f32::consts::LN_2;
         let val = soft_clip_ad(100.0);
         assert!(val.is_finite(), "overflow at x=100: {val}");
-        assert!((val - 100.0).abs() < 1e-5, "expected ~100.0, got {val}");
+        assert!(
+            (val - expected).abs() < 1e-4,
+            "expected {expected}, got {val}"
+        );
 
         let val_neg = soft_clip_ad(-100.0);
         assert!(val_neg.is_finite(), "overflow at x=-100: {val_neg}");
         assert!(
-            (val_neg - 100.0).abs() < 1e-5,
-            "expected ~100.0, got {val_neg}"
+            (val_neg - expected).abs() < 1e-4,
+            "expected {expected}, got {val_neg}"
         );
     }
 

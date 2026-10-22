@@ -1,7 +1,8 @@
 //! Parameter macro mapping — N exposed knobs → M internal parameters.
 //!
-//! A [`MacroMap`] exposes a small number of high-level "macro" knobs (the six
-//! knobs on the pedal, six automatable params in the plugin) and maps each one
+//! A [`MacroMap`] exposes a small number of high-level "macro" knobs (six in
+//! a patch — one per pedal knob K1–K6 in the patch format, and six automatable
+//! params in the graph-player plugin) and maps each one
 //! to one or more [`MacroTarget`]s — effect-slot parameters *or* graph-level
 //! globals. Every mapping has its own min/max range and [`MorphCurve`], so a
 //! macro can scale, invert, log-sweep, or range-limit any underlying control.
@@ -20,8 +21,9 @@
 //! # Application is decoupled from the engine
 //!
 //! [`MacroMap::apply_all`] feeds resolved `(target, value)` pairs to a sink
-//! closure, so the same map drives a GUI `ParamBridge`, a plugin `GraphEngine`,
-//! or raw firmware writes. [`MacroMap::apply_to_engine`] is the convenience
+//! closure, so the same map can drive a GUI `ParamBridge`, a plugin
+//! `GraphEngine`, or raw firmware writes (the GUI editor and `PatchPlayer` use
+//! it today; the Daisy pedal firmware does not). [`MacroMap::apply_to_engine`] is the convenience
 //! wrapper for the common `GraphEngine` + globals case.
 //!
 //! # no_std

@@ -1,6 +1,6 @@
 //! Criterion benchmarks for sonido effects (kernel architecture)
 //!
-//! Run with: cargo bench
+//! Run with: cargo bench -p sonido-effects
 #![allow(missing_docs)]
 
 use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};

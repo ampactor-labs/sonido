@@ -2,8 +2,8 @@
 //!
 //! `LooperKernel` owns DSP state (a stereo [`LoopBuffer`] and the cached mode).
 //! Parameters are received via `&LooperParams` each sample. Deployed via
-//! [`Adapter`](sonido_core::kernel::Adapter) for desktop/plugin, or called
-//! directly on embedded targets.
+//! [`Adapter`](sonido_core::kernel::Adapter) for desktop/plugin, or via `Adapter::new_direct`
+//! (no smoothing) on embedded targets.
 //!
 //! # State Machine
 //!
@@ -59,7 +59,10 @@
 //! let adapter = Adapter::new(LooperKernel::new(48000.0), 48000.0);
 //! let mut effect: Box<dyn Effect> = Box::new(adapter);
 //!
-//! // Embedded / Daisy Seed (direct — no smoothing, ADCs are hardware-filtered)
+//! // Embedded / Daisy Seed — zero-smoothing adapter, as the pedal firmware uses
+//! let effect = Adapter::new_direct(LooperKernel::new(48000.0), 48000.0);
+//!
+//! // Or drive the kernel directly with a typed params struct (no adapter)
 //! let mut kernel = LooperKernel::new(48000.0);
 //! let params = LooperParams::default();
 //! let (left, right) = kernel.process_stereo(input_l, input_r, &params);
@@ -110,8 +113,8 @@ const MODE_LABELS: &[&str] = &["Stop", "Record", "Play", "Overdub"];
 /// | 1 | `feedback_pct` | % | 0–100 | 50.0 |
 /// | 2 | `half_speed` | index | 0–1 | 0.0 |
 /// | 3 | `reverse` | index | 0–1 | 0.0 |
-/// | 4 | `mix_pct` | % | 0–100 | 100.0 |
-/// | 5 | `output_db` | dB | −20–+6 | 0.0 |
+/// | 4 | `mix_pct` | % | 0–100 | 50.0 |
+/// | 5 | `output_db` | dB | −6–+6 | 0.0 |
 #[derive(Debug, Clone, Copy)]
 pub struct LooperParams {
     /// Looper mode index.
@@ -148,19 +151,19 @@ pub struct LooperParams {
 
     /// Output level in decibels.
     ///
-    /// Range: −20.0 to +6.0 dB. Applied to the final output after wet/dry mix.
+    /// Range: −6.0 to +6.0 dB. Applied to the final output after wet/dry mix.
     pub output_db: f32,
 }
 
 impl Default for LooperParams {
-    /// Default: Stop mode, 50 % feedback, no half-speed/reverse, 100 % wet, 0 dB output.
+    /// Default: Stop mode, 50 % feedback, no half-speed/reverse, 50 % mix, 0 dB output.
     fn default() -> Self {
         Self {
             mode: 0.0,
             feedback_pct: 80.0,
             half_speed: 0.0,
             reverse: 0.0,
-            mix_pct: 100.0,
+            mix_pct: 50.0,
             output_db: 0.0,
         }
     }
@@ -179,7 +182,7 @@ impl LooperParams {
     /// - `half_speed`: ADC reading → 0 or 1 (stepped toggle)
     /// - `reverse`: ADC reading → 0 or 1 (stepped toggle)
     /// - `mix`: ADC reading → 0–100 %
-    /// - `output`: ADC reading → −20–+6 dB
+    /// - `output`: ADC reading → −6–+6 dB
     #[allow(clippy::too_many_arguments)]
     pub fn from_knobs(
         mode: f32,
@@ -213,6 +216,7 @@ kernel_params! {
                 max: 100.0,
                 default: 80.0,
                 step: 1.0,
+                flags: ParamFlags::AUTOMATABLE,
                 ..ParamDescriptor::mix()
             }
             .with_id(ParamId(2001), "looper_feedback"),

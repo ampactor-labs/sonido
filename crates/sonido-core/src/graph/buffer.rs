@@ -260,7 +260,7 @@ mod tests {
     #[test]
     fn stereo_buffer_is_empty_on_zero_size() {
         let buf = StereoBuffer::new(0);
-        assert!(buf.is_empty());
+        assert_eq!(buf.len(), 0);
     }
 
     #[test]

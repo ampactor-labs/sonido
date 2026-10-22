@@ -28,7 +28,7 @@ Sonido is a production-grade DSP framework in Rust. The following capabilities a
 - **Dynamics (6)**: Compressor (program-dependent release, sidechain-capable), Limiter (lookahead brickwall), Gate, Multiband Compressor (Linkwitz-Riley crossovers), De-esser, Transient Shaper
 - **Modulation (9)**: Chorus, Flanger (through-zero), Phaser, Tremolo, Vibrato, Ring Modulator, Pitch Shift (granular), Time Stretch, Texture (granular pads)
 - **Filter (4)**: Filter (multimode biquad), Wah, Parametric EQ (3-band), Shelving EQ
-- **Time-Based (7)**: Delay (ping-pong, diffusion, tempo sync), Reverb (Freeverb-style), Plate Reverb (Dattorro-inspired), Spring Reverb, Harmonic Habitat (pitch-aware modal tank), Drone, Looper
+- **Time-Based (7)**: Delay (ping-pong, diffusion, tempo sync), Reverb (8-line Hadamard FDN with early reflections), Plate Reverb (Dattorro-inspired), Spring Reverb, Harmonic Habitat (pitch-aware modal tank), Drone, Looper
 - **Utility (4)**: Preamp, Stage (signal conditioning), Stereo Widener, Tuner (YIN pitch detection)
 
 Key DSP quality features active across all effects:
@@ -43,12 +43,12 @@ Key DSP quality features active across all effects:
 
 ### Plugin Integration
 
-20 single-effect CLAP plugins via the `sonido_effect_entry!` macro, plus graph-player. Plugin features:
+One plugin bundle: `crates/sonido-plugin/examples/sonido.rs` exports `SonidoEntry` (`crates/sonido-plugin/src/bundle.rs`), whose CLAP factory lists all 36 effects (`bundle::CATALOG`, IDs `com.sonido.<effect-id>` with `_` written as `-`) plus the graph player (`com.sonido.graph-player`). Plugin features:
 - Full `ParameterInfo` automation (stable numeric IDs, CLAP flags, text display)
 - Per-gesture `begin_set/end_set` protocol for DAW automation recording
-- egui GUI shared with standalone GUI via `sonido-gui-core`
-- State save/restore, bypass, host notification on parameter change
-- Built as cargo examples, installed to `~/.clap/` via `make plugins`
+- Every effect plugin draws the design system's Cabinet (`sonido-gui-core`, see `docs/DESIGN_SYSTEM.md`)
+- State save/restore, bypass, host notification on parameter change, tail length reported from the live effect
+- `scripts/bundle-clap.sh` builds `dist-clap/sonido.clap`; `scripts/bundle-vst3.sh` builds a `sonido.vst3` shim (clap-wrapper) that loads it. `make plugins` installs `~/.clap/sonido.clap`; `make plugins-vst3` also installs `~/.vst3/sonido.vst3`
 
 ### GUI
 
@@ -87,7 +87,7 @@ Full polyphonic synthesis pipeline:
 
 - 75 golden regression baselines (MSE < 1e-6, SNR > 60 dB, spectral correlation > 0.9999)
 - Property tests via proptest: bounded output, reset state clearing, parameter roundtrip
-- 4 CI workflow files (ci.yml, ci-manual.yml, pages.yml, release.yml) with 9 jobs total
+- 4 CI workflow files (ci.yml, ci-manual.yml, pages.yml, release.yml) with 11 jobs total
 - Workspace lints: `unsafe_code = deny`, `clippy::pedantic = warn`
 - Edition 2024, resolver 3
 
@@ -96,8 +96,8 @@ Full polyphonic synthesis pipeline:
 | Target | Status | Notes |
 |--------|--------|-------|
 | Linux x86_64 | Production | Primary development target, CI-gated |
-| macOS | Builds | Release workflow cross-builds bundles; no CI runner yet |
-| Windows | Builds | Release workflow cross-builds bundles; no CI runner yet |
+| macOS | Builds | Release workflow builds on macOS runners (x64, arm64); not in per-push CI |
+| Windows | Builds | Release workflow builds on a Windows runner; not in per-push CI |
 | wasm32-unknown-unknown | Production | CI-gated build, deployed to GitHub Pages |
 | Cortex-M7 (Daisy Seed) | Stable | no_std core verified, hardware integration manual |
 
@@ -122,21 +122,21 @@ Replace `log` facade with `tracing` throughout std crates. `tracing-log` bridge 
 
 **Status:** Complete
 
-Add `cargo-llvm-cov` job to CI. Generates `lcov.info` artifact per main-branch build. No threshold gate in v0.2 — establishes the baseline before enforcing floors.
+`cargo-llvm-cov` job in `ci-manual.yml`, run on demand via `gh workflow run ci-manual.yml -f job=coverage`. Generates an `lcov.info` artifact. No threshold gate in v0.2 — establishes the baseline before enforcing floors.
 
-Current known coverage state: DSP core ~100% (unit tested per module), CLI 43 unit tests, GUI-core 22 unit tests, GUI/IO lower (visual/hardware paths untested by unit tests).
+Current known coverage state: DSP core ~100% (unit tested per module), CLI 45 unit tests, GUI-core 71 unit tests, GUI/IO lower (visual/hardware paths untested by unit tests).
 
 ### Plugin GUI Resize
 
 **Status:** Complete
 
-All packaged CLAP plugins support host-negotiated window resize via atomic `PendingResize` channel (packed `AtomicU64`). The host calls `set_size()`, the baseview handler applies it in `on_frame()` via `window.resize()`. Size constraints: 320×240 minimum, 1920×1080 maximum, 480×380 default. `can_resize()` returns true, `get_resize_hints()` reports free resize (no aspect ratio), `adjust_size()` clamps to bounds.
+Effect plugins support host-negotiated window resize via atomic `PendingResize` channel (packed `AtomicU64`). The host calls `set_size()`, the baseview handler applies it in `on_frame()` via `window.resize()`. Size constraints: 560×380 minimum, 1920×1080 maximum; the window opens at the Cabinet's preferred size for the effect's parameters. `can_resize()` returns true, `get_resize_hints()` reports free resize (no aspect ratio), `adjust_size()` clamps to bounds.
 
 ### Multi-Effect CLAP Plugin
 
-**Status:** Complete
+**Status:** Headless core complete; editor GUI in progress
 
-`ChainPlugin` — single CLAP plugin exposing a full effect chain with runtime add/remove/reorder. Pre-allocated parameter space (16 slots × 32 params = 512 CLAP IDs), JSON state save/restore, egui chain editor GUI. Built on `GraphEngine` for signal routing.
+The graph player (`crates/sonido-plugin/src/graph_player.rs`, `com.sonido.graph-player`) runs a whole exported `Patch` as one plugin via `PatchPlayer`: six macro params, morph position/speed, input and master gain, bypass. Its state is the patch JSON the GUI exports ("Export as CLAP patch"). The rig is edited in the GUI, not inside the plugin; the plugin's own Cabinet editor is being built.
 
 ### Benchmark Baseline Tracking in CI
 
@@ -156,7 +156,7 @@ Key capabilities unlocked:
 - `from_knobs()` maps normalized ADC readings to parameter ranges (embedded convenience)
 - `from_normalized()` / `to_normalized()` for CLAP/MIDI host bridge
 - `SmoothingStyle` per parameter: None, Fast (5ms), Standard (10ms), Slow (20ms), Interpolated (50ms)
-- 233+ kernel-specific tests across all implementations
+- 340+ kernel-specific tests across all implementations
 
 See ADR-028 in `docs/DESIGN_DECISIONS.md`.
 
@@ -236,14 +236,14 @@ Informed by analysis of DigiTech's design philosophy (Tom Cram era): musicality 
 - MIDI CC routing table: `HashMap<(u8, u8), (SlotIndex, ParamIndex)>` (channel, CC → effect param)
 - Learn mode: next CC received maps to selected parameter
 - Expression pedal: special CC (typically CC11 or CC100) with per-mapping response curves
-- Response curves: linear, logarithmic, S-curve, custom LUT (already designed in sonido-platform)
+- Response curves: linear, logarithmic, S-curve, custom LUT (`MacroMap` curves in sonido-core are a starting point)
 - GUI: MIDI mapping overlay showing active assignments
 
-**Dependencies:** MIDI input (new for GUI — CLI `realtime` already handles MIDI). Expression pedal is a special case of CC mapping.
+**Dependencies:** MIDI input (new for both GUI and CLI — neither reads MIDI today; `sonido-daisy` has a USB-MIDI packet parser in `midi.rs`). Expression pedal is a special case of CC mapping.
 
 **Estimated scope:** ~600 LOC MIDI routing + ~300 LOC GUI overlay.
 
-**Status:** Not started. Platform traits for expression/CC already exist in sonido-platform.
+**Status:** Not started. `sonido-platform` reserves a MIDI namespace in `ControlId` (`ControlId::midi`, 0x02XX), and `sonido-daisy` has `ExpressionInput` (`expression.rs`); neither is wired to a CC routing table.
 
 ---
 
@@ -264,7 +264,7 @@ Informed by analysis of DigiTech's design philosophy (Tom Cram era): musicality 
 
 **Estimated scope:** Mostly creative work (designing the presets). ~200 LOC for category browser UI.
 
-**Status:** Started. 5 chains ship in `presets/` (clean boost, guitar crunch, tape delay, subtle chorus, full chain); the 20–30 target and the category browser remain.
+**Status:** Started. 5 chains ship in `presets/` (clean boost, guitar crunch, tape delay, subtle chorus, full chain) and 8 factory presets in `crates/sonido-config/src/factory_presets.rs`, which the graph-player plugin also lists as built-in rigs; the 20–30 target and the category browser remain.
 
 ---
 
@@ -344,7 +344,7 @@ Directed acyclic graph replacing the linear `Vec<usize>` effect chain. Nodes are
 - **Latency compensation**: auto-inserted `CompensationDelay` ring buffers on shorter parallel paths
 - **Click-free schedule swap**: `SmoothedParam` crossfade (~5ms) on recompile — no audio glitches
 - **Node types**: Input, Output, Effect (per-node bypass crossfade), Split (fan-out), Merge (fan-in sum)
-- **`ProcessStep` instruction set**: WriteInput, ProcessEffect, SplitCopy, ClearBuffer, AccumulateBuffer, DelayCompensate, ReadOutput
+- **`ProcessStep` instruction set**: WriteInput, ProcessEffect, ProcessSubGraph, SplitCopy, ClearBuffer, AccumulateBuffer, DelayCompensate, FeedbackDelay, SampleAndHold, ReadOutput
 - **`linear()` convenience**: constructs Input→E1→...→En→Output chains
 - **no_std with alloc**: embeddable on Daisy Seed
 
@@ -403,11 +403,11 @@ See ADR-025 in `docs/DESIGN_DECISIONS.md` for full architectural rationale.
 
 ---
 
-### Morph Pedal v3
+### Morph Pedal
 
-**Status:** Complete
+**Status:** Complete (firmware header calls it "Morph Pedal v2")
 
-Full UX redesign of the embedded morph pedal firmware on Hothouse/Daisy Seed. Per-node A/B editing: capture Sound A and Sound B independently for each effect slot. Topology toggles for serial/parallel/fan routing. DAG morphing interpolates between full graph topologies (not just parameter snapshots). LED patterns indicate mode (scroll pulse for Explore, slot-number blink for Build, PWM morph position for Morph).
+Morph pedal firmware on Hothouse/Daisy Seed (`crates/sonido-daisy/examples/sonido_pedal.rs`). Three slots, each holding one of 8 effects or bypass. T1 selects the node being edited; T2 selects A edit / B edit / Morph; T3 selects the topology (linear 1→2→3, parallel split, fan 1→[2,3]). Sound A and Sound B are captured per node; Morph mode ramps between those parameter snapshots with FS1/FS2 (K5 morph speed 0.1–5 s, K6 master −60..+12 dB). Topology is set by T3, not morphed. LED 2 shows morph position as PWM in Morph mode, output level otherwise, and blinks for confirmations. The firmware does not load exported patches yet.
 
 ---
 
@@ -418,7 +418,7 @@ Full UX redesign of the embedded morph pedal firmware on Hothouse/Daisy Seed. Pe
 CPU budget targets for the most expensive effects, informed by embedded real-time constraints.
 
 **Targets:**
-- Reverb: M7 CPU budget target — the Freeverb tank must stay under 40% of Cortex-M7 budget at 48 kHz/128 samples
+- Reverb: M7 CPU budget target — the 8-line FDN tank must stay under 40% of Cortex-M7 budget at 48 kHz/128 samples
 - Tape: M7 CPU budget target — hysteresis + wow/flutter + head bump + HF rolloff within 35% budget
 - Graph overhead: schedule compilation + buffer allocation overhead < 5% per block
 
@@ -432,7 +432,7 @@ CPU budget targets for the most expensive effects, informed by embedded real-tim
 
 ### Embedded Hardening
 
-**Status:** Not started
+**Status:** Groundwork only. `sonido-daisy` has `ExpressionInput` (calibration, deadzone, slew limiting; `expression.rs`), a USB-MIDI packet parser (`midi.rs`), and tap tempo (`tap_tempo.rs`); the shipping pedal firmware uses none of them yet. Everything below is still open.
 
 Hardware interface features required for production pedal deployment on Hothouse/Daisy Seed.
 
@@ -492,7 +492,7 @@ Run neural amp capture on the Daisy Seed ($30, Cortex-M7 at 480MHz). RTNeural ha
 
 Combined capability: full neural capture + algorithmic effects on $30 hardware. This is the end-to-end guitar processor that closes the loop between the Hothouse DIY pedal platform and modern ML-based amp modeling.
 
-**Dependencies:** Neural capture crate (v0.3), Daisy Seed HAL integration (existing, in `sonido-platform`).
+**Dependencies:** Neural capture crate (v0.3), Daisy Seed HAL integration (existing, in `sonido-daisy`).
 
 **Status:** Not started.
 
@@ -569,6 +569,6 @@ These principles apply to all roadmap items:
 
 **One crate per capability domain.** `sonido-wdf`, `sonido-neural`, and future additions are separate crates with clearly scoped dependencies. The workspace prevents capability bleeding between domains.
 
-**Benchmark before optimizing.** Add benchmarks before claiming performance properties. `cargo bench` is part of CI. Claims about real-time viability on embedded targets require measured cycle counts.
+**Benchmark before optimizing.** Add benchmarks before claiming performance properties. `cargo bench` runs in CI on manual dispatch (`ci-manual.yml`, `job=bench`). Claims about real-time viability on embedded targets require measured cycle counts.
 
 **Stable parameter IDs.** Once an effect ships, parameter indices and `ParamId` values are public API. New parameters are added at the end. No reordering.

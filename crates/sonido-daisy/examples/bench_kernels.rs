@@ -1,33 +1,37 @@
-//! Tier 2: DWT cycle-count benchmarks for registered Sonido DSP kernels.
+//! Tier 2: DWT cycle-count benchmarks for all 36 of Sonido's DSP kernels.
 //!
-//! Runs each kernel through a 32-sample stereo block and reports cycle counts.
-//! Results are output via **USB serial** (CDC ACM) — no probe needed.
+//! Each kernel is heap-allocated (SDRAM, as on the pedal), warmed up for
+//! `WARMUP_BLOCKS`, then timed over `TIMED_BLOCKS` 32-sample stereo blocks of
+//! a 220 Hz sine. It reports the mean and the worst block: kernels with
+//! periodic work (the tuner's pitch analysis every 2048 samples, grain
+//! schedulers) can be cheap on average and still miss one block's deadline.
+//! Percentages are of the 480 MHz (`Performance`) budget: 320,000 cycles per
+//! 32-sample block. Results go out over defmt RTT (with a probe) and USB serial.
 //!
-//! Shows dual-budget percentages: both 480 MHz (Performance) and 400 MHz
-//! (Efficient) profiles, so you can choose the right profile for your chain.
-//!
-//! # Build & Flash
+//! # Run with an SWD probe (no bootloader needed)
 //!
 //! ```bash
 //! cd crates/sonido-daisy
-//! cargo objcopy --example bench_kernels --release -- -O binary bench.bin
-//! # Press RESET, then flash within the 2.5s grace period:
+//! cargo run --example bench_kernels --release
+//! ```
+//!
+//! probe-rs loads the image into AXI SRAM, starts it, and prints the defmt log:
+//! one `bench <kernel>` line as each starts (a hang names the culprit), then
+//! `kernel=<name> mean=<cycles> worst=<cycles> budget=320000` per kernel.
+//!
+//! # Or flash over USB (Electrosmith bootloader)
+//!
+//! ```bash
+//! cargo objcopy --example bench_kernels --release -- -O binary -R .sram1_bss bench.bin
+//! # Press RESET, then flash within the 2.5 s grace period:
 //! dfu-util -a 0 -s 0x90040000:leave -D bench.bin
 //! ```
 //!
-//! # Read results
+//! After the benchmarks the Daisy enumerates as a USB serial device
+//! (`1209:0001`); `cat /dev/ttyACM0` shows the table, repeated every 5 s.
 //!
-//! After flashing, the Daisy enumerates as a USB serial device.
-//! Open it with any terminal:
-//!
-//! ```bash
-//! cat /dev/ttyACM0
-//! # or: screen /dev/ttyACM0 115200
-//! ```
-//!
-//! Output repeats every 5 seconds so you can connect at any time.
-//!
-//! Results are also available via defmt RTT if a probe is connected.
+//! Measured results: `docs/BENCHMARKS.md`, "Cortex-M7, measured on a Daisy
+//! Seed".
 
 #![no_std]
 #![no_main]
@@ -55,20 +59,20 @@ use sonido_daisy::{
     led::UserLed, measure_cycles, rcc, usb_task,
 };
 
-use sonido_effects::kernels::{
-    BitcrusherKernel, BitcrusherParams, ChorusKernel, ChorusParams, CompressorKernel,
-    CompressorParams, DelayKernel, DelayParams, DistortionKernel, DistortionParams, EqKernel,
-    EqParams, FilterKernel, FilterParams, FlangerKernel, FlangerParams, GateKernel, GateParams,
-    LimiterKernel, LimiterParams, PhaserKernel, PhaserParams, PreampKernel, PreampParams,
-    ReverbKernel, ReverbParams, RingModKernel, RingModParams, StageKernel, StageParams, TapeKernel,
-    TapeParams, TremoloKernel, TremoloParams, VibratoKernel, VibratoParams, WahKernel, WahParams,
-};
+use sonido_effects::kernels::*;
 
 bind_interrupts!(struct Irqs {
     OTG_FS => usb::InterruptHandler<peripherals::USB_OTG_FS>;
 });
 
-const NUM_KERNELS: usize = 19;
+const NUM_KERNELS: usize = 36;
+
+/// Blocks run before timing (fills delay lines, settles caches).
+const WARMUP_BLOCKS: usize = 8;
+/// Timed blocks per kernel: 4096 samples, enough to include one tuner analysis.
+const TIMED_BLOCKS: usize = 128;
+/// Input length: one sine period table long enough for every timed block.
+const INPUT_LEN: usize = BLOCK_SIZE * (WARMUP_BLOCKS + TIMED_BLOCKS);
 
 const NAMES: [&str; NUM_KERNELS] = [
     "preamp",
@@ -90,18 +94,61 @@ const NAMES: [&str; NUM_KERNELS] = [
     "bitcrusher",
     "ringmod",
     "stage",
+    "looper",
+    "amp",
+    "cabinet",
+    "deesser",
+    "drone",
+    "glitch",
+    "multiband_comp",
+    "pitch_shift",
+    "plate_reverb",
+    "shelving_eq",
+    "spring_reverb",
+    "stereo_widener",
+    "texture",
+    "time_stretch",
+    "transient_shaper",
+    "tuner",
+    "harmonic_habitat",
 ];
 
-/// Benchmark a single kernel: create, process one block, return cycle count.
+/// Per-kernel result: mean and worst cycles per 32-sample block.
+#[derive(Clone, Copy, Default)]
+struct BlockCycles {
+    mean: u32,
+    worst: u32,
+}
+
+/// Benchmark one kernel: heap-allocate it (SDRAM, like the pedal's boxed
+/// effects), warm up, then time each of `TIMED_BLOCKS` blocks.
 macro_rules! bench {
-    ($results:expr, $idx:expr, $kernel:ty, $params:ty) => {{
-        let mut k = <$kernel>::new(SAMPLE_RATE);
+    ($results:expr, $idx:expr, $input:expr, $kernel:ty, $params:ty) => {{
+        defmt::info!("bench {}", NAMES[$idx]);
+        let mut k = alloc::boxed::Box::new(<$kernel>::new(SAMPLE_RATE));
         let p = <$params>::default();
-        $results[$idx] = measure_cycles(|| {
-            for _ in 0..BLOCK_SIZE {
-                let _ = k.process_stereo(0.5, -0.3, &p);
+        let input: &[f32] = $input;
+        let mut block = |b: usize| {
+            for &x in &input[b * BLOCK_SIZE..(b + 1) * BLOCK_SIZE] {
+                core::hint::black_box(k.process_stereo(x, -x, &p));
             }
-        });
+        };
+        for b in 0..WARMUP_BLOCKS {
+            block(b);
+        }
+        let (mut total, mut worst) = (0u64, 0u32);
+        for b in WARMUP_BLOCKS..WARMUP_BLOCKS + TIMED_BLOCKS {
+            let c = measure_cycles(|| block(b));
+            total += u64::from(c);
+            worst = worst.max(c);
+        }
+        $results[$idx] = BlockCycles {
+            mean: (total / TIMED_BLOCKS as u64) as u32,
+            worst,
+        };
+        drop(k);
+        // Let the heartbeat task run between kernels.
+        embassy_time::Timer::after_millis(1).await;
     }};
 }
 
@@ -109,56 +156,40 @@ macro_rules! bench {
 ///
 /// Shows dual-budget percentages for both Performance (480 MHz) and
 /// Efficient (400 MHz) profiles.
-fn format_results(results: &[u32; NUM_KERNELS], buf: &mut [u8]) -> usize {
-    let budget_perf = rcc::cycles_per_block(ClockProfile::Performance);
-    let budget_eff = rcc::cycles_per_block(ClockProfile::Efficient);
+fn format_results(results: &[BlockCycles; NUM_KERNELS], buf: &mut [u8]) -> usize {
+    let budget = rcc::cycles_per_block(ClockProfile::Performance);
+    let pct = |c: u32| {
+        let x = (u64::from(c) * 10000) / u64::from(budget);
+        (x / 100, x % 100)
+    };
 
     let mut w = BufWriter::new(buf);
-    let _ = writeln!(w, "\r\n=== Sonido Kernel Benchmarks ===");
-    let _ = writeln!(w, "sample_rate=48000 block_size={}\r", BLOCK_SIZE);
+    let _ = writeln!(w, "\r\n=== Sonido Kernel Benchmarks ===\r");
     let _ = writeln!(
         w,
-        "budget: {}cyc @480MHz (Performance) | {}cyc @400MHz (Efficient)\r",
-        budget_perf, budget_eff
+        "sample_rate=48000 block={} warmup={} timed={} budget={}cyc/block @480MHz\r",
+        BLOCK_SIZE, WARMUP_BLOCKS, TIMED_BLOCKS, budget
     );
-
-    let mut total: u64 = 0;
-    for (i, &cycles) in results.iter().enumerate() {
-        let pct_perf = (cycles as u64 * 10000) / budget_perf as u64;
-        let pct_eff = (cycles as u64 * 10000) / budget_eff as u64;
+    let _ = writeln!(
+        w,
+        "  kernel                mean_cyc  mean%   worst_cyc  worst%\r"
+    );
+    for (i, r) in results.iter().enumerate() {
+        let (mp, mf) = pct(r.mean);
+        let (wp, wf) = pct(r.worst);
         let _ = writeln!(
             w,
-            "  {:>12}  {:>8} cycles  {:>3}.{:02}% / {:>3}.{:02}%\r",
-            NAMES[i],
-            cycles,
-            pct_perf / 100,
-            pct_perf % 100,
-            pct_eff / 100,
-            pct_eff % 100,
+            "  {:<18} {:>11} {:>4}.{:02} {:>11} {:>4}.{:02}\r",
+            NAMES[i], r.mean, mp, mf, r.worst, wp, wf
         );
-        total += cycles as u64;
     }
-
-    let total_pct_perf = (total * 10000) / budget_perf as u64;
-    let total_pct_eff = (total * 10000) / budget_eff as u64;
-    let _ = writeln!(w, "---\r");
-    let _ = writeln!(
-        w,
-        "  {:>12}  {:>8} cycles  {:>3}.{:02}% / {:>3}.{:02}% (registered)\r",
-        "TOTAL",
-        total,
-        total_pct_perf / 100,
-        total_pct_perf % 100,
-        total_pct_eff / 100,
-        total_pct_eff % 100,
-    );
-    let _ = writeln!(w, "                                  ^480MHz   ^400MHz\r");
     let _ = writeln!(w, "=== End ===\r");
     w.pos
 }
 
 // Static buffers for USB CDC ACM — StaticCell guarantees single-init safety without unsafe.
-static OUTPUT_BUF: StaticCell<[u8; 2048]> = StaticCell::new();
+static OUTPUT_BUF: StaticCell<[u8; 4096]> = StaticCell::new();
+static INPUT: StaticCell<[f32; INPUT_LEN]> = StaticCell::new();
 static EP_OUT_BUF: StaticCell<[u8; 256]> = StaticCell::new();
 static CONFIG_DESC: StaticCell<[u8; 256]> = StaticCell::new();
 static BOS_DESC: StaticCell<[u8; 256]> = StaticCell::new();
@@ -189,54 +220,80 @@ async fn main(spawner: Spawner) {
     enable_cycle_counter(&mut cp.DCB, &mut cp.DWT);
 
     // --- Run all benchmarks with diagnostic yields ---
-    // Count heartbeats to identify which group crashes:
-    //   ~1 beat  = crash in DWT/cycle counter setup
-    //   ~2 beats = crash in group A (preamp..eq)
-    //   ~3 beats = crash in group B (wah..tremolo)
-    //   ~4 beats = crash in group C (delay..reverb)
-    //   ~5 beats = crash in group D (limiter..stage)
-    //   continuous = all benchmarks passed
-    let mut results = [0u32; NUM_KERNELS];
+    // The LED heartbeat keeps blinking between kernels; if it stops, a kernel
+    // hung. With a probe attached, the last "bench <name>" defmt line names it.
+    // 220 Hz sine input, in DTCM (zero-wait), shared by every kernel.
+    let input = INPUT.init([0.0; INPUT_LEN]);
+    for (n, x) in input.iter_mut().enumerate() {
+        *x = 0.5 * libm::sinf(2.0 * core::f32::consts::PI * 220.0 * n as f32 / SAMPLE_RATE);
+    }
+    let input: &[f32] = input;
 
-    bench!(results, 0, PreampKernel, PreampParams);
-    bench!(results, 1, DistortionKernel, DistortionParams);
-    bench!(results, 2, CompressorKernel, CompressorParams);
-    bench!(results, 3, GateKernel, GateParams);
-    bench!(results, 4, EqKernel, EqParams);
-    bench!(results, 5, WahKernel, WahParams);
-    bench!(results, 6, ChorusKernel, ChorusParams);
-    bench!(results, 7, FlangerKernel, FlangerParams);
-    bench!(results, 8, PhaserKernel, PhaserParams);
-    bench!(results, 9, TremoloKernel, TremoloParams);
-
-    bench!(results, 10, DelayKernel, DelayParams);
-    bench!(results, 11, FilterKernel, FilterParams);
-    bench!(results, 12, VibratoKernel, VibratoParams);
-    bench!(results, 13, TapeKernel, TapeParams);
-    bench!(results, 14, ReverbKernel, ReverbParams);
-
-    bench!(results, 15, LimiterKernel, LimiterParams);
-    bench!(results, 16, BitcrusherKernel, BitcrusherParams);
-    bench!(results, 17, RingModKernel, RingModParams);
-    bench!(results, 18, StageKernel, StageParams);
+    let mut results = [BlockCycles::default(); NUM_KERNELS];
+    bench!(results, 0, input, PreampKernel, PreampParams);
+    bench!(results, 1, input, DistortionKernel, DistortionParams);
+    bench!(results, 2, input, CompressorKernel, CompressorParams);
+    bench!(results, 3, input, GateKernel, GateParams);
+    bench!(results, 4, input, EqKernel, EqParams);
+    bench!(results, 5, input, WahKernel, WahParams);
+    bench!(results, 6, input, ChorusKernel, ChorusParams);
+    bench!(results, 7, input, FlangerKernel, FlangerParams);
+    bench!(results, 8, input, PhaserKernel, PhaserParams);
+    bench!(results, 9, input, TremoloKernel, TremoloParams);
+    bench!(results, 10, input, DelayKernel, DelayParams);
+    bench!(results, 11, input, FilterKernel, FilterParams);
+    bench!(results, 12, input, VibratoKernel, VibratoParams);
+    bench!(results, 13, input, TapeKernel, TapeParams);
+    bench!(results, 14, input, ReverbKernel, ReverbParams);
+    bench!(results, 15, input, LimiterKernel, LimiterParams);
+    bench!(results, 16, input, BitcrusherKernel, BitcrusherParams);
+    bench!(results, 17, input, RingModKernel, RingModParams);
+    bench!(results, 18, input, StageKernel, StageParams);
+    bench!(results, 19, input, LooperKernel, LooperParams);
+    bench!(results, 20, input, AmpKernel, AmpParams);
+    bench!(results, 21, input, CabinetKernel, CabinetParams);
+    bench!(results, 22, input, DeesserKernel, DeesserParams);
+    bench!(results, 23, input, DroneKernel, DroneParams);
+    bench!(results, 24, input, GlitchKernel, GlitchParams);
+    bench!(results, 25, input, MultibandCompKernel, MultibandCompParams);
+    bench!(results, 26, input, PitchShiftKernel, PitchShiftParams);
+    bench!(results, 27, input, PlateReverbKernel, PlateReverbParams);
+    bench!(results, 28, input, ShelvingEqKernel, ShelvingEqParams);
+    bench!(results, 29, input, SpringReverbKernel, SpringReverbParams);
+    bench!(results, 30, input, StereoWidenerKernel, StereoWidenerParams);
+    bench!(results, 31, input, TextureKernel, TextureParams);
+    bench!(results, 32, input, TimeStretchKernel, TimeStretchParams);
+    bench!(
+        results,
+        33,
+        input,
+        TransientShaperKernel,
+        TransientShaperParams
+    );
+    bench!(results, 34, input, TunerKernel, TunerParams);
+    bench!(
+        results,
+        35,
+        input,
+        HarmonicHabitatKernel,
+        HarmonicHabitatParams
+    );
 
     // Log via defmt (visible with probe)
     let budget = rcc::cycles_per_block(ClockProfile::Performance);
-    for (i, &cycles) in results.iter().enumerate() {
-        let pct_x100 = (cycles as u64 * 10000) / budget as u64;
+    for (i, r) in results.iter().enumerate() {
         defmt::info!(
-            "kernel={} cycles={} budget={} pct={}.{}%",
+            "kernel={} mean={} worst={} budget={}",
             NAMES[i],
-            cycles,
-            budget,
-            pct_x100 / 100,
-            pct_x100 % 100
+            r.mean,
+            r.worst,
+            budget
         );
     }
     defmt::info!("=== Benchmarks complete, starting USB serial ===");
 
     // --- Format results into a static buffer ---
-    let output_buf = OUTPUT_BUF.init([0u8; 2048]);
+    let output_buf = OUTPUT_BUF.init([0u8; 4096]);
     let output_len = format_results(&results, output_buf);
 
     // --- USB CDC ACM setup ---

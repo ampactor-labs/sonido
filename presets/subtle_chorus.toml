@@ -5,5 +5,5 @@ description = "Light chorus for stereo widening"
 type = "chorus"
 [effects.params]
 rate = "0.8"
-depth = "0.35"
-mix = "0.3"
+depth = "35"
+mix = "30"

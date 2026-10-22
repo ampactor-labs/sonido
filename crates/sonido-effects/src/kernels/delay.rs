@@ -3,7 +3,7 @@
 //! `DelayKernel` owns DSP state (delay lines, feedback filters, diffusion
 //! allpasses, tempo manager). Parameters are received via `&DelayParams` each
 //! sample. Deployed via [`Adapter`](sonido_core::kernel::Adapter) for
-//! desktop/plugin, or called directly on embedded targets.
+//! desktop/plugin, or via `Adapter::new_direct` (no smoothing) on embedded targets.
 //!
 //! # Algorithm
 //!
@@ -41,7 +41,10 @@
 //! let adapter = Adapter::new(DelayKernel::new(48000.0), 48000.0);
 //! let mut effect: Box<dyn Effect> = Box::new(adapter);
 //!
-//! // Embedded / Daisy Seed (direct — no smoothing, ADCs are hardware-filtered)
+//! // Embedded / Daisy Seed — zero-smoothing adapter, as the pedal firmware uses
+//! let effect = Adapter::new_direct(DelayKernel::new(48000.0), 48000.0);
+//!
+//! // Or drive the kernel directly with a typed params struct (no adapter)
 //! let mut kernel = DelayKernel::new(48000.0);
 //! let params = DelayParams::from_knobs(0.5, 0.4, 0.5, 0.0, 1.0, 0.0, 0.0, 0.0, 2.0, 0.5);
 //! let (left, right) = kernel.process_stereo(input_l, input_r, &params);
@@ -100,7 +103,7 @@ const DIFFUSION_AP2_S: f32 = 0.007;
 /// | 6 | `diffusion_pct` | % | 0–100 | 0.0 |
 /// | 7 | `sync` | index | 0–1 | 0 (Off) |
 /// | 8 | `division` | index | 0–11 | 2 (Quarter) |
-/// | 9 | `output_db` | dB | −20–6 | 0.0 |
+/// | 9 | `output_db` | dB | −6–+6 | 0.0 |
 #[derive(Debug, Clone, Copy)]
 pub struct DelayParams {
     /// Delay time in milliseconds.
@@ -160,12 +163,12 @@ pub struct DelayParams {
 
     /// Output level in decibels.
     ///
-    /// Range: −20.0 to +20.0 dB. Applied after the wet/dry mix.
+    /// Range: −6.0 to +6.0 dB. Applied after the wet/dry mix.
     pub output_db: f32,
 }
 
 impl Default for DelayParams {
-    /// Defaults match the classic `Delay` effect's descriptor defaults exactly.
+    /// Defaults match the original pre-kernel `Delay` effect's descriptor defaults exactly.
     fn default() -> Self {
         Self {
             time_ms: 300.0,
@@ -199,7 +202,7 @@ impl DelayParams {
     /// - `diffusion`: Diffusion knob → 0–100 %
     /// - `sync`: Sync toggle → 0.0 = Off, 1.0 = On (stepped)
     /// - `division`: Division selector → index 0–11 (stepped)
-    /// - `output`: Output knob → −20–+6 dB
+    /// - `output`: Output knob → −6–+6 dB
     #[allow(clippy::too_many_arguments)]
     pub fn from_knobs(
         time: f32,
@@ -236,6 +239,7 @@ kernel_params! {
                 max: 95.0,
                 default: 40.0,
                 step: 1.0,
+                flags: ParamFlags::AUTOMATABLE,
                 ..ParamDescriptor::mix()
             }
             .with_id(ParamId(1101), "dly_feedback"),
@@ -289,6 +293,7 @@ kernel_params! {
                 max: 100.0,
                 default: 0.0,
                 step: 1.0,
+                flags: ParamFlags::AUTOMATABLE,
                 ..ParamDescriptor::mix()
             }
             .with_id(ParamId(1107), "dly_diffusion"),
@@ -808,7 +813,7 @@ mod tests {
     }
 
     /// The adapter's `ParameterInfo` must expose the correct count and `ParamId`s,
-    /// matching the classic `Delay` effect's parameter contract exactly.
+    /// matching the original pre-kernel `Delay` effect's parameter contract exactly.
     ///
     /// Note the non-sequential output ID: index 9 carries `ParamId(1104)` while
     /// index 3 (ping_pong) carries `ParamId(1103)`. This matches the original

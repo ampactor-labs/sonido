@@ -28,11 +28,12 @@ mod morph_bar;
 mod param_menu;
 pub mod spectrum;
 mod toggle;
+pub mod vector_font;
 pub mod waveform;
 
 pub use bridged_knob::{
-    bridged_combo, bridged_fader, bridged_knob, bridged_knob_fmt, bridged_knob_with_morph,
-    gesture_wrap,
+    bridged_combo, bridged_fader, bridged_knob, bridged_knob_accent, bridged_knob_fmt,
+    bridged_knob_with_morph, draw_morph_markers, gesture_wrap,
 };
 pub use fader::Fader;
 pub use knob::Knob;
@@ -43,4 +44,5 @@ pub use morph_bar::{MorphBarResponse, morph_bar};
 pub use param_menu::{MacroAction, NUM_MACROS, param_macro_menu, take_macro_action};
 pub use spectrum::{SpectrumState, SpectrumWidget};
 pub use toggle::{BypassToggle, FootswitchToggle};
+pub use vector_font::VectorText;
 pub use waveform::{WaveformState, WaveformWidget};

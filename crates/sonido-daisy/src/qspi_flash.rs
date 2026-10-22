@@ -9,7 +9,7 @@
 //! - **No DMA** → no D-cache invalidation dance on the read buffer. The FIFO is
 //!   drained by the CPU straight into the destination.
 //! - **Single-line (1-1-1) Read Data (`0x03`)** → no quad-enable sequence, no
-//!   dummy-cycle tuning. Slower, but a 2 KB patch sector is read once per patch
+//!   dummy-cycle tuning. Slower, but a 4 KB patch sector is read once per patch
 //!   switch, not in the audio path.
 //!
 //! Under BOOT_SRAM the firmware runs from AXI SRAM, so the QUADSPI peripheral is
@@ -37,7 +37,7 @@ const CMD_JEDEC_ID: u8 = 0x9F;
 // The last 64 KB of the 8 MB flash holds the patch bank: 15 × 4 KB patch
 // sectors, with the legacy preset sector kept at the very end (0x007F_F000)
 // for one firmware generation. The GUI writes patch slot `n` over DFU at
-// `0x9004_0000`-relative address `PATCH_BANK_ADDR + n * 4096`.
+// `0x9000_0000 + PATCH_BANK_ADDR + n * 4096` (slot 0 = `0x907F_0000`).
 
 /// First byte of the patch bank, relative to flash base.
 pub const PATCH_BANK_ADDR: u32 = 0x007F_0000;

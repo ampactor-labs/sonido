@@ -1,68 +1,26 @@
 # Sonido GUI
 
-Sonido GUI is a professional real-time DSP effect processor built on the Sonido framework using [egui](https://github.com/emilk/egui).
+`sonido-gui` is the standalone node-graph editor: build an effect graph from the 36 registry effects, play a test signal or WAV file through it, perform it with six macros and an A/B morph, and export the result to the CLAP graph-player plugin or the Daisy pedal. It is built on [egui](https://github.com/emilk/egui)/eframe and runs natively and in the browser (wasm).
+
+![The node-graph editor with a Distortion, Delay and Reverb chain wired between the input and output nodes, six macro knobs, and the A/B morph strip](img/editor.png)
 
 ## Design System
 
-Sonido uses an **arcade CRT** visual identity across all GUI targets (standalone, CLAP/VST3 plugins, WASM):
-
-### Color Palette
-
-| Role | Color | Hex | Usage |
-|------|-------|-----|-------|
-| Amber | Brand primary | `#FFB833` | Knob arcs, headings, panel borders |
-| Green | Signal OK | `#33FF66` | Meter safe zone, bypass-on LED |
-| Cyan | Info/labels | `#33DDFF` | Parameter labels, secondary text |
-| Red | Danger/clip | `#FF3333` | Clipping, error states |
-| Magenta | Modulation | `#FF33AA` | Modulation effect category |
-| Yellow | Caution | `#FFDD33` | Meter hot zone |
-| Purple | Time-based | `#AA55FF` | Delay/reverb category |
-| Dim | Inactive | `#2A2A35` | Ghost segments, tracks |
-| Void | Background | `#0A0A0F` | Everything glows out of this |
-
-### Typography
-
-Share Tech Mono — bundled TTF, registered as both Monospace and Proportional.
-All text uses monospace rendering for the arcade aesthetic.
-
-### Theme Architecture
-
-`SonidoTheme` (in `sonido-gui-core/src/theme.rs`) is the single source of truth:
-- Stored in `egui::Context::data()` via `install()`, retrieved via `SonidoTheme::get(ctx)`
-- Sub-structs: `ThemeColors`, `ThemeSizing`, `GlowConfig`, `ScanlineConfig`
-- `reduced_fx` flag skips bloom + scanlines for WASM performance
-
-### Glow Primitives
-
-`widgets/glow.rs` provides phosphor bloom rendering:
-- `glow_circle()`, `glow_line()`, `glow_arc()`, `glow_rect()` — sharp element + bloom halo
-- `glow_circle_stroke()` — circle outline with bloom
-- `ghost()` — dim inactive elements to ghost alpha
-- `scanlines()` — horizontal CRT scanline overlay
-
-### Component Inventory
-
-| Widget | File | Style |
-|--------|------|-------|
-| Knob | `widgets/knob.rs` | Pointer-on-void, amber glow arc |
-| Bridged Knob | `widgets/bridged_knob.rs` | Knob + 7-segment LED readout |
-| LED Display | `widgets/led_display.rs` | 7-segment digits with ghost traces |
-| Level Meter | `widgets/meter.rs` | 16-segment LED bar, peak hold |
-| Bypass Toggle | `widgets/toggle.rs` | Green LED bloom |
-| Morph Bar | `widgets/morph_bar.rs` | 20-segment cyan→amber crossfade |
+The editor, the plugins and the web build share one design system: tokens, effect families, the Sonido Vector display face, the knob, meter and selector components, and the plugin Cabinet layout. It is specified in [DESIGN_SYSTEM.md](DESIGN_SYSTEM.md); the values live in `crates/sonido-gui-core/src/theme.rs`.
 
 ## Installation
 
 ### Native (from source)
 
 ```bash
-# Build and run
 cargo run -p sonido-gui
 
-# Or install globally
+# Or install the binary
 cargo install --path crates/sonido-gui
 sonido-gui
 ```
+
+Linux build dependencies: the ALSA headers for cpal's ALSA backend (`alsa-lib-devel` on Fedora, `libasound2-dev` on Debian/Ubuntu; PipeWire systems serve it through `pipewire-alsa`), plus the X11/Wayland/GL development libraries eframe links against. CI's Debian list is `SYSTEM_DEPS` in [`.github/workflows/ci.yml`](../.github/workflows/ci.yml).
 
 ### Web (wasm)
 
@@ -72,527 +30,283 @@ Requires [Trunk](https://trunkrs.dev/) (`cargo install trunk`).
 # Compile check (fast gate for cfg issues, no runtime)
 cargo check --target wasm32-unknown-unknown -p sonido-gui
 
-# Dev server with hot reload
+# Dev server with hot reload, at http://127.0.0.1:8080
 cd crates/sonido-gui
 trunk serve
-# Opens at http://127.0.0.1:8080
 ```
 
-On first load, click anywhere to resume the browser's `AudioContext` (autoplay policy).
-Hard-refresh with Ctrl+Shift+R after rebuilds to bypass cache.
+Browsers keep audio suspended until a user gesture: the first click, key press, or PLAY resumes it. Hard-refresh (Ctrl+Shift+R) after a rebuild to bypass the cache. There is no headless wasm test runner; the browser is the runtime test. `cargo check` for wasm catches missing `#[cfg]` gates and std-only APIs that the native build doesn't.
 
-### Full Verification Flow
-
-From a clean state (after `cargo clean`):
-
-```bash
-# 1. Native build + tests
-cargo build --workspace
-cargo test --workspace
-
-# 2. Wasm compile check
-cargo check --target wasm32-unknown-unknown -p sonido-gui
-
-# 3. Wasm dev server (from crates/sonido-gui/)
-cd crates/sonido-gui
-trunk serve
-
-# 4. Browser: http://127.0.0.1:8080 (Ctrl+Shift+R to hard-refresh)
-#    - Three columns visible: INPUT | GRAPH EDITOR | OUTPUT
-#    - Click effect node in graph → parameter panel renders below
-#    - Resize window → center column flexes, I/O columns stay fixed
-#    - Click anywhere to resume audio (browser autoplay policy)
-```
-
-Step 2 catches missing `#[cfg]` gates and std-only API usage that native compilation misses.
-Step 4 is the actual runtime test — there is no headless wasm test runner.
+The web build differs from native only where a browser tab can't reach: Save/Load use the browser's download and file picker, and Export offers patch JSON and the pedal `.bin` (no CLAP-folder write, no USB flash).
 
 ## Command-Line Options
 
 ```
 sonido-gui [OPTIONS]
 
-OPTIONS:
-    --input <NAME>         Input audio device name (uses default if not specified)
-    --output <NAME>        Output audio device name (uses default if not specified)
-    --sample-rate <N>      Sample rate in Hz (default: 48000)
-    --buffer-size <N>      Buffer size in samples (default: 512)
-    --effect <NAME>        Launch in single-effect mode (e.g., distortion, reverb)
-    -h, --help             Print help information
-    -V, --version          Print version information
+    --output <OUTPUT>                    Output device: index, exact name, or unique part of a name
+    --sample-rate <SAMPLE_RATE>          Fallback sample rate in Hz (default: 48000)
+    --buffer-size <BUFFER_SIZE>          Buffer size in samples (default: 2048)
+    --effect <EFFECT>                    Single-effect mode with this registry ID
+    --screenshot <SCREENSHOT>            Render the editor to a PNG, then exit
+    --screenshot-size <SCREENSHOT_SIZE>  Window size for --screenshot, as WxH
+    -h, --help                           Print help
+    -V, --version                        Print version
 ```
 
-### Examples
+- **Audio device.** `--output` picks the output by index, exact name or a unique part of its name (the same rule as the CLI's `--output`; `sonido devices` lists them). Without it the editor uses the system default. On Linux the device list is ALSA's, which PipeWire serves through `pipewire-alsa`.
+- **Sample rate.** The device's own default rate is used; `--sample-rate` applies only if that config can't be read. The status bar shows the rate actually in use.
+- **Input.** There is no microphone or line input. The source is the built-in signal generator or a WAV file (see [Source](#source)).
+- **Single-effect mode.** `--effect reverb` shows one effect's panel full-width with no graph, info band, or morph band. An unknown ID exits with the list of valid IDs. The IDs are in [EFFECTS_REFERENCE.md](EFFECTS_REFERENCE.md).
+- **Screenshots.** `--screenshot out.png` boots the full app offscreen-sized, renders a few frames, writes the PNG and exits. Without `--effect` it first loads a demo chain (Input → Distortion → Delay → Reverb → Output, Distortion selected). The default size is 1600×1000; `--screenshot-size 390x844` previews the phone layout. This is how `docs/img/editor.png` is produced.
 
 ```bash
-# Use default devices
-sonido-gui
-
-# Lower latency (smaller buffer)
-sonido-gui --buffer-size 128
-
-# Specify devices
-sonido-gui --input "USB Audio" --output "Built-in Output"
-
-# Higher sample rate
-sonido-gui --sample-rate 96000
-
-# Single-effect mode (simplified UI with one effect, no chain strip)
-sonido-gui --effect distortion
-sonido-gui --effect reverb
+sonido-gui --buffer-size 512          # lower latency
+sonido-gui --effect distortion        # one effect, no graph
+sonido-gui --screenshot editor.png --screenshot-size 1440x900
 ```
 
-## User Interface
-
-### Window Layout
+## Window Layout
 
 ```
-+------------------------------------------------------------------+
-| SONIDO  [Preset v] [Compile]                     [Audio Status]  |
-+------------------------------------------------------------------+
-|                                                                  |
-| INPUT  |  GRAPH EDITOR                              |  OUTPUT    |
-| [Meter]|  [Input]──>[Dist]──>[Rev]──>[Output]       |  [Meter]   |
-| [Gain] |            (visual node graph, egui-snarl)  |  [Master]  |
-|        |                                             |            |
-|        +---------------------------------------------+            |
-|        | SELECTED EFFECT PANEL                       |            |
-|        | (Parameters for currently selected node)    |            |
-|        +---------------------------------------------+            |
-+------------------------------------------------------------------+
-| [A] ─────────── morph slider ─────────── [B]                     |
-+------------------------------------------------------------------+
-| 48000 Hz | [Buffer ▼] | 10.7 ms | CPU: 2.3% ▁▂▃▄▅▆▇▆▅▄▃▁        |
-+------------------------------------------------------------------+
++---------------------------------------------------------------------------+
+| SONIDO PLAY FOCUS UNDO REDO +EFFECT BYPASS Save Load Export GEN FILE  ... |
+|   ... MACROS Auto (K1)..(K6)                               [errors] (o)   |
++---------------------------------------------------------------------------+
+|IN|                       GRAPH CANVAS                                |OUT|
+|  |   o──[Distortion]──[Delay]──[Reverb]──o                           |   |
+|  |                                                                   |   |
+|GAIN                                                                  |VOL|
++---------------------------------------------------------------------------+
+| SELECTED EFFECT PANEL  (knobs, selectors, ACTIVE/BYPASSED, LOCK)          |
++---------------------------------------------------------------------------+
+| INFO: name · description · live values · shortcuts                        |
++---------------------------------------------------------------------------+
+| MORPH  status  RAMP  A⇄B   (A) ▮▮▮▮▮▮▯▯▯▯▯▯▯▯▯▯▯▯ (B)                       |
++---------------------------------------------------------------------------+
+| 48000Hz | 42.7ms | CPU: 2.3% ▁▂▃ | Daisy: 3/3 | > Sine 440 Hz             |
++---------------------------------------------------------------------------+
 ```
 
-### Header Bar
+The layout adapts to width. **Desktop** (≥ 900 px) is shown above; on a wide window the header is a single row (drawn as two here), and it wraps when space runs out. **Tablet** (600–900 px) wraps the header and status bar and enlarges touch targets. **Phone** (< 600 px, web only, since the native window has an 800×550 minimum) drops the FOCUS and + EFFECT buttons and the info band, moves the macros and morph into a **RIG** drawer toggled from the header, and adds a floating **+** button over the canvas.
 
-- **SONIDO**: Application title
-- **Preset Selector**: Drop-down to choose presets (asterisk * indicates unsaved changes)
-- **Compile**: Compile the current graph topology to the audio engine
-- **Save**: Save current settings as a preset (native only)
-- **Audio Status**: Green dot = audio running, red dot = audio error
+### Header
 
-### Input/Output Sections
+- **SONIDO**: the vector wordmark.
+- **PLAY / PAUSE**: one transport for both sources (Space).
+- **FOCUS**: hides the info band and morph band for a full-height canvas (F). Desktop/Tablet.
+- **UNDO / REDO**: structural edits (Ctrl+Z, Ctrl+Shift+Z / Ctrl+Y), 64 steps deep.
+- **+ EFFECT**: opens the ADD EFFECT palette (Desktop/Tablet).
+- **BYPASS**: bypasses the whole chain with a 5 ms crossfade to the dry signal.
+- **Save / Load**: the session as JSON (see [Sessions](#sessions)).
+- **Export**: see [Export](#export).
+- **GEN / FILE**: source select.
+- **MACROS**: **Auto** plus the six macro knobs K1–K6 (in the RIG drawer on Phone).
+- **Right side**: audio status LED (green running, red stopped), plus, when present, `errors: N` (audio stream errors such as underruns), the last compile error, the last export result, and an audio start error with a **Retry** button.
 
-- **Input Meter**: Real-time peak and RMS level display
-- **Input Gain**: -20 to +20 dB gain control
-- **Output Meter**: Real-time peak and RMS level display
-- **Master Volume**: -40 to +6 dB master output control
+### I/O wall bars
 
-### Signal Generator
+The canvas is flanked by two full-height level meters, **IN** (left) and **OUT** (right). Each shows RMS with the peak headroom above it, a falling peak-hold line, and the highest peak in dBFS at the top, red past 0 dBFS. Click a meter to reset its peak. The **GAIN** knob at the foot of IN trims the source from −20 to +20 dB; the **VOL** knob at the foot of OUT sets the master from −40 to +6 dB. Both default to 0 dB. The Input and Output node pins are welded to the bars' inner edges.
 
-The built-in signal generator provides test tones for evaluating effects without requiring external audio files or a microphone. It is the default audio source — the app opens with the generator selected and paused. Press spacebar to start.
+## Graph Editor
 
-**Source modes** (toggle in header bar):
-- **GEN**: Built-in signal generator (default)
-- **FILE**: WAV file playback
+The canvas is an [egui-snarl](https://crates.io/crates/egui-snarl) node graph. It opens with Input wired straight to Output (plain passthrough).
 
-**Signal types:**
+- **Input / Output**: fixed, one each; they have no menu and can't be selected.
+- **Effect nodes**: any registry effect. The header shows the effect name and the body shows its count of visible parameters. Node, header and wire colors come from the effect's family (`Family::from_category(..).accent()`):
 
-| Signal | Description | Use Case |
-|--------|-------------|----------|
-| Sine | Pure tone at configurable frequency | Distortion character, clean reference |
-| Sweep | Logarithmic 20 Hz–20 kHz frequency sweep | Filter shapes, resonance peaks |
-| White Noise | Flat spectrum, decorrelated L/R | EQ curves, gate thresholds |
-| Pink Noise | −3 dB/octave (Voss-McCartney) | Perceptually flat broadband testing |
-| Impulse | Single-sample clicks at configurable rate | Reverb tails, delay times |
-| Saw Chord | Root + major 3rd + perfect 5th (naive saw) | Harmonically rich, aliasing test |
+| Category | Family | Color |
+|----------|--------|-------|
+| Distortion | HEAT | orange |
+| Dynamics | VOLT | gold |
+| Modulation | FLUX | magenta |
+| Time-based | ECHO | violet |
+| Filter | WAVE | cyan |
+| Utility | LINE | green |
 
-**Controls:** Signal type dropdown, frequency slider (log-scaled, for Sine/Saw Chord), play/pause/stop transport. All signals generated at the device sample rate in the audio thread.
-
-### Graph Editor
-
-The center panel contains a visual node-graph editor powered by [egui-snarl](https://crates.io/crates/egui-snarl). Nodes represent audio processing elements; wires represent audio signal flow.
-
-**Node types:**
-- **Input**: Audio source (signal generator or file). One per graph. Pinned to left edge.
-- **Output**: Audio sink (speakers). One per graph. Pinned to right edge.
-- **Effect**: Any of the 19 registered effects. Shows category, parameter count.
-
-Split and Merge nodes are auto-inserted during compilation when the graph has fan-out (one node wired to multiple targets) or fan-in (multiple sources wired to one node). Users never need to place routing nodes manually.
-
-Effect nodes are color-coded by category:
-
-| Category | Color | Effects |
-|----------|-------|---------|
-| Dynamics | Steel blue | compressor, gate, limiter |
-| Distortion | Warm red | distortion, preamp, bitcrusher |
-| Modulation | Forest green | chorus, flanger, phaser, tremolo, vibrato, ringmod |
-| Filter | Amber | filter, eq, wah |
-| Time-based | Purple | delay, reverb |
-| Utility | Slate gray | tape, stage |
+Each effect's category and parameters are listed in [EFFECTS_REFERENCE.md](EFFECTS_REFERENCE.md).
 
 **Interactions:**
-- **Right-click canvas**: Context menu to add nodes (organized by effect category)
-- **Click node**: Select node to show its parameter panel below
-- **Right-click node**: Remove or duplicate
-- **Drag wire**: Connect output pin to input pin
-- **Ctrl+Scroll**: Zoom the graph view
 
-**Auto-wire compilation:**
-Topology changes auto-compile. The compiler walks the Snarl topology, auto-inserts Split nodes for fan-out and Merge nodes for fan-in, builds a `ProcessingGraph` (Kahn sort, latency compensation), creates effects via the registry, and produces a `GraphCommand::ReplaceTopology` for atomic swap on the audio thread. Old sessions with explicit Split/Merge nodes are handled transparently.
+- **+ EFFECT**: opens a searchable palette of all effects (type to filter). The pick is appended as the last node before Output and selected.
+- **Right-click canvas**: a search field plus category submenus. The new node is spliced into the wire nearest the click.
+- **Click a node**: selects it and opens its panel. Click empty canvas to deselect.
+- **Selected node**: a floating **Duplicate / Remove** bar appears at the canvas's top-left, and Delete or Backspace removes the node.
+- **Right-click a node**: Remove or Duplicate.
+- **Drag pin to pin**: wire an output to an input. One output may feed several inputs (fan-out), and an input may take several wires, which are summed (fan-in).
+- **Ctrl+Scroll / pinch**: zoom, clamped to 0.5×–1.5×.
 
-### Effect Panels
+After every structural edit the nodes re-flow left to right by depth. If the last node feeding Output is removed, the nearest remaining node is wired to Output so the graph never goes silent.
 
-When an effect is selected, its parameter panel appears below the chain. Each panel includes:
+**Compilation.** Every structural edit recompiles automatically. The compiler walks the snarl topology, inserts Split nodes for fan-out and Merge nodes for fan-in (so you never place them yourself), builds a `ProcessingGraph`, creates the effects through the registry, and sends a `GraphCommand::ReplaceTopology` that the audio thread swaps in at the next buffer. Explicit Split/Merge nodes in older sessions still load and compile.
 
-- Effect name header
-- Rotary knobs for continuous parameters
-- Toggle buttons for discrete options
-- Value readouts below knobs
+## Effect Panel
 
-**Common Controls:**
-- **Knob drag**: Vertical drag to adjust value
-- **Knob double-click**: Reset to default value
+Selecting an effect node opens its panel below the canvas, framed in the effect's family color (cyan or amber instead while sculpting morph pose A or B). The panel is the plugin cabinet's deck:
 
-### A/B Morph Crossfader
+- **Title row**: the effect name, an **ACTIVE / BYPASSED** toggle (a click-free per-effect bypass), and, once the morph is active, a **LOCK** toggle that holds this effect still while the morph sweeps the rest of the rig.
+- **Stepped parameters**: `cabinet::selector`, which draws segmented buttons for a few short options and otherwise a ◀ value ▶ stepper (click the value to advance, scroll to step).
+- **Continuous parameters**: LED-ring knobs in the family color (`bridged_knob_accent`), with the formatted value and the label under each ring. Ranges that span zero fill from twelve o'clock. When an effect has distinct A/B poses, cyan and amber ghost ticks mark each knob's A and B values.
+- **Every** visible parameter is shown, so the node's "N params" count matches the panel. Read-only and hidden parameters are skipped.
+- **The looper** has its own transport panel instead.
 
-The morph bar appears at the bottom of the window (above the status bar). It enables A/B parameter interpolation across all effect slots:
+**Knob controls:** drag vertically (Shift for fine), scroll the mouse wheel over a knob (Shift for fine), use Up/Down on a focused knob (1 % per press, Shift 0.2 %), use Left/Right to move focus between knobs, and double-click to reset to default.
 
-- **[A] button**: Click to capture current parameters as snapshot A (filled circle = captured)
-- **[B] button**: Click to capture current parameters as snapshot B
-- **Crossfader**: Drag to interpolate between A and B (enabled when both captured)
-- **Recall**: Right-click or double-click A/B to recall that snapshot
+**Right-click any knob or selector** to get **Map to Macro 1–6** or **Clear macro mapping**.
 
-The interpolation mirrors `KernelParams::lerp()`:
-- Continuous parameters: linear interpolation `va + (vb - va) * t`
-- STEPPED parameters (enum/discrete): snap at `t = 0.5`
-- Bypass state: snap at `t = 0.5`
+With nothing selected, the area shows a one-line prompt.
 
-### Status Bar
+### Info band
 
-- **Sample Rate**: Current sample rate (e.g., 48000 Hz)
-- **Buffer Size**: Drop-down selector for audio buffer size (click to change)
-  - Presets: Low Latency (256), Very Low (512), Balanced (1024), Stable (2048), Maximum (4096)
-  - Changes require audio restart and are validated against hardware limits
-- **Latency**: Round-trip latency in milliseconds (buffer size / sample rate)
-- **CPU**: Audio thread CPU usage percentage with real-time sparkline graph
-  - Graph shows last 60 frames of CPU usage trend
-  - Color-coded: green (<80%), yellow (80-100%), red (>100%)
-- **Daisy Eligibility**: Shows `Daisy: N/3` — green when the graph has 3 or fewer
-  effect nodes (compatible with Hothouse hardware), red when over the limit
-- **Buffer Overrun Warning**: Appears when buffer overruns are detected
-  - Yellow: warning status (processing time approaching buffer limit)
-  - Red: critical status (audio glitches possible)
-  - Shows overrun count to indicate severity
+Docked under the panel on Desktop/Tablet (hidden in Focus mode). It shows the selected effect's name and description from the registry, every parameter's live formatted value, and the relevant shortcuts. With no selection it shows the general shortcuts.
 
-## Effects Reference
+## Macros
 
-### Preamp
-- **Gain**: -20 to +20 dB
-- **Output**: -20 to +6 dB output level
-- **Headroom**: 6 to 40 dB clipping ceiling
+Six performance knobs, **K1–K6**, sit in the header. Each macro sweeps any number of parameters at once.
 
-### Distortion
-- **Drive**: 0 to 40 dB (default 12)
-- **Tone**: 500 to 10000 Hz lowpass filter (default 4000)
-- **Level**: -20 to 0 dB output level (default -6)
-- **Waveshape**: SoftClip, HardClip, Foldback, Asymmetric
+- **Map**: right-click a parameter in an effect panel and choose **Map to Macro N**.
+- **Auto**: seeds one macro per effect in chain order (the first six), each bound to that effect's first continuous, musical parameter over its full range and curve. The knob position is set to reproduce the current value, so assigning never jumps the sound.
+- **Edit**: right-click a macro knob to open its mapping window. There you can rename it, set each target's min/max, invert (⇄), remove a target (✕), or **Clear all**.
+- **Hover** a macro knob for its name and target count. A small cyan dot under the knob marks a mapped macro.
 
-### Compressor
-- **Threshold**: -60 to 0 dB (default -18)
-- **Ratio**: 1:1 to 20:1
-- **Attack**: 0.1 to 100 ms
-- **Release**: 10 to 1000 ms
-- **Makeup**: 0 to 24 dB
-- **Knee**: 0 to 12 dB knee width
+## A/B Morph
 
-### Chorus
-- **Rate**: 0.1 to 10 Hz LFO rate
-- **Depth**: 0 to 1 modulation depth
-- **Mix**: 0 to 1 wet/dry mix
+The MORPH band crossfades the whole rig between two poses, A and B. Every effect owns its own A and B values, keyed to its node, so adding, removing or reordering effects never desyncs the morph. A new effect joins flat (A = B) until you give it a distinct pose.
 
-### Delay
-- **Time**: 1 to 2000 ms delay time (default 300)
-- **Feedback**: 0 to 0.95 feedback amount (default 0.4)
-- **Mix**: 0 to 1 wet/dry mix
-- **Ping-Pong**: On/Off stereo ping-pong mode
+- **Left-click A or B**: park the rig at that pose and *sculpt* it; every knob you turn is recorded into it. The readout says `editing A` / `editing B`.
+- **Right-click (or double-click) A or B**: grab the current sound into that pose.
+- **Drag the LED bar**: perform; the readout shows `A→B nn%`.
+- **RAMP / MOM / LATCH**: the mode for the **A⇄B** trigger (and the pedal footswitch). Ramp glides, Momentary holds B while pressed, and Latch toggles. **A⇄B** is enabled once some effect has distinct poses.
 
-### Filter (Lowpass)
-- **Cutoff**: 20 to 20000 Hz
-- **Resonance**: 0.1 to 10 Q factor
+Interpolation is per parameter and curve-aware (`curve_lerp`). Linear parameters interpolate linearly, logarithmic ones (frequencies) geometrically, and snap/stepped ones switch at the midpoint. Per-effect bypass switches at `t = 0.5`. Locked effects are left alone.
 
-### Vibrato
-- **Depth**: 0 to 1 overall modulation depth
-- **Mix**: 0 to 100% wet/dry mix
+## Source
 
-### Tape Saturation
-- **Drive**: 0 to 24 dB (default 6)
-- **Saturation**: 0 to 1
-- **Output**: -12 to +12 dB output level
-- **HF Rolloff**: 1000 to 20000 Hz high-frequency rolloff
-- **Bias**: -0.2 to 0.2 tape bias offset
+The audio source is either the built-in signal generator (**GEN**, the default) or a WAV file (**FILE**), switched in the header. The app opens on GEN, paused; press Space or PLAY to start.
 
-### Reverb
-- **Room Size**: 0 to 1 (default 0.5)
-- **Decay**: 0 to 1
-- **Damping**: 0 to 1 (0 = bright, 1 = dark)
-- **Pre-delay**: 0 to 100 ms
-- **Mix**: 0 to 1 wet/dry mix
-- **Stereo Width**: 0 to 100% stereo decorrelation
-- **Type**: Room, Hall
+**Generator signals** (status-bar drop-down):
 
-### Tremolo
-- **Rate**: 0.5 to 20 Hz LFO rate
-- **Depth**: 0 to 100% modulation depth
-- **Wave**: Sine, Triangle, Square, Sample & Hold
+| Signal | Description |
+|--------|-------------|
+| Sine | Pure tone (440 Hz) |
+| Sweep | Logarithmic frequency sweep |
+| White Noise | Flat spectrum, decorrelated L/R |
+| Pink Noise | About −3 dB/octave (Voss-McCartney) |
+| Impulse | Single-sample click train |
+| Saw Chord | Root + major 3rd + perfect 5th, naive saw (440 Hz root) |
 
-### Flanger
-- **Rate**: 0.05 to 5 Hz LFO rate
-- **Depth**: 0 to 100% modulation depth
-- **Feedback**: 0 to 95% feedback amount
-- **Mix**: 0 to 100% wet/dry mix
+The frequency is shown next to the selector for Sine and Saw Chord. It isn't adjustable from the UI.
 
-### Phaser
-- **Rate**: 0.05 to 5 Hz LFO rate
-- **Depth**: 0 to 100% modulation depth
-- **Feedback**: 0 to 95% feedback/resonance
-- **Mix**: 0 to 100% wet/dry mix
-- **Stages**: 2, 4, 6, 8, 10, or 12 allpass stages
+**File mode:** **OPEN** picks a WAV file. On native you can also drop a `.wav` onto the window. The status bar then shows play/pause, the file name, and position/duration.
 
-### Gate
-- **Threshold**: -80 to 0 dB open threshold
-- **Attack**: 0.1 to 50 ms attack time
-- **Release**: 10 to 1000 ms release time
-- **Hold**: 0 to 500 ms hold time
+## Status Bar
 
-### Wah
-- **Frequency**: 200 to 2000 Hz center frequency
-- **Resonance**: 1 to 10 filter Q
-- **Sensitivity**: 0 to 100% (auto-wah mode)
-- **Mode**: Auto (envelope follower), Manual
+- **Sample rate**: the rate in use (the device's).
+- **Latency**: one buffer, `buffer_size / sample_rate`, in ms.
+- **CPU**: audio-callback time as a percentage of the buffer duration, with a 60-sample sparkline. Green is ≤ 80 %, yellow is 80–100 %, and red is > 100 %. Debug builds append `(debug)`.
+- **Daisy: N/3**: green while the graph has three or fewer effect nodes, red above. Export runs the real pedal check (see below).
+- **Transport**: generator play/pause, signal type and frequency; in FILE mode, the file controls.
 
-### Parametric EQ
-Three independent bands with identical controls:
+The buffer size is fixed at launch by `--buffer-size`; there is no in-app selector.
 
-**Low Band**
-- **Frequency**: 20 to 500 Hz
-- **Gain**: -12 to +12 dB
-- **Q**: 0.5 to 5.0
+## Sessions
 
-**Mid Band**
-- **Frequency**: 200 to 5000 Hz
-- **Gain**: -12 to +12 dB
-- **Q**: 0.5 to 5.0
+**Save / Load** write and read a JSON session: topology and node positions, every effect's parameters and bypass (A and B poses), the six macros with names, mappings and knob positions, the morph mode, locks and position, and the input gain and master volume. Older session versions load; missing fields take defaults. Loading a session clears undo history. Native uses OS file dialogs; the web build downloads `sonido-rig.json` and uses the browser file picker.
 
-**High Band**
-- **Frequency**: 1000 to 15000 Hz
-- **Gain**: -12 to +12 dB
-- **Q**: 0.5 to 5.0
+## Export
 
-## Preset Management
+The **Export** menu projects the rig to a canonical `sonido_patch::Patch` and offers:
 
-### Factory Presets
+- **Export as CLAP patch** (native): writes `<name>.sonidopatch.json` to the rig library, `sonido_config::paths::rig_library_dir()`. The graph-player plugin's RIG selector lists these alongside its built-in factory rigs. The directory is created on first export.
 
-Built-in presets are available immediately:
+| Platform | Rig library |
+|----------|-------------|
+| Linux | `$XDG_DATA_HOME/sonido/patches` (or `~/.local/share/sonido/patches`) |
+| macOS | `~/Library/Application Support/sonido/patches` |
+| Windows | `%APPDATA%\sonido\patches` |
 
-- **Init**: Clean signal, all effects bypassed
-- **Crunch**: Moderate distortion
-- **High Gain**: Heavy distortion with compression
-- **Ambient**: Delay, reverb, and chorus combination
-- **Tape Warmth**: Subtle tape saturation
+- **Save patch JSON…**: the same patch, anywhere.
+- **Pedal (Daisy)**: the rig is validated against the pedal's supported effects and its CPU-cycle and SDRAM budgets. The menu shows `✓ fits pedal budget` or `✗ exceeds pedal limits` with each finding. When it fits, you can choose **Save pedal binary (.bin)…** (a 4 KB patch sector) or **Flash to pedal (DFU)** (native only; put the pedal in bootloader by holding both footswitches about 3 s, and the patch is flashed to slot 0). The shipping pedal firmware does not read the patch bank yet, so a flashed rig is stored but not played ([PATCH_PLATFORM.md](PATCH_PLATFORM.md), workstream D).
 
-### Saving Presets
+The result appears in the header.
 
-1. Adjust effect parameters to your liking
-2. Click the **Save** button in the header
-3. Enter a preset name and category
-4. Click **Save** to store the preset
+## Keyboard Shortcuts
 
-### Preset Storage Location
+Global shortcuts are inactive while the ADD EFFECT palette or a macro mapping window is open.
 
-User presets are saved as JSON files in:
+| Key | Action |
+|-----|--------|
+| Space | Play / pause the source |
+| F | Toggle Focus mode (Desktop/Tablet) |
+| Ctrl+Z (⌘Z) | Undo structural edit |
+| Ctrl+Shift+Z or Ctrl+Y (⌘⇧Z / ⌘Y) | Redo |
+| Delete / Backspace | Remove the selected effect node |
+| Up / Down | Adjust the focused knob (Shift = fine) |
+| Left / Right | Move focus between knobs |
+| Ctrl+Scroll | Zoom the graph |
 
-| Platform | Directory |
-|----------|-----------|
-| Linux | `~/.config/sonido/presets/` |
-| macOS | `~/Library/Application Support/sonido/presets/` |
-| Windows | `%APPDATA%\sonido\presets\` |
-
-### Preset File Format
-
-Presets are stored as TOML files containing effect parameters, bypass states,
-effect order, and optional graph topology:
-
-```toml
-name = "My Preset"
-description = "Warm crunch with reverb"
-topology = "linear"  # optional: "linear", "parallel", "fan"
-
-[[effects]]
-type = "distortion"
-[effects.params]
-drive = "18"
-```
-
-The `topology` field is preserved through save/load cycles and used by the
-Daisy export command (`sonido daisy export`) to encode routing into the
-hardware binary. See the [CLI Guide](CLI_GUIDE.md#preset-files) for the
-full TOML format reference.
-
-### Generic Effect Panels
-
-Effects without a dedicated UI panel (e.g., the 15 newly registered effects
-like amp, cabinet, pitch_shift) use a `GenericPanel` that auto-discovers
-parameters from the registry. Stepped parameters render as combo boxes;
-continuous parameters render as faders in rows of 6.
-
-## Real-Time Parameter Changes
-
-### AtomicParamBridge with Dirty Flags
-
-The `AtomicParamBridge` provides per-slot parameter sharing between GUI and audio threads. Each slot has a `dirty` flag (`AtomicBool`) that is set when the GUI writes any parameter. The audio thread checks this flag once per buffer and only pushes changed params to the effect chain when dirty, avoiding unnecessary iteration over all parameters on every buffer.
-
-Individual parameter values use `AtomicU32` bit-cast (`f32::to_bits` / `f32::from_bits`), which is lock-free and wait-free. The slot collection uses `parking_lot::RwLock<Vec<SlotState>>`, which is acceptable because slot mutations (add/remove) are rare compared to per-buffer param reads.
-
-### Bypass Crossfade
-
-Bypass toggling uses `SmoothedParam::fast` (5ms exponential smoothing) per slot for click-free transitions. The crossfade level (`bypass_fade`) ranges from 0.0 (fully bypassed) to 1.0 (fully active). During the transition, the audio thread mixes dry and wet signals proportionally:
-
-- `fade < 1e-6`: Fully bypassed, skip processing entirely (optimization)
-- `fade > 1.0 - 1e-6`: Fully active, no crossfade math needed
-- Otherwise: `output = dry * (1 - fade) + wet * fade`
-
-When un-bypassing, all effect parameters are re-set to their current values so internal `SmoothedParam`s settle before audio reaches the effect.
-
-## Audio Thread Architecture
+## Real-Time Architecture
 
 ```
-[Input Device] -> [Input Gain] -> [Effect Chain] -> [Master Volume] -> [Output Device]
-                                        |
-                                        v
-                              [Metering Data] -> [GUI Thread]
+[Generator | WAV file] -> GAIN -> [GraphEngine] -> chain BYPASS crossfade -> VOL -> safety clamp -> [default output device]
+                            |                                                                  |
+                            +--------------------- MeteringData (in/out peak+RMS, CPU) --------+--> GUI
 ```
 
-### AudioProcessor
+Audio runs in a single cpal **output** callback that owns an `AudioProcessor` (`audio_processor.rs`). Each buffer it:
 
-The audio output callback delegates to `AudioProcessor`, a testable struct extracted from the monolithic closure. It encapsulates:
+1. Drains transport commands (play/pause, source, signal type, file load).
+2. Drains `GraphCommand`s (`ReplaceTopology` swaps in a freshly compiled `GraphEngine` and rebuilds the parameter bridge's slots).
+3. Pushes every parameter and per-effect bypass from the bridge into the graph.
+4. Generates or reads the source, applies input gain, and meters it.
+5. Runs the graph. If the block goes non-finite (a runaway feedback loop), it resets the graph and outputs silence for that block.
+6. Crossfades to dry for chain BYPASS, applies master volume, flushes NaN/Inf and clamps to ±4.0 (about +12 dBFS).
+7. Meters the output, measures CPU, and sends `MeteringData`.
 
-- `process_commands()` — drains transport + chain commands
-- `process_buffer(data)` — parameter sync, effect processing, gain staging, metering
+The callback reuses its scratch buffers, so it doesn't allocate.
 
-The `AudioProcessor` owns the `GraphEngine`, `AtomicParamBridge`, effect order cache, file playback state, and metering sender. This extraction enables unit testing of the audio path without a live audio stream.
+**GUI → audio communication:**
 
-### Graph Topology Changes
+- **Effect parameters** live in `AtomicParamBridge` (`atomic_param_bridge.rs`): one `AtomicU32` per parameter (bit-cast `f32`) in per-slot state held behind an `ArcSwap`. GUI writes and audio reads are wait-free loads. Structural changes (`rebuild_from_manifest` on `ReplaceTopology`) publish a new slot list via RCU, so readers never block.
+- **Input gain and master volume** are `AtomicParam`s (`audio_bridge.rs`).
+- **Topology and transport commands** travel over unbounded `crossbeam_channel`s. The editor sends only `ReplaceTopology`; the `Add`/`Remove` variants exist for linear-chain mutation.
+- **Metering** comes back over a bounded channel (capacity 4) with `try_send`, so the audio thread never blocks on a slow GUI.
 
-Topology changes are sent via `GraphCommand` messages through a `crossbeam_channel`:
+All parameter access from UI code goes through the `ParamBridge` trait (`sonido-gui-core`), whose `begin_set`/`end_set` gesture brackets map to host automation gestures in the CLAP plugins.
 
-- `GraphCommand::Add { id, effect, descriptors }` — adds an effect to the linear chain
-- `GraphCommand::Remove { slot }` — removes an effect from the chain
-- `GraphCommand::ReplaceTopology { engine, effect_ids, slot_descriptors }` — replaces the entire engine with a compiled DAG (used by graph view's Compile button)
+### Shared GUI crate
 
-The `AtomicParamBridge::rebuild_from_manifest()` atomically swaps the parameter slot list on `ReplaceTopology`.
-
-### Widget and Effect UI Consolidation
-
-All shared GUI components live in `sonido-gui-core`:
-- **Widgets**: `Knob`, `LevelMeter`, `BypassToggle`, `FootswitchToggle` — re-exported by `sonido-gui::widgets`
-- **Effect UIs**: 15 effect parameter panels + `EffectPanel` dispatcher — used by both standalone and future plugin UIs
-- **Theme**: Dark theme shared across all targets
-- **ParamBridge**: Trait with `begin_set`/`end_set` gesture protocol for CLAP/VST3 host integration
-
-This architecture means a future `sonido-plugin` crate only depends on `sonido-gui-core`, not the full standalone application.
+`sonido-gui-core` holds everything the editor shares with the plugins (`sonido-plugin`): the theme and families, the cabinet layout and selector, the widgets (`Knob`, `LevelMeter`, `morph_bar`, macro menu, vector font, and others), the `ParamBridge` trait, and the effect panels (`GenericPanel` and `LooperPanel`).
 
 ## Troubleshooting
 
-### No Audio
+**No audio.**
+1. Check the header's status LED and any audio error. Click **Retry** after fixing the device.
+2. The editor plays to the system default output device. Change it in your sound settings.
+3. The source starts paused. Press Space or PLAY. In FILE mode, open a file first.
+4. On the web, click or press a key once to resume the AudioContext.
+5. A new graph is a passthrough, and the chain **BYPASS** (red LED) or an effect's **BYPASSED** toggle silences processing, not the source.
 
-1. Check the audio status indicator (should be green)
-2. Verify input/output devices are connected
-3. Run `sonido devices` in CLI to list available devices
-4. Try specifying devices explicitly: `sonido-gui --input "Device Name"`
+**Crackles, dropouts, `errors: N` in the header.** The callback is missing its deadline. Watch the CPU readout: sustained readings near or above 100 % mean overruns.
+- Raise the buffer: `sonido-gui --buffer-size 4096`.
+- Use a release build (`cargo run --release -p sonido-gui`). Debug builds are much slower, as the `(debug)` tag warns.
+- Remove or bypass heavy effects, and close other CPU-heavy applications.
 
-### Audio Glitches/Crackling
+**Too much latency.** Lower the buffer (`--buffer-size 512` or `256`), at the cost of more CPU headroom per buffer.
 
-1. Increase buffer size: `sonido-gui --buffer-size 512` or `--buffer-size 1024`
-2. Close other audio applications
-3. Check CPU usage in the status bar
+**Won't start.** Run with logs:
 
-### High Latency
-
-1. Decrease buffer size: `sonido-gui --buffer-size 128` or `--buffer-size 256`
-2. Note: smaller buffers require more CPU and may cause glitches on slower systems
-
-### Buffer Overruns (Audio Glitches)
-
-Buffer overruns occur when audio processing takes longer than the buffer duration, causing dropouts.
-
-**Symptoms:**
-- Crackling or popping sounds
-- "OVERRUN" warning in status bar (yellow or red)
-- CPU usage consistently above 80-100%
-
-**Solutions:**
-1. Increase buffer size (reduces CPU load per buffer)
-2. Reduce CPU usage: bypass unused effects, use simpler chains
-3. Close other CPU-intensive applications
-4. Check power management settings (disable CPU throttling)
-
-### Buffer Underruns (Stuttering)
-
-Similar to overruns but caused by insufficient audio data. Usually resolves automatically when CPU load decreases.
-
-### Monitoring Buffer Health
-
-- **CPU Sparkline**: Watch the real-time CPU graph in the status bar. Spikes above 80% indicate potential buffer issues.
-- **Buffer Status**: The OVERRUN indicator shows cumulative overrun count. If it appears frequently, increase buffer size.
-- **Latency Display**: Balance latency needs vs. stability—lower buffer = lower latency but higher CPU.
-
-### Device Selection Issues
-
-List available devices first:
-```bash
-sonido devices
-```
-
-Then specify the exact device name:
-```bash
-sonido-gui --input "USB Audio Interface" --output "USB Audio Interface"
-```
-
-### Application Won't Start
-
-Check logs for errors:
 ```bash
 RUST_LOG=debug sonido-gui
 ```
 
-Common issues:
-- Missing audio drivers (install ALSA on Linux, check CoreAudio on macOS)
-- Permission issues with audio devices
-- Conflicting sample rates (try `--sample-rate 44100`)
-
-## Keyboard Shortcuts
-
-Currently, the GUI is primarily mouse-driven. Keyboard shortcuts may be added in future versions.
-
-## Recent Changes
-
-### Preset Loading Improvements
-Selecting a preset now performs a "hard reset": the application stops audio, rebuilds the entire effect chain to exactly match the preset (adding or removing effects as needed), applies all parameters, and restarts audio. This ensures preset chains are reconstructed precisely rather than just modifying parameters of existing effects.
-
-### Input Gain Safety
-The input gain defaults to 0 dB (unity gain). The knob range spans from -20 dB to +20 dB.
-
-### Level Meter Evolution
-The level meters now display a combined Peak and RMS visualization:
-- RMS bar: shows average signal level (gradient green→yellow→red)
-- Peak bar: overlays RMS in brighter colors (green → yellow → red when >0.7 → >0.95)
-- Peak hold: thin semi-transparent white line indicates peak level
-
-This design provides clearer visual feedback for level monitoring, inspired by professional DAW meters.
-
-### Visual Node-Graph Editor
-The chain view and DSL console have been replaced by a visual node-graph editor (egui-snarl 0.7.1). Users build audio graphs by adding nodes and connecting them visually, then compile to the audio engine. This subsumes the linear chain view — a linear chain is simply nodes connected left-to-right.
-
-### A/B Morph System
-A crossfade bar at the bottom enables capturing two parameter snapshots and morphing between them in real-time. The interpolation mirrors `KernelParams::lerp()` — continuous params interpolate linearly while stepped params snap at the midpoint.
+On Linux, a build failure mentioning `alsa` means the ALSA development package is missing (see [Installation](#installation)).
 
 ## See Also
 
-- [Getting Started](GETTING_STARTED.md) - Quick start guide
-- [CLI Guide](CLI_GUIDE.md) - Command-line interface documentation
-- [Effects Reference](EFFECTS_REFERENCE.md) - Detailed effect documentation
-- [Architecture](ARCHITECTURE.md) - System architecture overview
+- [Getting Started](GETTING_STARTED.md): quick start
+- [Effects Reference](EFFECTS_REFERENCE.md): every effect and parameter
+- [Design System](DESIGN_SYSTEM.md): tokens, families, components
+- [Patch Platform](PATCH_PLATFORM.md): the patch format behind sessions and export
+- [CLI Guide](CLI_GUIDE.md): the `sonido` command-line tool
+- [Architecture](ARCHITECTURE.md): system overview

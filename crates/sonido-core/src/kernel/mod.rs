@@ -18,7 +18,7 @@
 //!
 //! # Why This Exists
 //!
-//! The original [`Effect`](crate::Effect) trait couples DSP math with parameter ownership — each
+//! A hand-written [`Effect`](crate::Effect) couples DSP math with parameter ownership — the
 //! effect owns its [`SmoothedParam`](crate::SmoothedParam) instances and manages
 //! their targets internally. This works for a single platform, but creates tension
 //! when the same effect must deploy to:
@@ -33,13 +33,13 @@
 //! in whatever way makes sense — pre-smoothed, raw, snapped — and the kernel
 //! code remains identical.
 //!
-//! # Migration
+//! # Status
 //!
-//! Existing `Effect` implementations continue to work unchanged. New effects can
-//! use the kernel architecture from the start. Existing effects can be migrated
-//! incrementally — `Adapter<K, SmoothedPolicy>` produces a standard `Effect` that
-//! the rest of the system (graph, registry, plugin, GUI) consumes without knowing
-//! whether the underlying implementation is a classic `Effect` or a `DspKernel`.
+//! All 36 effects in `sonido-effects` are kernels. `Adapter<K, SmoothedPolicy>`
+//! and `Adapter<K, DirectPolicy>` produce a standard `Effect` that the rest of
+//! the system (graph, registry, plugin, GUI, firmware) consumes; a hand-written
+//! `Effect` implementation (e.g. `sonido_synth::SynthNode`) still plugs in the
+//! same way.
 //!
 //! See `docs/KERNEL_ARCHITECTURE.md` for the full architecture reference and
 //! adding-new-effect checklist.

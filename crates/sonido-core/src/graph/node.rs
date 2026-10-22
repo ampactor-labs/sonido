@@ -238,8 +238,8 @@ mod tests {
         let node = NodeData::new(id, NodeKind::Input, 48000.0);
         assert_eq!(node.id, id);
         assert!(!node.bypassed);
-        assert!(node.incoming.is_empty());
-        assert!(node.outgoing.is_empty());
+        assert_eq!(node.incoming.len(), 0);
+        assert_eq!(node.outgoing.len(), 0);
     }
 
     #[test]
@@ -247,8 +247,8 @@ mod tests {
         let id = NodeId(1);
         let node = NodeData::new(id, NodeKind::Output, 48000.0);
         assert_eq!(node.id, id);
-        assert!(node.incoming.is_empty());
-        assert!(node.outgoing.is_empty());
+        assert_eq!(node.incoming.len(), 0);
+        assert_eq!(node.outgoing.len(), 0);
     }
 
     #[test]
@@ -293,12 +293,12 @@ mod tests {
     #[test]
     fn node_data_bypass_buf_starts_empty() {
         let node = NodeData::new(NodeId(0), NodeKind::Input, 48000.0);
-        assert!(node.bypass_buf.is_empty());
+        assert_eq!(node.bypass_buf.len(), 0);
     }
 
     #[test]
     fn node_data_tap_buf_starts_empty() {
         let node = NodeData::new(NodeId(0), NodeKind::Input, 48000.0);
-        assert!(node.tap_buf.is_empty());
+        assert_eq!(node.tap_buf.len(), 0);
     }
 }

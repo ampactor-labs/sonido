@@ -29,3 +29,7 @@ sonido-registry = { workspace = true }
 [[bench]]
 name = "effects_bench"
 harness = false
+
+[[bench]]
+name = "all_effects"
+harness = false

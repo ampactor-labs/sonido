@@ -1,10 +1,12 @@
 //! Sonido Effects - Production-ready audio effect implementations
 //!
-//! This crate provides 20 audio effects built on `sonido-core` using the
+//! This crate provides 36 audio effects (all in [`kernels`]) built on `sonido-core` using the
 //! [`DspKernel`](sonido_core::DspKernel) + [`Adapter`](sonido_core::kernel::Adapter)
 //! architecture, suitable for real-time audio processing, plugins, and embedded systems.
 //!
 //! # Effect Categories
+//!
+//! A selection by category; [`kernels`] has the full set of 36.
 //!
 //! ## Dynamics & Gain
 //!
@@ -16,6 +18,7 @@
 //! ## Amp Simulation
 //!
 //! - [`AmpKernel`] - Full valve amp sim: dual gain stage + tone stack + sag + presence + bright
+//! - [`CabinetKernel`] - Guitar speaker cabinet IR simulator (3 factory IRs, direct convolution)
 //!
 //! ## Distortion & Saturation
 //!
@@ -25,25 +28,24 @@
 //!
 //! ## Modulation
 //!
-//! - [`ChorusKernel`] - Classic dual-voice stereo chorus
+//! - [`ChorusKernel`] - Stereo chorus with 2 to 4 voices
 //! - [`FlangerKernel`] - Classic flanger with modulated short delay
 //! - [`PhaserKernel`] - Multi-stage allpass phaser with LFO modulation
 //! - [`RingModKernel`] - Ring modulation with sine, triangle, and square carriers
 //! - [`TremoloKernel`] - Amplitude modulation with multiple waveforms
-//! - [`VibratoKernel`] - 10-unit tape wow/flutter simulation (original algorithm)
+//! - [`VibratoKernel`] - 6-unit tape wow/flutter simulation (original algorithm)
 //!
 //! ## Time-Based
 //!
 //! - [`DelayKernel`] - Tape-style feedback delay with interpolation
-//! - [`ReverbKernel`] - Freeverb-style algorithmic reverb (8 combs + 4 allpasses)
+//! - [`ReverbKernel`] - 8-line Hadamard feedback delay network on Freeverb's delay tunings
 //!
 //! ## Filters
 //!
-//! - [`FilterKernel`] - Resonant state-variable filter (lowpass, highpass, bandpass)
+//! - [`FilterKernel`] - Resonant biquad filter (lowpass, highpass, bandpass, notch)
 //!
 //! ## Pitch & Tuning
 //!
-//! - [`CabinetKernel`] - Guitar speaker cabinet IR simulator (3 factory IRs, direct convolution)
 //! - [`TunerKernel`] - Chromatic tuner with YIN pitch detection and READ_ONLY diagnostic params
 //! - [`PitchShiftKernel`] - Granular pitch shifter with Hann-windowed grain crossfade
 //!
@@ -53,8 +55,11 @@
 //!
 //! # Usage
 //!
-//! Effects are deployed via [`Adapter`](sonido_core::kernel::Adapter) for desktop/plugin
-//! use, or called directly on embedded targets via [`DspKernel`](sonido_core::DspKernel).
+//! Effects are deployed via [`Adapter`](sonido_core::kernel::Adapter): the smoothing
+//! adapter (`Adapter::new`) for desktop/plugin use, and the zero-smoothing
+//! `Adapter::new_direct` (`DirectPolicy`) on embedded targets. The shipping Daisy
+//! pedal firmware wraps every kernel in `Adapter::new_direct`; only a few
+//! single-effect test examples call [`DspKernel`](sonido_core::DspKernel) directly.
 //!
 //! ## Desktop / Plugin (via Adapter)
 //!
@@ -83,7 +88,20 @@
 //! }
 //! ```
 //!
-//! ## Embedded / Daisy Seed (direct kernel)
+//! ## Embedded / Daisy Seed (via `Adapter::new_direct`, as in the pedal firmware)
+//!
+//! ```rust,ignore
+//! use sonido_core::{Effect, ParameterInfo};
+//! use sonido_core::kernel::Adapter;
+//! use sonido_effects::kernels::DistortionKernel;
+//!
+//! // Same Effect + ParameterInfo interface as desktop, no per-sample smoothing
+//! let mut dist = Adapter::new_direct(DistortionKernel::new(48000.0), 48000.0);
+//! dist.set_param(0, 15.0); // drive_db, applied on the next sample
+//! let (left, right) = dist.process_stereo(input_l, input_r);
+//! ```
+//!
+//! ## Embedded / Daisy Seed (direct kernel, as in the single-effect test examples)
 //!
 //! ```rust,ignore
 //! use sonido_effects::kernels::{DistortionKernel, DistortionParams};
@@ -114,7 +132,7 @@ pub mod kernels;
 #[cfg(test)]
 pub mod test_utils;
 
-// Re-export all kernel types at crate root
+// Re-export kernel types at crate root (Harmonic Habitat is reachable via `kernels::` only)
 pub use kernels::{
     AmpKernel, AmpParams, BitcrusherKernel, BitcrusherParams, CabinetKernel, CabinetParams,
     ChorusKernel, ChorusParams, CompressorKernel, CompressorParams, DeesserKernel, DeesserParams,

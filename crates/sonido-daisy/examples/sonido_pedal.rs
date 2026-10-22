@@ -1,6 +1,8 @@
 //! Morph Pedal v2 — DAG-based effect processor with static shared state.
 //!
-//! Phase 1: 3 effects (Chorus, Distortion, Reverb), linear chain.
+//! 3 slots, each holding one of 8 effects (`PEDAL_EFFECT_IDS`: chorus, phaser,
+//! distortion, bitcrusher, delay, reverb, ringmod, filter) or bypass, routed
+//! linear, parallel or fan (T3).
 //! Heap on 64 MB SDRAM (FMC bus, separate from D2 SRAM DMA bus).
 //!
 //! # Toggle Mapping
@@ -15,8 +17,8 @@
 //!
 //! ```bash
 //! cd crates/sonido-daisy
-//! cargo objcopy --example sonido_pedal_v2 --release --features alloc,platform -- -O binary -R .sram1_bss sonido_pedal_v2.bin
-//! dfu-util -a 0 -s 0x90040000:leave -D sonido_pedal_v2.bin
+//! cargo objcopy --example sonido_pedal --release --features alloc,platform -- -O binary -R .sram1_bss sonido_pedal.bin
+//! dfu-util -a 0 -s 0x90040000:leave -D sonido_pedal.bin
 //! ```
 
 #![no_std]
@@ -27,7 +29,7 @@
 extern crate alloc;
 
 use alloc::boxed::Box;
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use defmt_rtt as _;
 use embassy_stm32 as hal;
@@ -36,7 +38,7 @@ use panic_probe as _;
 
 use sonido_core::ParamDescriptor;
 use sonido_core::graph::{NodeId, ProcessingGraph};
-use sonido_core::kernel::Adapter;
+use sonido_core::kernel::{Adapter, KernelParams};
 use sonido_core::{EffectWithParams, ParamFlags};
 use sonido_daisy::controls::HothouseBuffer;
 use sonido_daisy::effect_slot::{self, BypassCrossfade, sanitize_stereo};
@@ -45,8 +47,8 @@ use sonido_daisy::{
     BLOCK_SIZE, ClockProfile, SAMPLE_RATE, f32_to_u24, heartbeat, led::UserLed, u24_to_f32,
 };
 use sonido_effects::{
-    BitcrusherKernel, ChorusKernel, DelayKernel, DistortionKernel, FilterKernel, PhaserKernel,
-    ReverbKernel, RingModKernel,
+    BitcrusherKernel, ChorusKernel, DelayKernel, DelayParams, DistortionKernel, DistortionParams,
+    FilterKernel, PhaserKernel, ReverbKernel, ReverbParams, RingModKernel,
 };
 use sonido_platform::adc_to_param;
 use sonido_platform::knob_mapping::{self, NULL_KNOB};
@@ -67,6 +69,16 @@ static BYPASSED: AtomicBool = AtomicBool::new(false);
 static GRAPH_UPDATING: AtomicBool = AtomicBool::new(false);
 static NEEDS_REBUILD: AtomicBool = AtomicBool::new(false);
 
+// ── CPU load meter ──
+// The audio callback adds its own cycle count per block (DWT); the load
+// report task logs and resets these once a second over defmt RTT. Two
+// register reads and three atomics per 32-sample block.
+static LOAD_SUM: AtomicU32 = AtomicU32::new(0);
+static LOAD_BLOCKS: AtomicU32 = AtomicU32::new(0);
+static LOAD_PEAK: AtomicU32 = AtomicU32::new(0);
+/// Blocks whose callback took longer than the block's real-time budget.
+static LOAD_OVER: AtomicU32 = AtomicU32::new(0);
+
 // ── Constants ───────────────────────────────────────────────────────────────
 
 const MAX_PARAMS: usize = 16;
@@ -77,8 +89,8 @@ const NUM_SLOTS: usize = 3;
 const TAP_LIMIT: u32 = 30;
 
 /// Dual-footswitch hold duration that triggers DFU bootloader entry, in poll ticks
-/// (100 Hz × 1.5 s = 150 ticks).
-const BOOTLOADER_HOLD_TICKS: u16 = 150;
+/// (100 Hz × 3 s = 300 ticks). Long enough that a bypass stomp never trips it.
+const BOOTLOADER_HOLD_TICKS: u16 = 300;
 
 /// Pickup threshold for soft-takeover: knob is unlocked once within 5% of range.
 const PICKUP_THRESHOLD_FRAC: f32 = 0.05;
@@ -101,6 +113,9 @@ const NUM_EFFECTS: usize = EFFECT_IDS.len() + 1; // +1 for null/bypass at index 
 static mut GRAPH_STORAGE: Option<ProcessingGraph> = None;
 static mut NODES_STORAGE: Option<[NodeState; NUM_SLOTS]> = None;
 static mut NODE_IDS_STORAGE: [Option<NodeId>; NUM_SLOTS] = [None; NUM_SLOTS];
+/// Effect index each slot's graph node was built from (what is playing now,
+/// as opposed to `NodeState::effect_index`, which is what the user picked).
+static mut LIVE_EFFECTS: [Option<usize>; NUM_SLOTS] = [None; NUM_SLOTS];
 
 /// All mutable callback state packed into one struct for a single static.
 /// This keeps the closure zero-capture.
@@ -381,14 +396,61 @@ fn build_graph(
     Ok((g, node_ids))
 }
 
+/// Share of the block budget a chain's effects may use, summing each
+/// kernel's measured worst block. The rest covers the firmware's own audio
+/// and control work.
+const CHAIN_BUDGET: u32 = sonido_platform::cycle_table::CYCLE_BUDGET_PER_BLOCK / 100 * 85;
+
+/// Share of the block budget for the new chain plus the old chain's tails
+/// during a rebuild. Lower than [`CHAIN_BUDGET`]: measured in a Hothouse,
+/// delay + reverb with two delay tails (sum of worsts 78%) ran at 88% mean
+/// and 98% peak, so tails are kept only up to 70%.
+const SPILLOVER_BUDGET: u32 = sonido_platform::cycle_table::CYCLE_BUDGET_PER_BLOCK / 100 * 70;
+
+/// Measured worst-case cycles per block for an effect index (0 = bypass).
+fn effect_cycles(effect_idx: Option<usize>) -> u32 {
+    effect_idx
+        .and_then(|i| i.checked_sub(1))
+        .and_then(|i| EFFECT_IDS.get(i))
+        .and_then(|id| sonido_registry::effect_uid(id))
+        .and_then(sonido_platform::cycle_table::effect_cycles)
+        .unwrap_or(0)
+}
+
+/// Whether the old chain's tails can ring out next to the new chain.
+///
+/// Every node is rebuilt, so a tail runs alongside a fresh copy of the same
+/// effect: two reverbs measure ~125% of the block budget, and the SAI then
+/// overruns for the whole 3 s tail. Tails that don't fit are cut instead
+/// (the wet→dry ramp around the rebuild covers the cut).
+fn spillover_fits(
+    graph: &mut ProcessingGraph,
+    live_ids: &[Option<NodeId>; NUM_SLOTS],
+    live_effects: &[Option<usize>; NUM_SLOTS],
+    nodes: &[NodeState; NUM_SLOTS],
+) -> bool {
+    let tails: u32 = (0..NUM_SLOTS)
+        .filter(|&slot| {
+            live_ids[slot]
+                .and_then(|nid| graph.effect_mut(nid))
+                .is_some_and(|e| e.tail_samples() > 0)
+        })
+        .map(|slot| effect_cycles(live_effects[slot]))
+        .sum();
+    let chain: u32 = nodes.iter().map(|n| effect_cycles(n.effect_index)).sum();
+    tails + chain <= SPILLOVER_BUDGET
+}
+
 fn rebuild_graph_in_place(
     graph: &mut ProcessingGraph,
     nodes: &[NodeState; NUM_SLOTS],
     topology: Topology,
     sr: f32,
+    spillover: bool,
 ) -> Result<[Option<NodeId>; NUM_SLOTS], sonido_core::graph::GraphError> {
+    // Toggling drops tails still ringing from the previous rebuild.
     graph.set_spillover(false);
-    graph.set_spillover(true);
+    graph.set_spillover(spillover);
     graph.clear_topology();
 
     let inp = graph.input_id().unwrap();
@@ -410,9 +472,22 @@ fn ensure_b_snapshots(nodes: &mut [NodeState; NUM_SLOTS]) {
     }
 }
 
+/// Step `node_idx` to the next effect in `delta`'s direction, skipping any
+/// that would push the chain past [`CHAIN_BUDGET`] (in practice, a second
+/// reverb). Bypass always fits, so the walk ends.
 fn scroll_effect(nodes: &mut [NodeState; NUM_SLOTS], node_idx: usize, delta: i32) {
+    let others: u32 = (0..NUM_SLOTS)
+        .filter(|&slot| slot != node_idx)
+        .map(|slot| effect_cycles(nodes[slot].effect_index))
+        .sum();
+    let mut cursor = nodes[node_idx].browse_cursor;
+    loop {
+        cursor = ((cursor as i32 + delta).rem_euclid(NUM_EFFECTS as i32)) as usize;
+        if others + effect_cycles(Some(cursor)) <= CHAIN_BUDGET {
+            break;
+        }
+    }
     let node = &mut nodes[node_idx];
-    let cursor = ((node.browse_cursor as i32 + delta).rem_euclid(NUM_EFFECTS as i32)) as usize;
     node.browse_cursor = cursor;
     node.effect_index = Some(cursor);
     node.params_a = SlotSnapshot::new();
@@ -482,133 +557,174 @@ fn interpolate_and_apply(
 
 // ── Factory Presets ─────────────────────────────────────────────────────────
 
+/// Number of factory presets FS1 long-press cycles through.
+const FACTORY_PRESET_COUNT: usize = 3;
+
+/// One slot of a factory preset: the effect and its A and B states.
 struct FactorySlot {
-    effect_idx: Option<usize>,
-    params_a: [f32; MAX_PARAMS],
-    params_b: [f32; MAX_PARAMS],
-    stepped: [bool; MAX_PARAMS],
-    count: usize,
+    effect_index: usize,
+    a: SlotSnapshot,
+    b: SlotSnapshot,
 }
 
-impl FactorySlot {
-    const EMPTY: Self = Self {
-        effect_idx: None,
-        params_a: [0.0; MAX_PARAMS],
-        params_b: [0.0; MAX_PARAMS],
-        stepped: [false; MAX_PARAMS],
-        count: 0,
-    };
+/// Index of a pedal effect by registry id (0 is bypass).
+fn effect_index(id: &str) -> usize {
+    EFFECT_IDS
+        .iter()
+        .position(|e| *e == id)
+        .map_or(0, |i| i + 1)
 }
 
-struct FactoryPreset {
-    slots: [FactorySlot; NUM_SLOTS],
+/// Snapshot of a kernel's typed params, in descriptor order, with the
+/// stepped flags read from its descriptors.
+fn snapshot<P: KernelParams>(params: &P) -> SlotSnapshot {
+    let mut snap = SlotSnapshot::new();
+    snap.count = P::COUNT.min(MAX_PARAMS);
+    for i in 0..snap.count {
+        snap.values[i] = params.get(i);
+        snap.stepped[i] = P::descriptor(i).is_some_and(|d| d.flags.contains(ParamFlags::STEPPED));
+    }
+    snap
 }
 
-const FACTORY_PRESETS: [FactoryPreset; 3] = [
-    // Preset 1: "Room → Shimmer" — Reverb on node 1
-    // Morph story: intimate bright room → infinite dark shimmer
-    FactoryPreset {
-        slots: [
-            FactorySlot {
-                effect_idx: Some(6), // reverb
-                params_a: [
-                    30.0, 40.0, 60.0, 5.0, 40.0, 80.0, 50.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
-                    0.0, 0.0,
-                ],
-                params_b: [
-                    90.0, 88.0, 10.0, 30.0, 80.0, 100.0, 30.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
-                    0.0, 0.0,
-                ],
-                stepped: [false; MAX_PARAMS],
-                count: 8,
-            },
-            FactorySlot::EMPTY,
-            FactorySlot::EMPTY,
+fn factory_slot<P: KernelParams>(id: &str, a: P, b: P) -> Option<FactorySlot> {
+    Some(FactorySlot {
+        effect_index: effect_index(id),
+        a: snapshot(&a),
+        b: snapshot(&b),
+    })
+}
+
+/// The factory presets, written as the kernels' typed params so a renamed,
+/// added or reordered parameter is a compile error here rather than a
+/// silently shifted value.
+fn factory_preset(cursor: usize) -> [Option<FactorySlot>; NUM_SLOTS] {
+    match cursor {
+        // "Room → Shimmer": reverb. Intimate bright room → infinite dark shimmer.
+        0 => [
+            factory_slot(
+                "reverb",
+                ReverbParams {
+                    room_size_pct: 30.0,
+                    decay_pct: 40.0,
+                    damping_pct: 60.0,
+                    predelay_ms: 5.0,
+                    mix_pct: 40.0,
+                    width_pct: 80.0,
+                    er_level_pct: 50.0,
+                    output_db: 0.0,
+                },
+                ReverbParams {
+                    room_size_pct: 90.0,
+                    decay_pct: 88.0,
+                    damping_pct: 10.0,
+                    predelay_ms: 30.0,
+                    mix_pct: 80.0,
+                    width_pct: 100.0,
+                    er_level_pct: 30.0,
+                    output_db: 0.0,
+                },
+            ),
+            None,
+            None,
         ],
-    },
-    // Preset 2: "Slap → Self-Osc" — Delay on node 1
-    // Morph story: tight slapback → darkening delay wall approaching self-oscillation
-    FactoryPreset {
-        slots: [
-            FactorySlot {
-                effect_idx: Some(5), // delay
-                params_a: [
-                    80.0, 15.0, 25.0, 0.0, 20000.0, 20.0, 0.0, 0.0, 2.0, 0.0, 0.0, 0.0, 0.0, 0.0,
-                    0.0, 0.0,
-                ],
-                params_b: [
-                    400.0, 93.0, 70.0, 0.0, 3000.0, 100.0, 30.0, 0.0, 2.0, 0.0, 0.0, 0.0, 0.0, 0.0,
-                    0.0, 0.0,
-                ],
-                stepped: [
-                    false, false, false, true, false, false, false, true, true, false, false,
-                    false, false, false, false, false,
-                ],
-                count: 10,
-            },
-            FactorySlot::EMPTY,
-            FactorySlot::EMPTY,
+        // "Slap → Self-Osc": delay. Tight slapback → darkening wall near
+        // self-oscillation.
+        1 => [
+            factory_slot(
+                "delay",
+                DelayParams {
+                    time_ms: 80.0,
+                    feedback_pct: 15.0,
+                    mix_pct: 25.0,
+                    ping_pong: 0.0,
+                    fb_lp_hz: 20_000.0,
+                    fb_hp_hz: 20.0,
+                    diffusion_pct: 0.0,
+                    sync: 0.0,
+                    division: 2.0,
+                    output_db: 0.0,
+                },
+                DelayParams {
+                    time_ms: 400.0,
+                    feedback_pct: 93.0,
+                    mix_pct: 70.0,
+                    ping_pong: 0.0,
+                    fb_lp_hz: 3_000.0,
+                    fb_hp_hz: 100.0,
+                    diffusion_pct: 30.0,
+                    sync: 0.0,
+                    division: 2.0,
+                    output_db: 0.0,
+                },
+            ),
+            None,
+            None,
         ],
-    },
-    // Preset 3: "Clean → Saturated" — Distortion + Reverb on nodes 1-2
-    // Morph story: clean guitar + tight room → saturated drive + lush verb
-    FactoryPreset {
-        slots: [
-            FactorySlot {
-                effect_idx: Some(3), // distortion
-                params_a: [
-                    0.0, 0.0, 0.0, 0.0, 100.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
-                    0.0,
-                ],
-                params_b: [
-                    32.0, -3.0, -6.0, 3.0, 100.0, 60.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
-                    0.0, 0.0,
-                ],
-                stepped: [
-                    false, false, false, true, false, false, false, false, false, false, false,
-                    false, false, false, false, false,
-                ],
-                count: 6,
-            },
-            FactorySlot {
-                effect_idx: Some(6), // reverb
-                params_a: [
-                    20.0, 30.0, 50.0, 5.0, 20.0, 60.0, 40.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
-                    0.0, 0.0,
-                ],
-                params_b: [
-                    60.0, 65.0, 30.0, 15.0, 45.0, 100.0, 50.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
-                    0.0, 0.0,
-                ],
-                stepped: [false; MAX_PARAMS],
-                count: 8,
-            },
-            FactorySlot::EMPTY,
+        // "Clean → Saturated": distortion → reverb. Clean guitar in a tight
+        // room → saturated drive in a lush verb.
+        _ => [
+            factory_slot(
+                "distortion",
+                DistortionParams {
+                    drive_db: 0.0,
+                    tone_db: 0.0,
+                    output_db: 0.0,
+                    shape: 0.0,
+                    mix_pct: 100.0,
+                    dynamics_pct: 0.0,
+                },
+                DistortionParams {
+                    drive_db: 32.0,
+                    tone_db: -3.0,
+                    output_db: -6.0,
+                    shape: 3.0,
+                    mix_pct: 100.0,
+                    dynamics_pct: 60.0,
+                },
+            ),
+            factory_slot(
+                "reverb",
+                ReverbParams {
+                    room_size_pct: 20.0,
+                    decay_pct: 30.0,
+                    damping_pct: 50.0,
+                    predelay_ms: 5.0,
+                    mix_pct: 20.0,
+                    width_pct: 60.0,
+                    er_level_pct: 40.0,
+                    output_db: 0.0,
+                },
+                ReverbParams {
+                    room_size_pct: 60.0,
+                    decay_pct: 65.0,
+                    damping_pct: 30.0,
+                    predelay_ms: 15.0,
+                    mix_pct: 45.0,
+                    width_pct: 100.0,
+                    er_level_pct: 50.0,
+                    output_db: 0.0,
+                },
+            ),
+            None,
         ],
-    },
-];
+    }
+}
 
 fn load_factory_preset(nodes: &mut [NodeState; NUM_SLOTS], cursor: usize) {
-    let preset = &FACTORY_PRESETS[cursor];
-    for i in 0..NUM_SLOTS {
-        let slot = &preset.slots[i];
-        if let Some(idx) = slot.effect_idx {
-            nodes[i].effect_index = Some(idx);
-            nodes[i].browse_cursor = idx;
-            nodes[i].params_a = SlotSnapshot {
-                values: slot.params_a,
-                stepped: slot.stepped,
-                count: slot.count,
-            };
-            nodes[i].params_b = Some(SlotSnapshot {
-                values: slot.params_b,
-                stepped: slot.stepped,
-                count: slot.count,
-            });
-        } else {
-            nodes[i].effect_index = None;
-            nodes[i].params_a = SlotSnapshot::new();
-            nodes[i].params_b = None;
+    for (node, slot) in nodes.iter_mut().zip(factory_preset(cursor)) {
+        match slot {
+            Some(slot) => {
+                node.effect_index = Some(slot.effect_index);
+                node.browse_cursor = slot.effect_index;
+                node.params_a = slot.a;
+                node.params_b = Some(slot.b);
+            }
+            None => {
+                node.effect_index = None;
+                node.params_a = SlotSnapshot::new();
+                node.params_b = None;
+            }
         }
     }
 }
@@ -639,7 +755,8 @@ fn init_statics(focused: usize, ab: AbMode, topo: Topology) {
             morph_speed: 2.0,
             morph_delta: 1.0 / (2.0 * 100.0),
             master_gain: 1.0,
-            factory_cursor: 0,
+            // The first FS1 long-press advances to preset 1 (index 0).
+            factory_cursor: FACTORY_PRESET_COUNT - 1,
             led_blink_remaining: 0,
             led_blink_timer: 0,
             pickup_locked: [false; 6],
@@ -672,6 +789,7 @@ async fn main(spawner: embassy_executor::Spawner) {
         HEAP.init(sdram_ptr as usize, sonido_daisy::sdram::SDRAM_SIZE);
     }
     sonido_daisy::sdram::enable_dcache();
+    sonido_daisy::enable_cycle_counter(&mut cp.DCB, &mut cp.DWT);
 
     let led = UserLed::new(p.PC7);
     spawner.spawn(heartbeat(led)).unwrap();
@@ -715,7 +833,7 @@ async fn main(spawner: embassy_executor::Spawner) {
 
     // Init graph (SDRAM heap — no bus contention with DMA).
     init_statics(init_focused, init_ab, init_topo);
-    defmt::info!("factory preset 1 loaded");
+    defmt::info!("graph ready (all slots bypassed; FS1 hold loads factory presets)");
     defmt::info!("entering audio callback");
 
     // Zero-capture closure — ALL state accessed via statics.
@@ -723,343 +841,409 @@ async fn main(spawner: embassy_executor::Spawner) {
     // No critical_section — interrupts must stay enabled for DMA completion.
     NEEDS_REBUILD.store(true, Ordering::Release);
     spawner.spawn(graph_rebuild_task()).unwrap();
+    spawner.spawn(load_report_task()).unwrap();
     defmt::unwrap!(
         interface
             .start_callback(|input, output| {
-                let cb = unsafe { CB_STORAGE.as_mut().unwrap() };
+                // Time the whole callback, every path (the early returns are
+                // inside `run`).
+                let t0 = cortex_m::peripheral::DWT::cycle_count();
+                let mut run = || {
+                    let cb = unsafe { CB_STORAGE.as_mut().unwrap() };
 
-                if GRAPH_UPDATING.load(Ordering::Acquire) {
-                    // Audio callback can't run process_block while the graph is being
-                    // rebuilt. Ramp the bypass crossfade toward dry so the wet→dry
-                    // transition is smooth; set_active(true) on exit will ramp it
-                    // back up. Without this, every topology / scroll / preset rebuild
-                    // produces an audible click.
-                    cb.bypass_xfade.set_active(false);
+                    if GRAPH_UPDATING.load(Ordering::Acquire) {
+                        // Audio callback can't run process_block while the graph is being
+                        // rebuilt. Ramp the bypass crossfade toward dry so the wet→dry
+                        // transition is smooth; set_active(true) on exit will ramp it
+                        // back up. Without this, every topology / scroll / preset rebuild
+                        // produces an audible click.
+                        cb.bypass_xfade.set_active(false);
+                        for i in 0..BLOCK_SIZE {
+                            let l = u24_to_f32(input[i * 2]);
+                            let r = u24_to_f32(input[i * 2 + 1]);
+                            let mono = (l + r) * 0.5;
+                            let (out_l, out_r) = cb.bypass_xfade.advance(mono, mono, 0.0, 0.0);
+                            output[i * 2] = f32_to_u24(out_l);
+                            output[i * 2 + 1] = f32_to_u24(out_r);
+                        }
+                        return;
+                    }
+
+                    // ── Hard bypass ──
+                    if BYPASSED.load(Ordering::Relaxed) {
+                        output.copy_from_slice(input);
+                        cb.poll_counter = cb.poll_counter.wrapping_add(1);
+                        if cb
+                            .poll_counter
+                            .is_multiple_of(effect_slot::CONTROL_POLL_EVERY)
+                        {
+                            let fs1 = CONTROLS.read_footswitch(0);
+                            let fs2 = CONTROLS.read_footswitch(1);
+                            accumulate_both_held(cb, fs1, fs2);
+                            handle_both_release_toggle(cb, fs1, fs2);
+                        }
+                        return;
+                    }
+
+                    cb.bypass_xfade.set_active(true);
+
                     for i in 0..BLOCK_SIZE {
                         let l = u24_to_f32(input[i * 2]);
                         let r = u24_to_f32(input[i * 2 + 1]);
                         let mono = (l + r) * 0.5;
-                        let (out_l, out_r) = cb.bypass_xfade.advance(mono, mono, 0.0, 0.0);
+                        cb.left_in[i] = mono;
+                        cb.right_in[i] = mono;
+                    }
+
+                    if let Some(graph) = unsafe { GRAPH_STORAGE.as_mut() } {
+                        graph.process_block(
+                            &cb.left_in,
+                            &cb.right_in,
+                            &mut cb.left_out,
+                            &mut cb.right_out,
+                        );
+                    }
+
+                    for i in 0..BLOCK_SIZE {
+                        let (wet_l, wet_r) = sanitize_stereo(cb.left_out[i], cb.right_out[i]);
+                        let (mut out_l, mut out_r) =
+                            cb.bypass_xfade
+                                .advance(cb.left_in[i], cb.right_in[i], wet_l, wet_r);
+                        if cb.ab_mode == AbMode::Morph {
+                            out_l *= cb.master_gain;
+                            out_r *= cb.master_gain;
+                        }
                         output[i * 2] = f32_to_u24(out_l);
                         output[i * 2 + 1] = f32_to_u24(out_r);
                     }
-                    return;
-                }
 
-                // ── Hard bypass ──
-                if BYPASSED.load(Ordering::Relaxed) {
-                    output.copy_from_slice(input);
                     cb.poll_counter = cb.poll_counter.wrapping_add(1);
-                    if cb
+                    if !cb
                         .poll_counter
                         .is_multiple_of(effect_slot::CONTROL_POLL_EVERY)
                     {
-                        let fs1 = CONTROLS.read_footswitch(0);
-                        let fs2 = CONTROLS.read_footswitch(1);
-                        accumulate_both_held(cb, fs1, fs2);
-                        handle_both_release_toggle(cb, fs1, fs2);
+                        return;
                     }
-                    return;
-                }
 
-                cb.bypass_xfade.set_active(true);
+                    // ── Toggles ──
+                    let t1 = CONTROLS.read_toggle(0);
+                    let t2 = CONTROLS.read_toggle(1);
+                    let t3 = CONTROLS.read_toggle(2);
 
-                for i in 0..BLOCK_SIZE {
-                    let l = u24_to_f32(input[i * 2]);
-                    let r = u24_to_f32(input[i * 2 + 1]);
-                    let mono = (l + r) * 0.5;
-                    cb.left_in[i] = mono;
-                    cb.right_in[i] = mono;
-                }
-
-                if let Some(graph) = unsafe { GRAPH_STORAGE.as_mut() } {
-                    graph.process_block(
-                        &cb.left_in,
-                        &cb.right_in,
-                        &mut cb.left_out,
-                        &mut cb.right_out,
-                    );
-                }
-
-                for i in 0..BLOCK_SIZE {
-                    let (wet_l, wet_r) = sanitize_stereo(cb.left_out[i], cb.right_out[i]);
-                    let (mut out_l, mut out_r) =
-                        cb.bypass_xfade
-                            .advance(cb.left_in[i], cb.right_in[i], wet_l, wet_r);
-                    if cb.ab_mode == AbMode::Morph {
-                        out_l *= cb.master_gain;
-                        out_r *= cb.master_gain;
+                    let new_topo = toggle_to_topology(t3);
+                    if new_topo != cb.topology {
+                        cb.topology = new_topo;
+                        NEEDS_REBUILD.store(true, Ordering::Release);
                     }
-                    output[i * 2] = f32_to_u24(out_l);
-                    output[i * 2 + 1] = f32_to_u24(out_r);
-                }
+                    let new_focused = toggle_to_node(t1);
+                    if new_focused != cb.focused_node {
+                        cb.focused_node = new_focused;
+                        // Knobs were tracking the previous node's params; require a
+                        // soft-takeover gesture before they overwrite the new node's state.
+                        cb.pickup_locked = [true; 6];
+                    }
 
-                cb.poll_counter = cb.poll_counter.wrapping_add(1);
-                if !cb
-                    .poll_counter
-                    .is_multiple_of(effect_slot::CONTROL_POLL_EVERY)
-                {
-                    return;
-                }
-
-                // ── Toggles ──
-                let t1 = CONTROLS.read_toggle(0);
-                let t2 = CONTROLS.read_toggle(1);
-                let t3 = CONTROLS.read_toggle(2);
-
-                let new_topo = toggle_to_topology(t3);
-                if new_topo != cb.topology {
-                    cb.topology = new_topo;
-                    NEEDS_REBUILD.store(true, Ordering::Release);
-                }
-                let new_focused = toggle_to_node(t1);
-                if new_focused != cb.focused_node {
-                    cb.focused_node = new_focused;
-                    // Knobs were tracking the previous node's params; require a
-                    // soft-takeover gesture before they overwrite the new node's state.
-                    cb.pickup_locked = [true; 6];
-                }
-
-                let new_ab = toggle_to_ab_mode(t2);
-                if new_ab != cb.ab_mode {
-                    let old_mode = cb.ab_mode;
-                    cb.ab_mode = new_ab;
-                    let nodes = unsafe { NODES_STORAGE.as_mut().unwrap() };
-                    let graph = unsafe { GRAPH_STORAGE.as_mut().unwrap() };
-                    let nids = unsafe { NODE_IDS_STORAGE };
-                    // Any A/B/Morph transition repaints params on the graph; the
-                    // physical knobs were tracking the previous mode's snapshot, so
-                    // re-arm pickup_locked across the board to prevent immediate clobber.
-                    cb.pickup_locked = [true; 6];
-                    match (old_mode, cb.ab_mode) {
-                        (AbMode::A, AbMode::B) => {
-                            ensure_b_snapshots(nodes);
-                            apply_all_snapshots(graph, &nids, nodes, AbMode::B);
+                    let new_ab = toggle_to_ab_mode(t2);
+                    if new_ab != cb.ab_mode {
+                        let old_mode = cb.ab_mode;
+                        cb.ab_mode = new_ab;
+                        let nodes = unsafe { NODES_STORAGE.as_mut().unwrap() };
+                        let graph = unsafe { GRAPH_STORAGE.as_mut().unwrap() };
+                        let nids = unsafe { NODE_IDS_STORAGE };
+                        // Any A/B/Morph transition repaints params on the graph; the
+                        // physical knobs were tracking the previous mode's snapshot, so
+                        // re-arm pickup_locked across the board to prevent immediate clobber.
+                        cb.pickup_locked = [true; 6];
+                        match (old_mode, cb.ab_mode) {
+                            (AbMode::A, AbMode::B) => {
+                                ensure_b_snapshots(nodes);
+                                apply_all_snapshots(graph, &nids, nodes, AbMode::B);
+                            }
+                            (AbMode::B, AbMode::A) => {
+                                apply_all_snapshots(graph, &nids, nodes, AbMode::A);
+                            }
+                            (_, AbMode::Morph) => {
+                                ensure_b_snapshots(nodes);
+                                cb.morph_t = match old_mode {
+                                    AbMode::A => 0.0,
+                                    AbMode::B => 1.0,
+                                    _ => cb.morph_t,
+                                };
+                            }
+                            (AbMode::Morph, AbMode::A) => {
+                                apply_all_snapshots(graph, &nids, nodes, AbMode::A);
+                                cb.pickup_locked = [true; 6];
+                            }
+                            (AbMode::Morph, AbMode::B) => {
+                                ensure_b_snapshots(nodes);
+                                apply_all_snapshots(graph, &nids, nodes, AbMode::B);
+                                cb.pickup_locked = [true; 6];
+                            }
+                            _ => {}
                         }
-                        (AbMode::B, AbMode::A) => {
-                            apply_all_snapshots(graph, &nids, nodes, AbMode::A);
-                        }
-                        (_, AbMode::Morph) => {
-                            ensure_b_snapshots(nodes);
-                            cb.morph_t = match old_mode {
-                                AbMode::A => 0.0,
-                                AbMode::B => 1.0,
-                                _ => cb.morph_t,
+                    }
+
+                    // ── Footswitches ──
+                    let fs1_pressed = CONTROLS.read_footswitch(0);
+                    let fs2_pressed = CONTROLS.read_footswitch(1);
+                    let both_pressed = fs1_pressed && fs2_pressed;
+                    accumulate_both_held(cb, fs1_pressed, fs2_pressed);
+                    if fs1_pressed {
+                        cb.fs1_held += 1;
+                    }
+                    if fs2_pressed {
+                        cb.fs2_held += 1;
+                    }
+
+                    if cb.ab_mode == AbMode::Morph && !both_pressed {
+                        let delta = cb.morph_delta;
+                        if fs1_pressed && !fs2_pressed {
+                            cb.morph_t = if cb.morph_t > delta {
+                                cb.morph_t - delta
+                            } else {
+                                0.0
+                            };
+                        } else if fs2_pressed && !fs1_pressed {
+                            cb.morph_t = if cb.morph_t + delta < 1.0 {
+                                cb.morph_t + delta
+                            } else {
+                                1.0
                             };
                         }
-                        (AbMode::Morph, AbMode::A) => {
-                            apply_all_snapshots(graph, &nids, nodes, AbMode::A);
+                    }
+
+                    let was_both = cb.both_held_peak > 0;
+                    handle_both_release_toggle(cb, fs1_pressed, fs2_pressed);
+
+                    if (cb.ab_mode == AbMode::A || cb.ab_mode == AbMode::B) && !was_both {
+                        if cb.fs1_was_pressed && !fs1_pressed && cb.fs1_held < TAP_LIMIT {
+                            let nodes = unsafe { NODES_STORAGE.as_mut().unwrap() };
+                            scroll_effect(nodes, cb.focused_node, -1);
+                            NEEDS_REBUILD.store(true, Ordering::Release);
                             cb.pickup_locked = [true; 6];
                         }
-                        (AbMode::Morph, AbMode::B) => {
-                            ensure_b_snapshots(nodes);
-                            apply_all_snapshots(graph, &nids, nodes, AbMode::B);
+                        if cb.ab_mode == AbMode::A
+                            && cb.fs1_was_pressed
+                            && !fs1_pressed
+                            && cb.fs1_held >= TAP_LIMIT
+                        {
+                            cb.factory_cursor = (cb.factory_cursor + 1) % FACTORY_PRESET_COUNT;
+                            let nodes = unsafe { NODES_STORAGE.as_mut().unwrap() };
+                            load_factory_preset(nodes, cb.factory_cursor);
+                            NEEDS_REBUILD.store(true, Ordering::Release);
+                            cb.pickup_locked = [true; 6];
+                            cb.led_blink_remaining = (cb.factory_cursor as u8 + 1) * 2;
+                            cb.led_blink_timer = 0;
+                        }
+                        if cb.fs2_was_pressed && !fs2_pressed && cb.fs2_held < TAP_LIMIT {
+                            let nodes = unsafe { NODES_STORAGE.as_mut().unwrap() };
+                            scroll_effect(nodes, cb.focused_node, 1);
+                            NEEDS_REBUILD.store(true, Ordering::Release);
                             cb.pickup_locked = [true; 6];
                         }
-                        _ => {}
                     }
-                }
 
-                // ── Footswitches ──
-                let fs1_pressed = CONTROLS.read_footswitch(0);
-                let fs2_pressed = CONTROLS.read_footswitch(1);
-                let both_pressed = fs1_pressed && fs2_pressed;
-                accumulate_both_held(cb, fs1_pressed, fs2_pressed);
-                if fs1_pressed {
-                    cb.fs1_held += 1;
-                }
-                if fs2_pressed {
-                    cb.fs2_held += 1;
-                }
-
-                if cb.ab_mode == AbMode::Morph && !both_pressed {
-                    let delta = cb.morph_delta;
-                    if fs1_pressed && !fs2_pressed {
-                        cb.morph_t = if cb.morph_t > delta {
-                            cb.morph_t - delta
-                        } else {
-                            0.0
-                        };
-                    } else if fs2_pressed && !fs1_pressed {
-                        cb.morph_t = if cb.morph_t + delta < 1.0 {
-                            cb.morph_t + delta
-                        } else {
-                            1.0
-                        };
+                    if !fs1_pressed {
+                        cb.fs1_held = 0;
                     }
-                }
+                    if !fs2_pressed {
+                        cb.fs2_held = 0;
+                    }
+                    cb.fs1_was_pressed = fs1_pressed;
+                    cb.fs2_was_pressed = fs2_pressed;
 
-                let was_both = cb.both_held_peak > 0;
-                handle_both_release_toggle(cb, fs1_pressed, fs2_pressed);
-
-                if (cb.ab_mode == AbMode::A || cb.ab_mode == AbMode::B) && !was_both {
-                    if cb.fs1_was_pressed && !fs1_pressed && cb.fs1_held < TAP_LIMIT {
+                    // ── Knobs ──
+                    if cb.ab_mode != AbMode::Morph {
                         let nodes = unsafe { NODES_STORAGE.as_mut().unwrap() };
-                        scroll_effect(nodes, cb.focused_node, -1);
-                        NEEDS_REBUILD.store(true, Ordering::Release);
-                        cb.pickup_locked = [true; 6];
-                    }
-                    if cb.ab_mode == AbMode::A
-                        && cb.fs1_was_pressed
-                        && !fs1_pressed
-                        && cb.fs1_held >= TAP_LIMIT
-                    {
-                        cb.factory_cursor = (cb.factory_cursor + 1) % FACTORY_PRESETS.len();
-                        let nodes = unsafe { NODES_STORAGE.as_mut().unwrap() };
-                        load_factory_preset(nodes, cb.factory_cursor);
-                        NEEDS_REBUILD.store(true, Ordering::Release);
-                        cb.pickup_locked = [true; 6];
-                        cb.led_blink_remaining = (cb.factory_cursor as u8 + 1) * 2;
-                        cb.led_blink_timer = 0;
-                    }
-                    if cb.fs2_was_pressed && !fs2_pressed && cb.fs2_held < TAP_LIMIT {
-                        let nodes = unsafe { NODES_STORAGE.as_mut().unwrap() };
-                        scroll_effect(nodes, cb.focused_node, 1);
-                        NEEDS_REBUILD.store(true, Ordering::Release);
-                        cb.pickup_locked = [true; 6];
-                    }
-                }
+                        let graph = unsafe { GRAPH_STORAGE.as_mut().unwrap() };
+                        let nids = unsafe { NODE_IDS_STORAGE };
 
-                if !fs1_pressed {
-                    cb.fs1_held = 0;
-                }
-                if !fs2_pressed {
-                    cb.fs2_held = 0;
-                }
-                cb.fs1_was_pressed = fs1_pressed;
-                cb.fs2_was_pressed = fs2_pressed;
-
-                // ── Knobs ──
-                if cb.ab_mode != AbMode::Morph {
-                    let nodes = unsafe { NODES_STORAGE.as_mut().unwrap() };
-                    let graph = unsafe { GRAPH_STORAGE.as_mut().unwrap() };
-                    let nids = unsafe { NODE_IDS_STORAGE };
-
-                    if let Some(eff_idx) = nodes[cb.focused_node].effect_index
-                        && eff_idx > 0
-                        && let Some(nid) = nids[cb.focused_node]
-                    {
-                        let effect_id = EFFECT_IDS[eff_idx - 1];
-                        let knobs = knob_mapping::knob_map(effect_id).unwrap_or([NULL_KNOB; 6]);
-                        let platform = sonido_daisy::hothouse::HothousePlatform::new(&CONTROLS);
-                        use sonido_platform::PlatformController;
-                        let mut param_vals: [(u8, f32); 6] = [(NULL_KNOB, 0.0); 6];
-                        if let Some(effect) = graph.effect_with_params_ref(nid) {
-                            for k in 0..6 {
-                                let ctrl_id = sonido_platform::ControlId::hardware(k as u8);
-                                if let Some(state) = platform.read_control(ctrl_id) {
-                                    let pidx = knobs[k];
-                                    if pidx == NULL_KNOB {
-                                        continue;
-                                    }
-                                    let idx = pidx as usize;
-                                    if let Some(desc) = effect.effect_param_info(idx) {
-                                        let val = knob_mapping::knob_to_param(
-                                            effect_id,
-                                            idx,
-                                            &desc,
-                                            state.value,
-                                        );
-                                        if cb.pickup_locked[k] {
-                                            let current = effect.effect_get_param(idx);
-                                            let range = desc.max - desc.min;
-                                            if (val - current).abs() < range * PICKUP_THRESHOLD_FRAC
-                                            {
-                                                cb.pickup_locked[k] = false;
-                                            } else {
-                                                continue;
-                                            }
+                        if let Some(eff_idx) = nodes[cb.focused_node].effect_index
+                            && eff_idx > 0
+                            && let Some(nid) = nids[cb.focused_node]
+                        {
+                            let effect_id = EFFECT_IDS[eff_idx - 1];
+                            let knobs = knob_mapping::knob_map(effect_id).unwrap_or([NULL_KNOB; 6]);
+                            let platform = sonido_daisy::hothouse::HothousePlatform::new(&CONTROLS);
+                            use sonido_platform::PlatformController;
+                            let mut param_vals: [(u8, f32); 6] = [(NULL_KNOB, 0.0); 6];
+                            if let Some(effect) = graph.effect_with_params_ref(nid) {
+                                for k in 0..6 {
+                                    let ctrl_id = sonido_platform::ControlId::hardware(k as u8);
+                                    if let Some(state) = platform.read_control(ctrl_id) {
+                                        let pidx = knobs[k];
+                                        if pidx == NULL_KNOB {
+                                            continue;
                                         }
-                                        param_vals[k] = (pidx, val);
+                                        let idx = pidx as usize;
+                                        if let Some(desc) = effect.effect_param_info(idx) {
+                                            let val = knob_mapping::knob_to_param(
+                                                effect_id,
+                                                idx,
+                                                &desc,
+                                                state.value,
+                                            );
+                                            if cb.pickup_locked[k] {
+                                                let current = effect.effect_get_param(idx);
+                                                let range = desc.max - desc.min;
+                                                if (val - current).abs()
+                                                    < range * PICKUP_THRESHOLD_FRAC
+                                                {
+                                                    cb.pickup_locked[k] = false;
+                                                } else {
+                                                    continue;
+                                                }
+                                            }
+                                            param_vals[k] = (pidx, val);
+                                        }
                                     }
                                 }
                             }
-                        }
-                        if let Some(effect) = graph.effect_with_params_mut(nid) {
-                            for &(pidx, val) in &param_vals {
-                                if pidx != NULL_KNOB {
-                                    effect.effect_set_param(pidx as usize, val);
+                            if let Some(effect) = graph.effect_with_params_mut(nid) {
+                                for &(pidx, val) in &param_vals {
+                                    if pidx != NULL_KNOB {
+                                        effect.effect_set_param(pidx as usize, val);
+                                    }
                                 }
                             }
+                            nodes[cb.focused_node].update_snapshot(&cb.ab_mode, &param_vals);
                         }
-                        nodes[cb.focused_node].update_snapshot(&cb.ab_mode, &param_vals);
-                    }
-                } else {
-                    const SPEED_DESC: ParamDescriptor =
-                        ParamDescriptor::custom("Morph Speed", "Morph Speed", 0.1, 5.0, 2.0);
-                    const MASTER_DESC: ParamDescriptor =
-                        ParamDescriptor::gain_db("Master", "Master", -60.0, 12.0, 0.0);
+                    } else {
+                        const SPEED_DESC: ParamDescriptor =
+                            ParamDescriptor::custom("Morph Speed", "Morph Speed", 0.1, 5.0, 2.0);
+                        const MASTER_DESC: ParamDescriptor =
+                            ParamDescriptor::gain_db("Master", "Master", -60.0, 12.0, 0.0);
 
-                    let new_speed = adc_to_param(&SPEED_DESC, CONTROLS.read_knob(4));
-                    if new_speed != cb.morph_speed {
-                        cb.morph_speed = new_speed;
-                        cb.morph_delta = 1.0 / (new_speed * 100.0);
-                    }
-
-                    let master_gain_db = adc_to_param(&MASTER_DESC, CONTROLS.read_knob(5));
-                    cb.master_gain = sonido_core::fast_db_to_linear(master_gain_db);
-                }
-
-                // ── Morph interpolation ──
-                if cb.ab_mode == AbMode::Morph {
-                    let nodes = unsafe { NODES_STORAGE.as_ref().unwrap() };
-                    let graph = unsafe { GRAPH_STORAGE.as_mut().unwrap() };
-                    let nids = unsafe { NODE_IDS_STORAGE };
-                    interpolate_and_apply(graph, &nids, nodes, cb.morph_t);
-                }
-
-                // ── LED feedback ──
-                if BYPASSED.load(Ordering::Relaxed) {
-                    CONTROLS.write_led(0, 0.0);
-                    CONTROLS.write_led(1, 0.0);
-                } else if cb.led_blink_remaining > 0 {
-                    cb.led_blink_timer += 1;
-                    if cb.led_blink_timer >= 10 {
-                        cb.led_blink_timer = 0;
-                        cb.led_blink_remaining -= 1;
-                    }
-                    CONTROLS.write_led(
-                        1,
-                        if cb.led_blink_remaining % 2 == 0 {
-                            1.0
-                        } else {
-                            0.0
-                        },
-                    );
-                } else if cb.ab_mode == AbMode::Morph {
-                    let pwm = cb.poll_counter % 10;
-                    CONTROLS.write_led(
-                        1,
-                        if pwm < (cb.morph_t * 10.0) as u16 {
-                            1.0
-                        } else {
-                            0.0
-                        },
-                    );
-                } else {
-                    let mut peak = 0.0f32;
-                    for &s in cb.left_out.iter().chain(cb.right_out.iter()) {
-                        let a = if s < 0.0 { -s } else { s };
-                        if a > peak {
-                            peak = a;
+                        let new_speed = adc_to_param(&SPEED_DESC, CONTROLS.read_knob(4));
+                        if new_speed != cb.morph_speed {
+                            cb.morph_speed = new_speed;
+                            cb.morph_delta = 1.0 / (new_speed * 100.0);
                         }
+
+                        let master_gain_db = adc_to_param(&MASTER_DESC, CONTROLS.read_knob(5));
+                        cb.master_gain = sonido_core::fast_db_to_linear(master_gain_db);
                     }
-                    cb.led_envelope += 0.3 * (peak - cb.led_envelope);
-                    let v = cb.led_envelope * 3.0;
-                    let brightness = if v > 1.0 { 1.0 } else { v };
-                    let pwm = cb.poll_counter % 10;
-                    CONTROLS.write_led(
-                        1,
-                        if pwm < (brightness * 10.0) as u16 {
-                            1.0
-                        } else {
-                            0.0
-                        },
-                    );
+
+                    // ── Morph interpolation ──
+                    if cb.ab_mode == AbMode::Morph {
+                        let nodes = unsafe { NODES_STORAGE.as_ref().unwrap() };
+                        let graph = unsafe { GRAPH_STORAGE.as_mut().unwrap() };
+                        let nids = unsafe { NODE_IDS_STORAGE };
+                        interpolate_and_apply(graph, &nids, nodes, cb.morph_t);
+                    }
+
+                    // ── LED feedback ──
+                    if BYPASSED.load(Ordering::Relaxed) {
+                        CONTROLS.write_led(0, 0.0);
+                        CONTROLS.write_led(1, 0.0);
+                    } else if cb.led_blink_remaining > 0 {
+                        cb.led_blink_timer += 1;
+                        if cb.led_blink_timer >= 10 {
+                            cb.led_blink_timer = 0;
+                            cb.led_blink_remaining -= 1;
+                        }
+                        CONTROLS.write_led(
+                            1,
+                            if cb.led_blink_remaining % 2 == 0 {
+                                1.0
+                            } else {
+                                0.0
+                            },
+                        );
+                    } else if cb.ab_mode == AbMode::Morph {
+                        let pwm = cb.poll_counter % 10;
+                        CONTROLS.write_led(
+                            1,
+                            if pwm < (cb.morph_t * 10.0) as u16 {
+                                1.0
+                            } else {
+                                0.0
+                            },
+                        );
+                    } else {
+                        let mut peak = 0.0f32;
+                        for &s in cb.left_out.iter().chain(cb.right_out.iter()) {
+                            let a = if s < 0.0 { -s } else { s };
+                            if a > peak {
+                                peak = a;
+                            }
+                        }
+                        cb.led_envelope += 0.3 * (peak - cb.led_envelope);
+                        let v = cb.led_envelope * 3.0;
+                        let brightness = if v > 1.0 { 1.0 } else { v };
+                        let pwm = cb.poll_counter % 10;
+                        CONTROLS.write_led(
+                            1,
+                            if pwm < (brightness * 10.0) as u16 {
+                                1.0
+                            } else {
+                                0.0
+                            },
+                        );
+                    }
+                };
+                run();
+                let cycles = cortex_m::peripheral::DWT::cycle_count().wrapping_sub(t0);
+                LOAD_SUM.fetch_add(cycles, Ordering::Relaxed);
+                LOAD_BLOCKS.fetch_add(1, Ordering::Relaxed);
+                LOAD_PEAK.fetch_max(cycles, Ordering::Relaxed);
+                if cycles > LOAD_BUDGET {
+                    LOAD_OVER.fetch_add(1, Ordering::Relaxed);
                 }
             })
             .await
     );
+}
+
+/// The audio callback's real-time budget per block, in cycles at 480 MHz.
+const LOAD_BUDGET: u32 = 480_000_000 / 48_000 * BLOCK_SIZE as u32;
+
+/// Once a second: the callback's mean and peak cost as a share of the block
+/// budget, blocks over budget, and what is loaded — over defmt RTT (attach a
+/// probe: `probe-rs attach --chip STM32H750IBKx <elf>`).
+#[embassy_executor::task]
+async fn load_report_task() {
+    loop {
+        embassy_time::Timer::after_secs(1).await;
+        let sum = LOAD_SUM.swap(0, Ordering::Relaxed);
+        let blocks = LOAD_BLOCKS.swap(0, Ordering::Relaxed);
+        let peak = LOAD_PEAK.swap(0, Ordering::Relaxed);
+        let over = LOAD_OVER.swap(0, Ordering::Relaxed);
+        if blocks == 0 {
+            continue;
+        }
+        let pct_x10 = |c: u32| (u64::from(c) * 1000 / u64::from(LOAD_BUDGET)) as u32;
+        let (mean, peak) = (pct_x10(sum / blocks), pct_x10(peak));
+        // Single-threaded executor: the callback isn't mid-update while this runs.
+        let name = |slot: usize| {
+            unsafe { NODES_STORAGE.as_ref() }
+                .and_then(|n| n[slot].effect_index)
+                // Index 0 is bypass; 1..=8 map to EFFECT_IDS.
+                .and_then(|i| i.checked_sub(1))
+                .and_then(|i| EFFECT_IDS.get(i).copied())
+                .unwrap_or("-")
+        };
+        let topo = match unsafe { CB_STORAGE.as_ref() }.map(|cb| cb.topology) {
+            Some(Topology::Linear) => "linear",
+            Some(Topology::Parallel) => "parallel",
+            Some(Topology::Fan) => "fan",
+            None => "?",
+        };
+        defmt::info!(
+            "load mean={}.{}% peak={}.{}% over_budget={}/{} slots=[{}, {}, {}] topo={} bypassed={}",
+            mean / 10,
+            mean % 10,
+            peak / 10,
+            peak % 10,
+            over,
+            blocks,
+            name(0),
+            name(1),
+            name(2),
+            topo,
+            BYPASSED.load(Ordering::Relaxed)
+        );
+    }
 }
 
 /// Accumulate the both-footswitches-held counter and trigger the DFU bootloader
@@ -1131,9 +1315,14 @@ async fn graph_rebuild_task() {
             let graph = unsafe { GRAPH_STORAGE.as_mut().unwrap() };
             let cb = unsafe { CB_STORAGE.as_mut().unwrap() };
 
-            if let Ok(new_nids) = rebuild_graph_in_place(graph, nodes, cb.topology, SAMPLE_RATE) {
+            let spillover =
+                unsafe { spillover_fits(graph, &NODE_IDS_STORAGE, &LIVE_EFFECTS, nodes) };
+            if let Ok(new_nids) =
+                rebuild_graph_in_place(graph, nodes, cb.topology, SAMPLE_RATE, spillover)
+            {
                 unsafe {
                     NODE_IDS_STORAGE = new_nids;
+                    LIVE_EFFECTS = core::array::from_fn(|slot| nodes[slot].effect_index);
                 }
                 for slot in 0..NUM_SLOTS {
                     if nodes[slot].effect_index.is_some()

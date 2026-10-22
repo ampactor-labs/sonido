@@ -4163,6 +4163,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sonido-core",
+ "sonido-patch",
  "sonido-registry",
  "tempfile",
  "thiserror 2.0.18",
@@ -4225,6 +4226,7 @@ dependencies = [
  "rfd",
  "serde",
  "serde_json",
+ "sonido-config",
  "sonido-core",
  "sonido-effects",
  "sonido-graph-dsl",
@@ -4249,6 +4251,7 @@ version = "0.1.0"
 dependencies = [
  "egui",
  "sonido-core",
+ "sonido-registry",
 ]
 
 [[package]]
@@ -4299,10 +4302,10 @@ dependencies = [
  "raw-window-handle 0.5.2",
  "serde",
  "serde_json",
+ "sonido-config",
  "sonido-core",
  "sonido-effects",
  "sonido-gui-core",
- "sonido-io",
  "sonido-patch",
  "sonido-registry",
  "tracing",

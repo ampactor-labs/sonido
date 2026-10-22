@@ -1,5 +1,22 @@
 # Sonido Pedal v2 — Static State Architecture
 
+> **Note (2026-10-22):** This is the original design. The shipped firmware differs; see
+> `crates/sonido-daisy/examples/sonido_pedal.rs` and the Morph Pedal section of
+> `docs/EMBEDDED.md`. Main differences:
+> - It replaced `sonido_pedal.rs` in place; there is no `sonido_pedal_v2.rs`.
+> - Shared state is `static mut` (`CB_STORAGE`, `GRAPH_STORAGE`, `NODES_STORAGE`,
+>   `NODE_IDS_STORAGE`), not `Mutex<RefCell<_>>`: a critical-section mutex disables
+>   interrupts during `process_block` and caused SAI overruns. The closure captures nothing.
+> - The heap is the 64 MB SDRAM (not D2 SRAM), with the D-cache enabled right after
+>   `init_sdram!`, before audio setup.
+> - 8 effects (`sonido_registry::PEDAL_EFFECT_IDS`: chorus, phaser, distortion,
+>   bitcrusher, delay, reverb, ringmod, filter), not 3 or 15. Factory preset 2 uses delay.
+> - Graph rebuilds run in a separate `graph_rebuild_task` (every 20 ms), not in the
+>   control poll; the callback fades to dry while `GRAPH_UPDATING` is set.
+> - Morph mode uses K5 for morph time (0.1–5 s) and K6 for master level (−60..+12 dB).
+>   Holding both footswitches for 1.5 s enters the DFU bootloader.
+> - Not used: `TapTempo`, `TempoManager`.
+
 ## Problem
 
 The v1 pedal's audio callback closure captures ~10-15KB of state (preset buffer,

@@ -16,12 +16,12 @@ The Hendrix Systems Lab repo is also a potential **validation target**: its SPIC
 | Hendrix Stage | Function | Sonido Equivalent | Gap / Opportunity |
 |---|---|---|---|
 | Guitar pickups (6k ohm, 2.5H) | Source with reactive impedance | — | Source impedance modeling not in Sonido; affects interaction with low-impedance pedals |
-| **Fuzz Face** (Si or Ge) | Two-transistor feedback amp; soft+hard clip mix | `Distortion` (4 algorithms + ADAA) | Sonido has `SoftClip` (tanh) and `HardClip` — the Fuzz Face uses a *mix* of both (0.55 soft + 0.45 hard). Also: the "cleanup effect" (fuzz character changes with input amplitude) is a nonlinear input-impedance interaction, not just a waveshaper. |
+| **Fuzz Face** (Si or Ge) | Two-transistor feedback amp; soft+hard clip mix | `distortion` (4 ADAA waveshapes: Soft Clip, Hard Clip, Foldback, Asymmetric) | Sonido has Soft Clip (`soft_clip` = tanh) and Hard Clip — the Fuzz Face uses a *mix* of both (0.55 soft + 0.45 hard). Also: the "cleanup effect" (fuzz character changes with input amplitude) is a nonlinear input-impedance interaction, not just a waveshaper. |
 | **Octavia** | Full-wave rectifier → frequency doubling | **Not in Sonido** | `abs(x)` as octave doubler is a distinct waveshaping mode. Not fuzz, not ring mod — it's rectification. Could be a new `Distortion` mode or standalone effect. |
 | **Wah-wah** (Vox V847) | Bandpass filter, 300Hz–2kHz sweep | `Wah` effect | Direct match. Sonido's Wah uses SVF; Hendrix's was inductor-capacitor. Compare Q profiles. |
 | **Uni-Vibe** | 4-stage allpass + LFO-modulated photoresistors | `Phaser` | Sonido's Phaser is allpass-cascade + LFO — structurally identical. Key difference: Uni-Vibe adds AM "throb" (half-rate amplitude modulation on top of phase modulation). Sonido's Phaser may lack this. |
-| **Marshall 100W** (near saturation) | Tube saturation + sustain extension | `Tape` / `CleanPreamp` | `Tape` has soft saturation. But tube amp saturation has specific even/odd harmonic ratios and power supply sag dynamics not modeled. |
-| **Room acoustics** (feedback loop) | Guitar ↔ speaker coupling, position-dependent | `Reverb` + feedback path | The acoustic feedback loop is the most interesting part: Hendrix tuned oscillation by physical position. In Sonido terms, this is a `Reverb` whose feedback parameter is modulated by an external control signal. |
+| **Marshall 100W** (near saturation) | Tube saturation + sustain extension | `tape` / `preamp` / `amp` | `tape` has soft saturation; `amp` models a guitar amp stage. But tube amp saturation has specific even/odd harmonic ratios and power supply sag dynamics not modeled. |
+| **Room acoustics** (feedback loop) | Guitar ↔ speaker coupling, position-dependent | `reverb` + feedback path | The acoustic feedback loop is the most interesting part: Hendrix tuned oscillation by physical position. In Sonido terms, this is a `reverb` whose decay (FDN feedback) is modulated by an external control signal. |
 
 ---
 
@@ -53,7 +53,7 @@ The Fuzz Face's input impedance is ~20k ohm — low enough that the guitar's pic
 
 This is **not just an amplitude effect** — the frequency response changes too, because the pickup/pedal interaction is reactive (inductance + capacitance). The "cleanup" is a nonlinear, frequency-dependent transition.
 
-**Sonido relevance**: The `EnvelopeFollower` could modulate distortion drive dynamically, but the impedance interaction is deeper. This is a case where modeling the source-load interaction matters. Worth noting for any "amp sim" or "pedal chain" preset work.
+**Sonido relevance**: The `distortion` kernel's `dynamics` parameter already scales drive with an `EnvelopeFollower` (up to 80% drive reduction on quiet input), but the impedance interaction is deeper. This is a case where modeling the source-load interaction matters. Worth noting for any "amp sim" or "pedal chain" preset work.
 
 ### 3. Germanium vs Silicon — Temperature as Parameter
 
@@ -105,7 +105,7 @@ The Hendrix Systems Lab repo provides SPICE-derived reference data that could va
 
 | Hendrix Lab Output | Sonido Validation Target |
 |---|---|
-| Fuzz Face transient waveforms (`ff_si_time.dat`) | `Distortion::SoftClip` + `HardClip` mix output |
+| Fuzz Face transient waveforms (`ff_si_time.dat`) | `distortion` Soft Clip + Hard Clip mix output |
 | Wah frequency response at 6+ treadle positions | `Wah` frequency sweep comparison |
 | Uni-Vibe phase response at 6 LFO positions | `Phaser` allpass cascade response |
 | Octavia transient (rectified + shaped) | Future `Rectify` mode |

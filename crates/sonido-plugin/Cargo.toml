@@ -15,8 +15,8 @@ name = "sonido_plugin"
 sonido-core = { workspace = true, features = ["std"] }
 sonido-effects = { workspace = true, features = ["std"] }
 sonido-registry = { workspace = true, features = ["std"] }
+sonido-config = { workspace = true, features = ["std"] }
 sonido-patch = { workspace = true, features = ["std"] }
-sonido-io = { workspace = true }
 
 arc-swap = "1.8"
 parking_lot = "0.12"
@@ -50,85 +50,5 @@ tracing.workspace = true
 workspace = true
 
 [[example]]
-name = "sonido-preamp"
-crate-type = ["cdylib"]
-
-[[example]]
-name = "sonido-graph-player"
-crate-type = ["cdylib"]
-
-[[example]]
-name = "sonido-distortion"
-crate-type = ["cdylib"]
-
-[[example]]
-name = "sonido-compressor"
-crate-type = ["cdylib"]
-
-[[example]]
-name = "sonido-gate"
-crate-type = ["cdylib"]
-
-[[example]]
-name = "sonido-eq"
-crate-type = ["cdylib"]
-
-[[example]]
-name = "sonido-wah"
-crate-type = ["cdylib"]
-
-[[example]]
-name = "sonido-chorus"
-crate-type = ["cdylib"]
-
-[[example]]
-name = "sonido-flanger"
-crate-type = ["cdylib"]
-
-[[example]]
-name = "sonido-phaser"
-crate-type = ["cdylib"]
-
-[[example]]
-name = "sonido-tremolo"
-crate-type = ["cdylib"]
-
-[[example]]
-name = "sonido-delay"
-crate-type = ["cdylib"]
-
-[[example]]
-name = "sonido-filter"
-crate-type = ["cdylib"]
-
-[[example]]
-name = "sonido-vibrato"
-crate-type = ["cdylib"]
-
-[[example]]
-name = "sonido-tape"
-crate-type = ["cdylib"]
-
-[[example]]
-name = "sonido-reverb"
-crate-type = ["cdylib"]
-
-[[example]]
-name = "sonido-harmonic-habitat"
-crate-type = ["cdylib"]
-
-[[example]]
-name = "sonido-limiter"
-crate-type = ["cdylib"]
-
-[[example]]
-name = "sonido-bitcrusher"
-crate-type = ["cdylib"]
-
-[[example]]
-name = "sonido-ringmod"
-crate-type = ["cdylib"]
-
-[[example]]
-name = "sonido-stage"
+name = "sonido"
 crate-type = ["cdylib"]

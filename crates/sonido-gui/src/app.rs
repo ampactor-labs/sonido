@@ -19,9 +19,9 @@ use egui::{
 use egui_snarl::NodeId;
 use sonido_core::{GlobalParam, MacroMap, MacroMapping, MacroTarget, MorphCurve, MorphMode};
 use sonido_gui_core::effects_ui;
-use sonido_gui_core::theme::SonidoTheme;
-use sonido_gui_core::widgets::glow;
+use sonido_gui_core::theme::{Family, SonidoTheme};
 use sonido_gui_core::widgets::{MacroAction, morph_bar, take_macro_action};
+use sonido_gui_core::widgets::{VectorText, glow};
 use sonido_gui_core::{ParamBridge, ParamIndex, SlotIndex};
 
 use crate::info_view::{self, InfoPayload};
@@ -90,6 +90,8 @@ pub struct SonidoApp {
     // Status
     sample_rate: f32,
     buffer_size: usize,
+    /// `--output`: the device to play through (`None` = system default).
+    output_device: Option<String>,
     cpu_usage: f32,
     audio_error: Option<String>,
 
@@ -200,11 +202,14 @@ impl SonidoApp {
     ///
     /// `requested_sample_rate` and `requested_buffer_size` are initial hints;
     /// the actual device rate is detected in `start_audio()` and takes priority.
+    /// `output_device` picks the output by index, exact name or unique
+    /// partial name (`None` = the system default).
     pub fn new(
         cc: &eframe::CreationContext<'_>,
         effect: Option<&str>,
         requested_sample_rate: Option<f32>,
         requested_buffer_size: Option<usize>,
+        output_device: Option<String>,
     ) -> Self {
         let registry = Arc::new(EffectRegistry::new());
 
@@ -268,6 +273,7 @@ impl SonidoApp {
             cached_panel: None,
             sample_rate: initial_rate,
             buffer_size: initial_buffer,
+            output_device,
             cpu_usage: 0.0,
             audio_error: None,
             cpu_history: Vec::with_capacity(60),
@@ -400,6 +406,7 @@ impl SonidoApp {
             error_count,
             self.sample_rate,
             self.buffer_size,
+            self.output_device.as_deref(),
         )?;
 
         // Update to actual device-negotiated values
@@ -710,13 +717,12 @@ impl SonidoApp {
         // of running off-screen; on a desktop window everything fits one row, so
         // the layout is unchanged.
         ui.horizontal_wrapped(|ui| {
-            // SONIDO brand
-            ui.heading(
-                egui::RichText::new("SONIDO")
-                    .font(FontId::monospace(18.0))
-                    .color(theme.colors.amber)
-                    .strong(),
-            );
+            // SONIDO wordmark in the design system's vector face, as on
+            // every plugin's marquee.
+            let wordmark = VectorText::new(15.0, theme.colors.text_primary).stroke(1.8);
+            let size = wordmark.size("SONIDO") + vec2(4.0, 6.0);
+            let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
+            wordmark.paint(ui.painter(), rect.min + vec2(2.0, 3.0), "SONIDO", &theme);
             ui.add_space(12.0);
 
             // Transport: ONE prominent Play/Pause for both GEN and FILE sources.
@@ -751,7 +757,7 @@ impl SonidoApp {
                 let rig_color = if rig_open {
                     theme.colors.cyan
                 } else {
-                    theme.colors.dim
+                    theme.colors.text_dim
                 };
                 if ui
                     .button(
@@ -774,7 +780,7 @@ impl SonidoApp {
                 let focus_color = if self.chrome_collapsed {
                     theme.colors.cyan
                 } else {
-                    theme.colors.dim
+                    theme.colors.text_dim
                 };
                 if ui
                     .button(
@@ -797,7 +803,7 @@ impl SonidoApp {
             let undo_color = if can_undo {
                 theme.colors.text_primary
             } else {
-                theme.colors.dim
+                theme.colors.text_dim
             };
             if ui
                 .button(
@@ -813,7 +819,7 @@ impl SonidoApp {
             let redo_color = if can_redo {
                 theme.colors.text_primary
             } else {
-                theme.colors.dim
+                theme.colors.text_dim
             };
             if ui
                 .button(
@@ -856,7 +862,7 @@ impl SonidoApp {
             let bypass_color = if chain_bypassed {
                 theme.colors.red
             } else {
-                theme.colors.dim
+                theme.colors.text_dim
             };
             let bypass_btn = ui.button(
                 egui::RichText::new("BYPASS")
@@ -1104,9 +1110,10 @@ impl SonidoApp {
             .as_ref()
             .map(|(slot, _, _)| self.bridge.param_count(*slot))
             .unwrap_or(6);
-        // Rough estimate: title row + ~40px per row of 4-5 knobs
-        let rows = param_count.div_ceil(5).max(1);
-        80.0 + rows as f32 * 60.0
+        // Rough estimate: title and selector rows, then ~100 px per row of
+        // knobs (80 px cells, value and label under each ring).
+        let rows = param_count.div_ceil(8).max(1);
+        110.0 + rows as f32 * 100.0
     }
 
     /// Render the effect panel for the selected slot.
@@ -1136,10 +1143,12 @@ impl SonidoApp {
 
         // Tint the panel border to the morph pose being sculpted, so it is
         // obvious you are editing A (cyan) or B (amber) as you turn knobs.
+        // Otherwise it glows in the effect's family color, as its plugin does.
+        let accent = Family::of_effect(effect_id).accent();
         let (border_color, border_w) = match self.morph_state.edit() {
             Some(MorphEnd::A) => (theme.colors.cyan, 2.5_f32),
             Some(MorphEnd::B) => (theme.colors.amber, 2.5_f32),
-            None => (theme.colors.amber, 2.0_f32),
+            None => (accent, 1.5_f32),
         };
         let panel_frame = Frame::new()
             .fill(theme.colors.void)
@@ -1151,9 +1160,9 @@ impl SonidoApp {
             // Title row: effect name + morph bar + bypass
             ui.horizontal(|ui| {
                 ui.label(
-                    egui::RichText::new(panel_name)
+                    egui::RichText::new(panel_name.to_uppercase())
                         .font(FontId::monospace(12.0))
-                        .color(theme.colors.amber)
+                        .color(accent)
                         .strong(),
                 );
 
@@ -1193,7 +1202,7 @@ impl SonidoApp {
                         let (label, col) = if locked {
                             ("LOCKED", theme.colors.amber)
                         } else {
-                            ("LOCK", theme.colors.dim)
+                            ("LOCK", theme.colors.text_dim)
                         };
                         let lock_btn = egui::Button::new(
                             egui::RichText::new(label)
@@ -1977,7 +1986,7 @@ impl SonidoApp {
                 if ui
                     .add_enabled(pedal_ok, egui::Button::new("Flash to pedal (DFU)"))
                     .on_hover_text(
-                        "Put the pedal in bootloader (hold both footswitches ~1.5 s), then flash slot 0",
+                        "Put the pedal in bootloader (hold both footswitches ~3 s), then flash slot 0",
                     )
                     .clicked()
                 {

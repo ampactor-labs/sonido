@@ -3,13 +3,19 @@
 //! A [`Patch`] is the single source of truth for a complete effect rig:
 //! the graph topology, per-node A/B parameter snapshots, six macro
 //! definitions, the A/B morph configuration, and graph-level globals. One
-//! model has three projections that all round-trip back to the same `Patch`:
+//! model has three projections; the two serialized ones round-trip back to
+//! the same `Patch`:
 //!
-//! | Projection      | Where                          | Module          |
-//! |-----------------|--------------------------------|-----------------|
-//! | JSON            | GUI session, CLAP plugin state | `serde` derives |
-//! | 4 KB binary     | QSPI flash sector on the pedal | [`binary`]      |
-//! | runtime engine  | GUI / plugin / firmware         | consumer crates |
+//! | Projection      | Where                                          | Module                    |
+//! |-----------------|------------------------------------------------|---------------------------|
+//! | JSON            | GUI `.json` export, graph-player state/presets | `serde` derives           |
+//! | 4 KB binary     | QSPI flash sector on the pedal                 | [`binary`]                |
+//! | runtime engine  | graph-player plugin ([`PatchPlayer`])          | [`build`], [`runtime`]    |
+//!
+//! The GUI editor projects its own session into a `Patch` for export; it does
+//! not run patches. The Daisy firmware's `patch_loader` can build a patch's
+//! graph with [`build_graph_from_patch`], but the shipping pedal firmware
+//! does not use [`PatchPlayer`].
 //!
 //! # Identity, not position
 //!
@@ -62,7 +68,7 @@ pub const SECTOR_SIZE: usize = 4096;
 /// pedal is the CPU budget, enforced at export time ([`validate`]).
 pub const MAX_NODES: usize = 8;
 
-/// Maximum parameters per effect node (current kernel max is 11).
+/// Maximum parameters per effect node (the largest kernels — compressor, multiband compressor, stage — have 12).
 pub const MAX_PARAMS: usize = 16;
 
 /// Number of macros, one per hardware knob (K1–K6).

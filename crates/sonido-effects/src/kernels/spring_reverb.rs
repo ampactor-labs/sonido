@@ -37,7 +37,10 @@
 //! let adapter = Adapter::new(SpringReverbKernel::new(48000.0), 48000.0);
 //! let mut effect: Box<dyn Effect> = Box::new(adapter);
 //!
-//! // Embedded / Daisy Seed (direct)
+//! // Embedded / Daisy Seed — zero-smoothing adapter, as the pedal firmware uses
+//! let effect = Adapter::new_direct(SpringReverbKernel::new(48000.0), 48000.0);
+//!
+//! // Or drive the kernel directly with a typed params struct (no adapter)
 //! let mut kernel = SpringReverbKernel::new(48000.0);
 //! let params = SpringReverbParams::from_knobs(adc_decay, adc_tension, adc_drip,
 //!                                             adc_damp, adc_mix, adc_out);
@@ -49,8 +52,8 @@ use sonido_core::kernel::{DspKernel, KernelParams, SmoothingStyle};
 use sonido_core::kernel_params;
 use sonido_core::math::soft_limit;
 use sonido_core::{
-    AllpassFilter, InterpolatedDelay, OnePole, ParamDescriptor, ParamId, ParamUnit, db_to_linear,
-    flush_denormal, wet_dry_mix,
+    AllpassFilter, InterpolatedDelay, OnePole, ParamDescriptor, ParamFlags, ParamId, ParamUnit,
+    db_to_linear, flush_denormal, wet_dry_mix,
 };
 
 // ── Constants ───────────────────────────────────────────────────────────────
@@ -168,8 +171,8 @@ fn decay_to_gain(decay_s: f32, sr: f32) -> f32 {
 /// | 1 | `tension_pct` | % | 0–100 | 50.0 |
 /// | 2 | `drip_pct` | % | 0–100 | 40.0 |
 /// | 3 | `damping_pct` | % | 0–100 | 50.0 |
-/// | 4 | `mix_pct` | % | 0–100 | 30.0 |
-/// | 5 | `output_db` | dB | −60–+6 | 0.0 |
+/// | 4 | `mix_pct` | % | 0–100 | 50.0 |
+/// | 5 | `output_db` | dB | −6–+6 | 0.0 |
 #[derive(Debug, Clone, Copy)]
 pub struct SpringReverbParams {
     /// Decay time in seconds (0.5–5 s).
@@ -199,7 +202,7 @@ pub struct SpringReverbParams {
     /// Wet/dry mix as a percentage (0% = dry, 100% = wet).
     pub mix_pct: f32,
 
-    /// Output level in decibels (−60 to +6 dB).
+    /// Output level in decibels (−6 to +6 dB).
     pub output_db: f32,
 }
 
@@ -210,7 +213,7 @@ impl Default for SpringReverbParams {
             tension_pct: 50.0,
             drip_pct: 40.0,
             damping_pct: 50.0,
-            mix_pct: 30.0,
+            mix_pct: 50.0,
             output_db: 0.0,
         }
     }
@@ -247,6 +250,7 @@ kernel_params! {
                 max: 100.0,
                 default: 50.0,
                 step: 1.0,
+                flags: ParamFlags::AUTOMATABLE,
                 ..ParamDescriptor::mix()
             }
             .with_id(ParamId(2801), "spring_tension"),
@@ -262,6 +266,7 @@ kernel_params! {
                 max: 100.0,
                 default: 40.0,
                 step: 1.0,
+                flags: ParamFlags::AUTOMATABLE,
                 ..ParamDescriptor::mix()
             }
             .with_id(ParamId(2802), "spring_drip"),
@@ -277,6 +282,7 @@ kernel_params! {
                 max: 100.0,
                 default: 50.0,
                 step: 1.0,
+                flags: ParamFlags::AUTOMATABLE,
                 ..ParamDescriptor::mix()
             }
             .with_id(ParamId(2803), "spring_damping"),
@@ -461,6 +467,12 @@ impl DspKernel for SpringReverbKernel {
         self.fb_delay.clear();
         self.fb_damp.reset();
         self.fb_state = 0.0;
+    }
+
+    /// Same ring-out as the [`TailReporting`](sonido_core::TailReporting) impl
+    /// below; the adapter (and so every plugin host) asks through this trait.
+    fn tail_samples(&self) -> usize {
+        <Self as sonido_core::TailReporting>::tail_samples(self)
     }
 
     fn set_sample_rate(&mut self, sample_rate: f32) {

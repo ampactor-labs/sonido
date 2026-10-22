@@ -88,9 +88,11 @@ fn main() {
         .unwrap();
     }
     md.push_str(
-        "\nKernels run at base rate here; the desktop/plugin path wraps each kernel in\n\
-         `Oversampled<N>` (`crates/sonido-core/src/oversample.rs`, windowed-sinc up/downsampling)\n\
-         to keep these harmonics from aliasing back into the audible band.\n\n",
+        "\nKernels run at base rate here, as they do on every shipping path (plugin, CLI,\n\
+         pedal) — none wraps kernels in `Oversampled<N>`. Aliasing of these harmonics is\n\
+         held down in the kernel itself by first-order ADAA (antiderivative anti-aliasing)\n\
+         waveshaping; `Oversampled<N>` (`crates/sonido-core/src/oversample.rs`) is an\n\
+         opt-in wrapper, not part of any shipping signal path.\n\n",
     );
 
     // ── 3. Reverb decay (RT60 from impulse response) ─────────────────────────

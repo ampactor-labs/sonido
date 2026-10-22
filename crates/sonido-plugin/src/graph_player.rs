@@ -3,15 +3,24 @@
 //! Where the per-effect plugins each wrap one effect, this wraps a whole rig: a
 //! [`PatchPlayer`] driven by six macro params, a morph position/speed, input and
 //! master gain, and a bypass. Its state *is* the patch JSON the Studio GUI
-//! exports — so "Export as CLAP" is the same blob, and a rig sounds identical in
-//! the DAW and on the pedal (both wrap a `PatchPlayer`).
+//! exports — so "Export as CLAP" is the same blob.
 //!
-//! This is the headless core (params + state + audio). It is loadable and
-//! automatable in any host today; the editor GUI (reusing the macro/morph panels)
-//! is a follow-up.
+//! What the plugin shares with the pedal is the effect kernels and the
+//! [`Patch`] format (the firmware's `patch_loader` decodes the 4 KB binary form
+//! and builds it with the same `build_graph_from_patch`). It does not share this
+//! runtime: the firmware never uses `PatchPlayer`, so it has none of its macro,
+//! morph or gain handling. The shipping pedal (`sonido_pedal.rs`) runs its own
+//! `ProcessingGraph` of up to 3 of 8 effects through unsmoothed
+//! `Adapter::new_direct` wrappers and does not load patches yet, so a rig is not
+//! guaranteed to sound the same in the DAW and on the pedal.
+//!
+//! Its editor is the design system's cabinet in the RIG family: the loaded
+//! rig's chain on the screen, a rig browser, the six macros, morph and gains
+//! (see [`crate::graph_editor`]). Choosing a rig asks the host to restart the
+//! plugin, which rebuilds the player off the audio thread.
 
 use std::io::{Read, Write};
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU8, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use clack_extensions::audio_ports::{
@@ -23,15 +32,25 @@ use clack_extensions::params::{
     PluginMainThreadParams,
 };
 use clack_extensions::state::PluginStateImpl;
+use clack_extensions::tail::{PluginTailImpl, TailLength};
+use clack_plugin::events::EventFlags;
+use clack_plugin::events::event_types::{
+    ParamGestureBeginEvent, ParamGestureEndEvent, ParamValueEvent,
+};
 use clack_plugin::prelude::*;
 use clack_plugin::stream::{InputStream, OutputStream};
 use clack_plugin::utils::Cookie;
 
-use sonido_core::{ParamDescriptor, ParamId};
+use sonido_core::{ParamDescriptor, ParamFlags, ParamId, ParamUnit, TempoContext};
+use sonido_gui_core::telemetry::SignalTap;
 use sonido_patch::{NUM_MACROS, Patch, PatchPlayer};
 use sonido_registry::{EffectRegistry, EffectWithParams, effect_by_uid};
 
+use crate::audio::{in_place, next_tempo};
+use crate::graph_editor::GraphModel;
+use crate::gui::{EditorHost, EditorModel, preferred_window_size};
 use crate::main_thread::map_flags;
+use crate::shared::{GESTURE_BEGIN, GESTURE_END};
 
 // ── Stable CLAP param ids (never renumber) ──────────────────────────────────
 
@@ -44,10 +63,14 @@ const ID_BYPASS: u32 = 0x1030;
 
 /// The graph player's fixed parameter set (UID-stable, never reordered on the wire).
 fn graph_param_descriptors() -> Vec<ParamDescriptor> {
+    const NAMES: [&str; NUM_MACROS] = [
+        "Macro 1", "Macro 2", "Macro 3", "Macro 4", "Macro 5", "Macro 6",
+    ];
+    const SHORT: [&str; NUM_MACROS] = ["M1", "M2", "M3", "M4", "M5", "M6"];
     let mut v = Vec::with_capacity(NUM_MACROS + 5);
     for i in 0..NUM_MACROS {
         v.push(
-            ParamDescriptor::custom("Macro", "Macro", 0.0, 1.0, 0.0)
+            ParamDescriptor::custom(NAMES[i], SHORT[i], 0.0, 1.0, 0.0)
                 .with_id(ParamId(ID_MACRO_BASE + i as u32), "macro"),
         );
     }
@@ -61,14 +84,19 @@ fn graph_param_descriptors() -> Vec<ParamDescriptor> {
     );
     v.push(
         ParamDescriptor::custom("Input Gain", "In", -24.0, 24.0, 0.0)
+            .with_unit(ParamUnit::Decibels)
             .with_id(ParamId(ID_INPUT_GAIN), "input_gain"),
     );
     v.push(
         ParamDescriptor::custom("Master Volume", "Vol", -40.0, 6.0, 0.0)
+            .with_unit(ParamUnit::Decibels)
             .with_id(ParamId(ID_MASTER_VOLUME), "master_volume"),
     );
     v.push(
         ParamDescriptor::custom("Bypass", "Byp", 0.0, 1.0, 0.0)
+            .with_step(1.0)
+            .with_flags(ParamFlags::AUTOMATABLE.union(ParamFlags::STEPPED))
+            .with_step_labels(&["Off", "On"])
             .with_id(ParamId(ID_BYPASS), "bypass"),
     );
     v
@@ -82,8 +110,18 @@ struct GraphSharedData {
     /// The rig this plugin plays. Read on activate to build the `PatchPlayer`;
     /// replaced on state load (which happens while inactive in the common flow).
     patch: Mutex<Patch>,
+    /// Bumped on every patch change, so the GUI can tell when to redraw the rig.
+    generation: AtomicU64,
     latency_samples: AtomicU32,
+    /// Host sample rate (`f32` bits), 0 until activated.
+    sample_rate: AtomicU32,
+    /// GUI → audio gesture flags per param (see [`crate::shared::GESTURE_BEGIN`]).
+    gesture_flags: Vec<AtomicU8>,
+    /// Audio → GUI meters and scope.
+    tap: SignalTap,
     host_notify: Option<Box<dyn Fn() + Send + Sync>>,
+    /// Asks the host to deactivate and reactivate the plugin (rebuild the rig).
+    host_restart: Option<Box<dyn Fn() + Send + Sync>>,
 }
 
 /// Shared state for the graph-player plugin.
@@ -94,42 +132,100 @@ pub struct GraphShared {
 
 impl GraphShared {
     /// Create shared state with default params and an empty patch.
-    pub fn new(host_notify: Option<Box<dyn Fn() + Send + Sync>>) -> Self {
+    ///
+    /// `host_notify` asks the host for a `process()`/`flush()` call (GUI edits);
+    /// `host_restart` asks it to restart the plugin (a new rig). `None` for
+    /// standalone use.
+    pub fn new(
+        host_notify: Option<Box<dyn Fn() + Send + Sync>>,
+        host_restart: Option<Box<dyn Fn() + Send + Sync>>,
+    ) -> Self {
         let descriptors = graph_param_descriptors();
         let values = descriptors
             .iter()
             .map(|d| AtomicU32::new(d.default.to_bits()))
             .collect();
+        let gesture_flags = descriptors.iter().map(|_| AtomicU8::new(0)).collect();
         Self {
             inner: Arc::new(GraphSharedData {
                 descriptors,
                 values,
                 patch: Mutex::new(Patch::new("graph")),
+                generation: AtomicU64::new(0),
                 latency_samples: AtomicU32::new(0),
+                sample_rate: AtomicU32::new(0),
+                gesture_flags,
+                tap: SignalTap::new(),
                 host_notify,
+                host_restart,
             }),
         }
     }
 
-    fn param_count(&self) -> usize {
+    pub(crate) fn param_count(&self) -> usize {
         self.inner.descriptors.len()
     }
-    fn descriptor(&self, i: usize) -> Option<&ParamDescriptor> {
+    pub(crate) fn descriptor(&self, i: usize) -> Option<&ParamDescriptor> {
         self.inner.descriptors.get(i)
     }
-    fn descriptors(&self) -> &[ParamDescriptor] {
+    pub(crate) fn descriptors(&self) -> &[ParamDescriptor] {
         &self.inner.descriptors
     }
-    fn index_by_id(&self, id: u32) -> Option<usize> {
+    pub(crate) fn index_by_id(&self, id: u32) -> Option<usize> {
         self.inner.descriptors.iter().position(|d| d.id.0 == id)
     }
-    fn get_value(&self, i: usize) -> Option<f32> {
+    /// Index of the Bypass param.
+    pub(crate) fn bypass_index(&self) -> Option<usize> {
+        self.index_by_id(ID_BYPASS)
+    }
+    /// Audio → GUI meters and scope.
+    pub(crate) fn tap(&self) -> &SignalTap {
+        &self.inner.tap
+    }
+    /// Host sample rate in Hz (0.0 before activation).
+    pub(crate) fn sample_rate(&self) -> f32 {
+        f32::from_bits(self.inner.sample_rate.load(Ordering::Acquire))
+    }
+    pub(crate) fn set_sample_rate(&self, sr: f32) {
+        self.inner
+            .sample_rate
+            .store(sr.to_bits(), Ordering::Release);
+    }
+    /// Patch generation: changes whenever the patch does.
+    pub(crate) fn generation(&self) -> u64 {
+        self.inner.generation.load(Ordering::Acquire)
+    }
+    /// GUI drag start on param `i` (forwarded to the host as a gesture).
+    pub(crate) fn gesture_begin(&self, i: usize) {
+        if let Some(f) = self.inner.gesture_flags.get(i) {
+            f.fetch_or(GESTURE_BEGIN, Ordering::Release);
+        }
+    }
+    /// GUI drag end on param `i`.
+    pub(crate) fn gesture_end(&self, i: usize) {
+        if let Some(f) = self.inner.gesture_flags.get(i) {
+            f.fetch_or(GESTURE_END, Ordering::Release);
+        }
+    }
+    fn take_gesture_flags(&self, i: usize) -> u8 {
+        self.inner
+            .gesture_flags
+            .get(i)
+            .map_or(0, |f| f.swap(0, Ordering::AcqRel))
+    }
+    /// Ask the host to restart the plugin so `activate()` builds the new rig.
+    pub(crate) fn request_restart(&self) {
+        if let Some(cb) = &self.inner.host_restart {
+            cb();
+        }
+    }
+    pub(crate) fn get_value(&self, i: usize) -> Option<f32> {
         self.inner
             .values
             .get(i)
             .map(|v| f32::from_bits(v.load(Ordering::Acquire)))
     }
-    fn set_value(&self, i: usize, value: f32) {
+    pub(crate) fn set_value(&self, i: usize, value: f32) {
         if let Some((a, d)) = self.inner.values.get(i).zip(self.inner.descriptors.get(i)) {
             a.store(value.clamp(d.min, d.max).to_bits(), Ordering::Release);
         }
@@ -137,18 +233,19 @@ impl GraphShared {
     fn set_latency_samples(&self, n: u32) {
         self.inner.latency_samples.store(n, Ordering::Release);
     }
-    fn latency_samples(&self) -> u32 {
+    pub(crate) fn latency_samples(&self) -> u32 {
         self.inner.latency_samples.load(Ordering::Acquire)
     }
     /// Snapshot the current patch (for building a player / saving state).
     pub fn patch(&self) -> Patch {
         self.inner.patch.lock().unwrap().clone()
     }
-    /// Replace the current patch (state load).
+    /// Replace the current patch (state load, or a rig chosen in the editor).
     pub fn set_patch(&self, patch: Patch) {
         *self.inner.patch.lock().unwrap() = patch;
+        self.inner.generation.fetch_add(1, Ordering::AcqRel);
     }
-    fn notify_host(&self) {
+    pub(crate) fn notify_host(&self) {
         if let Some(cb) = &self.inner.host_notify {
             cb();
         }
@@ -159,17 +256,26 @@ impl PluginShared<'_> for GraphShared {}
 
 // ── Main thread ──────────────────────────────────────────────────────────────
 
-/// Main-thread handler: param metadata, state, ports, latency.
+/// Main-thread handler: param metadata, state, ports, latency, editor.
 pub struct GraphMainThread<'a> {
     shared: &'a GraphShared,
+    /// The editor window and its host-facing size/scale state.
+    editor: EditorHost,
 }
 
 impl<'a> GraphMainThread<'a> {
     /// Create the handler referencing shared state.
     pub fn new(shared: &'a GraphShared) -> Self {
-        Self { shared }
+        let owned = shared.clone();
+        let (w, h) = preferred_window_size(&GraphModel::deck_descriptors(shared));
+        let editor = EditorHost::new("graph-player", (w, h), move || {
+            Arc::new(GraphModel::new(owned.clone())) as Arc<dyn EditorModel>
+        });
+        Self { shared, editor }
     }
 }
+
+crate::impl_plugin_gui!(GraphMainThread<'_>, editor);
 
 impl<'a> PluginMainThread<'a, GraphShared> for GraphMainThread<'a> {}
 
@@ -319,6 +425,13 @@ fn registry_make_effect(
 pub struct GraphAudioProcessor<'a> {
     shared: &'a GraphShared,
     player: PatchPlayer,
+    /// Last value of each param the host knows about; a GUI write shows up as
+    /// a difference and is forwarded to the host.
+    last_sent: Vec<f32>,
+    /// Right channel for mono ports (the player is stereo), sized at activate.
+    mono_scratch: Vec<f32>,
+    /// Host tempo and transport, refreshed from each block's transport event.
+    tempo: TempoContext,
 }
 
 impl<'a> PluginAudioProcessor<'a, GraphShared, GraphMainThread<'a>> for GraphAudioProcessor<'a> {
@@ -340,41 +453,70 @@ impl<'a> PluginAudioProcessor<'a, GraphShared, GraphMainThread<'a>> for GraphAud
         apply_params(shared, &mut player);
         player.apply_controls();
         shared.set_latency_samples(player.engine().latency_samples() as u32);
+        shared.set_sample_rate(sr);
+        let last_sent = (0..shared.param_count())
+            .map(|i| shared.get_value(i).unwrap_or(0.0))
+            .collect();
 
-        Ok(Self { shared, player })
+        Ok(Self {
+            shared,
+            player,
+            last_sent,
+            mono_scratch: vec![0.0; block.max(1)],
+            tempo: TempoContext {
+                sample_rate: sr,
+                ..TempoContext::default()
+            },
+        })
     }
 
     fn process(
         &mut self,
-        _process: Process,
+        process: Process,
         mut audio: Audio,
         events: Events,
     ) -> Result<ProcessStatus, PluginError> {
-        // Apply host automation, then push all control values into the player.
-        handle_param_events(self.shared, events.input);
+        // Tempo-synced effects in the rig follow the host transport.
+        if let Some(ctx) = next_tempo(&self.tempo, process.transport) {
+            self.tempo = ctx;
+            self.player.set_tempo_context(&ctx);
+        }
+        // Host automation in, GUI edits out, then push controls into the player.
+        self.handle_events(events.input);
+        self.sync_gui_changes(events.output);
         apply_params(self.shared, &mut self.player);
         self.player.apply_controls();
 
+        let tap = self.shared.tap();
         for mut port_pair in &mut audio {
             let Some(mut channels) = port_pair.channels()?.into_f32() else {
                 continue;
             };
-            if channels.channel_pair_count() < 2 {
-                continue;
-            }
-            match (channels.channel_pair(0), channels.channel_pair(1)) {
-                (
-                    Some(ChannelPair::InputOutput(li, lo)),
-                    Some(ChannelPair::InputOutput(ri, ro)),
-                ) => {
-                    lo.copy_from_slice(li);
-                    ro.copy_from_slice(ri);
-                    self.player.process_block_stereo(lo, ro);
+            match channels.channel_pair_count() {
+                0 => {}
+                1 => {
+                    // Mono: run the rig on L = R and keep the left output.
+                    if let Some(buf) = channels.channel_pair(0).and_then(in_place) {
+                        let n = buf.len().min(self.mono_scratch.len());
+                        let (buf, right) = (&mut buf[..n], &mut self.mono_scratch[..n]);
+                        right.copy_from_slice(buf);
+                        tap.input(buf, buf);
+                        self.player.process_block_stereo(buf, right);
+                        tap.output(buf, buf);
+                    }
                 }
-                (Some(ChannelPair::InPlace(l)), Some(ChannelPair::InPlace(r))) => {
-                    self.player.process_block_stereo(l, r);
+                _ => {
+                    let left = channels.channel_pair(0).and_then(in_place);
+                    let right = channels.channel_pair(1).and_then(in_place);
+                    if let (Some(left), Some(right)) = (left, right) {
+                        let n = left.len().min(right.len());
+                        let (left, right) = (&mut left[..n], &mut right[..n]);
+                        tap.input(left, right);
+                        // Bypassed, the player leaves the buffers (the dry input) alone.
+                        self.player.process_block_stereo(left, right);
+                        tap.output(left, right);
+                    }
                 }
-                _ => {}
             }
         }
 
@@ -384,29 +526,80 @@ impl<'a> PluginAudioProcessor<'a, GraphShared, GraphMainThread<'a>> for GraphAud
     fn deactivate(self, _main_thread: &mut GraphMainThread<'_>) {}
 }
 
+impl GraphAudioProcessor<'_> {
+    /// Host automation → shared params (and what the host now knows).
+    fn handle_events(&mut self, input: &InputEvents) {
+        for event in input {
+            if let Some(clack_plugin::events::spaces::CoreEventSpace::ParamValue(ev)) =
+                event.as_core_event()
+                && let Some(param_id) = ev.param_id()
+                && let Some(index) = self.shared.index_by_id(param_id.get())
+            {
+                self.shared.set_value(index, ev.value() as f32);
+                if let Some(v) = self.shared.get_value(index) {
+                    self.last_sent[index] = v;
+                }
+            }
+        }
+    }
+
+    /// GUI edits → host: gesture begin, the new value, gesture end, so the
+    /// host records automation and groups undo per drag.
+    fn sync_gui_changes(&mut self, output: &mut OutputEvents) {
+        for i in 0..self.shared.param_count() {
+            let flags = self.shared.take_gesture_flags(i);
+            let Some(desc) = self.shared.descriptor(i) else {
+                continue;
+            };
+            let id = ClapId::new(desc.id.0);
+            if flags & GESTURE_BEGIN != 0 {
+                let _ = output
+                    .try_push(ParamGestureBeginEvent::new(0, id).with_flags(EventFlags::IS_LIVE));
+            }
+            if let Some(v) = self.shared.get_value(i)
+                && v.to_bits() != self.last_sent[i].to_bits()
+            {
+                self.last_sent[i] = v;
+                let ev =
+                    ParamValueEvent::new(0, id, Pckn::match_all(), f64::from(v), Cookie::empty())
+                        .with_flags(EventFlags::IS_LIVE);
+                let _ = output.try_push(ev);
+            }
+            if flags & GESTURE_END != 0 {
+                let _ = output
+                    .try_push(ParamGestureEndEvent::new(0, id).with_flags(EventFlags::IS_LIVE));
+            }
+        }
+    }
+}
+
+/// The rig rings out as long as its longest tail (reverb, delay, looper).
+impl PluginTailImpl for GraphAudioProcessor<'_> {
+    fn get(&self) -> TailLength {
+        let engine = self.player.engine();
+        let longest = (0..engine.slot_count())
+            .filter_map(|slot| engine.effect_at(slot))
+            .map(|e| e.tail_samples())
+            .max()
+            .unwrap_or(0);
+        match u32::try_from(longest) {
+            Ok(samples) if samples < u32::MAX => TailLength::Finite(samples),
+            _ => TailLength::Infinite,
+        }
+    }
+}
+
 impl PluginAudioProcessorParams for GraphAudioProcessor<'_> {
-    fn flush(&mut self, input: &InputEvents, _output: &mut OutputEvents) {
-        handle_param_events(self.shared, input);
+    fn flush(&mut self, input: &InputEvents, output: &mut OutputEvents) {
+        self.handle_events(input);
+        self.sync_gui_changes(output);
         apply_params(self.shared, &mut self.player);
         self.player.apply_controls();
     }
 }
 
-/// Update shared param atomics from incoming host parameter events.
-fn handle_param_events(shared: &GraphShared, input: &InputEvents) {
-    for event in input {
-        if let Some(clack_plugin::events::spaces::CoreEventSpace::ParamValue(ev)) =
-            event.as_core_event()
-            && let Some(param_id) = ev.param_id()
-            && let Some(index) = shared.index_by_id(param_id.get())
-        {
-            shared.set_value(index, ev.value() as f32);
-        }
-    }
-}
-
 /// Push the shared param atomics into the player (macros, morph, gains, bypass).
-fn apply_params(shared: &GraphShared, player: &mut PatchPlayer) {
+pub(crate) fn apply_params(shared: &GraphShared, player: &mut PatchPlayer) {
     for i in 0..NUM_MACROS {
         if let Some(index) = shared.index_by_id(ID_MACRO_BASE + i as u32)
             && let Some(v) = shared.get_value(index)
@@ -442,8 +635,8 @@ fn apply_params(shared: &GraphShared, player: &mut PatchPlayer) {
 
 // ── Plugin entry ─────────────────────────────────────────────────────────────
 
-/// The graph-player plugin type. The example cdylib exports it via
-/// `clack_export_entry!(SinglePluginEntry<GraphPlugin>)`.
+/// The graph-player plugin type, exported from the bundle's factory
+/// ([`crate::bundle`]) alongside the effects.
 pub struct GraphPlugin;
 
 impl Plugin for GraphPlugin {
@@ -453,14 +646,18 @@ impl Plugin for GraphPlugin {
 
     fn declare_extensions(builder: &mut PluginExtensions<Self>, _shared: Option<&GraphShared>) {
         use clack_extensions::audio_ports::PluginAudioPorts;
+        use clack_extensions::gui::PluginGui;
         use clack_extensions::latency::PluginLatency;
         use clack_extensions::params::PluginParams;
         use clack_extensions::state::PluginState;
+        use clack_extensions::tail::PluginTail;
 
         builder.register::<PluginAudioPorts>();
+        builder.register::<PluginGui>();
         builder.register::<PluginLatency>();
         builder.register::<PluginParams>();
         builder.register::<PluginState>();
+        builder.register::<PluginTail>();
     }
 }
 
@@ -479,7 +676,10 @@ impl DefaultPluginFactory for GraphPlugin {
         let notify: Box<dyn Fn() + Send + Sync> = Box::new(move || {
             host.request_process();
         });
-        Ok(GraphShared::new(Some(notify)))
+        let restart: Box<dyn Fn() + Send + Sync> = Box::new(move || {
+            host.request_restart();
+        });
+        Ok(GraphShared::new(Some(notify), Some(restart)))
     }
 
     fn new_main_thread<'a>(
@@ -517,7 +717,7 @@ mod tests {
 
     #[test]
     fn shared_defaults_and_patch_roundtrip() {
-        let shared = GraphShared::new(None);
+        let shared = GraphShared::new(None, None);
         assert_eq!(shared.param_count(), NUM_MACROS + 5);
         // Patch set/get roundtrips.
         let patch = patch_with_distortion();
@@ -527,7 +727,7 @@ mod tests {
 
     #[test]
     fn state_roundtrip_preserves_patch_and_params() {
-        let shared = GraphShared::new(None);
+        let shared = GraphShared::new(None, None);
         shared.set_patch(patch_with_distortion());
         // Set macro 0 and master volume to non-defaults.
         let m0 = shared.index_by_id(ID_MACRO_BASE).unwrap();
@@ -547,7 +747,7 @@ mod tests {
         let json = serde_json::to_vec(&state).unwrap();
 
         // Load into a fresh shared.
-        let shared2 = GraphShared::new(None);
+        let shared2 = GraphShared::new(None, None);
         let loaded: GraphState = serde_json::from_slice(&json).unwrap();
         shared2.set_patch(loaded.patch);
         for (id, v) in loaded.params {

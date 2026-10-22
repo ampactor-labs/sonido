@@ -72,23 +72,23 @@ test-nostd:
 install:
 	cargo install --path crates/sonido-cli
 
-# Build and install CLAP plugins to ~/.clap/
-# Names use dashes, matching the bundle/release artifacts — the VST3 wrapper
-# shims (plugins-vst3) find their .clap by that exact filename stem.
+# Build the plugin bundle (all 36 effects + the graph player in one
+# sonido.clap) and install it to ~/.clap/, where Linux hosts look.
 plugins:
-	cargo build --release -p sonido-plugin --examples
-	@mkdir -p $(HOME)/.clap
-	@for f in target/release/examples/libsonido_*.so; do \
-		name=$$(basename "$$f" .so | sed 's/^lib//; s/_/-/g'); \
-		cp "$$f" "$(HOME)/.clap/$$name.clap"; \
-		echo "Installed $$name.clap"; \
-	done
-	@echo "All plugins installed to ~/.clap/"
-
-# Package VST3 wrapper shims next to the CLAP bundles (requires cmake)
-plugins-vst3:
 	./scripts/bundle-clap.sh
+	@mkdir -p $(HOME)/.clap
+	cp -R dist-clap/sonido.clap $(HOME)/.clap/
+	@echo "Installed ~/.clap/sonido.clap"
+
+# Also build the VST3 shim (clap-wrapper; needs cmake and a C++ compiler) and
+# install it to ~/.vst3/. The shim loads ~/.clap/sonido.clap at run time, so
+# this installs both.
+plugins-vst3: plugins
 	./scripts/bundle-vst3.sh
+	@mkdir -p $(HOME)/.vst3
+	rm -rf $(HOME)/.vst3/sonido.vst3
+	cp -R dist-vst3/sonido.vst3 $(HOME)/.vst3/
+	@echo "Installed ~/.vst3/sonido.vst3"
 
 # Full local CI check (mirrors remote CI minus no_std/wasm jobs)
 ci:

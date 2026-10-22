@@ -1,8 +1,10 @@
 # DSP Quality Standard
 
 Rules governing gain staging, bypass parity, feedback stability, and parameter
-vocabulary for all Sonido effects. Every effect in `sonido-effects` must pass
-all seven rules at default parameters before merge.
+vocabulary for all Sonido effects. Rules 1-7 are the design targets;
+`crates/sonido-effects/tests/quality_standard.rs` enforces each one in the
+form described under **Automated Enforcement** below, iterating every effect in
+the registry. Those tests must pass before merge.
 
 ## Rules
 
@@ -35,31 +37,31 @@ audible level jumps. Users expect unity gain at default settings.
 
 ### Rule 3: Output Parameter Contract
 
-Every effect exposes a gain staging parameter as the **last**
+Every effect exposes a dB gain staging parameter, normally as the **last**
 `ParameterInfo` index. Most effects use `gain::output_param_descriptor()` from
 `crates/sonido-core/src/gain.rs`, which provides:
 
 | Field | Value |
 |-------|-------|
-| Name | "Output" |
+| Name / short name | "Output" / "Out" |
 | Unit | dB |
-| Range | -20 to +6 dB |
+| Range | -6 to +6 dB (`OUTPUT_MIN_DB`..`OUTPUT_MAX_DB`; noon = 0 dB) |
 | Default | 0 dB (unity) |
-| Smoothing | `SmoothedParam::standard` (10 ms) |
+| Smoothing | `gain::output_level_param()` = `SmoothedParam::standard` (10 ms) |
 
-**Naming exceptions** (domain-appropriate names that serve the same purpose):
+**Non-last exceptions** (listed in `RULE3_NON_LAST_EXCEPTIONS`):
 
-| Effect | Last Gain Param | Name | Index |
-|--------|----------------|------|-------|
-| Distortion | Level | "Level" | 2 (not last; "Waveshape" follows) |
-| Compressor | Makeup Gain | "Makeup Gain" | 4 (not last; "Knee" follows) |
+| Effect | Gain Param | Index | What follows it |
+|--------|-----------|-------|-----------------|
+| Distortion | "Output" | 2 | Waveshape, Mix, Dynamics |
+| Compressor | "Makeup Gain" | 4 | Knee, Detection, SC HPF Freq, Auto Makeup, Mix |
+| Filter | "Output" | 2 | Type |
+| Chorus, Flanger, Phaser, Tremolo | "Output" | second to last | READ_ONLY "LFO Phase" |
+| Gate | "Output" | second to last | READ_ONLY "Gate Open" |
+| Tuner | "Output" | 2 | READ_ONLY detected Hz and cents |
 
-These effects use domain-standard vocabulary ("level" for distortion output
-stages, "makeup" for compression gain restoration) rather than the generic
-"output" name. They comply with the spirit of the contract (user-accessible
-gain staging) but not the letter (last index).
-
-All other effects use `gain::output_param_descriptor()` at their final index.
+For these the test only requires a dB-unit parameter whose name contains
+"output", "level", "makeup" or "gain".
 
 **Implementation:** See `crates/sonido-core/src/gain.rs` for the shared
 constructor, dB get/set helpers, and `ParamDescriptor`.
@@ -68,14 +70,15 @@ constructor, dB get/set helpers, and `ParamDescriptor`.
 
 The mix parameter must satisfy:
 
-- **mix = 0%** (or 0.0 internally): output is **bit-exact dry** -- no
-  processing artifacts, no latency compensation error, no floating-point
-  deviation from the input sample.
+- **mix = 0%** (or 0.0 internally): output equals the dry input -- no
+  processing artifacts, no latency compensation error. The `wet_dry_mix`
+  formula itself is exact at mix = 0; the test allows 5e-4 per sample for
+  smoother residue and the output-gain stage.
 - **mix = 100%** (or 1.0 internally): output is **pure wet** -- no dry signal
   leakage.
 
-**Implementation:** All effects use `wet_dry_mix()` / `wet_dry_mix_stereo()`
-from `crates/sonido-core/src/math.rs`:
+**Implementation:** Effects with a mix control use `wet_dry_mix()` /
+`wet_dry_mix_stereo()` from `crates/sonido-core/src/math.rs`:
 
 ```rust
 // dry + (wet - dry) * mix
@@ -98,15 +101,17 @@ parameter setting within the declared range may produce unbounded energy growth.
 
 | Mechanism | Where | Details |
 |-----------|-------|---------|
-| Feedback cap at 95% | `ParamDescriptor::feedback()` | `max: 95.0` percent. Applied in `set_feedback()` via `clamp(0.0, 0.95)`. |
-| Wet-signal compensation | `gain::feedback_wet_compensation()` | Scales wet by `(1-fb)` for exact peak-gain cancellation in comb topologies. |
-| Reverb comb compensation | `reverb.rs:update_comb_params()` | Uses `sqrt(1-fb)` (moderate) — parallel averaging provides additional headroom. |
+| Feedback cap at 95% | `ParamDescriptor::feedback()` | `max: 95.0` percent; the `Adapter` clamps every value to the descriptor range before the kernel sees it. |
+| Wet-signal compensation | `gain::feedback_wet_compensation()` | Scales wet by `(1-fb)` for exact peak-gain cancellation in comb topologies (delay, flanger, phaser). |
+| Reverb FDN compensation | `reverb.rs` `update_derived()` | FDN feedback clamped to `0.0..0.99`; wet scaled by `sqrt(1-fb)` (moderate) -- the 8-line Hadamard mix spreads energy, so exact compensation is unnecessary. |
 | Denormal flushing | `flush_denormal()` in `crates/sonido-core/src/math.rs` | Prevents CPU stalls from subnormal float decay in feedback paths. |
-| Comb filter damping | `CombFilter::set_damp()` | One-pole lowpass in the feedback path ensures HF energy decays faster than LF. |
-| Allpass coefficient bounds | `AllpassFilter` | Coefficient clamped to stable range. |
+| Feedback damping | `OnePole` in the reverb FDN, `CombFilter::set_damp()` in core | One-pole lowpass in the feedback path ensures HF energy decays faster than LF. |
+| Comb/allpass coefficient bounds | `CombFilter::set_feedback()`, `AllpassFilter::set_feedback()` | Clamped to `0.0..0.99` and `-0.99..0.99` respectively. |
 
-**Effects with feedback paths:** Delay, Flanger, Phaser, Reverb (8 comb
-filters per channel), Chorus.
+**Effects with feedback paths tested by Rule 5:** Delay, Flanger, Phaser,
+Reverb (8-line FDN), Chorus. Other kernels with internal feedback (looper
+overdub, plate and spring reverbs, harmonic habitat) are covered by the
+universal Rule 6 bound.
 
 ### Rule 6: Headroom Budget
 
@@ -145,64 +150,37 @@ All parameters use consistent units and naming from `ParamUnit` in
 - `ParamDescriptor::gain_db()` -- gain parameter with custom range
 - `gain::output_param_descriptor()` -- universal output level
 
-Short names are 8 characters or fewer for hardware display compatibility.
+Short names are 8 characters or fewer for hardware display compatibility
+(all current kernels comply; no test enforces it).
 
 ---
 
-## Per-Effect Compliance
+## Automated Enforcement
 
-Status as of 2026-02-22 against 0 dBFS sine input at 48 kHz, default parameters.
+`cargo test -p sonido-effects --test quality_standard` runs these checks on
+default parameters at 48 kHz (helpers in `crates/sonido-effects/tests/helpers`):
 
-| Effect | Category | R1 Peak | R2 Bypass | R3 Output | R4 Mix | R5 Feedback | R6 Headroom | R7 Vocab |
-|--------|----------|---------|-----------|-----------|--------|-------------|-------------|----------|
-| Distortion | Distortion | PASS | PASS | PASS* | PASS | N/A | PASS | PASS |
-| Tape Saturation | Distortion | PASS | PASS | PASS | PASS | N/A | PASS | PASS |
-| Compressor | Dynamics | PASS | PASS** | PASS* | N/A | N/A | PASS | PASS |
-| Gate | Dynamics | PASS | PASS | PASS | N/A | N/A | PASS | PASS |
-| Chorus | Modulation | PASS | PASS | PASS | PASS | PASS | PASS | PASS |
-| Flanger | Modulation | PASS | PASS | PASS | PASS | PASS | PASS | PASS |
-| Phaser | Modulation | PASS | PASS | PASS | PASS | PASS | PASS | PASS |
-| Tremolo | Modulation | PASS | PASS | PASS | N/A | N/A | PASS | PASS |
-| Multi Vibrato | Modulation | PASS | PASS | PASS | PASS | N/A | PASS | PASS |
-| Delay | Time-Based | PASS | PASS | PASS | PASS | PASS | PASS | PASS |
-| Reverb (Room) | Time-Based | PASS | PASS | PASS | PASS | PASS | PASS | PASS |
-| Reverb (Hall) | Time-Based | PASS | PASS | PASS | PASS | PASS | PASS | PASS |
-| Low Pass Filter | Filter | PASS | PASS | PASS | PASS | N/A | PASS | PASS |
-| Wah | Filter | PASS | PASS | PASS | PASS | N/A | PASS | PASS |
-| Parametric EQ | Filter | PASS | PASS | PASS | N/A | N/A | PASS | PASS |
-| Clean Preamp | Utility | PASS | PASS** | PASS | N/A | N/A | PASS | PASS |
-| Limiter | Dynamics | PASS | PASS** | PASS | N/A | N/A | PASS | PASS |
-| Bitcrusher | Distortion | PASS | PASS | PASS | PASS | N/A | PASS | PASS |
-| Ring Mod | Modulation | PASS | PASS | PASS | PASS | N/A | PASS | PASS |
-| Stage | Utility | PASS | PASS** | PASS | N/A | N/A | PASS | PASS |
+| Test | Effects | Check |
+|------|---------|-------|
+| `rule1_peak_ceiling` | all | 1 s of 0 dBFS 1 kHz sine: peak < 4.0 (+12 dBFS). Strict -1 dBFS ceiling only for `limiter`; unity-gain effects peak at 0 dBFS on a full-scale sine. |
+| `rule2_bypass_parity` | gate, eq, bitcrusher, tremolo | Output RMS within +/-3 dB of input RMS. |
+| `rule3_output_parameter` | all | Last param is dB, or a dB output/level/makeup/gain param exists for the Rule 3 exceptions. |
+| `rule4_wet_dry_exactness` | delay, flanger, phaser, reverb, ringmod, bitcrusher, vibrato | Mix = 0 after 100 ms settle: every sample within 5e-4 of input (440 Hz sine). |
+| `rule5_feedback_stability` | delay, flanger, phaser, reverb, chorus | Every "feedback"/"decay" param at max, 10 s of 1 kHz sine: all samples finite and < 10.0. |
+| `rule6_headroom` | all | 0 dBFS and -18 dBFS sines: all samples finite and < 10.0. |
+| `rule7_vocabulary` | all | Non-empty names, `min < max`. |
 
-**Legend:**
-- `*` Exception to Rule 3 naming (see Rule 3 table)
-- `**` Exempt from Rule 2 (gain-purpose effect)
-- `N/A` Rule does not apply (e.g., no feedback path, no mix control)
-
-### Reverb Hall Preset: Gain Compensation
-
-The hall preset (room_size=0.8, decay=0.8, damping=0.3) previously peaked at
-+11.8 dB above input level. This was fixed by feedback-adaptive comb
-compensation — a smooth quadratic curve that scales the comb output inversely
-with effective feedback. See `docs/DSP_FUNDAMENTALS.md` for the formula and
-`docs/DESIGN_DECISIONS.md` ADR-018 for rationale.
+The stricter targets in Rules 1 and 2 (-1 dBFS ceiling, +/-1 dB parity) are
+design goals checked by the manual protocol below, not by CI.
 
 ### Delay, Flanger, Phaser: Feedback Compensation
 
 These effects use `gain::feedback_wet_compensation()` — exact `(1-fb)` wet-signal
 scaling that cancels comb-filter peak gain at resonance:
 
-| Effect | Before (sqrt) | After (exact) | Feedback | Compensation |
-|--------|--------------|---------------|----------|-------------|
-| Delay | -0.8 dBFS | -2.0 dBFS | 0.4 | 0.6 |
-| Flanger | -0.5 dBFS | -2.1 dBFS | 0.5 | 0.5 |
-| Phaser | -1.1 dBFS | -2.6 dBFS | 0.5 | 0.5 |
-
-All three now pass Rule 1 (peak ceiling) with comfortable margin. The exact
-compensation guarantees the wet signal at resonance never exceeds the dry signal,
-regardless of feedback setting. See `docs/DSP_FUNDAMENTALS.md` (Feedback
+The exact compensation guarantees the wet signal at resonance never exceeds
+the dry signal, regardless of feedback setting (`feedback_wet_compensation`
+clamps feedback to 0.99 and floors the factor at 0.01). See `docs/DSP_FUNDAMENTALS.md` (Feedback
 Resonance Compensation) and `docs/DESIGN_DECISIONS.md` ADR-019 for the math.
 
 ---
@@ -214,12 +192,16 @@ Resonance Compensation) and `docs/DESIGN_DECISIONS.md` ADR-019 for the math.
 Generate a 0 dBFS, 1 kHz sine for 5 seconds and measure peak output:
 
 ```bash
-sonido generate tone demos/test_input.wav --freq 1000 --duration 5.0
+sonido generate tone demos/test_input.wav --freq 1000 --duration 5.0 --amplitude 1.0
 sonido process demos/test_input.wav --effect <effect>
 sonido analyze dynamics demos/test_input_<effect>.wav
 ```
 
-Pass criterion: reported peak <= -1.0 dBFS.
+`generate tone` defaults to `--amplitude 0.8`, so pass `1.0` for 0 dBFS.
+`process` without an output path writes `<stem>_<effect>.wav` (plus
+`_<key>=<value>` per `--param`) next to the input.
+
+Pass criterion: reported "Peak level" <= -1.0 dBFS.
 
 ### Rule 2: Bypass Parity Test
 
@@ -230,7 +212,7 @@ sonido process demos/test_input.wav --effect <effect>
 sonido compare demos/test_input.wav demos/test_input_<effect>.wav --detailed
 ```
 
-Pass criterion: |RMS_processed - RMS_dry| <= 1.0 dB.
+Pass criterion: the "Level diff - RMS" line reports <= 1.0 dB in magnitude.
 
 ### Rule 3: Output Parameter Audit
 
@@ -247,12 +229,12 @@ staging control.
 
 ```bash
 sonido process demos/test_input.wav --effect <effect> --param mix=0
-sonido compare demos/test_input.wav demos/test_input_<effect>.wav --detailed
+sonido compare demos/test_input.wav "demos/test_input_<effect>_mix=0.wav" --detailed
 
-sonido process demos/test_input.wav --effect <effect> --param mix=1
+sonido process demos/test_input.wav --effect <effect> --param mix=100
 ```
 
-Pass criterion: MSE = 0.0 at mix=0 (bit-exact).
+Mix is in percent (0-100). Pass criterion: MSE ~ 0 at mix=0.
 
 ### Rule 5: Feedback Stability Test
 
@@ -261,8 +243,8 @@ remains bounded:
 
 ```bash
 sonido generate tone demos/long_tone.wav --freq 1000 --duration 10.0
-sonido process demos/long_tone.wav --effect <effect> --param feedback=0.95
-sonido analyze dynamics demos/long_tone_<effect>.wav
+sonido process demos/long_tone.wav --effect <effect> --param feedback=95
+sonido analyze dynamics "demos/long_tone_<effect>_feedback=95.wav"
 ```
 
 Pass criterion: peak remains finite and does not grow monotonically over the
@@ -274,7 +256,7 @@ Process -18 dBFS and 0 dBFS inputs, verify no clipping or NaN:
 
 ```bash
 # Nominal level (-18 dBFS)
-sonido generate tone demos/nominal.wav --freq 1000 --duration 5.0 --amplitude 0.125
+sonido generate tone demos/nominal.wav --freq 1000 --duration 5.0 --amplitude 0.126
 sonido process demos/nominal.wav --effect <effect>
 sonido analyze dynamics demos/nominal_<effect>.wav
 
@@ -305,5 +287,6 @@ Verify parameter names, units, and ranges match the conventions in Rule 7.
 | Feedback descriptor | `crates/sonido-core/src/param_info.rs` (`ParamDescriptor::feedback`) |
 | Parameter units | `crates/sonido-core/src/param_info.rs` (`ParamUnit`) |
 | ParameterInfo trait | `crates/sonido-core/src/param_info.rs` |
-| Reverb comb feedback | `crates/sonido-effects/src/kernels/reverb.rs:298-302` |
+| Reverb FDN feedback | `crates/sonido-effects/src/kernels/reverb.rs` (`update_derived`) |
 | Effect registry | `crates/sonido-registry/src/lib.rs` |
+| Compliance tests | `crates/sonido-effects/tests/quality_standard.rs` |

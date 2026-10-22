@@ -28,8 +28,13 @@ pub fn run(
         "Sonido",
         options,
         Box::new(move |cc| {
-            let mut inner =
-                SonidoApp::new(cc, effect.as_deref(), Some(sample_rate), Some(buffer_size));
+            let mut inner = SonidoApp::new(
+                cc,
+                effect.as_deref(),
+                Some(sample_rate),
+                Some(buffer_size),
+                None,
+            );
             // Populate a demo chain so the capture shows the node editor in use.
             if effect.is_none() {
                 inner.populate_demo();

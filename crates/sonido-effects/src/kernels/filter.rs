@@ -3,7 +3,7 @@
 //! `FilterKernel` owns DSP state (biquad filters, sample rate, cached
 //! coefficients). Parameters are received via `&FilterParams` each sample.
 //! Deployed via [`Adapter`](sonido_core::kernel::Adapter) for
-//! desktop/plugin, or called directly on embedded targets.
+//! desktop/plugin, or via `Adapter::new_direct` (no smoothing) on embedded targets.
 //!
 //! # Signal Flow
 //!
@@ -35,7 +35,7 @@
 //! |-------|-------|------|-------|---------|
 //! | 0 | `cutoff_hz` | Hz | 20–20000 | 1000.0 |
 //! | 1 | `resonance` | ratio (Q) | 0.1–20.0 | 0.707 |
-//! | 2 | `output_db` | dB | −20–20 | 0.0 |
+//! | 2 | `output_db` | dB | −6–+6 | 0.0 |
 //! | 3 | `filter_type` | index | 0–3 | 0 (LPF) |
 //!
 //! # Deployment
@@ -45,7 +45,10 @@
 //! let adapter = Adapter::new(FilterKernel::new(48000.0), 48000.0);
 //! let mut effect: Box<dyn Effect> = Box::new(adapter);
 //!
-//! // Embedded / Daisy Seed (direct — no smoothing, ADCs are hardware-filtered)
+//! // Embedded / Daisy Seed — zero-smoothing adapter, as the pedal firmware uses
+//! let effect = Adapter::new_direct(FilterKernel::new(48000.0), 48000.0);
+//!
+//! // Or drive the kernel directly with a typed params struct (no adapter)
 //! let mut kernel = FilterKernel::new(48000.0);
 //! let params = FilterParams::from_knobs(adc_cutoff, adc_resonance, adc_output, adc_type);
 //! let (left, right) = kernel.process_stereo(input_l, input_r, &params);
@@ -73,7 +76,7 @@ use sonido_core::{
 /// |-------|-------|------|-------|---------|
 /// | 0 | `cutoff_hz` | Hz | 20–20000 | 1000.0 |
 /// | 1 | `resonance` | ratio (Q) | 0.1–20.0 | 0.707 |
-/// | 2 | `output_db` | dB | −20–20 | 0.0 |
+/// | 2 | `output_db` | dB | −6–+6 | 0.0 |
 /// | 3 | `filter_type` | index | 0–3 | 0 (LPF) |
 #[derive(Debug, Clone, Copy)]
 pub struct FilterParams {
@@ -107,7 +110,7 @@ impl FilterParams {
     /// # Parameters
     /// - `cutoff`: normalized 0.0–1.0 → 20–20000 Hz (logarithmic)
     /// - `resonance`: normalized 0.0–1.0 → 0.1–20.0 (linear)
-    /// - `output`: normalized 0.0–1.0 → −20–+6 dB (linear)
+    /// - `output`: normalized 0.0–1.0 → −6–+6 dB (linear)
     /// - `filter_type`: normalized 0.0–1.0 → 0–3 (stepped: LPF/HPF/BPF/Notch)
     pub fn from_knobs(cutoff: f32, resonance: f32, output: f32, filter_type: f32) -> Self {
         Self::from_normalized(&[cutoff, resonance, output, filter_type])
@@ -124,6 +127,7 @@ kernel_params! {
                 max: 20000.0,
                 default: 1000.0,
                 step: 1.0,
+                flags: ParamFlags::AUTOMATABLE,
                 ..ParamDescriptor::mix()
             }
             .with_id(ParamId(1200), "flt_cutoff")
@@ -140,6 +144,7 @@ kernel_params! {
                 max: 20.0,
                 default: 0.707,
                 step: 0.01,
+                flags: ParamFlags::AUTOMATABLE,
                 ..ParamDescriptor::mix()
             }
             .with_id(ParamId(1201), "flt_resonance"),

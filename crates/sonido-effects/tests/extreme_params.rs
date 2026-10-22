@@ -1,6 +1,8 @@
-//! Extreme parameter tests for all sonido effects.
+//! Extreme parameter tests for 19 of the 36 sonido effects (the original
+//! core set imported below; `properties.rs` checks finite output across the
+//! full registry with random parameters).
 //!
-//! Verifies that every effect produces finite (non-NaN, non-Inf) output when
+//! Verifies that each of these effects produces finite (non-NaN, non-Inf) output when
 //! parameters are set to their minimum and maximum values, and when running
 //! at extreme sample rates (8 kHz and 192 kHz).
 

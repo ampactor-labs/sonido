@@ -1,8 +1,13 @@
-//! QSPI NOR flash preset storage for the Daisy Seed.
+//! Legacy (`"SOND"`) QSPI preset layout for the Daisy Seed.
 //!
-//! Provides read/write access to the W25Q64JV 8 MB QSPI flash for
-//! persistent preset storage. Uses the last 4 KB sector to avoid the
-//! firmware region (BOOT_SRAM mode loads firmware from the start of flash).
+//! Defines the on-flash layout and an in-RAM [`PresetStore`] that
+//! (de)serializes it; no flash driver is wired up here (see the planned
+//! `QspiPresetStore` at the end of this file), and no shipping example reads
+//! it — the shipping `sonido_pedal` firmware uses compiled-in factory presets. New
+//! work uses the canonical `sonido-patch` sectors read by
+//! [`qspi_flash`](crate::qspi_flash). The layout uses the last 4 KB sector to
+//! avoid the firmware region (BOOT_SRAM mode loads firmware from the start of
+//! flash).
 //!
 //! # Flash Layout
 //!

@@ -17,7 +17,8 @@
 //! cargo objcopy --example tone_out --release -- -O binary -R .sram1_bss tone_out.bin
 //! # Press RESET, then flash within the 2.5s grace period:
 //! dfu-util -a 0 -s 0x90040000:leave -D tone_out.bin
-//! # (Hold BOOT while pressing RESET to extend the grace period indefinitely)
+//! # (Tap RESET, then press BOOT while the LED pulses to extend the window;
+//! #  holding BOOT through RESET starts the STM32 ROM bootloader instead)
 //! ```
 
 #![no_std]
@@ -32,6 +33,12 @@ use panic_probe as _;
 
 use sonido_daisy::{ClockProfile, SAMPLE_RATE, f32_to_u24, heartbeat, led::UserLed};
 
+// The sonido_daisy library links `alloc`, so every binary needs a global
+// allocator even if, like this one, it never allocates. 256 KB of D2 SRAM2+3,
+// clear of the SAI DMA buffers in SRAM1 (0x3000_0000).
+#[global_allocator]
+static HEAP: embedded_alloc::LlffHeap = embedded_alloc::LlffHeap::empty();
+
 /// Phase increment per sample for 440 Hz at 48 kHz.
 ///
 /// `2π × 440 / 48000 ≈ 0.05759586`
@@ -40,6 +47,13 @@ const PHASE_INC: f32 = 2.0 * PI * 440.0 / SAMPLE_RATE;
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
     sonido_daisy::enable_d2_sram();
+
+    #[allow(unsafe_code)]
+    // SAFETY: called once, before any allocation; 0x3000_8000..+256 KB is D2
+    // SRAM2+3 (clock enabled just above), used by nothing else here.
+    unsafe {
+        HEAP.init(0x3000_8000, 256 * 1024);
+    }
 
     let config = sonido_daisy::rcc_config(ClockProfile::Performance);
     let p = hal::init(config);

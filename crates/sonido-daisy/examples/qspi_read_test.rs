@@ -1,5 +1,5 @@
-//! QSPI flash read probe — the first hardware-validation step for the patch
-//! player.
+//! QSPI flash read probe — the first hardware-validation step for loading
+//! patches from flash (`patch_loader`).
 //!
 //! Confirms the on-board W25Q64 responds (JEDEC id `EF 40 17`), then reads patch
 //! slot 0 and reports whether it decodes. Flash a patch there first with the GUI

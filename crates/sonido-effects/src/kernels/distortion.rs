@@ -2,8 +2,8 @@
 //!
 //! `DistortionKernel` owns DSP state (filters, ADAA processors). Parameters
 //! are received via `&DistortionParams` each sample. Deployed via
-//! [`Adapter`](sonido_core::kernel::Adapter) for desktop/plugin, or called
-//! directly on embedded targets.
+//! [`Adapter`](sonido_core::kernel::Adapter) for desktop/plugin, or via `Adapter::new_direct`
+//! (no smoothing) on embedded targets.
 //!
 //! # Signal Flow
 //!
@@ -20,7 +20,10 @@
 //! let adapter = Adapter::new(DistortionKernel::new(48000.0), 48000.0);
 //! let mut effect: Box<dyn Effect> = Box::new(adapter);
 //!
-//! // Embedded / Daisy Seed (direct — no smoothing, ADCs are hardware-filtered)
+//! // Embedded / Daisy Seed — zero-smoothing adapter, as the pedal firmware uses
+//! let effect = Adapter::new_direct(DistortionKernel::new(48000.0), 48000.0);
+//!
+//! // Or drive the kernel directly with a typed params struct (no adapter)
 //! let mut kernel = DistortionKernel::new(48000.0);
 //! let params = DistortionParams::from_knobs(adc_drive, adc_tone, adc_output, adc_shape, adc_mix, adc_dynamics);
 //! let (left, right) = kernel.process_stereo(input_l, input_r, &params);
@@ -77,7 +80,7 @@ const FOLDBACK_THRESHOLD: f32 = 0.8;
 /// |-------|-------|------|-------|---------|
 /// | 0 | `drive_db` | dB | 0–40 | 8.0 |
 /// | 1 | `tone_db` | dB | −12–12 | 0.0 |
-/// | 2 | `output_db` | dB | −20–20 | 0.0 |
+/// | 2 | `output_db` | dB | −24–+6 | 0.0 |
 /// | 3 | `shape` | index | 0–3 | 0 (SoftClip) |
 /// | 4 | `mix_pct` | % | 0–100 | 100.0 |
 /// | 5 | `dynamics_pct` | % | 0–100 | 0.0 |
@@ -87,7 +90,8 @@ pub struct DistortionParams {
     pub drive_db: f32,
     /// Peaking EQ gain at 1 kHz, in decibels.
     pub tone_db: f32,
-    /// Output level, in decibels.
+    /// Output level, in decibels. Range: −24.0 to +6.0 dB (wider cut than the
+    /// shared −6..+6 output trim).
     pub output_db: f32,
     /// Waveshaping algorithm: 0=SoftClip, 1=HardClip, 2=Foldback, 3=Asymmetric.
     pub shape: f32,
@@ -150,7 +154,8 @@ kernel_params! {
         // Wider negative trim than the shared output_param_descriptor (-6..+6) so the
         // user can fully attenuate the saturator's makeup-gain boost when drive is high.
         [2] ParamDescriptor::gain_db("Output", "Out", -24.0, 6.0, 0.0)
-                .with_id(ParamId(202), "dist_output"),
+                .with_id(ParamId(202), "dist_output")
+                .with_flags(ParamFlags::AUTOMATABLE.union(ParamFlags::MACRO_EXCLUDE)),
             smoothing: SmoothingStyle::Standard, // output level
             get: this.output_db,
             set: |v| this.output_db = v;
@@ -167,7 +172,8 @@ kernel_params! {
         [4] ParamDescriptor::custom("Mix", "Mix", 0.0, 100.0, 100.0)
                 .with_unit(ParamUnit::Percent)
                 .with_step(1.0)
-                .with_id(ParamId(204), "dist_mix"),
+                .with_id(ParamId(204), "dist_mix")
+                .with_flags(ParamFlags::AUTOMATABLE.union(ParamFlags::MACRO_EXCLUDE)),
             smoothing: SmoothingStyle::Standard, // mix
             get: this.mix_pct,
             set: |v| this.mix_pct = v;

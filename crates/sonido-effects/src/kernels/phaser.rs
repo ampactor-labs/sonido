@@ -3,8 +3,8 @@
 //! `PhaserKernel` owns DSP state (allpass arrays, LFOs, feedback samples,
 //! tempo manager, coefficient decimation counter). Parameters are received via
 //! `&PhaserParams` each sample. Deployed via
-//! [`Adapter`](sonido_core::kernel::Adapter) for desktop/plugin, or called
-//! directly on embedded targets.
+//! [`Adapter`](sonido_core::kernel::Adapter) for desktop/plugin, or via `Adapter::new_direct`
+//! (no smoothing) on embedded targets.
 //!
 //! # Signal Flow
 //!
@@ -42,9 +42,14 @@
 //! let adapter = Adapter::new(PhaserKernel::new(48000.0), 48000.0);
 //! let mut effect: Box<dyn Effect> = Box::new(adapter);
 //!
-//! // Embedded / Daisy Seed (direct — no smoothing, ADCs are hardware-filtered)
+//! // Embedded / Daisy Seed — zero-smoothing adapter, as the pedal firmware uses
+//! let effect = Adapter::new_direct(PhaserKernel::new(48000.0), 48000.0);
+//!
+//! // Or drive the kernel directly with a typed params struct (no adapter)
 //! let mut kernel = PhaserKernel::new(48000.0);
-//! let params = PhaserParams::from_knobs(adc_rate, adc_depth, adc_stg, adc_fb, adc_mix);
+//! let params = PhaserParams::from_knobs(
+//!     adc_rate, adc_depth, adc_stg, adc_fb, adc_mix, adc_min_freq, adc_max_freq,
+//! );
 //! let (left, right) = kernel.process_stereo(input_l, input_r, &params);
 //! ```
 
@@ -160,7 +165,7 @@ impl FirstOrderAllpass {
 /// | 6 | `max_freq_hz` | Hz | 200–20000 | 4000.0 |
 /// | 7 | `sync` | index | 0–1 (Off/On) | 0.0 |
 /// | 8 | `division` | index | 0–11 (note division) | 3.0 |
-/// | 9 | `output_db` | dB | −20–+6 | 0.0 |
+/// | 9 | `output_db` | dB | −6–+6 | 0.0 |
 /// | 10 | `lfo_phase` | 0–1 | READ_ONLY diagnostic | 0.0 |
 #[derive(Debug, Clone, Copy)]
 pub struct PhaserParams {
@@ -205,7 +210,7 @@ pub struct PhaserParams {
     pub division: f32,
     /// Output level in decibels.
     ///
-    /// Range: −20 to +6 dB. Applied after wet/dry mix.
+    /// Range: −6 to +6 dB. Applied after wet/dry mix.
     pub output_db: f32,
 
     /// Current LFO phase (0.0–1.0). READ_ONLY diagnostic — written by the
@@ -264,7 +269,7 @@ impl PhaserParams {
 
 kernel_params! {
     PhaserParams, this {
-        // Index 0: Rate — must match classic Phaser impl_params! ParamId(900)
+        // Index 0: Rate — must match original pre-kernel Phaser impl_params! ParamId(900)
         [0] ParamDescriptor::rate_hz(0.05, 5.0, 0.3).with_id(ParamId(900), "phsr_rate"),
             smoothing: SmoothingStyle::Standard, // rate — LFO frequency, gradual feel
             get: this.rate,
@@ -406,7 +411,7 @@ impl PhaserKernel {
     /// Create a new phaser kernel at the given sample rate.
     ///
     /// The right-channel LFO is initialised with a 0.25 phase offset
-    /// (90° — matching the classic `Phaser::new()` behaviour).
+    /// (90° — matching the original pre-kernel `Phaser::new()` behaviour).
     ///
     /// # Parameters
     ///

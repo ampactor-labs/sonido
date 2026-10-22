@@ -1121,7 +1121,7 @@ mod tests {
         engine.clear();
         assert!(engine.is_empty());
         assert_eq!(engine.slot_count(), 0);
-        assert!(engine.effect_ids().is_empty());
+        assert_eq!(engine.effect_ids().len(), 0);
 
         // Verify passthrough still works.
         let input = [1.0; 4];
@@ -1497,7 +1497,7 @@ mod tests {
     fn test_snapshot_empty_chain() {
         let engine = GraphEngine::new_linear(48000.0, 256);
         let snap = engine.snapshot();
-        assert!(snap.entries.is_empty());
+        assert_eq!(snap.entries.len(), 0);
     }
 
     #[test]

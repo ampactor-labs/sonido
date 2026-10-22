@@ -537,7 +537,7 @@ mod tests {
         assert_eq!(meter.width, 24.0);
         assert_eq!(meter.height, 120.0);
         assert!(!meter.horizontal);
-        assert!(meter.label.is_empty());
+        assert_eq!(meter.label, "");
     }
 
     #[test]

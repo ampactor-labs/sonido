@@ -394,7 +394,7 @@ mod tests {
     fn test_mapper_new() {
         let mapper = ControlMapper::<8>::new();
         assert_eq!(mapper.len(), 0);
-        assert!(mapper.is_empty());
+        assert_eq!(mapper.len(), 0);
         assert_eq!(mapper.capacity(), 8);
     }
 
@@ -406,7 +406,7 @@ mod tests {
         assert!(mapper.map(ControlId::hardware(1), 1));
 
         assert_eq!(mapper.len(), 2);
-        assert!(!mapper.is_empty());
+        assert_ne!(mapper.len(), 0);
 
         assert_eq!(mapper.get_param_index(ControlId::hardware(0)), Some(0));
         assert_eq!(mapper.get_param_index(ControlId::hardware(1)), Some(1));
@@ -478,7 +478,7 @@ mod tests {
 
         mapper.clear();
         assert_eq!(mapper.len(), 0);
-        assert!(mapper.is_empty());
+        assert_eq!(mapper.len(), 0);
         assert_eq!(mapper.get_param_index(ControlId::hardware(0)), None);
     }
 
@@ -560,7 +560,7 @@ mod tests {
     #[test]
     fn test_mapper_default() {
         let mapper = ControlMapper::<8>::default();
-        assert!(mapper.is_empty());
+        assert_eq!(mapper.len(), 0);
     }
 
     #[test]

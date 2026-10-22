@@ -1,9 +1,13 @@
-//! Arcade CRT visual theme for the Sonido GUI.
+//! The Sonido design system's tokens: one theme for every Sonido GUI.
 //!
 //! All colors, sizing, glow parameters, and scanline config live in
-//! [`SonidoTheme`]. Widgets read this from `egui::Context::data()`.
-//! The theme produces a CRT phosphor aesthetic: amber-dominant colors,
-//! bloom/glow on active elements, void backgrounds, and scanline textures.
+//! [`SonidoTheme`]. Widgets read it from `egui::Context::data()`.
+//!
+//! The look is a vector-display arcade cabinet at night: a violet-black void,
+//! neon phosphor traces with a white-hot core, and one accent per effect
+//! [`Family`] so every plugin reads as part of one set while telling you what
+//! kind of effect it is at a glance. `docs/DESIGN_SYSTEM.md` is the written
+//! spec; the values here are the source of truth.
 
 use egui::{
     Color32, Context, CornerRadius, FontDefinitions, FontFamily, Id, Stroke, Style, Vec2, Visuals,
@@ -48,10 +52,113 @@ pub struct ThemeColors {
     pub dim: Color32,
     /// Background — the void everything glows out of.
     pub void: Color32,
-    /// Primary text.
+    /// Primary text: values and readouts (≥ 14:1 on every surface).
     pub text_primary: Color32,
-    /// Secondary/muted text.
+    /// Secondary text: labels (≥ 7:1 on every surface).
     pub text_secondary: Color32,
+    /// Tertiary text: decoration and non-essential hints (≥ 3.9:1).
+    pub text_dim: Color32,
+    /// Raised surface: panels, the control deck.
+    pub panel: Color32,
+    /// Inset / hovered surface: knob bodies, chips.
+    pub panel_hi: Color32,
+    /// Hairlines and bezels.
+    pub line: Color32,
+}
+
+/// Effect family: the design system's color identity per effect category.
+///
+/// Each family has an accent (its phosphor) and a partner (the second stop of
+/// its sunset gradient). Structure is identical across families; only the
+/// light changes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Family {
+    /// Distortion, saturation, amps — HEAT, flame orange.
+    Heat,
+    /// Dynamics — VOLT, gold.
+    Volt,
+    /// Modulation — FLUX, magenta.
+    Flux,
+    /// Delay, reverb, loopers — ECHO, violet.
+    Echo,
+    /// Filters and EQ — WAVE, cyan.
+    Wave,
+    /// Utility — LINE, acid green.
+    Line,
+    /// A whole rig (the graph player) — RIG, chrome lavender over magenta.
+    Rig,
+}
+
+impl Family {
+    /// Every effect family, in display order ([`Family::Rig`] is not an
+    /// effect category, so it is not listed).
+    pub const ALL: [Self; 6] = [
+        Self::Heat,
+        Self::Volt,
+        Self::Flux,
+        Self::Echo,
+        Self::Wave,
+        Self::Line,
+    ];
+
+    /// The family of a registry effect category.
+    pub fn from_category(category: sonido_registry::EffectCategory) -> Self {
+        use sonido_registry::EffectCategory as C;
+        match category {
+            C::Distortion => Self::Heat,
+            C::Dynamics => Self::Volt,
+            C::Modulation => Self::Flux,
+            C::TimeBased => Self::Echo,
+            C::Filter => Self::Wave,
+            C::Utility => Self::Line,
+        }
+    }
+
+    /// The family of a registry effect ID ([`Family::Line`] if unknown).
+    pub fn of_effect(effect_id: &str) -> Self {
+        sonido_registry::EffectRegistry::new()
+            .descriptor(effect_id)
+            .map_or(Self::Line, |d| Self::from_category(d.category))
+    }
+
+    /// The family's phosphor: knob rings, its marquee, its grid.
+    pub fn accent(self) -> Color32 {
+        match self {
+            Self::Heat => Color32::from_rgb(0xFF, 0x6A, 0x2B),
+            Self::Volt => Color32::from_rgb(0xFF, 0xC5, 0x3D),
+            Self::Flux => Color32::from_rgb(0xFF, 0x4F, 0xD8),
+            Self::Echo => Color32::from_rgb(0xA2, 0x7B, 0xFF),
+            Self::Wave => Color32::from_rgb(0x36, 0xE2, 0xFF),
+            Self::Line => Color32::from_rgb(0x8C, 0xFF, 0x5A),
+            Self::Rig => Color32::from_rgb(0xE2, 0xD9, 0xFF),
+        }
+    }
+
+    /// Second stop of the family's sunset gradient (sun, horizon).
+    pub fn partner(self) -> Color32 {
+        match self {
+            Self::Heat => Color32::from_rgb(0xFF, 0x2E, 0x88),
+            Self::Volt => Color32::from_rgb(0xFF, 0x6A, 0x2B),
+            Self::Flux => Color32::from_rgb(0x7B, 0x5C, 0xFF),
+            Self::Echo => Color32::from_rgb(0x36, 0xE2, 0xFF),
+            Self::Wave => Color32::from_rgb(0x7B, 0x5C, 0xFF),
+            Self::Line => Color32::from_rgb(0x36, 0xE2, 0xFF),
+            Self::Rig => Color32::from_rgb(0xFF, 0x4F, 0xD8),
+        }
+    }
+
+    /// Four-letter zone name shown in the cabinet's marquee.
+    pub fn zone(self) -> &'static str {
+        match self {
+            Self::Heat => "HEAT",
+            Self::Volt => "VOLT",
+            Self::Flux => "FLUX",
+            Self::Echo => "ECHO",
+            Self::Wave => "WAVE",
+            Self::Line => "LINE",
+            Self::Rig => "RIG",
+        }
+    }
 }
 
 /// Sizing constants for layout consistency.
@@ -135,19 +242,24 @@ pub struct ThemeLayout {
 
 impl Default for ThemeColors {
     fn default() -> Self {
+        // Sonido Night: neon phosphors on a violet-black void. Contrast ratios
+        // (WCAG, against `panel`) are in docs/DESIGN_SYSTEM.md.
         Self {
-            // Polybius arcade CRT phosphors — saturated, high-contrast
-            amber: Color32::from_rgb(255, 176, 32),
-            green: Color32::from_rgb(32, 255, 96),
-            cyan: Color32::from_rgb(32, 210, 255),
-            red: Color32::from_rgb(255, 48, 48),
-            magenta: Color32::from_rgb(255, 48, 160),
-            yellow: Color32::from_rgb(255, 210, 32),
-            purple: Color32::from_rgb(160, 80, 255),
-            dim: Color32::from_rgb(28, 28, 38),
-            void: Color32::from_rgb(4, 4, 8),
-            text_primary: Color32::from_rgb(220, 220, 228),
-            text_secondary: Color32::from_rgb(100, 115, 120),
+            amber: Color32::from_rgb(0xFF, 0xC5, 0x3D),
+            green: Color32::from_rgb(0x3D, 0xFF, 0x9A),
+            cyan: Color32::from_rgb(0x36, 0xE2, 0xFF),
+            red: Color32::from_rgb(0xFF, 0x2D, 0x55),
+            magenta: Color32::from_rgb(0xFF, 0x4F, 0xD8),
+            yellow: Color32::from_rgb(0xFF, 0xE1, 0x4D),
+            purple: Color32::from_rgb(0xA2, 0x7B, 0xFF),
+            dim: Color32::from_rgb(0x24, 0x20, 0x42),
+            void: Color32::from_rgb(0x07, 0x06, 0x0E),
+            text_primary: Color32::from_rgb(0xF2, 0xEE, 0xFF),
+            text_secondary: Color32::from_rgb(0xAB, 0xA5, 0xCF),
+            text_dim: Color32::from_rgb(0x7A, 0x74, 0xA3),
+            panel: Color32::from_rgb(0x10, 0x0E, 0x21),
+            panel_hi: Color32::from_rgb(0x1B, 0x18, 0x36),
+            line: Color32::from_rgb(0x2E, 0x29, 0x52),
         }
     }
 }
@@ -305,18 +417,28 @@ impl SonidoTheme {
         visuals.widgets.noninteractive.bg_fill = self.colors.void;
         visuals.widgets.noninteractive.fg_stroke = Stroke::new(1.0_f32, self.colors.text_secondary);
         visuals.widgets.noninteractive.corner_radius = CornerRadius::same(4);
+        // egui fades disabled widgets toward this color: a mid-tone keeps
+        // disabled labels readable (≈4:1) instead of sinking into the void.
+        visuals.widgets.noninteractive.weak_bg_fill = self.colors.text_dim;
+        visuals.widgets.noninteractive.bg_stroke = Stroke::new(1.0_f32, self.colors.line);
 
         visuals.widgets.inactive.bg_fill = self.colors.dim;
         visuals.widgets.inactive.fg_stroke = Stroke::new(1.0_f32, self.colors.text_primary);
         visuals.widgets.inactive.corner_radius = CornerRadius::same(4);
+        visuals.widgets.inactive.weak_bg_fill = self.colors.panel_hi;
+        visuals.widgets.inactive.bg_stroke = Stroke::new(1.0_f32, self.colors.line);
 
-        visuals.widgets.hovered.bg_fill = Color32::from_rgb(35, 30, 15);
+        visuals.widgets.hovered.bg_fill = self.colors.panel_hi;
         visuals.widgets.hovered.fg_stroke = Stroke::new(1.5_f32, self.colors.amber);
         visuals.widgets.hovered.corner_radius = CornerRadius::same(4);
+        visuals.widgets.hovered.weak_bg_fill = self.colors.line;
+        visuals.widgets.hovered.bg_stroke = Stroke::new(1.0_f32, self.colors.amber);
 
-        visuals.widgets.active.bg_fill = Color32::from_rgb(45, 38, 12);
+        visuals.widgets.active.bg_fill = self.colors.line;
         visuals.widgets.active.fg_stroke = Stroke::new(2.0_f32, self.colors.amber);
         visuals.widgets.active.corner_radius = CornerRadius::same(4);
+        visuals.widgets.active.weak_bg_fill = self.colors.dim;
+        visuals.widgets.active.bg_stroke = Stroke::new(1.5_f32, self.colors.amber);
 
         // Selection — amber tint
         visuals.selection.bg_fill = self.colors.amber.gamma_multiply(0.2);

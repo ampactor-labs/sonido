@@ -17,8 +17,8 @@
 //!
 //! # Algorithm
 //!
-//! - **Frequency tracking**: counts samples between rising zero-crossings. Clamped
-//!   to 50–2000 Hz to stay in musical range.
+//! - **Frequency tracking**: counts samples between rising zero-crossings.
+//!   Estimates outside 50–2000 Hz are discarded (the last in-range value holds).
 //! - **Oscillators**: `sin(2π × f × t)` with per-sample phase increment. The fifth
 //!   is at `f × 2^(7/12)` and the octave at `2f`.
 //! - **Detune**: a slow sinusoidal wobble at ~0.5 Hz adds ±detune_cents to each
@@ -33,7 +33,10 @@
 //! let adapter = Adapter::new(DroneKernel::new(48000.0), 48000.0);
 //! let mut effect: Box<dyn Effect> = Box::new(adapter);
 //!
-//! // Embedded / Daisy Seed (direct — no smoothing)
+//! // Embedded / Daisy Seed — zero-smoothing adapter, as the pedal firmware uses
+//! let effect = Adapter::new_direct(DroneKernel::new(48000.0), 48000.0);
+//!
+//! // Or drive the kernel directly with a typed params struct (no adapter)
 //! let mut kernel = DroneKernel::new(48000.0);
 //! let params = DroneParams::default();
 //! let (left, right) = kernel.process_stereo(input_l, input_r, &params);
@@ -45,7 +48,7 @@ extern crate alloc;
 use sonido_core::kernel::KernelParams;
 use sonido_core::kernel::{DspKernel, SmoothingStyle};
 use sonido_core::kernel_params;
-use sonido_core::{ParamDescriptor, ParamId, ParamUnit, fast_db_to_linear};
+use sonido_core::{ParamDescriptor, ParamFlags, ParamId, ParamUnit, fast_db_to_linear};
 
 // ═══════════════════════════════════════════════════════════════════════════
 //  Parameters
@@ -96,6 +99,7 @@ kernel_params! {
                 name: "Root Mix",
                 short_name: "Root",
                 default: 30.0,
+                flags: ParamFlags::AUTOMATABLE,
                 ..ParamDescriptor::mix()
             }
             .with_id(ParamId(3300), "drone_root"),
@@ -107,6 +111,7 @@ kernel_params! {
                 name: "Fifth Mix",
                 short_name: "Fifth",
                 default: 20.0,
+                flags: ParamFlags::AUTOMATABLE,
                 ..ParamDescriptor::mix()
             }
             .with_id(ParamId(3301), "drone_fifth"),
@@ -118,6 +123,7 @@ kernel_params! {
                 name: "Octave Mix",
                 short_name: "Octave",
                 default: 25.0,
+                flags: ParamFlags::AUTOMATABLE,
                 ..ParamDescriptor::mix()
             }
             .with_id(ParamId(3302), "drone_octave"),
@@ -141,7 +147,8 @@ kernel_params! {
             set: |v| this.decay = v;
 
         [5] ParamDescriptor::gain_db("Output", "Out", -60.0, 6.0, 0.0)
-                .with_id(ParamId(3305), "drone_output"),
+                .with_id(ParamId(3305), "drone_output")
+                .with_flags(ParamFlags::AUTOMATABLE.union(ParamFlags::MACRO_EXCLUDE)),
             smoothing: SmoothingStyle::Fast,     // output_db — 5 ms
             get: this.output_db,
             set: |v| this.output_db = v;
@@ -167,7 +174,7 @@ const ENV_ATTACK_S: f32 = 0.005;
 ///
 /// - `osc_phase[i]` stays in `[0, 1)` via modular wrap.
 /// - `detune_phase[i]` stays in `[0, 1)`.
-/// - `detected_freq_hz` is clamped to `[50.0, 2000.0]`.
+/// - `detected_freq_hz` stays in `[50.0, 2000.0]` (out-of-range estimates are ignored).
 /// - `env_gain` is non-negative and bounded by 1.0.
 pub struct DroneKernel {
     /// Audio sample rate in Hz.
@@ -186,6 +193,8 @@ pub struct DroneKernel {
     prev_sample: f32,
     /// One-pole envelope follower output.
     env_follower: f32,
+    /// Last `decay` time constant seen, in seconds; sizes the reported tail.
+    decay_s: f32,
 }
 
 impl DroneKernel {
@@ -203,6 +212,7 @@ impl DroneKernel {
             zc_counter: 0,
             prev_sample: 0.0,
             env_follower: 0.0,
+            decay_s: DroneParams::default().decay,
         }
     }
 
@@ -225,6 +235,7 @@ impl DspKernel for DroneKernel {
     fn process_stereo(&mut self, left: f32, right: f32, params: &DroneParams) -> (f32, f32) {
         let mono = (left + right) * 0.5;
         let sr = self.sample_rate;
+        self.decay_s = params.decay;
 
         // ── Envelope follower (attack fast, decay per params) ──────────────
         let attack_coeff = libm::expf(-1.0 / (ENV_ATTACK_S * sr));
@@ -307,6 +318,12 @@ impl DspKernel for DroneKernel {
     fn set_sample_rate(&mut self, sample_rate: f32) {
         self.sample_rate = sample_rate;
         self.reset();
+    }
+
+    /// The tones sustain on the envelope follower's exponential release, whose
+    /// time constant is `decay`: they fall 60 dB after ln(1000) ≈ 6.9 of them.
+    fn tail_samples(&self) -> usize {
+        (self.decay_s.max(0.001) * 6.9 * self.sample_rate) as usize
     }
 }
 

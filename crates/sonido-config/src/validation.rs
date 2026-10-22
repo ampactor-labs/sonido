@@ -151,12 +151,10 @@ impl EffectValidator {
         // First check effect exists
         self.validate_effect(effect_type)?;
 
-        let params = self
-            .get_params(effect_type)
+        self.get_params(effect_type)
             .ok_or_else(|| ValidationError::UnknownEffect(effect_type.to_string()))?;
 
-        let normalized_name = normalize_param_name(param_name);
-        if params.iter().any(|p| p.name == normalized_name) {
+        if self.lookup(effect_type, param_name).is_some() {
             Ok(())
         } else {
             Err(ValidationError::UnknownParameter {
@@ -176,18 +174,15 @@ impl EffectValidator {
         // First check effect exists
         self.validate_effect(effect_type)?;
 
-        let params = self
-            .get_params(effect_type)
+        self.get_params(effect_type)
             .ok_or_else(|| ValidationError::UnknownEffect(effect_type.to_string()))?;
 
-        let normalized_name = normalize_param_name(param_name);
-        let param = params
-            .iter()
-            .find(|p| p.name == normalized_name)
-            .ok_or_else(|| ValidationError::UnknownParameter {
+        let param = self.lookup(effect_type, param_name).ok_or_else(|| {
+            ValidationError::UnknownParameter {
                 effect: effect_type.to_string(),
                 param: param_name.to_string(),
-            })?;
+            }
+        })?;
 
         if value >= param.min && value <= param.max {
             Ok(())
@@ -215,12 +210,17 @@ impl EffectValidator {
     ///
     /// Returns `None` if the effect or parameter is not found.
     pub fn find_param_index(&mut self, effect_type: &str, param_name: &str) -> Option<usize> {
-        let params = self.get_params(effect_type)?;
-        let normalized_name = normalize_param_name(param_name);
-        params
+        self.lookup(effect_type, param_name).map(|p| p.index)
+    }
+
+    /// The parameter `param_name` names (name, short name or string id; see
+    /// [`ParamDescriptor::matches_key`](sonido_core::ParamDescriptor::matches_key)).
+    fn lookup(&mut self, effect_type: &str, param_name: &str) -> Option<ParamValidationInfo> {
+        let index = self.registry.param_index_by_name(effect_type, param_name)?;
+        self.get_params(effect_type)?
             .iter()
-            .find(|p| p.name == normalized_name)
-            .map(|p| p.index)
+            .find(|p| p.index == index)
+            .cloned()
     }
 
     /// Get parameter info by name for an effect type.
@@ -231,9 +231,7 @@ impl EffectValidator {
         effect_type: &str,
         param_name: &str,
     ) -> Option<ParamValidationInfo> {
-        let params = self.get_params(effect_type)?;
-        let normalized_name = normalize_param_name(param_name);
-        params.iter().find(|p| p.name == normalized_name).cloned()
+        self.lookup(effect_type, param_name)
     }
 
     /// Parse a parameter value from string.

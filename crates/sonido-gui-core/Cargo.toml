@@ -12,6 +12,8 @@ egui = { workspace = true }
 
 # Core types (ParamDescriptor, ParamUnit)
 sonido-core = { workspace = true, features = ["std"] }
+# Effect catalog (names, categories) for family accents and display names
+sonido-registry = { workspace = true, features = ["std"] }
 
 [lints]
 workspace = true

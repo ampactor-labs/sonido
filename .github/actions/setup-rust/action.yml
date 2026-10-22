@@ -22,7 +22,7 @@ runs:
     - name: Install system dependencies
       if: runner.os == 'Linux'
       shell: bash
-      run: sudo apt-get update -qq && sudo apt-get install -y -qq libasound2-dev libudev-dev mold libgl-dev libx11-dev libx11-xcb-dev libxcursor-dev libxrandr-dev libxi-dev libxkbcommon-dev libxext-dev libxfixes-dev libxinerama-dev libxrender-dev libxpresent-dev libxxf86vm-dev libxft-dev libxmu-dev libxss-dev libxtst-dev
+      run: sudo apt-get update -qq && sudo apt-get install -y -qq libasound2-dev mold libgl-dev libx11-dev libx11-xcb-dev libxcursor-dev libxrandr-dev libxi-dev libxkbcommon-dev libxext-dev libxfixes-dev libxinerama-dev libxrender-dev libxpresent-dev libxxf86vm-dev libxft-dev libxmu-dev libxss-dev libxtst-dev
     - uses: actions/cache@v4
       with:
         path: |

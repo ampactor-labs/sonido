@@ -256,10 +256,13 @@ impl ParamFlags {
     pub const MODULATABLE: Self = Self(1 << 4);
     /// Auto-assignment should not bind this parameter to a performance macro.
     ///
-    /// Marks the non-musical controls — output/makeup gain, dry/wet mix, master
-    /// volume — that a macro should skip when it seeds itself from the effects
-    /// in the chain. Advisory only: it constrains automatic mapping and has no
-    /// effect on plugin-host automation, where every parameter stays available.
+    /// Meant for the non-musical controls — output/makeup gain, dry/wet mix,
+    /// master volume — that a macro should skip when it seeds itself from the
+    /// effects in the chain. Set by the shared
+    /// [`output_param_descriptor`](crate::gain::output_param_descriptor) and
+    /// [`mix`](ParamDescriptor::mix) constructors. Advisory only: it constrains automatic mapping
+    /// and has no effect on plugin-host automation, where every parameter
+    /// stays available.
     pub const MACRO_EXCLUDE: Self = Self(1 << 5);
 
     /// Returns `true` if all bits in `other` are set in `self`.
@@ -579,7 +582,11 @@ pub struct ParamDescriptor {
 impl ParamDescriptor {
     /// Standard mix parameter (0–100%, default 50%).
     ///
-    /// Used by most effects with a wet/dry blend control.
+    /// Used by most effects with a wet/dry blend control. Flagged
+    /// [`MACRO_EXCLUDE`](ParamFlags::MACRO_EXCLUDE): a wet/dry blend is not a
+    /// performance control. A descriptor that reuses this as a generic percent
+    /// template (`..ParamDescriptor::mix()` with a new `name`) for a musical
+    /// parameter should set `flags: ParamFlags::AUTOMATABLE`.
     pub const fn mix() -> Self {
         Self {
             name: "Mix",
@@ -592,7 +599,7 @@ impl ParamDescriptor {
             id: ParamId(0),
             string_id: "",
             scale: ParamScale::Linear,
-            flags: ParamFlags::AUTOMATABLE,
+            flags: ParamFlags::AUTOMATABLE.union(ParamFlags::MACRO_EXCLUDE),
             group: "",
             modulation_id: None,
             step_labels: None,
@@ -621,7 +628,7 @@ impl ParamDescriptor {
         }
     }
 
-    /// Standard feedback parameter (5–95%, default 50%).
+    /// Standard feedback parameter (0–95%, default 50%).
     ///
     /// Used by delay-based effects (delay, flanger, chorus).
     /// Range 0–95%, capped at 95% to prevent runaway oscillation.
@@ -1096,10 +1103,14 @@ impl ParamDescriptor {
 
     /// Parses human-readable text back to a parameter value.
     ///
-    /// Handles step labels (case-insensitive match) and numeric values with
-    /// unit suffixes. Auto-converts scaled units (kHz → Hz, s → ms).
+    /// Handles step labels (case-insensitive) and numbers with or without a
+    /// unit suffix, with or without a space, in any case: `-6dB`, `-6 dB`,
+    /// `1.2kHz`, `250 ms`, `1.5 s`, `50%`, `4:1`. kHz becomes Hz, and seconds
+    /// become milliseconds for a millisecond parameter. The result is in the
+    /// parameter's own units and is not clamped.
     ///
-    /// Maps directly to CLAP `text_to_value()` and VST3 string-to-parameter.
+    /// Maps directly to CLAP `text_to_value()` and VST3 string-to-parameter;
+    /// presets and the CLI parse values with it too.
     ///
     /// # Example
     ///
@@ -1108,35 +1119,87 @@ impl ParamDescriptor {
     ///
     /// let desc = ParamDescriptor::gain_db("Gain", "Gain", -60.0, 12.0, 0.0);
     /// assert_eq!(desc.parse_value("-6.0 dB"), Some(-6.0));
+    /// assert_eq!(desc.parse_value("-6dB"), Some(-6.0));
     ///
     /// let desc = ParamDescriptor::rate_hz(20.0, 20000.0, 1000.0);
     /// assert_eq!(desc.parse_value("1.5 kHz"), Some(1500.0));
     /// ```
     pub fn parse_value(&self, text: &str) -> Option<f32> {
+        let text = text.trim();
         if let Some(labels) = self.step_labels
-            && let Some(i) = labels
-                .iter()
-                .position(|l| l.eq_ignore_ascii_case(text.trim()))
+            && let Some(i) = labels.iter().position(|l| l.eq_ignore_ascii_case(text))
         {
             return Some(self.min + i as f32 * self.step.max(1.0));
         }
-        // Strip known suffixes and parse
-        let cleaned = text
-            .trim()
-            .trim_end_matches(" dB")
-            .trim_end_matches(" Hz")
-            .trim_end_matches(" kHz")
-            .trim_end_matches(" ms")
-            .trim_end_matches(" s")
-            .trim_end_matches('%')
-            .trim_end_matches(":1")
-            .trim();
-        let val: f32 = cleaned.parse().ok()?;
-        // Handle kHz → Hz, s → ms conversions
-        if text.contains("kHz") || (text.ends_with(" s") && !text.ends_with(" ms")) {
-            Some(val * 1000.0)
+        let (number, scale) = if let Some(n) = strip_suffix_ci(text, ":1") {
+            (n, 1.0)
+        } else if let Some(n) = strip_suffix_ci(text, "khz") {
+            (n, 1000.0)
+        } else if let Some(n) = strip_suffix_ci(text, "hz")
+            .or_else(|| strip_suffix_ci(text, "db"))
+            .or_else(|| strip_suffix_ci(text, "ms"))
+            .or_else(|| strip_suffix_ci(text, "%"))
+        {
+            (n, 1.0)
+        } else if let Some(n) = strip_suffix_ci(text, "s") {
+            let scale = if self.unit == ParamUnit::Milliseconds {
+                1000.0
+            } else {
+                1.0
+            };
+            (n, scale)
         } else {
-            Some(val)
+            (text, 1.0)
+        };
+        let value: f32 = number.trim().parse().ok()?;
+        Some(value * scale)
+    }
+
+    /// Whether `key` names this parameter: its name, short name or string ID
+    /// (also without the string ID's leading `effect_` prefix), ignoring case,
+    /// spaces, dashes and underscores. `"room_size"`, `"Room Size"` and
+    /// `"reverb_room_size"` all name the reverb's Room Size.
+    ///
+    /// Presets, the CLI and the registry resolve parameter names with this.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use sonido_core::{ParamDescriptor, ParamId};
+    ///
+    /// let desc = ParamDescriptor::custom("Room Size", "Room", 0.0, 100.0, 50.0)
+    ///     .with_id(ParamId(1500), "rev_room_size");
+    /// assert!(desc.matches_key("room_size"));
+    /// assert!(desc.matches_key("ROOM"));
+    /// assert!(desc.matches_key("rev_room_size"));
+    /// assert!(!desc.matches_key("size"));
+    /// ```
+    pub fn matches_key(&self, key: &str) -> bool {
+        let unprefixed = self
+            .string_id
+            .split_once('_')
+            .map_or(self.string_id, |(_, rest)| rest);
+        [self.name, self.short_name, self.string_id, unprefixed]
+            .iter()
+            .any(|candidate| !candidate.is_empty() && loose_eq(candidate, key))
+    }
+}
+
+/// `text` without `suffix`, compared ASCII-case-insensitively.
+fn strip_suffix_ci<'a>(text: &'a str, suffix: &str) -> Option<&'a str> {
+    let cut = text.len().checked_sub(suffix.len())?;
+    (text.is_char_boundary(cut) && text[cut..].eq_ignore_ascii_case(suffix)).then(|| &text[..cut])
+}
+
+/// Equal after lower-casing and dropping spaces, dashes and underscores.
+fn loose_eq(a: &str, b: &str) -> bool {
+    let mut x = a.chars().filter(|c| !matches!(c, ' ' | '-' | '_'));
+    let mut y = b.chars().filter(|c| !matches!(c, ' ' | '-' | '_'));
+    loop {
+        match (x.next(), y.next()) {
+            (None, None) => return true,
+            (Some(p), Some(q)) if p.eq_ignore_ascii_case(&q) => {}
+            _ => return false,
         }
     }
 }
@@ -1534,7 +1597,10 @@ mod tests {
         assert_eq!(desc.id, ParamId(0));
         assert_eq!(desc.string_id, "");
         assert_eq!(desc.scale, ParamScale::Linear);
-        assert_eq!(desc.flags, ParamFlags::AUTOMATABLE);
+        assert_eq!(
+            desc.flags,
+            ParamFlags::AUTOMATABLE.union(ParamFlags::MACRO_EXCLUDE)
+        );
         assert_eq!(desc.group, "");
         assert_eq!(desc.modulation_id, None);
         assert_eq!(desc.step_labels, None);
@@ -1556,6 +1622,31 @@ mod tests {
         // MACRO_EXCLUDE is its own bit — a default (AUTOMATABLE) param is not excluded.
         assert!(!ParamFlags::default().contains(ParamFlags::MACRO_EXCLUDE));
         assert!(!ParamFlags::MACRO_EXCLUDE.contains(ParamFlags::STEPPED));
+    }
+
+    #[test]
+    fn test_mix_and_output_are_macro_excluded() {
+        for desc in [
+            ParamDescriptor::mix(),
+            crate::gain::output_param_descriptor(),
+        ] {
+            assert!(
+                desc.flags.contains(ParamFlags::MACRO_EXCLUDE),
+                "{}",
+                desc.name
+            );
+            assert!(
+                desc.flags.contains(ParamFlags::AUTOMATABLE),
+                "{}",
+                desc.name
+            );
+        }
+        // Musical templates stay eligible for macro assignment.
+        assert!(
+            !ParamDescriptor::depth()
+                .flags
+                .contains(ParamFlags::MACRO_EXCLUDE)
+        );
     }
 
     #[test]

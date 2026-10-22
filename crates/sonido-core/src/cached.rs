@@ -1,9 +1,10 @@
 //! Cached coefficient wrapper with epsilon-threshold change detection.
 //!
 //! [`Cached<T>`] recomputes a value only when its inputs change beyond an
-//! epsilon threshold. This replaces the `NaN`-sentinel coefficient caching
-//! pattern used across filter kernels (preamp, distortion, EQ, gate, filter,
-//! compressor, tape, stage).
+//! epsilon threshold. It replaced the `NaN`-sentinel coefficient caching
+//! pattern in the filter-bearing kernels; 13 kernels use it today (amp,
+//! compressor, deesser, distortion, EQ, filter, gate, multiband compressor,
+//! preamp, shelving EQ, stage, stereo widener, tape).
 //!
 //! # Why not just compare `last_freq != freq`?
 //!

@@ -181,7 +181,7 @@ fn cli_process_single_effect() {
 
     let (loaded, loaded_spec) = sonido_io::read_wav(&output_path).unwrap();
     assert_eq!(loaded_spec.sample_rate, sr as u32);
-    assert!(!loaded.is_empty());
+    assert_ne!(loaded.len(), 0, "written WAV should contain samples");
 }
 
 #[test]
@@ -226,7 +226,7 @@ fn cli_process_chain() {
 
     assert!(output_path.exists());
     let (loaded, _) = sonido_io::read_wav(&output_path).unwrap();
-    assert!(!loaded.is_empty());
+    assert_ne!(loaded.len(), 0, "written WAV should contain samples");
 }
 
 #[test]
@@ -348,7 +348,7 @@ fn cli_generate_tone() {
     assert!(output_path.exists());
 
     let (loaded, spec) = sonido_io::read_wav(&output_path).unwrap();
-    assert!(!loaded.is_empty());
+    assert_ne!(loaded.len(), 0, "written WAV should contain samples");
     // Duration 0.1s at default sample rate should give ~4800 samples
     assert!(loaded.len() > 1000, "tone should have reasonable length");
     assert_eq!(spec.sample_rate, 48000); // default sample rate

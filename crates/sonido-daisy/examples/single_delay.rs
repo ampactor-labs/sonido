@@ -12,7 +12,7 @@
 //! | KNOB_2       | PB1          | Feedback (0–95%)                              |
 //! | KNOB_3       | PA7          | Diffusion (0–100%)                            |
 //! | KNOB_4       | PA6          | Mix / dry-wet (0–100%)                        |
-//! | KNOB_5       | PC1          | Output level (−20 to +6 dB)                   |
+//! | KNOB_5       | PC1          | Output level (−6 to +6 dB)                    |
 //! | KNOB_6       | PC4          | Feedback LP filter (200–20k Hz, log)          |
 //! | TOGGLE_1 up  | PB4          | Mode: Up=Ping-pong                            |
 //! | TOGGLE_1 mid | (neither)    | Mode: Mid=Stereo                              |
@@ -121,7 +121,7 @@ async fn main(spawner: embassy_executor::Spawner) {
                 let feedback = CONTROLS.read_knob(1); // K2: Feedback
                 let diffusion = CONTROLS.read_knob(2); // K3: Diffusion
                 let mix = CONTROLS.read_knob(3); // K4: Mix
-                let out_level = CONTROLS.read_knob(4); // K5: Output (−20 to +6 dB)
+                let out_level = CONTROLS.read_knob(4); // K5: Output (−6 to +6 dB)
                 let fb_lp = CONTROLS.read_knob(5); // K6: Feedback LP filter
 
                 // Toggle 1: ping-pong mode (UP=ping-pong, MID/DN=stereo)

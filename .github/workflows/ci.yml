@@ -13,7 +13,7 @@ env:
   # Build deps for the desktop GUI (eframe/winit/cpal) on Linux runners.
   # macOS and Windows link system frameworks (CoreAudio/WASAPI) — nothing to install.
   SYSTEM_DEPS: >-
-    libasound2-dev libudev-dev libgl-dev libx11-dev libx11-xcb-dev
+    libasound2-dev libgl-dev libx11-dev libx11-xcb-dev
     libxcursor-dev libxrandr-dev libxi-dev libxkbcommon-dev libxext-dev
     libxfixes-dev libwayland-dev
 

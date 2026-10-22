@@ -13,7 +13,7 @@
 //!
 //! # Architecture
 //!
-//! ADC and GPIO reads run in [`hothouse_control_task`] (50 Hz), NOT inside the
+//! ADC and GPIO reads run in [`hothouse_control_task`] (100 Hz), NOT inside the
 //! audio DMA callback. Shared state flows through a lock-free [`HothouseBuffer`].
 //! This matches libDaisy's design where `seed.adc` runs via DMA independently
 //! of audio.

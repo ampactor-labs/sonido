@@ -138,13 +138,17 @@ impl EffectChain {
         effect: &mut Box<dyn EffectWithParams + Send>,
         config: &EffectConfig,
     ) -> Result<(), ConfigError> {
+        // Same resolution everywhere (ParamDescriptor::matches_key /
+        // parse_value): name, short name or string id; values in the
+        // parameter's own units, clamped to its range.
         for (param_name, param_value) in &config.params {
-            if let Some(value) = crate::effect_config::parse_param_value(param_value)
-                && let Some(idx) = self
-                    .registry
-                    .param_index_by_name(config.canonical_type(), param_name)
+            if let Some(idx) = self
+                .registry
+                .param_index_by_name(config.canonical_type(), param_name)
+                && let Some(desc) = effect.effect_param_info(idx)
+                && let Some(value) = desc.parse_value(param_value)
             {
-                effect.effect_set_param(idx, value);
+                effect.effect_set_param(idx, value.clamp(desc.min, desc.max));
             }
         }
 
@@ -314,7 +318,7 @@ mod tests {
     #[test]
     fn test_empty_chain() {
         let chain = EffectChain::new(48000.0);
-        assert!(chain.is_empty());
+        assert_eq!(chain.len(), 0);
         assert_eq!(chain.len(), 0);
         assert_eq!(chain.sample_rate(), 48000.0);
     }
@@ -473,7 +477,7 @@ mod tests {
         chain.add_effect("reverb").unwrap();
 
         chain.clear();
-        assert!(chain.is_empty());
+        assert_eq!(chain.len(), 0);
     }
 
     #[test]

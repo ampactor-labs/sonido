@@ -3,7 +3,7 @@
 //! `VibratoKernel` owns DSP state (6 x 2 `VibratoUnit` structs, each with
 //! its own delay line and LFO). Parameters are received via `&VibratoParams`
 //! each sample. Deployed via [`Adapter`](sonido_core::kernel::Adapter) for
-//! desktop/plugin, or called directly on embedded targets.
+//! desktop/plugin, or via `Adapter::new_direct` (no smoothing) on embedded targets.
 //!
 //! # Algorithm
 //!
@@ -44,7 +44,10 @@
 //! let adapter = Adapter::new(VibratoKernel::new(48000.0), 48000.0);
 //! let mut effect: Box<dyn Effect> = Box::new(adapter);
 //!
-//! // Embedded / Daisy Seed (direct — no smoothing, ADCs are hardware-filtered)
+//! // Embedded / Daisy Seed — zero-smoothing adapter, as the pedal firmware uses
+//! let effect = Adapter::new_direct(VibratoKernel::new(48000.0), 48000.0);
+//!
+//! // Or drive the kernel directly with a typed params struct (no adapter)
 //! let mut kernel = VibratoKernel::new(48000.0);
 //! let params = VibratoParams::from_knobs(0.5, 1.0, 0.5);
 //! let (left, right) = kernel.process_stereo(input_l, input_r, &params);
@@ -53,8 +56,8 @@
 use sonido_core::kernel::{DspKernel, KernelParams, SmoothingStyle};
 use sonido_core::kernel_params;
 use sonido_core::{
-    FixedDelayLine, Lfo, LfoWaveform, ParamDescriptor, ParamId, ParamUnit, fast_db_to_linear,
-    wet_dry_mix, wet_dry_mix_stereo,
+    FixedDelayLine, Lfo, LfoWaveform, ParamDescriptor, ParamFlags, ParamId, ParamUnit,
+    fast_db_to_linear, wet_dry_mix, wet_dry_mix_stereo,
 };
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -169,8 +172,8 @@ impl VibratoUnit {
 /// | Index | Field | Unit | Range | Default |
 /// |-------|-------|------|-------|---------|
 /// | 0 | `depth_pct` | % | 0–400 | 100.0 |
-/// | 1 | `mix_pct` | % | 0–100 | 50.0 |
-/// | 2 | `output_db` | dB | −20–20 | 0.0 |
+/// | 1 | `mix_pct` | % | 0–100 | 100.0 |
+/// | 2 | `output_db` | dB | −6–+6 | 0.0 |
 #[derive(Debug, Clone, Copy)]
 pub struct VibratoParams {
     /// Master vibrato depth as a percentage of the full scale (0–400%).
@@ -182,12 +185,12 @@ pub struct VibratoParams {
     /// Wet/dry mix as a percentage (0% = fully dry, 100% = fully wet).
     pub mix_pct: f32,
 
-    /// Output level in decibels (−20 to +20 dB).
+    /// Output level in decibels (−6 to +6 dB).
     pub output_db: f32,
 }
 
 impl Default for VibratoParams {
-    /// Defaults match the classic `MultiVibrato` effect's descriptor defaults exactly.
+    /// Defaults match the original pre-kernel `MultiVibrato` effect's descriptor defaults exactly.
     fn default() -> Self {
         Self {
             depth_pct: 100.0,
@@ -207,7 +210,7 @@ impl VibratoParams {
     ///
     /// - `depth` — 0.0 → 0 %, 1.0 → 400 %
     /// - `mix` — 0.0 → 0 %, 1.0 → 100 %
-    /// - `output` — 0.0 → −20 dB, 1.0 → +6 dB
+    /// - `output` — 0.0 → −6 dB, 1.0 → +6 dB
     pub fn from_knobs(depth: f32, mix: f32, output: f32) -> Self {
         Self::from_normalized(&[depth, mix, output])
     }
@@ -223,6 +226,7 @@ kernel_params! {
                 max: 400.0,
                 default: 100.0,
                 step: 1.0,
+                flags: ParamFlags::AUTOMATABLE,
                 ..ParamDescriptor::mix()
             }
             .with_id(ParamId(1300), "vib_depth"),
@@ -512,7 +516,7 @@ mod tests {
     }
 
     /// The adapter's `ParameterInfo` must expose the correct count and `ParamId`s,
-    /// matching the classic `MultiVibrato` effect's parameter contract exactly.
+    /// matching the original pre-kernel `MultiVibrato` effect's parameter contract exactly.
     #[test]
     fn adapter_param_info_matches() {
         let adapter = Adapter::new(VibratoKernel::new(48000.0), 48000.0);
@@ -523,7 +527,7 @@ mod tests {
             "Adapter param count must match VibratoParams::COUNT"
         );
 
-        // Verify ParamIds match the classic MultiVibrato effect exactly
+        // Verify ParamIds match the original pre-kernel MultiVibrato effect exactly
         // (plugin/preset API contract — these must not change).
         let depth_info = adapter.param_info(0).expect("Depth param must exist");
         let mix_info = adapter.param_info(1).expect("Mix param must exist");

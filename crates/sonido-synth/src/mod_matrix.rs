@@ -179,9 +179,7 @@ impl<const N: usize> ModulationMatrix<N> {
 
     /// Clear all routes.
     pub fn clear(&mut self) {
-        for route in &mut self.routes {
-            *route = None;
-        }
+        self.routes.fill(None);
         self.route_count = 0;
     }
 
