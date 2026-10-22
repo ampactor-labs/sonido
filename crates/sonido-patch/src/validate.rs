@@ -136,6 +136,28 @@ fn lookup(table: &[(u16, u32)], uid: u16) -> Option<u32> {
     table.iter().find(|(u, _)| *u == uid).map(|(_, v)| *v)
 }
 
+/// Validate `patch` for the Daisy pedal: the effects its firmware carries and
+/// the one CPU and memory rule ([`sonido_platform::cycle_table`]) the pedal
+/// itself enforces. The editor's export and `sonido pedal push` both check
+/// rigs with this.
+pub fn validate_for_daisy(patch: &Patch) -> Vec<Finding> {
+    use sonido_platform::cycle_table;
+    let allowed: Vec<u16> = cycle_table::EFFECT_CYCLES.iter().map(|(u, _)| *u).collect();
+    validate_for_pedal(
+        patch,
+        &PedalLimits {
+            allowed_uids: &allowed,
+            cycle_table: cycle_table::EFFECT_CYCLES,
+            sdram_table: cycle_table::EFFECT_SDRAM,
+            cycle_budget: cycle_table::CYCLE_BUDGET_PER_BLOCK,
+            chain_fraction: cycle_table::CHAIN_FRACTION,
+            warn_fraction: cycle_table::WARN_FRACTION,
+            node_overhead: cycle_table::NODE_OVERHEAD_CYCLES,
+            sdram_budget: cycle_table::SDRAM_BUDGET_BYTES,
+        },
+    )
+}
+
 /// Pedal-fit validation: structural checks plus effect-set, CPU, and memory
 /// budgets. Call before flashing or exporting a pedal patch.
 ///

@@ -52,6 +52,9 @@ pub enum Request {
     ReadJam = 0x06,
     /// Reply [`Reply::Status`].
     Status = 0x07,
+    /// Reply [`Reply::Ok`], then restart into the Daisy bootloader (USB DFU)
+    /// for a firmware update.
+    Bootloader = 0x08,
 }
 
 impl Request {
@@ -65,6 +68,7 @@ impl Request {
             0x05 => Self::Activate,
             0x06 => Self::ReadJam,
             0x07 => Self::Status,
+            0x08 => Self::Bootloader,
             _ => return None,
         })
     }

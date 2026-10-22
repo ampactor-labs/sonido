@@ -9,13 +9,14 @@
 //!
 //! # Knobs
 //!
-//! Every rig maps its six macros the same way where it can: K1–K3 are the
-//! rig's own controls, K4 input gain (±12 dB, 0 at noon), K5 morph time (how
-//! long the footswitch ramp takes in Morph mode: 0.2 s, 1 s at noon, 5 s), K6
-//! master volume (±12 dB around the rig's level-matching trim, generated
-//! into [`trims`] by this crate's `calibrate` example). The A/B
-//! morph moves the parameters the macros leave alone, so a knob never fights
-//! the morph.
+//! Every rig maps its six macros the pedal's way: the top row is levels, the
+//! bottom row is the sound (see `sonido_platform::knob_mapping::knob_map`).
+//! K1 input gain (±12 dB, 0 at noon), K2 morph time (how long a glide
+//! between A and B takes: 0.2 s, 1 s at noon, 5 s), K3 master volume (±12 dB
+//! around the rig's level-matching trim, generated into [`trims`] by this
+//! crate's `calibrate` example), and K4–K6 the rig's own three controls. The
+//! A/B morph moves the parameters the macros leave alone, so a knob never
+//! fights the morph.
 
 pub mod trims;
 
@@ -101,7 +102,8 @@ impl<'r> Rig<'r> {
         }
     }
 
-    /// Macro `k` (0-based) moves node `node`'s `param` across `min..=max`.
+    /// Macro `k` (0-based; 3–5 are the rig's own K4–K6) moves node `node`'s
+    /// `param` across `min..=max`.
     fn knob(
         &mut self,
         k: usize,
@@ -129,7 +131,7 @@ impl<'r> Rig<'r> {
         };
     }
 
-    /// K4–K6 (see the crate docs); `trim_db` is the master volume at noon.
+    /// K1–K3 (see the crate docs); `trim_db` is the master volume at noon.
     fn finish(mut self, trim_db: f32) -> Patch {
         let global = |label: &str, target, min, max, curve| MacroDef {
             name: String::from(label),
@@ -140,7 +142,7 @@ impl<'r> Rig<'r> {
                 curve,
             }],
         };
-        self.patch.macros[3] = global(
+        self.patch.macros[0] = global(
             "Input",
             GlobalParam::InputGain,
             -12.0,
@@ -148,14 +150,14 @@ impl<'r> Rig<'r> {
             MorphCurve::Linear,
         );
         // Speed is sweeps per second: 5 → 0.2 s, 1 at noon (geometric), 0.2 → 5 s.
-        self.patch.macros[4] = global(
+        self.patch.macros[1] = global(
             "Morph Time",
             GlobalParam::MorphSpeed,
             5.0,
             0.2,
             MorphCurve::Logarithmic,
         );
-        self.patch.macros[5] = global(
+        self.patch.macros[2] = global(
             "Master",
             GlobalParam::MasterVolume,
             trim_db - 12.0,
@@ -208,9 +210,9 @@ fn shimmer_cathedral(r: &EffectRegistry) -> Patch {
     );
     rig.wire(&[Input, Split(0), pitch, plate, Merge(0), Output]);
     rig.wire(&[Split(0), delay, Merge(0)]);
-    rig.knob(0, "Shimmer", pitch, "Mix", (0.0, 100.0), Linear);
-    rig.knob(1, "Wash", plate, "Output", (-6.0, 6.0), Linear);
-    rig.knob(2, "Echo", delay, "Mix", (0.0, 70.0), Linear);
+    rig.knob(3, "Shimmer", pitch, "Mix", (0.0, 100.0), Linear);
+    rig.knob(4, "Wash", plate, "Output", (-6.0, 6.0), Linear);
+    rig.knob(5, "Echo", delay, "Mix", (0.0, 70.0), Linear);
     rig.finish(trims::SHIMMER_CATHEDRAL)
 }
 
@@ -266,9 +268,9 @@ fn fuzz_lab(r: &EffectRegistry) -> Patch {
     );
     rig.wire(&[Input, Split(0), fuzz, filter, Merge(0), tape, Output]);
     rig.wire(&[Split(0), crush, ring, Merge(0)]);
-    rig.knob(0, "Fuzz", fuzz, "Drive", (12.0, 40.0), Linear);
-    rig.knob(1, "Filter", filter, "Cutoff", (300.0, 8000.0), Logarithmic);
-    rig.knob(2, "Crush", crush, "Mix", (0.0, 100.0), Linear);
+    rig.knob(3, "Fuzz", fuzz, "Drive", (12.0, 40.0), Linear);
+    rig.knob(4, "Filter", filter, "Cutoff", (300.0, 8000.0), Logarithmic);
+    rig.knob(5, "Crush", crush, "Mix", (0.0, 100.0), Linear);
     rig.finish(trims::FUZZ_LAB)
 }
 
@@ -310,9 +312,9 @@ fn space_echo(r: &EffectRegistry) -> Patch {
         &[("Decay", 4.5)],
     );
     rig.wire(&[Input, pre, tape, delay, spring, Output]);
-    rig.knob(0, "Echo", delay, "Mix", (0.0, 80.0), Linear);
-    rig.knob(1, "Spring", spring, "Mix", (0.0, 60.0), Linear);
-    rig.knob(2, "Grit", pre, "Gain", (0.0, 30.0), Linear);
+    rig.knob(3, "Echo", delay, "Mix", (0.0, 80.0), Linear);
+    rig.knob(4, "Spring", spring, "Mix", (0.0, 60.0), Linear);
+    rig.knob(5, "Grit", pre, "Gain", (0.0, 30.0), Linear);
     rig.finish(trims::SPACE_ECHO)
 }
 
@@ -361,9 +363,9 @@ fn granular_drift(r: &EffectRegistry) -> Patch {
     );
     rig.wire(&[Input, Split(0), glitch, Merge(0), plate, Output]);
     rig.wire(&[Split(0), stretch, grains, Merge(0)]);
-    rig.knob(0, "Cloud", grains, "Output", (-36.0, 6.0), Linear);
-    rig.knob(1, "Stretch", stretch, "Output", (-36.0, 6.0), Linear);
-    rig.knob(2, "Stutter", glitch, "Mix", (0.0, 100.0), Linear);
+    rig.knob(3, "Cloud", grains, "Output", (-36.0, 6.0), Linear);
+    rig.knob(4, "Stretch", stretch, "Output", (-36.0, 6.0), Linear);
+    rig.knob(5, "Stutter", glitch, "Mix", (0.0, 100.0), Linear);
     rig.finish(trims::GRANULAR_DRIFT)
 }
 
@@ -397,9 +399,9 @@ fn harmonic_habitat(r: &EffectRegistry) -> Patch {
         &[("Feedback", 65.0)],
     );
     rig.wire(&[Input, habitat, chorus, delay, Output]);
-    rig.knob(0, "Habitat", habitat, "Mix", (0.0, 100.0), Linear);
-    rig.knob(1, "Chorus", chorus, "Mix", (0.0, 80.0), Linear);
-    rig.knob(2, "Echo", delay, "Mix", (0.0, 70.0), Linear);
+    rig.knob(3, "Habitat", habitat, "Mix", (0.0, 100.0), Linear);
+    rig.knob(4, "Chorus", chorus, "Mix", (0.0, 80.0), Linear);
+    rig.knob(5, "Echo", delay, "Mix", (0.0, 70.0), Linear);
     rig.finish(trims::HARMONIC_HABITAT)
 }
 
@@ -420,9 +422,9 @@ fn amp_stack(r: &EffectRegistry) -> Patch {
     );
     let cab = rig.fx("cabinet", &[("Mix", 100.0)], &[]);
     rig.wire(&[Input, gate, amp, cab, Output]);
-    rig.knob(0, "Bass", amp, "Bass", (0.0, 100.0), Linear);
-    rig.knob(1, "Mid", amp, "Mid", (0.0, 100.0), Linear);
-    rig.knob(2, "Treble", amp, "Treble", (0.0, 100.0), Linear);
+    rig.knob(3, "Bass", amp, "Bass", (0.0, 100.0), Linear);
+    rig.knob(4, "Mid", amp, "Mid", (0.0, 100.0), Linear);
+    rig.knob(5, "Treble", amp, "Treble", (0.0, 100.0), Linear);
     rig.finish(trims::AMP_STACK)
 }
 

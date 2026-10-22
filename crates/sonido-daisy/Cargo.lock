@@ -943,6 +943,7 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "sonido-core",
+ "sonido-platform",
 ]
 
 [[package]]

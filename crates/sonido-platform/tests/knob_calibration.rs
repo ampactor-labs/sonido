@@ -13,7 +13,7 @@
 use sonido_analysis::loudness::LufsMeter;
 use sonido_analysis::signals::strummed_guitar;
 use sonido_platform::knob_mapping::{NULL_KNOB, knob_map, knob_to_param};
-use sonido_registry::{EffectRegistry, PEDAL_EFFECT_IDS};
+use sonido_registry::{EffectRegistry, JAM_EFFECT_IDS};
 
 const SR: f32 = 48_000.0;
 const BLOCK: usize = 32;
@@ -67,7 +67,7 @@ fn noon_is_level_matched_and_extremes_are_usable() {
     let registry = EffectRegistry::new();
     let input = strummed_guitar(SR, 4.0, GUITAR_PEAK);
     let mut failures = Vec::new();
-    for id in PEDAL_EFFECT_IDS {
+    for id in JAM_EFFECT_IDS {
         let noon = gain_db(&registry, id, [0.5; 6], &input);
         let mut row = format!("{id:>11} noon {noon:+5.1} dB |");
         if noon.abs() > 1.5 {
@@ -84,9 +84,9 @@ fn noon_is_level_matched_and_extremes_are_usable() {
                 let mut knobs = [0.5; 6];
                 knobs[k] = pos;
                 ends[e] = gain_db(&registry, id, knobs, &input);
-                // K6 is the level knob: quiet at its minimum and a clean
+                // K3 is the level knob: quiet at its minimum and a clean
                 // boost at its maximum are its job.
-                let (floor, ceiling) = if k == 5 { (-30.0, 13.0) } else { (-15.0, 8.0) };
+                let (floor, ceiling) = if k == 2 { (-30.0, 13.0) } else { (-15.0, 8.0) };
                 if !(floor..=ceiling).contains(&ends[e]) {
                     failures.push(format!(
                         "{id}: K{} at {pos} gives {:+.1} dB",

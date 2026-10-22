@@ -2,16 +2,17 @@
 //!
 //! The pedal firmware plays every rig through [`PatchPlayer`](crate::PatchPlayer):
 //! rigs flashed from the editor, built-in factory rigs, and the **jam**, the
-//! three-slot rig you build on the pedal by scrolling effects into slots, routed
-//! by the T3 toggle. [`jam_patch`] turns a jam into a patch; [`PedalState`] is
-//! what the pedal keeps in its state sector across power cycles (the active
-//! rig, the jam and its routing).
+//! three-slot rig you build on the pedal by picking effects into slots, routed
+//! by the T3 toggle, with its own input, master and morph time
+//! ([`JamSettings`]). [`jam_patch`] turns a jam into a patch; [`PedalState`]
+//! is what the pedal keeps in its state sector across power cycles (the
+//! active rig, the jam, its routing and settings, and the tempo).
 
 #[cfg(not(feature = "std"))]
 use alloc::vec::Vec;
 
 use crate::binary::{self, PatchError, crc32};
-use crate::{Patch, PatchEdge, PatchEndpoint, PatchNode, SECTOR_SIZE};
+use crate::{MorphMode, Patch, PatchEdge, PatchEndpoint, PatchNode, SECTOR_SIZE};
 
 /// Effect slots in a jam (one per T1 position).
 pub const JAM_SLOTS: usize = 3;
@@ -47,6 +48,28 @@ impl Topology {
     }
 }
 
+/// The jam's setup-page levels and morph time (K1–K3 with T2 in the middle,
+/// like the factory rigs' K1–K3).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct JamSettings {
+    /// Input gain, dB.
+    pub input_db: f32,
+    /// Master volume, dB.
+    pub master_db: f32,
+    /// Seconds a glide between A and B takes.
+    pub morph_time_s: f32,
+}
+
+impl Default for JamSettings {
+    fn default() -> Self {
+        Self {
+            input_db: 0.0,
+            master_db: 0.0,
+            morph_time_s: 1.0,
+        }
+    }
+}
+
 /// One populated jam slot: its effect and its A and B states.
 #[derive(Clone, Debug, PartialEq)]
 pub struct JamSlot {
@@ -73,10 +96,20 @@ pub fn jam_node_indices(slots: &[Option<JamSlot>; JAM_SLOTS]) -> [Option<usize>;
 /// `topology`. Empty slots are skipped, so with one effect every topology is
 /// a plain chain, and with none the input goes straight to the output. Jams
 /// have no macros; on the pedal the knobs edit the selected slot directly.
-pub fn jam_patch(slots: &[Option<JamSlot>; JAM_SLOTS], topology: Topology) -> Patch {
+/// `settings` become the patch's input and master gain and its morph speed
+/// (a glide: [`MorphMode::Latch`]).
+pub fn jam_patch(
+    slots: &[Option<JamSlot>; JAM_SLOTS],
+    topology: Topology,
+    settings: &JamSettings,
+) -> Patch {
     use PatchEndpoint::{Input, Merge, Node, Output, Split};
 
     let mut patch = Patch::new("Jam");
+    patch.globals.input_gain_db = settings.input_db;
+    patch.globals.master_volume_db = settings.master_db;
+    patch.morph.speed = 1.0 / settings.morph_time_s.max(0.01);
+    patch.morph.mode = MorphMode::Latch;
     for slot in slots.iter().flatten() {
         let mut node = PatchNode::new(slot.effect_uid, slot.params_a.clone());
         node.params_b.clone_from(&slot.params_b);
@@ -157,8 +190,8 @@ impl RigRef {
     }
 }
 
-/// What the pedal keeps in its state sector: the active rig, the jam and the
-/// tapped tempo.
+/// What the pedal keeps in its state sector: the active rig, the jam with its
+/// settings, and the tapped tempo.
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct PedalState {
     /// The rig to start with at power-on.
@@ -167,6 +200,8 @@ pub struct PedalState {
     pub topology: Topology,
     /// The jam's slots.
     pub jam: [Option<JamSlot>; JAM_SLOTS],
+    /// The jam's levels and morph time.
+    pub settings: JamSettings,
     /// Tapped tempo in BPM (to 0.1), or `None` before the first tap.
     pub bpm: Option<f32>,
 }
@@ -196,7 +231,7 @@ impl PedalState {
     /// Propagates [`PatchError`] if the jam does not fit.
     pub fn encode(&self, out: &mut [u8; SECTOR_SIZE]) -> Result<(), PatchError> {
         out.fill(0xFF);
-        let patch = jam_patch(&self.jam, self.topology);
+        let patch = jam_patch(&self.jam, self.topology, &self.settings);
         binary::encode(&patch, &mut out[STATE_HEADER..])?;
         let map = jam_node_indices(&self.jam);
         out[..4].copy_from_slice(&STATE_MAGIC);
@@ -243,10 +278,16 @@ impl PedalState {
             }
         }
         let bpm = u16::from_le_bytes([data[9], data[10]]);
+        let settings = JamSettings {
+            input_db: patch.globals.input_gain_db,
+            master_db: patch.globals.master_volume_db,
+            morph_time_s: 1.0 / patch.morph.speed.max(0.01),
+        };
         Ok(Self {
             active: RigRef::from_byte(data[4]),
             topology: Topology::from_toggle(data[5]),
             jam,
+            settings,
             bpm: (bpm > 0).then(|| f32::from(bpm) / 10.0),
         })
     }
@@ -289,7 +330,7 @@ mod tests {
                 let slots: [Option<JamSlot>; JAM_SLOTS] = core::array::from_fn(|i| {
                     (mask & (1 << i) != 0).then(|| slot(all[i], &registry))
                 });
-                let patch = jam_patch(&slots, topology);
+                let patch = jam_patch(&slots, topology, &JamSettings::default());
                 assert_eq!(
                     builds(&patch, &registry),
                     mask.count_ones() as usize,
@@ -319,6 +360,11 @@ mod tests {
             active: RigRef::Bank(4),
             topology: Topology::Fan,
             jam: [Some(slot("distortion", &registry)), None, Some(b)],
+            settings: JamSettings {
+                input_db: -3.0,
+                master_db: 4.5,
+                morph_time_s: 2.0,
+            },
             bpm: Some(97.5),
         };
         let mut sector = [0u8; SECTOR_SIZE];

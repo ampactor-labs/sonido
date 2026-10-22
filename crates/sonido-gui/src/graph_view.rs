@@ -840,6 +840,7 @@ impl GraphView {
             macro_positions: perf.macro_positions,
             morph: perf.morph,
             morph_position: perf.morph_position,
+            name: perf.name,
         }
     }
 
@@ -1785,6 +1786,7 @@ mod tests {
             macro_positions: [0.0; sonido_patch::NUM_MACROS],
             morph: sonido_patch::MorphConfig::default(),
             morph_position: 0.0,
+            name: crate::session::default_rig_name(),
         };
 
         let mut gv = GraphView::new();

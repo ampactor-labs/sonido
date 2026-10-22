@@ -13,30 +13,35 @@ pub const NULL_KNOB: u8 = 0xFF;
 ///
 /// Returns `None` if the effect has no hardware mapping.
 ///
-/// Consistent knob roles for muscle memory:
-/// - K1: Primary (rate, cutoff, drive, threshold, frequency)
-/// - K2: Secondary (depth, feedback, resonance, tone, ratio)
-/// - K3: Color (damping, HF rolloff, stages, jitter, waveform)
-/// - K4: Character (mode/shape, often STEPPED)
-/// - K5: Mix (wet/dry blend)
-/// - K6: Level (output/makeup gain) — morph mode: morph speed
+/// The Hothouse's knobs are two rows: K1 K2 K3 on top, K4 K5 K6 below. One
+/// rule on every page of the pedal, for muscle memory:
+///
+/// - **Top row, levels and extras.** K1 a secondary control (stages,
+///   voices, ping-pong, pre-delay, …), K2 the wet/dry mix, and K3 (top right)
+///   always a volume: the effect's output level here, the master volume on
+///   the jam's setup page and in the factory rigs.
+/// - **Bottom row, the sound.** K4 K5 K6 the three controls that shape the
+///   effect most (drive · tone · shape, rate · depth · feedback, size · decay
+///   · damping, …).
 pub fn knob_map(effect_id: &str) -> Option<[u8; 6]> {
+    const N: u8 = NULL_KNOB;
     match effect_id {
-        "filter" => Some([0, 1, 3, NULL_KNOB, NULL_KNOB, 2]),
-        "tremolo" => Some([0, 1, 2, 3, NULL_KNOB, 6]),
-        "vibrato" => Some([0, NULL_KNOB, NULL_KNOB, NULL_KNOB, 1, 2]),
-        "chorus" => Some([0, 1, 4, 3, 2, 8]),
-        "phaser" => Some([0, 1, 2, 3, 4, 9]),
-        "flanger" => Some([0, 1, 2, 4, 3, 7]),
-        "delay" => Some([0, 1, 4, 3, 2, 9]),
-        "reverb" => Some([0, 1, 2, 3, 4, 7]),
-        "tape" => Some([0, 1, 2, 4, 5, 9]),
-        "compressor" => Some([0, 1, 2, 3, 10, 4]),
-        "wah" => Some([0, 1, 2, 3, NULL_KNOB, 4]),
-        "distortion" => Some([0, 1, 3, 5, 4, 2]),
-        "bitcrusher" => Some([0, 1, 2, NULL_KNOB, 3, 4]),
-        "ringmod" => Some([0, 1, 2, NULL_KNOB, 3, 4]),
-        "looper" => Some([0, 1, 2, 3, 4, 5]),
+        //                    K1  K2  K3 | K4  K5  K6
+        "distortion" => Some([5, 4, 2, 0, 1, 3]), // dynamics mix out | drive tone shape
+        "bitcrusher" => Some([N, 3, 4, 0, 1, 2]), // — mix out | bits downsample jitter
+        "filter" => Some([N, N, 2, 0, 1, 3]),     // — — out | cutoff resonance type
+        "ringmod" => Some([N, 3, 4, 0, 1, 2]),    // — mix out | frequency depth waveform
+        "chorus" => Some([3, 2, 8, 0, 1, 4]),     // voices mix out | rate depth feedback
+        "phaser" => Some([2, 4, 9, 0, 1, 3]),     // stages mix out | rate depth feedback
+        "delay" => Some([3, 2, 9, 0, 1, 4]),      // ping-pong mix out | time feedback tone
+        "reverb" => Some([3, 4, 7, 0, 1, 2]),     // pre-delay mix out | size decay damping
+        "flanger" => Some([4, 3, 7, 0, 1, 2]),    // through-zero mix out | rate depth feedback
+        "tremolo" => Some([3, N, 6, 0, 1, 2]),    // spread — out | rate depth waveform
+        "vibrato" => Some([N, 1, 2, 0, N, N]),    // — mix out | depth — —
+        "tape" => Some([4, 5, 9, 0, 1, 2]),       // wow flutter out | drive saturation rolloff
+        "compressor" => Some([3, 10, 4, 0, 1, 2]), // release mix makeup | threshold ratio attack
+        "wah" => Some([3, N, 4, 0, 1, 2]),        // mode — out | frequency resonance sensitivity
+        "looper" => Some([3, 4, 5, 0, 1, 2]),     // reverse mix out | mode feedback half-speed
         _ => None,
     }
 }
@@ -101,19 +106,33 @@ mod tests {
 
     #[test]
     fn all_pedal_effects_have_knob_map() {
-        let ids = [
-            "chorus",
-            "phaser",
-            "distortion",
-            "bitcrusher",
-            "delay",
-            "reverb",
-            "ringmod",
-            "filter",
-        ];
-        for id in &ids {
+        for id in jam_ids() {
             assert!(knob_map(id).is_some(), "missing knob_map for {id}");
         }
+    }
+
+    /// K3 (top right) is always a level, and every effect's main control is
+    /// on the bottom row.
+    #[test]
+    fn k3_is_the_level_and_the_sound_is_below() {
+        for id in jam_ids() {
+            let map = knob_map(id).unwrap();
+            assert_ne!(map[2], NULL_KNOB, "{id}: K3 must be a level");
+            assert_eq!(map[3], 0, "{id}: K4 must be the main control (param 0)");
+        }
+    }
+
+    fn jam_ids() -> [&'static str; 8] {
+        [
+            "distortion",
+            "bitcrusher",
+            "filter",
+            "ringmod",
+            "chorus",
+            "phaser",
+            "delay",
+            "reverb",
+        ]
     }
 
     #[test]

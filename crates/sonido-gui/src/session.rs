@@ -50,6 +50,8 @@ pub struct PerformanceCapture {
     /// Pose B in slot order — its values become each effect's `params_b`.
     /// `None` ⇒ leave `params_b` empty (B mirrors A).
     pub morph_b: Option<MorphSnapshot>,
+    /// The rig's name.
+    pub name: String,
 }
 
 /// Project the GUI's runtime [`MacroMap`] + display names into the persisted
@@ -123,6 +125,15 @@ pub struct Session {
     /// Current A→B crossfade position (0.0–1.0). Absent in v1/v2 ⇒ 0.0 (full A).
     #[serde(default)]
     pub morph_position: f32,
+    /// The rig's name: what it is called on the pedal and in the graph player.
+    /// Sending a rig to the pedal replaces the pedal's rig with this name.
+    #[serde(default = "default_rig_name")]
+    pub name: String,
+}
+
+/// A new rig's name.
+pub fn default_rig_name() -> String {
+    String::from("My Rig")
 }
 
 fn default_macros() -> [MacroDef; NUM_MACROS] {
@@ -352,6 +363,7 @@ mod tests {
             macro_positions: default_macro_positions(),
             morph: MorphConfig::default(),
             morph_position: 0.0,
+            name: default_rig_name(),
         }
     }
 
@@ -454,6 +466,7 @@ mod tests {
             macro_positions: default_macro_positions(),
             morph: MorphConfig::default(),
             morph_position: 0.0,
+            name: default_rig_name(),
         };
         let patch = session.to_patch("parallel");
         assert_eq!(patch.nodes.len(), 2);

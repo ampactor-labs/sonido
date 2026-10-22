@@ -49,6 +49,7 @@ log = "0.4"
 egui-snarl = { version = "0.7.1", features = ["serde"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+sonido-patch = { workspace = true, features = ["serial"] }
 sonido-io = { workspace = true }
 clap.workspace = true
 tracing-subscriber.workspace = true

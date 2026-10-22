@@ -4,25 +4,11 @@
 mod support;
 
 use sonido_analysis::signals::reference_guitar;
-use sonido_patch::validate::{PedalLimits, Severity, validate_for_pedal};
+use sonido_patch::validate::{Severity, validate_for_daisy};
 use sonido_patch::{SECTOR_SIZE, decode, encode};
-use sonido_platform::cycle_table;
 use sonido_registry::EffectRegistry;
 use sonido_rigs::factory_rigs;
 use support::measure::{SR, rig_gain_db};
-
-fn limits(allowed: &[u16]) -> PedalLimits<'_> {
-    PedalLimits {
-        allowed_uids: allowed,
-        cycle_table: cycle_table::EFFECT_CYCLES,
-        sdram_table: cycle_table::EFFECT_SDRAM,
-        cycle_budget: cycle_table::CYCLE_BUDGET_PER_BLOCK,
-        chain_fraction: cycle_table::CHAIN_FRACTION,
-        warn_fraction: cycle_table::WARN_FRACTION,
-        node_overhead: cycle_table::NODE_OVERHEAD_CYCLES,
-        sdram_budget: cycle_table::SDRAM_BUDGET_BYTES,
-    }
-}
 
 #[test]
 fn rigs_round_trip_and_name_their_knobs() {
@@ -44,9 +30,8 @@ fn rigs_round_trip_and_name_their_knobs() {
 
 #[test]
 fn rigs_fit_the_pedal() {
-    let allowed: Vec<u16> = cycle_table::EFFECT_CYCLES.iter().map(|(u, _)| *u).collect();
     for rig in factory_rigs() {
-        let findings = validate_for_pedal(&rig, &limits(&allowed));
+        let findings = validate_for_daisy(&rig);
         let errors: Vec<_> = findings
             .iter()
             .filter(|f| f.severity == Severity::Error)

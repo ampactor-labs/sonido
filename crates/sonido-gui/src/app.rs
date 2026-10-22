@@ -110,6 +110,8 @@ pub struct SonidoApp {
     /// `Err` = failure (red). Cleared/replaced on the next export.
     #[cfg(not(target_arch = "wasm32"))]
     export_msg: Option<Result<String, String>>,
+    /// The rig's name, as the pedal and the graph player show it.
+    rig_name: String,
 
     /// Web-only: channel delivering loaded-session bytes from the async browser
     /// file picker back to the update loop (the native path reads files
@@ -282,6 +284,7 @@ impl SonidoApp {
             compile_success_frames: 0,
             #[cfg(not(target_arch = "wasm32"))]
             export_msg: None,
+            rig_name: crate::session::default_rig_name(),
             #[cfg(target_arch = "wasm32")]
             load_tx,
             #[cfg(target_arch = "wasm32")]
@@ -1796,6 +1799,7 @@ impl SonidoApp {
             morph_position: self.morph_state.t,
             morph_a,
             morph_b,
+            name: self.rig_name.clone(),
         }
     }
 
@@ -1863,9 +1867,17 @@ impl SonidoApp {
 
     /// Build the canonical [`Patch`](sonido_patch::Patch) from the current rig,
     /// for export to a CLAP plugin, a `.bin` sector, or the pedal.
-    #[cfg(not(target_arch = "wasm32"))]
-    fn current_patch(&self, name: &str) -> sonido_patch::Patch {
-        self.snapshot().to_patch(name)
+    fn current_patch(&self) -> sonido_patch::Patch {
+        self.snapshot().to_patch(self.rig_name.clone())
+    }
+
+    /// The rig-name field at the top of the Export menu.
+    fn rig_name_field(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new("Name").font(FontId::monospace(10.0)));
+            ui.add(egui::TextEdit::singleline(&mut self.rig_name).desired_width(140.0));
+        });
+        ui.separator();
     }
 
     /// Record an export/flash result for the header status line.
@@ -1880,8 +1892,8 @@ impl SonidoApp {
     }
 
     /// Render the Export menu: project the rig to a [`Patch`] and offer the four
-    /// destinations — CLAP sidecar, portable JSON, pedal `.bin` sector, and DFU
-    /// flash. Pedal targets validate against the device's effect/CPU/SDRAM
+    /// destinations — CLAP sidecar, portable JSON, pedal `.bin` sector, and the
+    /// pedal itself over USB. Pedal targets validate against the device's effect/CPU/SDRAM
     /// budget first and are disabled (with the failing findings shown) when the
     /// rig won't fit.
     #[cfg(not(target_arch = "wasm32"))]
@@ -1894,7 +1906,8 @@ impl SonidoApp {
                 .font(FontId::monospace(12.0))
                 .color(theme.colors.text_primary),
             |ui| {
-                let patch = self.current_patch("Sonido Rig");
+                self.rig_name_field(ui);
+                let patch = self.current_patch();
                 let findings = crate::export::validate_patch_for_pedal(&patch);
                 let pedal_ok = crate::export::can_export_to_pedal(&patch);
 
@@ -1921,9 +1934,13 @@ impl SonidoApp {
                             .map_err(|e| e.to_string())
                             .and_then(|j| std::fs::write(&path, j).map_err(|e| e.to_string()));
                         match result {
-                            Ok(()) => self
-                                .set_export_msg(format!("Saved patch JSON → {}", path.display()), true),
-                            Err(e) => self.set_export_msg(format!("JSON export failed: {e}"), false),
+                            Ok(()) => self.set_export_msg(
+                                format!("Saved patch JSON → {}", path.display()),
+                                true,
+                            ),
+                            Err(e) => {
+                                self.set_export_msg(format!("JSON export failed: {e}"), false)
+                            }
                         }
                     }
                     ui.close_menu();
@@ -1978,26 +1995,33 @@ impl SonidoApp {
                                 format!("Saved pedal binary → {}", path.display()),
                                 true,
                             ),
-                            Err(e) => self.set_export_msg(format!("Binary export failed: {e}"), false),
+                            Err(e) => {
+                                self.set_export_msg(format!("Binary export failed: {e}"), false)
+                            }
                         }
                     }
                     ui.close_menu();
                 }
                 if ui
-                    .add_enabled(pedal_ok, egui::Button::new("Flash to pedal (DFU)"))
+                    .add_enabled(pedal_ok, egui::Button::new("Send to pedal"))
                     .on_hover_text(
-                        "Put the pedal in bootloader (hold both footswitches ~3 s), then flash slot 0",
+                        "Over the pedal's USB port: replaces its rig with this name, or takes \
+                         its first empty bank slot, and plays it",
                     )
                     .clicked()
                 {
-                    let result = crate::export::encode_patch_sector(&patch)
-                        .map_err(|e| e.to_string())
-                        .and_then(|buf| crate::dfu::flash_patch(0, &buf).map_err(|e| e.to_string()));
+                    let result = sonido_patch::client::open_pedal(None)
+                        .and_then(|mut link| link.send_rig(&patch));
                     match result {
-                        Ok(()) => {
-                            self.set_export_msg("Flashed patch to pedal slot 0".to_owned(), true)
-                        }
-                        Err(e) => self.set_export_msg(format!("Flash failed: {e}"), false),
+                        Ok(slot) => self.set_export_msg(
+                            format!(
+                                "Sent '{}' to pedal bank slot {}: playing",
+                                patch.name,
+                                slot + 1
+                            ),
+                            true,
+                        ),
+                        Err(e) => self.set_export_msg(format!("Send to pedal failed: {e}"), false),
                     }
                     ui.close_menu();
                 }
@@ -2101,7 +2125,8 @@ impl SonidoApp {
                 .font(FontId::monospace(12.0))
                 .color(theme.colors.text_primary),
             |ui| {
-                let patch = self.snapshot().to_patch("Sonido Rig");
+                self.rig_name_field(ui);
+                let patch = self.current_patch();
                 if ui.button("Save patch JSON…").clicked() {
                     if let Ok(json) = crate::export::patch_to_json(&patch) {
                         let task = rfd::AsyncFileDialog::new()
@@ -2151,6 +2176,8 @@ impl SonidoApp {
     fn restore_performance(&mut self, session: &crate::session::Session) {
         use crate::morph_state::{MorphSnapshot, SlotSnapshot};
         use crate::session::SessionNode;
+
+        self.rig_name.clone_from(&session.name);
 
         // Macros: defs → runtime map + names, then live knob positions.
         let (map, names) = crate::session::defs_to_macro_map(&session.macros);

@@ -7,7 +7,7 @@
 
 use std::path::PathBuf;
 
-use sonido_patch::validate::{Finding, PedalLimits, has_errors, validate_for_pedal};
+use sonido_patch::validate::{Finding, has_errors, validate_for_daisy};
 use sonido_patch::{Patch, SECTOR_SIZE, binary};
 use sonido_platform::cycle_table;
 
@@ -20,18 +20,7 @@ pub fn pedal_allowed_uids() -> Vec<u16> {
 ///
 /// Returns all findings; the caller refuses the pedal export iff [`has_errors`].
 pub fn validate_patch_for_pedal(patch: &Patch) -> Vec<Finding> {
-    let allowed = pedal_allowed_uids();
-    let limits = PedalLimits {
-        allowed_uids: &allowed,
-        cycle_table: cycle_table::EFFECT_CYCLES,
-        sdram_table: cycle_table::EFFECT_SDRAM,
-        cycle_budget: cycle_table::CYCLE_BUDGET_PER_BLOCK,
-        chain_fraction: cycle_table::CHAIN_FRACTION,
-        warn_fraction: cycle_table::WARN_FRACTION,
-        node_overhead: cycle_table::NODE_OVERHEAD_CYCLES,
-        sdram_budget: cycle_table::SDRAM_BUDGET_BYTES,
-    };
-    validate_for_pedal(patch, &limits)
+    validate_for_daisy(patch)
 }
 
 /// Whether a patch is safe to flash to the pedal (no error-level findings).

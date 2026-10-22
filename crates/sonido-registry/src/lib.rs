@@ -57,25 +57,22 @@ use alloc::{boxed::Box, vec::Vec};
 // Pedal firmware constants
 // ---------------------------------------------------------------------------
 
-/// Ordered effect IDs for the Hothouse pedal firmware.
+/// The effects you can pick into the pedal's jam, in the order of the pick
+/// knobs' zones (fully left is an empty slot, then these): dirt, color,
+/// motion, space.
 ///
-/// Index in this slice = `effect_idx` in the binary preset format.
-/// Both CLI (`sonido daisy export`) and firmware (`sonido_pedal.rs`)
-/// MUST use this single source of truth.
-///
-/// # Invariant
-///
-/// This list is append-only. Reordering or removing entries would break
-/// existing binary presets stored in QSPI flash.
-pub const PEDAL_EFFECT_IDS: &[&str] = &[
-    "chorus",     // 0
-    "phaser",     // 1
-    "distortion", // 2
-    "bitcrusher", // 3
-    "delay",      // 4
-    "reverb",     // 5
-    "ringmod",    // 6
-    "filter",     // 7
+/// Rigs sent from the editor can use any registered effect that fits the
+/// pedal's CPU rule; this is only the jam's palette. Jams are stored by
+/// effect UID, so the order is free to change.
+pub const JAM_EFFECT_IDS: &[&str] = &[
+    "distortion",
+    "bitcrusher",
+    "filter",
+    "ringmod",
+    "chorus",
+    "phaser",
+    "delay",
+    "reverb",
 ];
 
 // ---------------------------------------------------------------------------
@@ -85,8 +82,8 @@ pub const PEDAL_EFFECT_IDS: &[&str] = &[
 /// Stable, append-only `(string-id, UID)` table.
 ///
 /// A UID is a permanent identity for an effect, unlike a *position* in
-/// [`PEDAL_EFFECT_IDS`] or the registration order (both of which proved
-/// fragile — see the index drift fixed in the daisy export tests). The
+/// [`JAM_EFFECT_IDS`] or the registration order (positions proved fragile:
+/// the old position-indexed pedal presets drifted). The
 /// canonical `sonido-patch` wire format stores effect **UIDs**, so a patch
 /// authored today still resolves after effects are added or reordered.
 ///
@@ -905,9 +902,9 @@ mod tests {
         uids.dedup();
         assert_eq!(uids.len(), unique, "duplicate UID in EFFECT_UIDS");
 
-        // Every pedal effect resolves to a UID (export relies on this).
-        for id in PEDAL_EFFECT_IDS {
-            assert!(effect_uid(id).is_some(), "pedal effect '{id}' has no UID");
+        // Every jam effect resolves to a UID (the jam is stored by UID).
+        for id in JAM_EFFECT_IDS {
+            assert!(effect_uid(id).is_some(), "jam effect '{id}' has no UID");
         }
     }
 
