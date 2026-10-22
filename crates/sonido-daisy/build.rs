@@ -14,6 +14,16 @@
 
 fn main() {
     write_factory_rigs();
+    firmware_version();
+
+    // The linker scripts (cortex-m-rt's `link.x`, defmt's `defmt.x`) come from
+    // here rather than `.cargo/config.toml` rustflags: a `RUSTFLAGS` variable
+    // (CI sets one) replaces config rustflags, and the link would lose them.
+    let target = std::env::var("TARGET").unwrap_or_default();
+    if target.starts_with("thumbv7em") {
+        println!("cargo:rustc-link-arg=-Tlink.x");
+        println!("cargo:rustc-link-arg=-Tdefmt.x");
+    }
 
     let target_dir = std::env::var("OUT_DIR")
         .map(std::path::PathBuf::from)
@@ -44,6 +54,29 @@ fn main() {
     }
 
     println!("cargo:rerun-if-changed=memory.x");
+}
+
+/// `SONIDO_FIRMWARE_VERSION`: `git describe` of the source the firmware is
+/// built from (a tag, else the commit, `-dirty` with local changes), so
+/// `sonido pedal info` tells builds apart; the crate version without git.
+fn firmware_version() {
+    let describe = std::process::Command::new("git")
+        .args(["describe", "--tags", "--always", "--dirty"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|s| s.trim().to_owned())
+        .filter(|s| !s.is_empty());
+    let version =
+        describe.unwrap_or_else(|| std::env::var("CARGO_PKG_VERSION").unwrap_or_default());
+    println!("cargo:rustc-env=SONIDO_FIRMWARE_VERSION={version}");
+    // Rebuild when the commit or the index changes.
+    for path in ["../../.git/HEAD", "../../.git/index"] {
+        if std::path::Path::new(path).exists() {
+            println!("cargo:rerun-if-changed={path}");
+        }
+    }
 }
 
 /// Encode every factory rig to its binary patch form, as Rust byte arrays.

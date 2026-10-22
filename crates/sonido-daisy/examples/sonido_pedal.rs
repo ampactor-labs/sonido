@@ -116,7 +116,7 @@ bind_interrupts!(struct Irqs {
     OTG_FS => usb::InterruptHandler<peripherals::USB_OTG_FS>;
 });
 
-const FIRMWARE: &str = concat!("sonido_pedal ", env!("CARGO_PKG_VERSION"));
+const FIRMWARE: &str = concat!("sonido_pedal ", env!("SONIDO_FIRMWARE_VERSION"));
 
 // ── Heap and shared state ───────────────────────────────────────────────────
 

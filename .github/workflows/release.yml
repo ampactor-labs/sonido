@@ -141,9 +141,53 @@ jobs:
           name: ${{ matrix.artifact }}
           path: ${{ matrix.artifact }}.zip
 
+  firmware:
+    name: Build (sonido_pedal.bin)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: crates/sonido-daisy
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0 # `git describe` names the firmware build
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: thumbv7em-none-eabihf
+          components: clippy, llvm-tools
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: crates/sonido-daisy -> target
+
+      - name: Build sonido_pedal.bin
+        run: |
+          cargo build --release --example sonido_pedal --features alloc,platform
+          objcopy=$(find "$(rustc --print sysroot)" -name llvm-objcopy -type f | head -1)
+          "$objcopy" -O binary -R .sram1_bss -R .sdram_bss \
+            target/thumbv7em-none-eabihf/release/examples/sonido_pedal sonido_pedal.bin
+
+      - name: Fits BOOT_SRAM (480 KB)
+        run: |
+          size=$(stat -c %s sonido_pedal.bin)
+          limit=491520
+          echo "sonido_pedal.bin: $size of $limit bytes ($((limit - size)) free)"
+          test "$size" -le "$limit"
+
+      - name: Checksum
+        run: sha256sum sonido_pedal.bin > sonido_pedal.bin.sha256
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sonido_pedal
+          path: |
+            crates/sonido-daisy/sonido_pedal.bin
+            crates/sonido-daisy/sonido_pedal.bin.sha256
+
   release:
     name: Create Release
-    needs: build
+    needs: [build, firmware]
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     permissions:
@@ -163,6 +207,8 @@ jobs:
           files: |
             artifacts/**/*.tar.gz
             artifacts/**/*.zip
+            artifacts/**/*.bin
+            artifacts/**/*.sha256
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

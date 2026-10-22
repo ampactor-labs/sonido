@@ -5,7 +5,7 @@
 
 A Rust framework for audio signal processing whose effect kernels run unchanged in CLAP and VST3 plugins, a browser node-graph editor and guitar-pedal firmware. CLAP is an open plugin format for audio workstations; the pedal is an Electrosmith Daisy Seed (a 480 MHz Cortex-M7) in a Hothouse enclosure. The 36 effects are kernels that allocate and smooth nothing while processing; every target builds them through the same registry, wrapped in the same adapter that smooths their parameters, and every effect is level-matched by measurement, so at its defaults it plays at the loudness of its input. The pedal plays rigs through the same runtime as the graph-player plugin, and a knob at noon selects the same default a freshly opened plugin starts at. The distortion kernel on the pedal is the same code as the one in the plugin, compiled for a different target. What differs is the input and output around it: the pedal sums its input to mono and clips at 0 dBFS on the way to its codec, so a pedal and a plugin set to the same values can still sound different at the edges.
 
-**Status: working.** The API may change; nothing is published to crates.io, so the git dependency under Usage is the only install, and the ARM firmware is built and checked by flashing it by hand, since CI does not build it.
+**Status: working.** The API may change; nothing is published to crates.io, so the git dependency under Usage is the only install. CI builds, lints and size-checks the ARM firmware, but I test it by flashing it and playing.
 
 Live: https://ampactor.dev/sonido/
 
@@ -170,7 +170,7 @@ To see a plugin's UI without a host, `cargo run -p sonido-plugin --bin sonido-pr
 
 The web editor deploys from [.github/workflows/pages.yml](.github/workflows/pages.yml): on a push to `main` that touches `crates/**` (or a manual dispatch) it runs `trunk build --release --public-url /sonido/` (trunk is the WebAssembly bundler) in `crates/sonido-gui` and publishes `dist/` to GitHub Pages at https://ampactor.dev/sonido/.
 
-Releases come from [.github/workflows/release.yml](.github/workflows/release.yml) on a `v*` tag: it builds the CLI, the GUI, the CLAP bundles (`scripts/bundle-clap.sh`) and the VST3 shims (`scripts/bundle-vst3.sh`, clap-wrapper v0.15.1; VST3 is Steinberg's plugin format) for linux-x64, macos-x64, macos-arm64 and windows-x64, exports the factory presets, and attaches one archive per target to a GitHub release. v0.1.0 (2026-07-20) is the one release so far, with those four archives; the VST3 shims joined the workflow after it.
+Releases come from [.github/workflows/release.yml](.github/workflows/release.yml) on a `v*` tag: it builds the CLI, the GUI, the CLAP bundles (`scripts/bundle-clap.sh`) and the VST3 shims (`scripts/bundle-vst3.sh`, clap-wrapper v0.15.1; VST3 is Steinberg's plugin format) for linux-x64, macos-x64, macos-arm64 and windows-x64, exports the factory presets, and attaches one archive per target to a GitHub release. Releases also carry the pedal firmware, `sonido_pedal.bin` with its SHA-256; update a pedal with `sonido pedal update sonido_pedal.bin` (CI runs upload the same file as the `sonido_pedal` artifact). v0.1.0 (2026-07-20) is the one release so far, with those four archives; the VST3 shims and the firmware joined the workflow after it.
 
 ## Testing
 
@@ -193,7 +193,7 @@ There are 1,954 `#[test]` functions in the tree (`grep -rho '#\[test\]' crates |
 
 On every push and pull request to `main`, [.github/workflows/ci.yml](.github/workflows/ci.yml) runs `cargo fmt --all --check`, `cargo clippy --workspace --all-targets` with `RUSTFLAGS=-D warnings`, `cargo test --workspace` on Ubuntu, macOS and Windows, and a `wasm32-unknown-unknown` build of the editor. Behind `workflow_dispatch`, [.github/workflows/ci-manual.yml](.github/workflows/ci-manual.yml) adds `--no-default-features` tests for the six `no_std` crates, `cargo doc` with warnings denied, the cargo-deny dependency policy, criterion benchmarks compared with critcmp, llvm-cov coverage, and the CLAP conformance checker clap-validator 0.3.2 over every bundled plugin.
 
-Not tested: the ARM path (`sonido-daisy` is outside the workspace, no workflow targets `thumbv7em-none-eabihf`, and its 28 tests never run in CI; I verify the firmware by flashing it and listening); the VST3 shims (no workflow runs Steinberg's validator; `docs/CHANGELOG.md` records one run by hand); the two Usage blocks above (no doctest includes them); and performance, because the benchmark job uploads a comparison for a human to read and fails nothing.
+Not tested: the ARM path (CI's `firmware` job builds, lints and size-checks `sonido_pedal.bin`, but `sonido-daisy` is outside the workspace and its 28 tests never run in CI; I verify the firmware by flashing it and listening); the VST3 shims (no workflow runs Steinberg's validator; `docs/CHANGELOG.md` records one run by hand); the two Usage blocks above (no doctest includes them); and performance, because the benchmark job uploads a comparison for a human to read and fails nothing.
 
 ## Limitations
 
@@ -203,7 +203,7 @@ Memory is not the constraint on the pedal; CPU is. AXI SRAM, the chip's main wor
 
 The other gaps:
 
-- The ARM target is not in CI. `sonido-daisy` is excluded from the workspace and no workflow targets `thumbv7em-none-eabihf`; I check the pedal firmware and the benchmark harness (`crates/sonido-daisy/examples/bench_kernels.rs`) only by flashing them on my desk.
+- The ARM firmware is only built in CI. The `firmware` job builds, lints and size-checks `sonido_pedal.bin`, but nothing runs it; I check the pedal firmware and the benchmark harness (`crates/sonido-daisy/examples/bench_kernels.rs`) by flashing them on my desk.
 - The pedal's jam offers 8 of the 36 effects (`JAM_EFFECT_IDS` in `crates/sonido-registry/src/lib.rs`); a rig can use any effect, within the CPU rule.
 - The editor sends a rig to the pedal by name only: it replaces the bank rig with the same name or takes the first empty slot (`LinkClient::send_rig` in `crates/sonido-patch/src/client.rs`), on the first pedal it finds. Choosing a slot, erasing one and updating the firmware are CLI-only (`sonido pedal push --slot`, `erase`, `update`); a firmware update needs `dfu-util` installed.
 - On the pedal, T1 and T3 do nothing in a rig (they edit and route the jam); assignable toggles in rigs are not built.

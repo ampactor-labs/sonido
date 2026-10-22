@@ -97,7 +97,11 @@ Codec ADC → SAI RX → DMA → SRAM buffer (ping)
 Firmware crate with tiered examples at `crates/sonido-daisy/`.
 It is excluded from the Cargo workspace (`exclude` in the root `Cargo.toml`), so
 build it from its own directory, where `.cargo/config.toml` sets the
-`thumbv7em-none-eabihf` target.
+`thumbv7em-none-eabihf` target and `target-cpu=cortex-m7`. `build.rs` passes the
+linker scripts (`link.x`, `defmt.x`), so a `RUSTFLAGS` variable (which replaces
+config rustflags) can't drop them; names the build (`SONIDO_FIRMWARE_VERSION`, from
+`git describe`, which `sonido pedal info` reports); and embeds the factory rigs. CI's
+`firmware` job builds and size-checks `sonido_pedal.bin`, and releases attach it.
 
 ```bash
 # Cross-compile check (no flash)
@@ -1083,7 +1087,8 @@ Measured on hardware on 2026-10-22, after these fixes and the control redesign:
 the jam distortion → reverb → ringmod ran at 74–75% mean and 84–85% peak, with 0
 blocks over budget; two rounds through every factory rig and the jam, plus a rig
 written to and erased from the bank over USB, gave 0 codec overruns (worst block
-91.4%). The firmware image is 466.6 KB of the 480 KB BOOT_SRAM limit.
+91.4%). The firmware image is 477,944 bytes of the 491,520-byte (480 KB) BOOT_SRAM
+limit; CI fails a build that doesn't fit.
 
 ### Flash: Rig Bank and State Sector
 

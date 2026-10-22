@@ -3,6 +3,11 @@
 # linker = "clang"
 # rustflags = ["-C", "link-arg=-fuse-ld=mold"]
 
+# Web Serial (the web editor's "Send to pedal") is behind web-sys's unstable
+# APIs. CI's wasm job repeats this in RUSTFLAGS, which replaces config flags.
+[target.wasm32-unknown-unknown]
+rustflags = ["--cfg=web_sys_unstable_apis"]
+
 [build]
 # Parallel frontend for faster compilation
 # Uncomment for nightly: rustflags = ["-Z", "threads=4"]

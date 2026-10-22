@@ -37,7 +37,8 @@ CI runs on GitHub Actions in the public `ampactor-labs/sonido` repo. Workflows l
 |-----|--------|-------|
 | `lint` | ubuntu-latest | `cargo fmt --all --check`, `cargo clippy --workspace --all-targets` |
 | `test` | ubuntu-latest, macos-latest, windows-latest | `cargo test --workspace` |
-| `wasm` | ubuntu-latest | `cargo build --target wasm32-unknown-unknown -p sonido-gui` |
+| `wasm` | ubuntu-latest | `cargo build` and `cargo clippy --target wasm32-unknown-unknown -p sonido-gui`, with `RUSTFLAGS` adding `--cfg=web_sys_unstable_apis` (Web Serial) |
+| `firmware` | ubuntu-latest | In `crates/sonido-daisy`: clippy (`--lib --example sonido_pedal`), build `sonido_pedal.bin` with `llvm-objcopy`, fail if it exceeds the 480 KB BOOT_SRAM, upload it as the `sonido_pedal` artifact |
 
 `ci-manual.yml` — manual dispatch only (`gh workflow run ci-manual.yml -f job=<check|bench|coverage|plugin|all>`):
 
@@ -50,7 +51,8 @@ CI runs on GitHub Actions in the public `ampactor-labs/sonido` repo. Workflows l
 
 `pages.yml` deploys the wasm web demo (push to `main` touching `crates/**`, or manual
 dispatch); `release.yml` (on `v*` tags, or manual dispatch as a dry run) builds the CLI,
-GUI, CLAP bundle, VST3 shim and factory presets per platform and publishes a GitHub release.
+GUI, CLAP bundle, VST3 shim and factory presets per platform, plus the pedal firmware
+(`sonido_pedal.bin` and its SHA-256), and publishes a GitHub release.
 
 ### Infrastructure
 

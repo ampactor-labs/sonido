@@ -1167,7 +1167,8 @@ Sonido pedal found is used. Bank slots are numbered 1–15 here (the link counts
 `update` asks the running pedal for its bootloader over USB, waits up to 10 s for the
 Daisy bootloader to appear, and flashes the image to `0x90040000`; it needs
 `dfu-util` installed, and it refuses the STM32 ROM bootloader (BOOT held through
-RESET), which cannot reach the pedal's QSPI flash. Build the image as in
+RESET), which cannot reach the pedal's QSPI flash. Download `sonido_pedal.bin` from a
+GitHub release (or a CI run's `sonido_pedal` artifact), or build the image as in
 `crates/sonido-daisy/examples/sonido_pedal.rs`:
 
 ```bash

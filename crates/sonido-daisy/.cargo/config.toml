@@ -3,11 +3,9 @@ target = "thumbv7em-none-eabihf"
 
 [target.thumbv7em-none-eabihf]
 runner = "probe-rs run --chip STM32H750IBKx"
-rustflags = [
-    "-C", "link-arg=-Tlink.x",
-    "-C", "link-arg=-Tdefmt.x",
-    "-C", "target-cpu=cortex-m7",
-]
+# The linker scripts (link.x, defmt.x) are passed by build.rs, so a RUSTFLAGS
+# variable (which replaces these) can't drop them.
+rustflags = ["-C", "target-cpu=cortex-m7"]
 
 [env]
 DEFMT_LOG = "info"
