@@ -74,7 +74,10 @@ use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, AtomicU8, AtomicU16, AtomicU32, Ordering};
 
 use defmt_rtt as _;
+use embassy_executor::InterruptExecutor;
 use embassy_stm32 as hal;
+use embassy_stm32::interrupt;
+use embassy_stm32::interrupt::{InterruptExt, Priority};
 use embassy_stm32::{bind_interrupts, peripherals, usb};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::mutex::Mutex;
@@ -85,6 +88,7 @@ use panic_probe as _;
 use static_cell::StaticCell;
 
 use sonido_core::{EffectWithParams, ParamDescriptor, ParamScale, TempoContext};
+use sonido_daisy::audio::{Interface, Running};
 use sonido_daisy::controls::HothouseBuffer;
 use sonido_daisy::effect_slot::{self, BypassCrossfade, sanitize_stereo};
 use sonido_daisy::hothouse::hothouse_control_task;
@@ -144,13 +148,35 @@ static LAST_MEAN: AtomicU16 = AtomicU16::new(0);
 static LAST_PEAK: AtomicU16 = AtomicU16::new(0);
 const LOAD_BUDGET: u32 = 480_000_000 / 48_000 * BLOCK_SIZE as u32;
 
-// SAFETY (all three): the executor is single-threaded and the audio callback
-// runs between awaits, so nothing holds a reference across another's use.
-// The rebuild task only touches `PLAYER` while `UPDATING` keeps the callback
-// off it. No critical sections: they would block the DMA interrupts.
+// The audio task runs on its own interrupt-priority executor
+// (`AUDIO_EXECUTOR`) and preempts every other task at any instruction, so a
+// slow task (a rig build takes up to 12 ms) can never starve it. Who touches
+// what:
+//
+// - `PLAYER`, `PEDAL`, `CB`: the audio callback, except while `UPDATING` is
+//   set; then only the rebuild task (`load`), and the callback uses nothing
+//   but `XFADE`. Other tasks reach `PEDAL` and `CB` only through [`shared`],
+//   which holds interrupts off for the few microseconds they take.
+// - `XFADE`: the audio callback only.
 static mut PLAYER: Option<PatchPlayer> = None;
 static mut CB: Option<Cb> = None;
 static mut PEDAL: Option<Pedal> = None;
+static mut XFADE: Option<BypassCrossfade> = None;
+
+/// The audio task's executor: a spare interrupt (UART4 is unused on the
+/// Hothouse) at a priority above thread mode, where every other task runs.
+static AUDIO_EXECUTOR: InterruptExecutor = InterruptExecutor::new();
+
+#[interrupt]
+unsafe fn UART4() {
+    unsafe { AUDIO_EXECUTOR.on_interrupt() }
+}
+
+/// Run `f` on the pedal's state from a thread-mode task, with interrupts held
+/// off so the audio callback can't change it halfway (see the statics above).
+fn shared<R>(f: impl FnOnce(&mut Pedal, &mut Cb) -> R) -> R {
+    critical_section::with(|_| unsafe { f(PEDAL.as_mut().unwrap(), CB.as_mut().unwrap()) })
+}
 
 static REGISTRY: StaticCell<EffectRegistry> = StaticCell::new();
 static mut REG: Option<&'static EffectRegistry> = None;
@@ -294,7 +320,6 @@ impl Pedal {
 
 /// Everything the audio callback keeps between blocks.
 struct Cb {
-    xfade: BypassCrossfade,
     left: [f32; BLOCK_SIZE],
     right: [f32; BLOCK_SIZE],
     dry: [f32; BLOCK_SIZE],
@@ -448,8 +473,8 @@ async fn main(spawner: embassy_executor::Spawner) {
     pedal.active = start;
     unsafe {
         PEDAL = Some(pedal);
+        XFADE = Some(BypassCrossfade::new(SAMPLE_RATE));
         CB = Some(Cb {
-            xfade: BypassCrossfade::new(SAMPLE_RATE),
             left: [0.0; BLOCK_SIZE],
             right: [0.0; BLOCK_SIZE],
             dry: [0.0; BLOCK_SIZE],
@@ -520,12 +545,20 @@ async fn main(spawner: embassy_executor::Spawner) {
     let interface = audio_peripherals
         .prepare_interface(Default::default())
         .await;
-    let mut interface = defmt::unwrap!(interface.start_interface().await);
+    let interface = defmt::unwrap!(interface.start_interface().await);
 
     spawner.spawn(rebuild_task()).unwrap();
     spawner.spawn(save_task()).unwrap();
     spawner.spawn(load_report_task()).unwrap();
 
+    interrupt::UART4.set_priority(Priority::P6);
+    let audio = AUDIO_EXECUTOR.start(interrupt::UART4);
+    audio.spawn(audio_task(interface)).unwrap();
+}
+
+/// The audio loop. It runs on [`AUDIO_EXECUTOR`], above every other task.
+#[embassy_executor::task]
+async fn audio_task(mut interface: Interface<'static, Running>) {
     defmt::unwrap!(
         interface
             .start_callback(|input, output| {
@@ -546,14 +579,15 @@ async fn main(spawner: embassy_executor::Spawner) {
 // ── Audio callback ──────────────────────────────────────────────────────────
 
 fn audio_block(input: &[u32], output: &mut [u32]) {
-    let cb = unsafe { CB.as_mut().unwrap() };
+    let xfade = unsafe { XFADE.as_mut().unwrap() };
 
     if UPDATING.load(Ordering::Acquire) {
         // The player is being swapped: ramp to dry so the change doesn't click.
-        cb.xfade.set_active(false);
+        // `PLAYER`, `PEDAL` and `CB` belong to the rebuild task until it's done.
+        xfade.set_active(false);
         for i in 0..BLOCK_SIZE {
             let mono = (u24_to_f32(input[i * 2]) + u24_to_f32(input[i * 2 + 1])) * 0.5;
-            let (l, r) = cb.xfade.advance(mono, mono, 0.0, 0.0);
+            let (l, r) = xfade.advance(mono, mono, 0.0, 0.0);
             output[i * 2] = f32_to_u24(l);
             output[i * 2 + 1] = f32_to_u24(r);
         }
@@ -562,7 +596,8 @@ fn audio_block(input: &[u32], output: &mut [u32]) {
 
     // Bypass crossfades to dry; the rig keeps running, so turning it back on
     // picks up where the input is, without a burst of stale buffers.
-    cb.xfade.set_active(!BYPASSED.load(Ordering::Relaxed));
+    let cb = unsafe { CB.as_mut().unwrap() };
+    xfade.set_active(!BYPASSED.load(Ordering::Relaxed));
     for i in 0..BLOCK_SIZE {
         let mono = (u24_to_f32(input[i * 2]) + u24_to_f32(input[i * 2 + 1])) * 0.5;
         cb.dry[i] = mono;
@@ -578,7 +613,7 @@ fn audio_block(input: &[u32], output: &mut [u32]) {
     let mut peak = 0.0f32;
     for i in 0..BLOCK_SIZE {
         let (wet_l, wet_r) = sanitize_stereo(cb.left[i], cb.right[i]);
-        let (l, r) = cb.xfade.advance(cb.dry[i], cb.dry[i], wet_l, wet_r);
+        let (l, r) = xfade.advance(cb.dry[i], cb.dry[i], wet_l, wet_r);
         peak = peak.max(l.abs()).max(r.abs());
         cb.out_energy += 0.5 * (l * l + r * r);
         output[i * 2] = f32_to_u24(l);
@@ -955,8 +990,8 @@ async fn rebuild_task() {
 async fn switch_to(rig: RigRef) {
     match load(rig).await {
         Ok(()) => {
-            let pedal = unsafe { PEDAL.as_ref().unwrap() };
-            BLINK.store(pedal.position(rig) as u8, Ordering::Release);
+            let position = shared(|pedal, _| pedal.position(rig));
+            BLINK.store(position as u8, Ordering::Release);
         }
         Err(e) => {
             let code = patch_loader::error_blink_code(&e);
@@ -1127,16 +1162,13 @@ async fn save_task() {
         if quiet < SAVE_QUIET_MS || !STATE_DIRTY.swap(false, Ordering::AcqRel) {
             continue;
         }
-        let state = {
-            let pedal = unsafe { PEDAL.as_ref().unwrap() };
-            PedalState {
-                active: pedal.active,
-                topology: pedal.topology,
-                jam: pedal.jam.clone(),
-                settings: pedal.settings,
-                bpm: Some(pedal.bpm),
-            }
-        };
+        let state = shared(|pedal, _| PedalState {
+            active: pedal.active,
+            topology: pedal.topology,
+            jam: pedal.jam.clone(),
+            settings: pedal.settings,
+            bpm: Some(pedal.bpm),
+        });
         if state.encode(&mut sector).is_err() {
             defmt::warn!("state does not fit its sector");
             continue;
@@ -1208,14 +1240,13 @@ async fn link_task(mut class: CdcAcmClass<'static, usb::Driver<'static, peripher
 /// Answer one request: (reply kind, argument, payload).
 async fn handle(kind: u8, arg: u8, payload: &[u8]) -> (Reply, u8, Vec<u8>) {
     let refuse = |code: ErrorCode| (Reply::Error, code as u8, Vec::new());
-    let pedal = unsafe { PEDAL.as_mut().unwrap() };
     match Request::from_byte(kind) {
         Some(Request::Hello) => {
             let info = Info {
                 protocol: link::PROTOCOL_VERSION,
                 slot_count: PATCH_SLOT_COUNT as u8,
                 factory_count: FACTORY_RIG_COUNT as u8,
-                active: pedal.active,
+                active: shared(|pedal, _| pedal.active),
                 effects: EFFECT_UIDS.iter().map(|(_, uid)| *uid).collect(),
                 firmware: FIRMWARE.into(),
             };
@@ -1255,7 +1286,7 @@ async fn handle(kind: u8, arg: u8, payload: &[u8]) -> (Reply, u8, Vec<u8>) {
             if written.is_err() {
                 return refuse(ErrorCode::Flash);
             }
-            pedal.bank[arg as usize] = true;
+            shared(|pedal, _| pedal.bank[arg as usize] = true);
             defmt::info!("rig written to slot {}", arg);
             request(RigRef::Bank(arg));
             (Reply::Ok, 0, Vec::new())
@@ -1276,22 +1307,26 @@ async fn handle(kind: u8, arg: u8, payload: &[u8]) -> (Reply, u8, Vec<u8>) {
             if done.is_err() {
                 return refuse(ErrorCode::Flash);
             }
-            pedal.bank[arg as usize] = false;
-            if pedal.active == RigRef::Bank(arg) {
+            let was_playing = shared(|pedal, _| {
+                pedal.bank[arg as usize] = false;
+                pedal.active == RigRef::Bank(arg)
+            });
+            if was_playing {
                 request(RigRef::Jam);
             }
             (Reply::Ok, 0, Vec::new())
         }
         Some(Request::Activate) => {
             let rig = RigRef::from_byte(arg);
-            if !pedal.has(rig) {
+            if !shared(|pedal, _| pedal.has(rig)) {
                 return refuse(ErrorCode::BadSlot);
             }
             request(rig);
             (Reply::Ok, 0, Vec::new())
         }
         Some(Request::ReadJam) => {
-            let patch: Patch = jam_patch(&pedal.jam, pedal.topology, &pedal.settings);
+            let patch: Patch =
+                shared(|pedal, _| jam_patch(&pedal.jam, pedal.topology, &pedal.settings));
             let mut sector = alloc::vec![0xFFu8; SECTOR_SIZE];
             if sonido_patch::encode(&patch, &mut sector).is_err() {
                 return refuse(ErrorCode::NotARig);
@@ -1299,13 +1334,16 @@ async fn handle(kind: u8, arg: u8, payload: &[u8]) -> (Reply, u8, Vec<u8>) {
             (Reply::Sector, 0, sector)
         }
         Some(Request::Status) => {
-            let morph = unsafe { CB.as_ref() }.map_or(0, |cb| match cb.mode {
-                Mode::A => 0,
-                Mode::B => 255,
-                Mode::Morph => (cb.morph_t * 255.0) as u8,
+            let (active, morph) = shared(|pedal, cb| {
+                let morph = match cb.mode {
+                    Mode::A => 0,
+                    Mode::B => 255,
+                    Mode::Morph => (cb.morph_t * 255.0) as u8,
+                };
+                (pedal.active, morph)
             });
             let status = Status {
-                active: pedal.active,
+                active,
                 bypassed: BYPASSED.load(Ordering::Relaxed),
                 morph,
                 load_mean: LAST_MEAN.load(Ordering::Relaxed),
@@ -1338,9 +1376,10 @@ async fn load_report_task() {
         let (mean, peak) = (pct_x10(sum / blocks), pct_x10(peak));
         LAST_MEAN.store(mean, Ordering::Relaxed);
         LAST_PEAK.store(peak, Ordering::Relaxed);
-        // Levels over the last second, in tenths of a dB (dBFS).
-        let (in_peak, in_rms, out_peak, out_rms) = match unsafe { CB.as_mut() } {
-            Some(cb) if cb.metered > 0 => {
+        // Levels over the last second, in tenths of a dB (dBFS), and what
+        // played: read together, with the callback held off.
+        let (levels, slots, topology, active) = shared(|pedal, cb| {
+            let levels = if cb.metered > 0 {
                 let n = cb.metered as f32;
                 let v = (
                     cb.in_peak,
@@ -1354,9 +1393,18 @@ async fn load_report_task() {
                 cb.out_energy = 0.0;
                 cb.metered = 0;
                 v
-            }
-            _ => (0.0, 0.0, 0.0, 0.0),
-        };
+            } else {
+                (0.0, 0.0, 0.0, 0.0)
+            };
+            let slots: [&'static str; JAM_SLOTS] = core::array::from_fn(|s| {
+                pedal.cursor[s]
+                    .checked_sub(1)
+                    .and_then(|i| JAM_EFFECT_IDS.get(i).copied())
+                    .unwrap_or("-")
+            });
+            (levels, slots, pedal.topology, pedal.active)
+        });
+        let (in_peak, in_rms, out_peak, out_rms) = levels;
         let db = |x: f32| (200.0 * libm::log10f(x.max(1e-6))) as i32;
         defmt::info!(
             "level in peak={}dB rms={}dB  out peak={}dB rms={}dB (tenths)",
@@ -1365,19 +1413,12 @@ async fn load_report_task() {
             db(out_peak),
             db(out_rms)
         );
-        let pedal = unsafe { PEDAL.as_ref().unwrap() };
-        let slot = |s: usize| {
-            pedal.cursor[s]
-                .checked_sub(1)
-                .and_then(|i| JAM_EFFECT_IDS.get(i).copied())
-                .unwrap_or("-")
-        };
-        let topo = match pedal.topology {
+        let topo = match topology {
             Topology::Linear => "linear",
             Topology::Parallel => "parallel",
             Topology::Fan => "fan",
         };
-        match pedal.active {
+        match active {
             RigRef::Jam => defmt::info!(
                 "load mean={}.{}% peak={}.{}% over_budget={}/{} rig=jam slots=[{}, {}, {}] topo={} bypassed={}",
                 mean / 10,
@@ -1386,9 +1427,9 @@ async fn load_report_task() {
                 peak % 10,
                 over,
                 blocks,
-                slot(0),
-                slot(1),
-                slot(2),
+                slots[0],
+                slots[1],
+                slots[2],
                 topo,
                 BYPASSED.load(Ordering::Relaxed)
             ),

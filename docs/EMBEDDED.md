@@ -1041,10 +1041,16 @@ next state save.
 
 ### Real-Time Hardening
 
-One Embassy executor runs the audio callback and every other task (controls,
-rig loading, flash, USB). While a rig plays at about 75% load, the audio task
-misses its block if another task holds the executor for more than about 0.18 ms.
-The firmware is built around that:
+The audio task runs on its own `InterruptExecutor` (on the spare UART4
+interrupt, priority 6), above the thread-mode executor that runs every other
+task (rig loading, flash, USB, state saves, the load report). It preempts them
+at any instruction, so however long they run, audio keeps its blocks: a rig
+load plays dry until the new rig is ready. Measured before this, with one
+executor for everything, building a factory rig took up to 12 ms (Granular
+Drift's graph) against about 0.6 ms of slack, and every rig change dropped
+audio three or four times. Other tasks touch the pedal's state through
+`shared()`, a few-microsecond critical section, so the callback never sees it
+half-changed. On top of that:
 
 - **Flash reads yield per page.** `QspiFlash::read` transfers 256 bytes (about
   80 µs) at a time and yields between pages; `write_sector` waits out erase and
@@ -1059,16 +1065,21 @@ The firmware is built around that:
   it at its values.
 - **The boot rig is built before the codec starts**, so building it (milliseconds
   of work) never competes with running audio.
-- **Rig changes ramp to dry** and build one effect per executor turn (above).
+- **Rig changes ramp to dry** (above).
+- **No heavy work in an audio block.** The cabinet built its impulse response
+  twice, the second time in its first audio block: 12,288 software `sin`/`cos`
+  calls, about 4 ms. Its normalization now rotates a phasor, and the kernel
+  remembers the IR it was built with.
 - **Knob hysteresis.** `ControlBuffer` holds each knob's value until the reading
   leaves a 0.15%-of-travel band (`KNOB_HYSTERESIS` in `src/controls.rs`), so an
   untouched knob reads exactly the same every poll and the parameters it drives
   settle; a jittering knob kept a reverb rig about 8 points busier.
 
 Measured on hardware on 2026-10-22, after these fixes and the control redesign:
-the jam distortion → reverb → ringmod ran at 74.7% mean and 84–85% peak, with 0
-blocks over budget and 0 codec overruns at boot. The firmware image is 463.1 KB
-of the 480 KB BOOT_SRAM limit.
+the jam distortion → reverb → ringmod ran at 74–75% mean and 84–85% peak, with 0
+blocks over budget; two rounds through every factory rig and the jam, plus a rig
+written to and erased from the bank over USB, gave 0 codec overruns (worst block
+91.4%). The firmware image is 466.6 KB of the 480 KB BOOT_SRAM limit.
 
 ### Flash: Rig Bank and State Sector
 
@@ -1294,11 +1305,10 @@ see the [v2 design note](superpowers/specs/2026-04-09-sonido-pedal-v2-design.md)
 blocks: mode, morph position and glide, takeover anchors, pick-knob zones,
 footswitch timers, LED and meter state) and `PEDAL` (`Pedal`: the active rig, which
 bank slots hold rigs, the jam slots and their pick cursors, topology, `JamSettings`,
-BPM). They are `static mut`, not
-`critical_section` mutexes, because disabling interrupts would block the DMA
-completions; the executor is single-threaded and the callback runs between awaits,
-and the rebuild task touches `PLAYER` only while `UPDATING` keeps the callback off
-it. Tasks talk to the callback through atomics (`BYPASSED`, `UPDATING`, `REQUEST`,
+BPM). They are `static mut`: the callback runs on the audio executor and uses them
+freely, except while `UPDATING` is set, when the rebuild task owns them and the
+callback uses only its own crossfade (`XFADE`); every other task goes through
+`shared()`, a short critical section. Tasks talk to the callback through atomics (`BYPASSED`, `UPDATING`, `REQUEST`,
 `BLINK`, `STATE_DIRTY`, `TO_BOOTLOADER`, the load meter), and share the flash driver through an
 `embassy_sync` `Mutex` (`FLASH`).
 

@@ -52,6 +52,10 @@ const IR_LEN: usize = 256;
 
 /// RMS of the IR's magnitude response over 24 log-spaced frequencies from
 /// 100 Hz to 4 kHz: the IR's loudness on guitar-range material.
+///
+/// Each frequency's `e^(−iωn)` comes from rotating a phasor, not from a
+/// `sin`/`cos` per tap: 12,288 software trig calls took ~4 ms on the pedal's
+/// Cortex-M7, longer than an audio block.
 fn band_rms_gain(ir: &[f32], sample_rate: f32) -> f32 {
     const POINTS: usize = 24;
     let (lo, hi) = (100.0_f32, 4000.0_f32.min(sample_rate * 0.45));
@@ -59,10 +63,16 @@ fn band_rms_gain(ir: &[f32], sample_rate: f32) -> f32 {
     for k in 0..POINTS {
         let f = lo * libm::powf(hi / lo, k as f32 / (POINTS - 1) as f32);
         let w = 2.0 * core::f32::consts::PI * f / sample_rate;
+        let (step_re, step_im) = (libm::cosf(w), -libm::sinf(w));
+        let (mut z_re, mut z_im) = (1.0_f32, 0.0_f32);
         let (mut re, mut im) = (0.0_f32, 0.0_f32);
-        for (n, &h) in ir.iter().enumerate() {
-            re += h * libm::cosf(w * n as f32);
-            im -= h * libm::sinf(w * n as f32);
+        for &h in ir {
+            re += h * z_re;
+            im += h * z_im;
+            (z_re, z_im) = (
+                z_re * step_re - z_im * step_im,
+                z_re * step_im + z_im * step_re,
+            );
         }
         sum_sq += re * re + im * im;
     }
@@ -180,6 +190,9 @@ fn generate_ir(ir_type: u8, sample_rate: f32) -> [f32; IR_LEN] {
     // A simple xorshift32 PRNG seeded per IR type for reproducible IRs
     let mut rng: u32 = 0x1234_5678u32 ^ (ir_type as u32).wrapping_mul(0x9E37_79B9);
     let mut lp_state = 0.0f32;
+    // e^(−decay_rate·i), stepped by multiplication rather than an expf per tap.
+    let decay_step = libm::expf(-decay_rate);
+    let mut decay = 1.0f32;
 
     for i in 0..IR_LEN {
         // xorshift32
@@ -193,10 +206,8 @@ fn generate_ir(ir_type: u8, sample_rate: f32) -> [f32; IR_LEN] {
         // One-pole lowpass to shape the spectral character
         lp_state = lp_state * lp_coeff + noise * (1.0 - lp_coeff);
 
-        // Exponential decay envelope
-        let decay = libm::expf(-decay_rate * i as f32);
-
         ir[i] = lp_state * decay;
+        decay *= decay_step;
     }
 
     // Normalize for unity loudness across the guitar band: scale so the RMS
@@ -289,7 +300,9 @@ impl CabinetKernel {
             low_cut_l,
             low_cut_r,
             sample_rate,
-            last_ir_select: f32::NAN,
+            // The IR above is type 0; regenerating it in the first audio block
+            // would cost what constructing it did.
+            last_ir_select: 0.0,
             last_low_cut_hz: f32::NAN,
         }
     }
@@ -368,15 +381,21 @@ impl DspKernel for CabinetKernel {
         self.write_pos = 0;
         self.low_cut_l.clear();
         self.low_cut_r.clear();
-        // Force IR and HPF reload on next process call
-        self.last_ir_select = f32::NAN;
+        // The IR depends only on its type and the sample rate, so it stays.
         self.last_low_cut_hz = f32::NAN;
     }
 
     fn set_sample_rate(&mut self, sample_rate: f32) {
         self.sample_rate = sample_rate;
-        // Force coefficient recomputation at new sample rate
-        self.last_ir_select = f32::NAN;
+        // Rebuild the IR here (a host calls this off the audio thread) for the
+        // band its loudness is normalized over; the HPF follows next block.
+        let ir_type = if self.last_ir_select.is_nan() {
+            0
+        } else {
+            (self.last_ir_select + 0.5) as u8
+        };
+        self.ir = generate_ir(ir_type, sample_rate);
+        self.last_ir_select = f32::from(ir_type);
         self.last_low_cut_hz = f32::NAN;
         self.low_cut_l.clear();
         self.low_cut_r.clear();

@@ -275,10 +275,10 @@ impl<'d> QspiFlash<'d> {
 
     /// Read `buf.len()` bytes starting at flash byte-`address` (1-1-1, `0x03`).
     ///
-    /// Reads a page (about 80 µs) at a time and yields between pages. The
-    /// transfer blocks the executor, and while a rig plays at 75% load the
-    /// audio task misses its block if held off for more than about 0.18 ms:
-    /// one 4 KB read (1.3 ms) used to drop audio on every state save.
+    /// Reads a page (about 80 µs) at a time and yields between pages, so a
+    /// long read never holds up the tasks sharing its executor (one 4 KB read
+    /// is 1.3 ms; it dropped audio on every state save while the audio task
+    /// shared that executor).
     pub async fn read(&mut self, address: u32, buf: &mut [u8]) {
         for (i, chunk) in buf.chunks_mut(PAGE_SIZE).enumerate() {
             self.qspi.blocking_read(
