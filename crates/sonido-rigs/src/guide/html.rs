@@ -612,7 +612,7 @@ fn power_on(b: &mut String) {
         (true, false, "Hold FS1"),
         (true, true, "Hold FS1 + FS2"),
         (false, false, "Hold neither"),
-        (false, true, "Hold FS2 alone"),
+        (false, true, "FS2 alone"),
     ] {
         let what = controls::power_on(fs1, fs2);
         match gestures.iter_mut().find(|(w, _)| *w == what) {
@@ -628,7 +628,7 @@ fn power_on(b: &mut String) {
         let _ = write!(
             b,
             "<div class=card><div class=head>{}</div><div class=what>{}</div></div>",
-            esc(&held.join(" or ")),
+            esc(&held.join(", or ")),
             esc(what.describe())
         );
     }
