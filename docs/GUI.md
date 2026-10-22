@@ -84,7 +84,7 @@ sonido-gui --screenshot editor.png --screenshot-size 1440x900
 +---------------------------------------------------------------------------+
 | MORPH  status  RAMP  A⇄B   (A) ▮▮▮▮▮▮▯▯▯▯▯▯▯▯▯▯▯▯ (B)                       |
 +---------------------------------------------------------------------------+
-| 48000Hz | 42.7ms | CPU: 2.3% ▁▂▃ | Daisy: 3/3 | > Sine 440 Hz             |
+| 48000Hz | 42.7ms | CPU: 2.3% ▁▂▃ | Pedal: 3/8 · CPU 64% | > Sine 440 Hz   |
 +---------------------------------------------------------------------------+
 ```
 
@@ -204,7 +204,7 @@ The frequency is shown next to the selector for Sine and Saw Chord. It isn't adj
 - **Sample rate**: the rate in use (the device's).
 - **Latency**: one buffer, `buffer_size / sample_rate`, in ms.
 - **CPU**: audio-callback time as a percentage of the buffer duration, with a 60-sample sparkline. Green is ≤ 80 %, yellow is 80–100 %, and red is > 100 %. Debug builds append `(debug)`.
-- **Daisy: N/3**: green while the graph has three or fewer effect nodes, red above. Export runs the real pedal check (see below).
+- **Pedal: N/8 · CPU x%**: the pedal's rule, the same one Export ▸ Pedal checks (`sonido_patch::validate::daisy_load`): the graph's effect count against the pedal's 8-node limit, and its estimated share of the pedal's CPU from the measured kernel costs (`sonido_platform::cycle_table`). Green fits; yellow is over 70 % (it runs, near the limit); red is over 80 %, more than 8 effects, an effect the pedal doesn't carry, or past its SDRAM. Hover for the reasons. For example, distortion → delay → reverb is red at 86 %: reverb alone is 62 %.
 - **Transport**: generator play/pause, signal type and frequency; in FILE mode, the file controls.
 
 The buffer size is fixed at launch by `--buffer-size`; there is no in-app selector.

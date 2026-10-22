@@ -734,7 +734,7 @@ For a few effects of different families (e.g. distortion, compressor, tremolo, r
 
 ### 7.8 Performance
 
-- [ ] Status bar shows sample rate, latency, CPU usage, and `Daisy: N/3`
+- [ ] Status bar shows sample rate, latency, CPU usage, and `Pedal: N/8 · CPU x%`, red for distortion → delay → reverb (86 %) and green once reverb is swapped for chorus; hovering it names the reasons
 - [ ] No audio glitches during parameter changes
 
 Test lower buffer (default is 2048) and single-effect mode:

@@ -136,26 +136,134 @@ fn lookup(table: &[(u16, u32)], uid: u16) -> Option<u32> {
     table.iter().find(|(u, _)| *u == uid).map(|(_, v)| *v)
 }
 
+/// What a rig costs the pedal, from its effects alone: the numbers
+/// [`validate_for_pedal`] judges, cheap enough for the editor to show live.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PedalLoad {
+    /// Effect nodes, of [`MAX_NODES`].
+    pub nodes: usize,
+    /// Nodes whose effect the pedal doesn't carry.
+    pub unavailable: usize,
+    /// Estimated share of the pedal's CPU: each effect's measured worst block
+    /// plus the graph's per-node cost, over the block budget (0 with no
+    /// budget). A lower bound when an effect has no measurement.
+    pub cpu: f32,
+    /// SDRAM the effects allocate, in bytes.
+    pub sdram: u64,
+    /// The CPU and memory findings, worded as export shows them.
+    pub findings: Vec<Finding>,
+}
+
+impl PedalLoad {
+    /// The verdict: `None` when the rig fits, a warning near the CPU limit, an
+    /// error when the pedal would refuse it (too many effects, one it doesn't
+    /// carry, or over its CPU or memory budget).
+    pub fn severity(&self) -> Option<Severity> {
+        if self.nodes > MAX_NODES || self.unavailable > 0 || has_errors(&self.findings) {
+            Some(Severity::Error)
+        } else if self.findings.is_empty() {
+            None
+        } else {
+            Some(Severity::Warning)
+        }
+    }
+}
+
+impl PedalLimits<'_> {
+    /// What a rig made of these effects costs the pedal.
+    pub fn load(&self, uids: impl IntoIterator<Item = u16>) -> PedalLoad {
+        let (mut nodes, mut unavailable, mut unmeasured) = (0, 0, false);
+        let (mut cycles, mut sdram) = (0u64, 0u64);
+        for uid in uids {
+            nodes += 1;
+            if !self.allowed_uids.contains(&uid) {
+                unavailable += 1;
+            }
+            match lookup(self.cycle_table, uid) {
+                Some(c) => cycles += u64::from(c),
+                None => unmeasured = true,
+            }
+            cycles += u64::from(self.node_overhead);
+            sdram += u64::from(lookup(self.sdram_table, uid).unwrap_or(0));
+        }
+
+        let mut findings = Vec::new();
+        if unmeasured {
+            findings.push(Finding::warn(
+                "some effects have no measured cycle data; CPU estimate is a lower bound",
+            ));
+        }
+        let budget = self.cycle_budget as f32;
+        let cpu = if budget > 0.0 {
+            cycles as f32 / budget
+        } else {
+            0.0
+        };
+        if budget > 0.0 {
+            if cpu > self.chain_fraction {
+                findings.push(Finding::error(format!(
+                    "estimated {:.0}% of the pedal's CPU, over its {:.0}% limit — \
+                     this rig would drop out on the pedal",
+                    100.0 * cpu,
+                    100.0 * self.chain_fraction
+                )));
+            } else if cpu > self.warn_fraction {
+                findings.push(Finding::warn(format!(
+                    "estimated {:.0}% of the pedal's CPU",
+                    100.0 * cpu
+                )));
+            }
+        }
+        // An allocation past the heap would crash the pedal.
+        if self.sdram_budget > 0 && sdram > u64::from(self.sdram_budget) {
+            findings.push(Finding::error(format!(
+                "needs {:.1} MB of the pedal's {:.0} MB SDRAM",
+                sdram as f32 / 1_048_576.0,
+                self.sdram_budget as f32 / 1_048_576.0
+            )));
+        }
+
+        PedalLoad {
+            nodes,
+            unavailable,
+            cpu,
+            sdram,
+            findings,
+        }
+    }
+}
+
+/// Hand the Daisy pedal's limits to `f`: the effects its firmware carries (the
+/// measured ones) and the one CPU and memory rule
+/// ([`sonido_platform::cycle_table`]) the pedal itself enforces.
+fn with_daisy_limits<R>(f: impl FnOnce(&PedalLimits<'_>) -> R) -> R {
+    use sonido_platform::cycle_table;
+    let allowed: Vec<u16> = cycle_table::EFFECT_CYCLES.iter().map(|(u, _)| *u).collect();
+    f(&PedalLimits {
+        allowed_uids: &allowed,
+        cycle_table: cycle_table::EFFECT_CYCLES,
+        sdram_table: cycle_table::EFFECT_SDRAM,
+        cycle_budget: cycle_table::CYCLE_BUDGET_PER_BLOCK,
+        chain_fraction: cycle_table::CHAIN_FRACTION,
+        warn_fraction: cycle_table::WARN_FRACTION,
+        node_overhead: cycle_table::NODE_OVERHEAD_CYCLES,
+        sdram_budget: cycle_table::SDRAM_BUDGET_BYTES,
+    })
+}
+
+/// What a rig of these effects costs the Daisy pedal, by the rule
+/// [`validate_for_daisy`] applies: the editor's status bar shows it as you
+/// build.
+pub fn daisy_load(uids: impl IntoIterator<Item = u16>) -> PedalLoad {
+    with_daisy_limits(|limits| limits.load(uids))
+}
+
 /// Validate `patch` for the Daisy pedal: the effects its firmware carries and
 /// the one CPU and memory rule ([`sonido_platform::cycle_table`]) the pedal
 /// itself enforces. The editor's export and `sonido pedal push` both check
 /// rigs with this.
 pub fn validate_for_daisy(patch: &Patch) -> Vec<Finding> {
-    use sonido_platform::cycle_table;
-    let allowed: Vec<u16> = cycle_table::EFFECT_CYCLES.iter().map(|(u, _)| *u).collect();
-    validate_for_pedal(
-        patch,
-        &PedalLimits {
-            allowed_uids: &allowed,
-            cycle_table: cycle_table::EFFECT_CYCLES,
-            sdram_table: cycle_table::EFFECT_SDRAM,
-            cycle_budget: cycle_table::CYCLE_BUDGET_PER_BLOCK,
-            chain_fraction: cycle_table::CHAIN_FRACTION,
-            warn_fraction: cycle_table::WARN_FRACTION,
-            node_overhead: cycle_table::NODE_OVERHEAD_CYCLES,
-            sdram_budget: cycle_table::SDRAM_BUDGET_BYTES,
-        },
-    )
+    with_daisy_limits(|limits| validate_for_pedal(patch, limits))
 }
 
 /// Pedal-fit validation: structural checks plus effect-set, CPU, and memory
@@ -175,54 +283,12 @@ pub fn validate_for_pedal(patch: &Patch, limits: &PedalLimits) -> Vec<Finding> {
         }
     }
 
-    // CPU budget — sum measured cycles, plus a per-node graph overhead.
-    let mut total_cycles: u64 = 0;
-    let mut missing_cycle_data = false;
-    for node in &patch.nodes {
-        match lookup(limits.cycle_table, node.effect_uid) {
-            Some(c) => total_cycles += c as u64,
-            None => missing_cycle_data = true,
-        }
-        total_cycles += limits.node_overhead as u64;
-    }
-
-    if missing_cycle_data {
-        out.push(Finding::warn(
-            "some effects have no measured cycle data; CPU estimate is a lower bound",
-        ));
-    }
-    let budget = limits.cycle_budget as u64;
-    if budget > 0 {
-        let limit = (budget as f32 * limits.chain_fraction) as u64;
-        if total_cycles > limit {
-            out.push(Finding::error(format!(
-                "estimated {:.0}% of the pedal's CPU, over its {:.0}% limit — \
-                 this rig would drop out on the pedal",
-                100.0 * total_cycles as f32 / budget as f32,
-                100.0 * limits.chain_fraction
-            )));
-        } else if (total_cycles as f32) > (budget as f32) * limits.warn_fraction {
-            out.push(Finding::warn(format!(
-                "estimated {:.0}% of the pedal's CPU",
-                100.0 * total_cycles as f32 / budget as f32
-            )));
-        }
-    }
-
-    // SDRAM — an allocation past the heap would crash the pedal.
-    let mut total_sdram: u64 = 0;
-    for node in &patch.nodes {
-        if let Some(b) = lookup(limits.sdram_table, node.effect_uid) {
-            total_sdram += b as u64;
-        }
-    }
-    if limits.sdram_budget > 0 && total_sdram > limits.sdram_budget as u64 {
-        out.push(Finding::error(format!(
-            "needs {:.1} MB of the pedal's {:.0} MB SDRAM",
-            total_sdram as f32 / 1_048_576.0,
-            limits.sdram_budget as f32 / 1_048_576.0
-        )));
-    }
+    // CPU and memory.
+    out.extend(
+        limits
+            .load(patch.nodes.iter().map(|n| n.effect_uid))
+            .findings,
+    );
 
     out
 }
@@ -331,6 +397,55 @@ mod tests {
             sdram_budget: 64 << 20,
         };
         assert!(has_errors(&validate_for_pedal(&p, &limits)));
+    }
+
+    #[test]
+    fn load_counts_what_the_pedal_judges() {
+        let limits = PedalLimits {
+            allowed_uids: &[1, 11],
+            cycle_table: &[(1, 100_000), (11, 70_000)],
+            sdram_table: &[(11, 1 << 20)],
+            cycle_budget: 320_000,
+            chain_fraction: 0.8,
+            warn_fraction: 0.7,
+            node_overhead: 400,
+            sdram_budget: 64 << 20,
+        };
+        let load = limits.load([1, 11]);
+        assert_eq!((load.nodes, load.unavailable, load.sdram), (2, 0, 1 << 20));
+        assert!((load.cpu - 170_800.0 / 320_000.0).abs() < 1e-6);
+        assert_eq!(load.severity(), None);
+
+        assert_eq!(limits.load([1, 11, 11]).severity(), Some(Severity::Warning));
+        assert_eq!(limits.load([1, 99]).severity(), Some(Severity::Error));
+        assert_eq!(
+            limits
+                .load(core::iter::repeat_n(11, MAX_NODES + 1))
+                .severity(),
+            Some(Severity::Error)
+        );
+    }
+
+    #[test]
+    fn daisy_load_matches_validate_for_daisy() {
+        use sonido_platform::cycle_table::{CYCLE_BUDGET_PER_BLOCK, EFFECT_CYCLES, chain_cycles};
+        let p = two_node();
+        let load = daisy_load(p.nodes.iter().map(|n| n.effect_uid));
+        let findings = validate_for_daisy(&p);
+        for f in &load.findings {
+            assert!(
+                findings.contains(f),
+                "{f:?} missing from validate_for_daisy"
+            );
+        }
+        let heavy = EFFECT_CYCLES.iter().max_by_key(|(_, c)| *c).unwrap().0;
+        let load = daisy_load([heavy, heavy]);
+        let expected = chain_cycles([heavy, heavy]) as f32 / CYCLE_BUDGET_PER_BLOCK as f32;
+        assert!((load.cpu - expected).abs() < 1e-6);
+        assert_eq!(
+            daisy_load([heavy; MAX_NODES]).severity(),
+            Some(Severity::Error)
+        );
     }
 
     #[test]

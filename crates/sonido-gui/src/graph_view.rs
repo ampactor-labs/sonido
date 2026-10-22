@@ -498,15 +498,14 @@ impl GraphView {
         None
     }
 
-    /// Count of [`SonidoNode::Effect`] nodes currently in the graph.
-    ///
-    /// Used by the Daisy eligibility badge in the status bar: the Hothouse
-    /// pedal supports up to 3 effects in a single-chain topology.
-    pub fn effect_node_count(&self) -> usize {
-        self.snarl
-            .node_ids()
-            .filter(|(_, node)| matches!(node, SonidoNode::Effect { .. }))
-            .count()
+    /// Each [`SonidoNode::Effect`] node's registry id, in chain-slot order:
+    /// the rig's nodes on export, which the status bar judges by the pedal's
+    /// rule as you build.
+    pub fn effect_ids(&self) -> impl Iterator<Item = &'static str> + '_ {
+        self.snarl.node_ids().filter_map(|(_, node)| match node {
+            SonidoNode::Effect { effect_id, .. } => Some(*effect_id),
+            _ => None,
+        })
     }
 
     /// The graph's effect nodes in chain-slot order.
@@ -1902,7 +1901,7 @@ mod tests {
     fn removing_last_node_keeps_output_connected() {
         let mut gv = GraphView::new(); // Input → Output
         gv.add_effect_node("distortion"); // Input → Distortion → Output
-        assert_eq!(gv.effect_node_count(), 1);
+        assert_eq!(gv.effect_ids().count(), 1);
         assert!(output_has_input(&gv));
 
         // Remove the only effect: the Output must auto-reconnect (to Input),
@@ -1910,7 +1909,7 @@ mod tests {
         let effect = first_effect(&gv).expect("effect node present");
         gv.remove_node(effect);
 
-        assert_eq!(gv.effect_node_count(), 0);
+        assert_eq!(gv.effect_ids().count(), 0);
         assert!(
             output_has_input(&gv),
             "Output was orphaned after removing the last node"

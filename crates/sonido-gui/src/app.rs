@@ -1738,19 +1738,43 @@ impl SonidoApp {
                 },
             );
 
-            // Daisy eligibility badge — green if ≤3 effects, red if >3
+            // The pedal's rule, the one Export ▸ Pedal checks: its effect
+            // count and estimated CPU, coloured by the verdict.
             ui.separator();
-            let effect_count = self.graph_view.effect_node_count();
-            let daisy_color = if effect_count <= 3 {
-                theme.colors.green
-            } else {
-                theme.colors.red
-            };
-            ui.label(
-                egui::RichText::new(format!("Daisy: {effect_count}/3"))
-                    .font(FontId::monospace(11.0))
-                    .color(daisy_color),
+            let load = sonido_patch::validate::daisy_load(
+                self.graph_view
+                    .effect_ids()
+                    .map(|id| sonido_registry::effect_uid(id).unwrap_or(0)),
             );
+            let pedal_color = match load.severity() {
+                None => theme.colors.green,
+                Some(sonido_patch::validate::Severity::Warning) => theme.colors.yellow,
+                Some(sonido_patch::validate::Severity::Error) => theme.colors.red,
+            };
+            let mut why = vec![format!(
+                "The pedal's rule, the same one Export ▸ Pedal checks: up to {} \
+                 effects and {:.0}% of its CPU.",
+                sonido_patch::MAX_NODES,
+                100.0 * sonido_platform::cycle_table::CHAIN_FRACTION
+            )];
+            if load.nodes > sonido_patch::MAX_NODES {
+                why.push(format!("{} effects is too many.", load.nodes));
+            }
+            if load.unavailable > 0 {
+                why.push("An effect here isn't on the pedal.".to_owned());
+            }
+            why.extend(load.findings.iter().map(|f| f.message.clone()));
+            ui.label(
+                egui::RichText::new(format!(
+                    "Pedal: {}/{} · CPU {:.0}%",
+                    load.nodes,
+                    sonido_patch::MAX_NODES,
+                    100.0 * load.cpu
+                ))
+                .font(FontId::monospace(11.0))
+                .color(pedal_color),
+            )
+            .on_hover_text(why.join("\n"));
 
             // File player / generator transport (inline)
             ui.separator();
