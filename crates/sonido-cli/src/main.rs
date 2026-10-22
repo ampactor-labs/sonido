@@ -46,7 +46,7 @@ enum Commands {
     /// Manage effect presets (list, show, save, delete)
     Presets(commands::presets::PresetsArgs),
 
-    /// Rig files: export a preset or DSL chain as a rig, inspect a rig
+    /// Rig files: convert a rig, preset or DSL chain to .json/.bin; inspect a rig
     Patch(commands::patch::PatchArgs),
 
     /// The pedal over USB: list, send, read and play rigs; update its firmware
