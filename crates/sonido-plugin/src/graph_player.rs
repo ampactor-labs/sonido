@@ -39,7 +39,8 @@ use clack_plugin::utils::Cookie;
 
 use sonido_core::{ParamDescriptor, ParamFlags, ParamId, ParamUnit, TempoContext};
 use sonido_gui_core::telemetry::SignalTap;
-use sonido_patch::{NUM_MACROS, Patch, PatchPlayer};
+use sonido_patch::controls::RIG_TOGGLES;
+use sonido_patch::{NUM_MACROS, NUM_TOGGLES, Patch, PatchPlayer};
 use sonido_registry::{EffectRegistry, EffectWithParams, effect_by_uid};
 
 use crate::audio::{in_place, next_tempo};
@@ -56,6 +57,10 @@ const ID_MORPH_SPEED: u32 = 0x1011;
 const ID_INPUT_GAIN: u32 = 0x1020;
 const ID_MASTER_VOLUME: u32 = 0x1021;
 const ID_BYPASS: u32 = 0x1030;
+const ID_TOGGLE_BASE: u32 = 0x1040; // 0x1040 T1, 0x1041 T3
+
+/// The player's parameter count: macros, morph, speed, gains, bypass, toggles.
+const PARAM_COUNT: usize = NUM_MACROS + 5 + NUM_TOGGLES;
 
 /// The graph player's fixed parameter set (UID-stable, never reordered on the wire).
 fn graph_param_descriptors() -> Vec<ParamDescriptor> {
@@ -63,10 +68,11 @@ fn graph_param_descriptors() -> Vec<ParamDescriptor> {
         "Macro 1", "Macro 2", "Macro 3", "Macro 4", "Macro 5", "Macro 6",
     ];
     const SHORT: [&str; NUM_MACROS] = ["M1", "M2", "M3", "M4", "M5", "M6"];
-    let mut v = Vec::with_capacity(NUM_MACROS + 5);
+    let mut v = Vec::with_capacity(PARAM_COUNT);
+    // At noon by default: every rig is voiced with its knobs there.
     for i in 0..NUM_MACROS {
         v.push(
-            ParamDescriptor::custom(NAMES[i], SHORT[i], 0.0, 1.0, 0.0)
+            ParamDescriptor::custom(NAMES[i], SHORT[i], 0.0, 1.0, 0.5)
                 .with_id(ParamId(ID_MACRO_BASE + i as u32), "macro"),
         );
     }
@@ -95,6 +101,16 @@ fn graph_param_descriptors() -> Vec<ParamDescriptor> {
             .with_step_labels(&["Off", "On"])
             .with_id(ParamId(ID_BYPASS), "bypass"),
     );
+    // The rig's T1 and T3, in the middle by default (as on the pedal).
+    for (t, toggle) in RIG_TOGGLES.iter().enumerate() {
+        v.push(
+            ParamDescriptor::custom(toggle.label(), toggle.label(), 0.0, 2.0, 1.0)
+                .with_step(1.0)
+                .with_flags(ParamFlags::AUTOMATABLE.union(ParamFlags::STEPPED))
+                .with_step_labels(&["Up", "Middle", "Down"])
+                .with_id(ParamId(ID_TOGGLE_BASE + t as u32), "toggle"),
+        );
+    }
     v
 }
 
@@ -173,6 +189,20 @@ impl GraphShared {
     /// Index of the Bypass param.
     pub(crate) fn bypass_index(&self) -> Option<usize> {
         self.index_by_id(ID_BYPASS)
+    }
+    /// Which macro (0–5, K1–K6) param `i` is, if it is one.
+    pub(crate) fn macro_of(&self, i: usize) -> Option<usize> {
+        let id = self.inner.descriptors.get(i)?.id.0;
+        (ID_MACRO_BASE..ID_MACRO_BASE + NUM_MACROS as u32)
+            .contains(&id)
+            .then(|| (id - ID_MACRO_BASE) as usize)
+    }
+    /// Which rig toggle (0 = T1, 1 = T3) param `i` is, if it is one.
+    pub(crate) fn toggle_of(&self, i: usize) -> Option<usize> {
+        let id = self.inner.descriptors.get(i)?.id.0;
+        (ID_TOGGLE_BASE..ID_TOGGLE_BASE + NUM_TOGGLES as u32)
+            .contains(&id)
+            .then(|| (id - ID_TOGGLE_BASE) as usize)
     }
     /// Audio → GUI meters and scope.
     pub(crate) fn tap(&self) -> &SignalTap {
@@ -594,13 +624,22 @@ impl PluginAudioProcessorParams for GraphAudioProcessor<'_> {
     }
 }
 
-/// Push the shared param atomics into the player (macros, morph, gains, bypass).
+/// Push the shared param atomics into the player (macros, toggles, morph,
+/// gains, bypass).
 pub(crate) fn apply_params(shared: &GraphShared, player: &mut PatchPlayer) {
     for i in 0..NUM_MACROS {
         if let Some(index) = shared.index_by_id(ID_MACRO_BASE + i as u32)
             && let Some(v) = shared.get_value(index)
         {
             player.set_macro(i, v);
+        }
+    }
+    for t in 0..NUM_TOGGLES {
+        if let Some(v) = shared
+            .index_by_id(ID_TOGGLE_BASE + t as u32)
+            .and_then(|i| shared.get_value(i))
+        {
+            player.set_toggle(t, v.round().clamp(0.0, 2.0) as u8);
         }
     }
     if let Some(v) = shared
@@ -704,17 +743,21 @@ mod tests {
     #[test]
     fn descriptors_are_stable_and_unique() {
         let descs = graph_param_descriptors();
-        assert_eq!(descs.len(), NUM_MACROS + 5);
+        assert_eq!(descs.len(), PARAM_COUNT);
         let mut ids: Vec<u32> = descs.iter().map(|d| d.id.0).collect();
         ids.sort_unstable();
         ids.dedup();
-        assert_eq!(ids.len(), NUM_MACROS + 5, "duplicate param id");
+        assert_eq!(ids.len(), PARAM_COUNT, "duplicate param id");
     }
 
     #[test]
     fn shared_defaults_and_patch_roundtrip() {
         let shared = GraphShared::new(None, None);
-        assert_eq!(shared.param_count(), NUM_MACROS + 5);
+        assert_eq!(shared.param_count(), PARAM_COUNT);
+        let toggles: Vec<usize> = (0..PARAM_COUNT)
+            .filter_map(|i| shared.toggle_of(i))
+            .collect();
+        assert_eq!(toggles, [0, 1]);
         // Patch set/get roundtrips.
         let patch = patch_with_distortion();
         shared.set_patch(patch.clone());

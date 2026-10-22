@@ -4,11 +4,18 @@
 //! CPU budget, SDRAM) need facts the registry/firmware own — those are passed
 //! in as slices so this crate never depends on `sonido-registry` or the effect
 //! set, keeping it light enough to sit under the firmware.
+//!
+//! A [`Finding`] is data ([`Problem`]); its words are formatted only when it
+//! is shown, so the firmware, which only asks whether a rig has errors,
+//! carries no message text.
 
 #[cfg(not(feature = "std"))]
-use alloc::{format, string::String, vec::Vec};
+use alloc::vec::Vec;
 
-use crate::{MAX_NODES, MAX_PARAMS, MacroTarget, Patch, PatchEndpoint};
+use crate::controls::{RIG_TOGGLES, Toggle};
+use crate::{
+    GlobalParam, MAX_NODES, MAX_PARAMS, MAX_TOGGLE_MAPPINGS, MacroTarget, Patch, PatchEndpoint,
+};
 
 /// Whether a finding blocks export or merely warns.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -20,27 +27,224 @@ pub enum Severity {
     Warning,
 }
 
-/// A single validation result.
-#[derive(Clone, Debug, PartialEq)]
+/// What a finding is about, with the facts its message needs.
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
+pub enum Problem {
+    /// More effect nodes than [`MAX_NODES`].
+    TooManyNodes(usize),
+    /// A node with UID 0.
+    NoEffect {
+        /// The node.
+        node: usize,
+    },
+    /// A node's A and B snapshots differ in length.
+    SnapshotLengths {
+        /// The node.
+        node: usize,
+        /// A's length.
+        a: usize,
+        /// B's length.
+        b: usize,
+    },
+    /// A node with more than [`MAX_PARAMS`] parameters.
+    TooManyParams {
+        /// The node.
+        node: usize,
+        /// Its parameter count.
+        count: usize,
+    },
+    /// An edge to a node that doesn't exist.
+    EdgeNode {
+        /// The edge.
+        edge: usize,
+        /// Which end: "from" or "to".
+        end: &'static str,
+        /// The missing node.
+        node: u8,
+        /// How many nodes there are.
+        nodes: usize,
+    },
+    /// A macro on a slot that doesn't exist.
+    MacroSlot {
+        /// The macro (0 ⇒ K1).
+        knob: usize,
+        /// The missing slot.
+        slot: u8,
+        /// How many nodes there are.
+        nodes: usize,
+    },
+    /// A toggle with more than [`MAX_TOGGLE_MAPPINGS`] targets.
+    ToggleCount {
+        /// The toggle.
+        toggle: Toggle,
+        /// Its target count.
+        count: usize,
+    },
+    /// A toggle on a slot that doesn't exist.
+    ToggleSlot {
+        /// The toggle.
+        toggle: Toggle,
+        /// The missing slot.
+        slot: u8,
+        /// How many nodes there are.
+        nodes: usize,
+    },
+    /// A toggle on the morph, which T2 and FS2 drive.
+    ToggleMorph {
+        /// The toggle.
+        toggle: Toggle,
+    },
+    /// A toggle value that isn't a finite number.
+    ToggleValue {
+        /// The toggle.
+        toggle: Toggle,
+    },
+    /// A toggle on something a knob also turns (the knob wins).
+    ToggleUnderKnob {
+        /// The toggle.
+        toggle: Toggle,
+        /// The knob (0 ⇒ K1).
+        knob: usize,
+    },
+    /// A node whose effect the pedal doesn't carry.
+    NotOnPedal {
+        /// The node.
+        node: usize,
+        /// Its effect UID.
+        uid: u16,
+    },
+    /// An effect with no cycle measurement: the CPU estimate is a lower bound.
+    Unmeasured,
+    /// Over the pedal's CPU limit.
+    OverCpu {
+        /// Estimated share of the CPU.
+        cpu: f32,
+        /// The limit.
+        limit: f32,
+    },
+    /// Near the pedal's CPU limit.
+    NearCpu {
+        /// Estimated share of the CPU.
+        cpu: f32,
+    },
+    /// More SDRAM than the pedal has.
+    OverSdram {
+        /// Bytes needed.
+        bytes: u64,
+        /// Bytes available.
+        budget: u32,
+    },
+}
+
+impl core::fmt::Display for Problem {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match *self {
+            Self::TooManyNodes(n) => {
+                write!(f, "{n} effect nodes exceeds the {MAX_NODES}-node maximum")
+            }
+            Self::NoEffect { node } => write!(f, "node {node} has no effect (UID 0)"),
+            Self::SnapshotLengths { node, a, b } => {
+                write!(f, "node {node} A/B snapshots differ in length ({a} vs {b})")
+            }
+            Self::TooManyParams { node, count } => {
+                write!(
+                    f,
+                    "node {node} has {count} params, exceeds max {MAX_PARAMS}"
+                )
+            }
+            Self::EdgeNode {
+                edge,
+                end,
+                node,
+                nodes,
+            } => write!(
+                f,
+                "edge {edge} {end} references node {node}, but only {nodes} nodes exist"
+            ),
+            Self::MacroSlot { knob, slot, nodes } => write!(
+                f,
+                "macro {knob} targets slot {slot}, but only {nodes} nodes exist"
+            ),
+            Self::ToggleCount { toggle, count } => write!(
+                f,
+                "{} sets {count} targets, at most {MAX_TOGGLE_MAPPINGS}",
+                toggle.label()
+            ),
+            Self::ToggleSlot {
+                toggle,
+                slot,
+                nodes,
+            } => write!(
+                f,
+                "{} targets slot {slot}, but only {nodes} nodes exist",
+                toggle.label()
+            ),
+            Self::ToggleMorph { toggle } => write!(
+                f,
+                "{} can't set the morph: T2 and FS2 drive it",
+                toggle.label()
+            ),
+            Self::ToggleValue { toggle } => {
+                write!(f, "{} sets a value that isn't a number", toggle.label())
+            }
+            Self::ToggleUnderKnob { toggle, knob } => write!(
+                f,
+                "{} sets something knob K{} also turns; the knob wins",
+                toggle.label(),
+                knob + 1
+            ),
+            Self::NotOnPedal { node, uid } => {
+                write!(f, "node {node} (UID {uid}) is not available on the pedal")
+            }
+            Self::Unmeasured => f.write_str(
+                "some effects have no measured cycle data; CPU estimate is a lower bound",
+            ),
+            Self::OverCpu { cpu, limit } => write!(
+                f,
+                "estimated {:.0}% of the pedal's CPU, over its {:.0}% limit — \
+                 this rig would drop out on the pedal",
+                100.0 * cpu,
+                100.0 * limit
+            ),
+            Self::NearCpu { cpu } => write!(f, "estimated {:.0}% of the pedal's CPU", 100.0 * cpu),
+            Self::OverSdram { bytes, budget } => write!(
+                f,
+                "needs {:.1} MB of the pedal's {:.0} MB SDRAM",
+                bytes as f32 / 1_048_576.0,
+                budget as f32 / 1_048_576.0
+            ),
+        }
+    }
+}
+
+/// A single validation result. Displays as its message.
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Finding {
     /// Whether this blocks export.
     pub severity: Severity,
-    /// Human-readable explanation.
-    pub message: String,
+    /// What it is about.
+    pub problem: Problem,
 }
 
 impl Finding {
-    fn error(message: impl Into<String>) -> Self {
+    fn error(problem: Problem) -> Self {
         Self {
             severity: Severity::Error,
-            message: message.into(),
+            problem,
         }
     }
-    fn warn(message: impl Into<String>) -> Self {
+    fn warn(problem: Problem) -> Self {
         Self {
             severity: Severity::Warning,
-            message: message.into(),
+            problem,
         }
+    }
+}
+
+impl core::fmt::Display for Finding {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        self.problem.fmt(f)
     }
 }
 
@@ -51,60 +255,95 @@ pub fn has_errors(findings: &[Finding]) -> bool {
 
 /// Structural integrity — independent of any platform.
 ///
-/// Checks node/param caps, A/B snapshot agreement, non-zero UIDs, and edge
-/// referential integrity (every `Node(i)` endpoint indexes a real node).
+/// Checks node/param caps, A/B snapshot agreement, non-zero UIDs, edge
+/// referential integrity (every `Node(i)` endpoint indexes a real node), and
+/// that macros and toggles target real slots (toggles only an effect
+/// parameter, the input gain or the master volume, with finite values).
 pub fn validate_structure(patch: &Patch) -> Vec<Finding> {
     let mut out = Vec::new();
+    let nodes = patch.nodes.len();
 
-    if patch.nodes.len() > MAX_NODES {
-        out.push(Finding::error(format!(
-            "{} effect nodes exceeds the {MAX_NODES}-node maximum",
-            patch.nodes.len()
-        )));
+    if nodes > MAX_NODES {
+        out.push(Finding::error(Problem::TooManyNodes(nodes)));
     }
 
     for (i, node) in patch.nodes.iter().enumerate() {
         if node.effect_uid == 0 {
-            out.push(Finding::error(format!("node {i} has no effect (UID 0)")));
+            out.push(Finding::error(Problem::NoEffect { node: i }));
         }
         if node.params_a.len() != node.params_b.len() {
-            out.push(Finding::error(format!(
-                "node {i} A/B snapshots differ in length ({} vs {})",
-                node.params_a.len(),
-                node.params_b.len()
-            )));
+            out.push(Finding::error(Problem::SnapshotLengths {
+                node: i,
+                a: node.params_a.len(),
+                b: node.params_b.len(),
+            }));
         }
         if node.params_a.len() > MAX_PARAMS {
-            out.push(Finding::error(format!(
-                "node {i} has {} params, exceeds max {MAX_PARAMS}",
-                node.params_a.len()
-            )));
+            out.push(Finding::error(Problem::TooManyParams {
+                node: i,
+                count: node.params_a.len(),
+            }));
         }
     }
 
-    let n = patch.nodes.len() as u8;
     for (i, edge) in patch.edges.iter().enumerate() {
-        for (which, ep) in [("from", edge.from), ("to", edge.to)] {
+        for (end, ep) in [("from", edge.from), ("to", edge.to)] {
             if let PatchEndpoint::Node(idx) = ep
-                && idx >= n
+                && usize::from(idx) >= nodes
             {
-                out.push(Finding::error(format!(
-                    "edge {i} {which} references node {idx}, but only {n} nodes exist"
-                )));
+                out.push(Finding::error(Problem::EdgeNode {
+                    edge: i,
+                    end,
+                    node: idx,
+                    nodes,
+                }));
             }
         }
     }
 
     // Macro targets must address an existing slot.
-    for (mi, m) in patch.macros.iter().enumerate() {
+    for (knob, m) in patch.macros.iter().enumerate() {
         for spec in &m.mappings {
             if let MacroTarget::Slot { slot, .. } = spec.target
-                && (slot as usize) >= patch.nodes.len()
+                && usize::from(slot) >= nodes
             {
-                out.push(Finding::error(format!(
-                    "macro {mi} targets slot {slot}, but only {} nodes exist",
-                    patch.nodes.len()
-                )));
+                out.push(Finding::error(Problem::MacroSlot { knob, slot, nodes }));
+            }
+        }
+    }
+
+    // Toggles set real targets the morph doesn't own, to real numbers.
+    for (def, &toggle) in patch.toggles.iter().zip(&RIG_TOGGLES) {
+        if def.mappings.len() > MAX_TOGGLE_MAPPINGS {
+            out.push(Finding::error(Problem::ToggleCount {
+                toggle,
+                count: def.mappings.len(),
+            }));
+        }
+        for spec in &def.mappings {
+            match spec.target {
+                MacroTarget::Slot { slot, .. } if usize::from(slot) >= nodes => {
+                    out.push(Finding::error(Problem::ToggleSlot {
+                        toggle,
+                        slot,
+                        nodes,
+                    }));
+                }
+                MacroTarget::Slot { .. }
+                | MacroTarget::Global(GlobalParam::InputGain | GlobalParam::MasterVolume) => {}
+                MacroTarget::Global(_) => {
+                    out.push(Finding::error(Problem::ToggleMorph { toggle }));
+                }
+            }
+            if !spec.values.iter().all(|v| v.is_finite()) {
+                out.push(Finding::error(Problem::ToggleValue { toggle }));
+            }
+            if let Some(knob) = patch
+                .macros
+                .iter()
+                .position(|m| m.mappings.iter().any(|m| m.target == spec.target))
+            {
+                out.push(Finding::warn(Problem::ToggleUnderKnob { toggle, knob }));
             }
         }
     }
@@ -150,7 +389,7 @@ pub struct PedalLoad {
     pub cpu: f32,
     /// SDRAM the effects allocate, in bytes.
     pub sdram: u64,
-    /// The CPU and memory findings, worded as export shows them.
+    /// The CPU and memory findings, as export shows them.
     pub findings: Vec<Finding>,
 }
 
@@ -189,9 +428,7 @@ impl PedalLimits<'_> {
 
         let mut findings = Vec::new();
         if unmeasured {
-            findings.push(Finding::warn(
-                "some effects have no measured cycle data; CPU estimate is a lower bound",
-            ));
+            findings.push(Finding::warn(Problem::Unmeasured));
         }
         let budget = self.cycle_budget as f32;
         let cpu = if budget > 0.0 {
@@ -201,26 +438,20 @@ impl PedalLimits<'_> {
         };
         if budget > 0.0 {
             if cpu > self.chain_fraction {
-                findings.push(Finding::error(format!(
-                    "estimated {:.0}% of the pedal's CPU, over its {:.0}% limit — \
-                     this rig would drop out on the pedal",
-                    100.0 * cpu,
-                    100.0 * self.chain_fraction
-                )));
+                findings.push(Finding::error(Problem::OverCpu {
+                    cpu,
+                    limit: self.chain_fraction,
+                }));
             } else if cpu > self.warn_fraction {
-                findings.push(Finding::warn(format!(
-                    "estimated {:.0}% of the pedal's CPU",
-                    100.0 * cpu
-                )));
+                findings.push(Finding::warn(Problem::NearCpu { cpu }));
             }
         }
         // An allocation past the heap would crash the pedal.
         if self.sdram_budget > 0 && sdram > u64::from(self.sdram_budget) {
-            findings.push(Finding::error(format!(
-                "needs {:.1} MB of the pedal's {:.0} MB SDRAM",
-                sdram as f32 / 1_048_576.0,
-                self.sdram_budget as f32 / 1_048_576.0
-            )));
+            findings.push(Finding::error(Problem::OverSdram {
+                bytes: sdram,
+                budget: self.sdram_budget,
+            }));
         }
 
         PedalLoad {
@@ -253,7 +484,7 @@ fn with_daisy_limits<R>(f: impl FnOnce(&PedalLimits<'_>) -> R) -> R {
 
 /// What a rig of these effects costs the Daisy pedal, by the rule
 /// [`validate_for_daisy`] applies: the editor's status bar shows it as you
-/// build.
+/// build, and the pedal refuses a rig it calls an error.
 pub fn daisy_load(uids: impl IntoIterator<Item = u16>) -> PedalLoad {
     with_daisy_limits(|limits| limits.load(uids))
 }
@@ -276,10 +507,10 @@ pub fn validate_for_pedal(patch: &Patch, limits: &PedalLimits) -> Vec<Finding> {
     // Effect set.
     for (i, node) in patch.nodes.iter().enumerate() {
         if !limits.allowed_uids.contains(&node.effect_uid) {
-            out.push(Finding::error(format!(
-                "node {i} (UID {}) is not available on the pedal",
-                node.effect_uid
-            )));
+            out.push(Finding::error(Problem::NotOnPedal {
+                node: i,
+                uid: node.effect_uid,
+            }));
         }
     }
 
@@ -331,6 +562,57 @@ mod tests {
             curve: MorphCurve::Linear,
         });
         assert!(has_errors(&validate_structure(&p)));
+    }
+
+    #[test]
+    fn toggles_target_real_slots_and_leave_the_morph_alone() {
+        use crate::{ToggleDef, ToggleMappingSpec};
+        let toggle = |target, values| {
+            let mut p = two_node();
+            p.toggles[1] = ToggleDef {
+                name: "Shape".into(),
+                positions: Default::default(),
+                mappings: vec![ToggleMappingSpec { target, values }],
+            };
+            validate_structure(&p)
+        };
+        let fine = toggle(MacroTarget::Slot { slot: 1, param: 0 }, [0.0, 1.0, 2.0]);
+        assert!(fine.is_empty(), "{fine:?}");
+        let master = toggle(
+            MacroTarget::Global(GlobalParam::MasterVolume),
+            [-3.0, 0.0, 3.0],
+        );
+        assert!(master.is_empty(), "{master:?}");
+        assert!(has_errors(&toggle(
+            MacroTarget::Slot { slot: 2, param: 0 },
+            [0.0; 3]
+        )));
+        assert!(has_errors(&toggle(
+            MacroTarget::Global(GlobalParam::MorphPosition),
+            [0.0; 3]
+        )));
+        let nan = toggle(
+            MacroTarget::Slot { slot: 0, param: 0 },
+            [0.0, f32::NAN, 1.0],
+        );
+        assert!(nan[0].to_string().starts_with("T3 "), "{nan:?}");
+
+        // Shared with a knob: allowed, but said.
+        let mut p = two_node();
+        p.macros[4].mappings.push(MacroMappingSpec {
+            target: MacroTarget::Slot { slot: 0, param: 1 },
+            min: 0.0,
+            max: 1.0,
+            curve: MorphCurve::Linear,
+        });
+        p.toggles[0].mappings.push(ToggleMappingSpec {
+            target: MacroTarget::Slot { slot: 0, param: 1 },
+            values: [0.0, 0.5, 1.0],
+        });
+        let shared = validate_structure(&p);
+        assert!(!has_errors(&shared));
+        assert_eq!(shared[0].severity, Severity::Warning);
+        assert!(shared[0].to_string().contains("K5"), "{shared:?}");
     }
 
     #[test]

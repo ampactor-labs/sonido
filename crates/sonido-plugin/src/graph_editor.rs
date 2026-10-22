@@ -1,8 +1,10 @@
 //! The graph player's editor: a RIG-family cabinet with a rig browser.
 //!
 //! The cabinet's controls are the player's own parameters (six macros, morph,
-//! morph speed, input and master gain; the power button is the Bypass
-//! param), plus one control that only exists here: **RIG**, a selector over
+//! morph speed, input and master gain, and the rig's T1 and T3; the macros
+//! and toggles go by the rig's own names and labels, an unused toggle is
+//! hidden, and the power button is the Bypass param), plus one control that
+//! only exists here: **RIG**, a selector over
 //! the rig library. Choosing a rig replaces the plugin's patch and asks the
 //! host to restart the plugin, so `activate()` rebuilds the player off the
 //! audio thread. The patch is the plugin's saved state, so the project
@@ -22,7 +24,8 @@ use sonido_core::{ParamDescriptor, ParamFlags};
 use sonido_gui_core::cabinet::{Cabinet, CabinetIo, RigView};
 use sonido_gui_core::param_bridge::{ParamBridge, ParamIndex, SlotIndex};
 use sonido_gui_core::theme::Family;
-use sonido_patch::Patch;
+use sonido_patch::controls::RIG_TOGGLES;
+use sonido_patch::{NUM_MACROS, NUM_TOGGLES, Patch};
 use sonido_registry::{EffectRegistry, effect_by_uid};
 
 use crate::graph_player::GraphShared;
@@ -184,16 +187,52 @@ pub struct GraphModel {
     shared: GraphShared,
     library: Mutex<RigLibrary>,
     choice: Mutex<RigChoice>,
+    /// The rig's own names for the deck (see [`RigLabels`]).
+    labels: Mutex<RigLabels>,
     /// Patch generation the rig view and choice were last built from.
     shown: Mutex<Option<u64>>,
+}
+
+/// The rig's own names for the deck: each knob's (`None` when unnamed) and
+/// each toggle's name and position labels (`None` when unused). Leaked once
+/// per patch change, as the RIG labels are.
+struct RigLabels {
+    macros: [Option<&'static str>; NUM_MACROS],
+    toggles: [Option<(&'static str, &'static [&'static str])>; NUM_TOGGLES],
+}
+
+fn leak(s: String) -> &'static str {
+    Box::leak(s.into_boxed_str())
+}
+
+fn rig_labels(patch: &Patch) -> RigLabels {
+    RigLabels {
+        macros: core::array::from_fn(|k| {
+            let name = &patch.macros[k].name;
+            (!name.is_empty()).then(|| leak(name.clone()))
+        }),
+        toggles: core::array::from_fn(|t| {
+            let def = &patch.toggles[t];
+            def.is_active().then(|| {
+                let labels: Vec<&'static str> =
+                    def.positions.iter().map(|l| leak(l.clone())).collect();
+                (
+                    leak(format!("{} {}", RIG_TOGGLES[t].label(), def.name)),
+                    &*Box::leak(labels.into_boxed_slice()),
+                )
+            })
+        }),
+    }
 }
 
 impl GraphModel {
     /// The editor model for one graph-player instance.
     pub fn new(shared: GraphShared) -> Self {
         let library = RigLibrary::new();
-        let choice = RigChoice::new(&library, &shared.patch());
+        let patch = shared.patch();
+        let choice = RigChoice::new(&library, &patch);
         Self {
+            labels: Mutex::new(rig_labels(&patch)),
             shared,
             library: Mutex::new(library),
             choice: Mutex::new(choice),
@@ -283,6 +322,21 @@ impl ParamBridge for GraphModel {
         // The power button is Bypass; don't also show it as a deck control.
         if Some(param.0) == self.shared.bypass_index() {
             desc.flags = desc.flags.union(ParamFlags::HIDDEN);
+        }
+        let labels = self.labels.lock().unwrap();
+        if let Some(name) = self.shared.macro_of(param.0).and_then(|k| labels.macros[k]) {
+            desc.name = name;
+            desc.short_name = name;
+        }
+        if let Some(t) = self.shared.toggle_of(param.0) {
+            match labels.toggles[t] {
+                Some((name, steps)) => {
+                    desc.name = name;
+                    desc.short_name = name;
+                    desc.step_labels = Some(steps);
+                }
+                None => desc.flags = desc.flags.union(ParamFlags::HIDDEN),
+            }
         }
         Some(desc)
     }
@@ -374,6 +428,7 @@ impl EditorModel for GraphModel {
             *shown = Some(generation);
             let patch = self.shared.patch();
             *self.choice.lock().unwrap() = RigChoice::new(&lib, &patch);
+            *self.labels.lock().unwrap() = rig_labels(&patch);
             cabinet.set_rig(Some(self.rig_view()));
         }
     }

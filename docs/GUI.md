@@ -101,7 +101,7 @@ The layout adapts to width. **Desktop** (≥ 900 px) is shown above; on a wide w
 - **Save / Load**: the session as JSON (see [Sessions](#sessions)).
 - **Export**: see [Export](#export).
 - **GEN / FILE**: source select.
-- **MACROS**: **Auto** plus the six macro knobs K1–K6 (in the RIG drawer on Phone).
+- **MACROS**: **Auto** plus the six macro knobs K1–K6, then the rig's toggles **T1** and **T3** (in the RIG drawer on Phone).
 - **Right side**: audio status LED (green running, red stopped), plus, when present, `errors: N` (audio stream errors such as underruns), the last compile error, the last export result, and an audio start error with a **Retry** button.
 
 ### I/O wall bars
@@ -152,7 +152,7 @@ Selecting an effect node opens its panel below the canvas, framed in the effect'
 
 **Knob controls:** drag vertically (Shift for fine), scroll the mouse wheel over a knob (Shift for fine), use Up/Down on a focused knob (1 % per press, Shift 0.2 %), use Left/Right to move focus between knobs, and double-click to reset to default.
 
-**Right-click any knob or selector** to get **Map to Macro 1–6** or **Clear macro mapping**.
+**Right-click any knob or selector** to get **Map to Macro 1–6**, **Map to toggle T1 / T3**, or **Clear mapping**. A parameter has one control: mapping it to a macro or toggle unmaps it from any other.
 
 With nothing selected, the area shows a one-line prompt.
 
@@ -168,6 +168,15 @@ Six performance knobs, **K1–K6**, sit in the header. Each macro sweeps any num
 - **Auto**: seeds one macro per effect in chain order (the first six), each bound to that effect's first continuous, musical parameter over its full range and curve. The knob position is set to reproduce the current value, so assigning never jumps the sound.
 - **Edit**: right-click a macro knob to open its mapping window. There you can rename it, set each target's min/max, invert (⇄), remove a target (✕), or **Clear all**.
 - **Hover** a macro knob for its name and target count. A small cyan dot under the knob marks a mapped macro.
+
+## Toggles
+
+The pedal's **T1** and **T3** belong to the rig: each is a three-way switch (Up, Mid, Down) that sets every parameter mapped to it to that position's value. They sit after the macros in the header, each position labelled with the rig's own label.
+
+- **Map**: right-click a parameter and choose **Map to toggle T1** (or T3). Every position starts at the parameter's current value, and the toggle's editor opens.
+- **Record**: click a position, then turn the mapped knob; the value records into that position, the way a focused A/B pose records. Flip between positions to compare.
+- **Edit**: click the toggle's name for its window: rename it, label its three positions (shown on the pedal guide and the plugin's deck), drag each position's value, or remove a target (✕).
+- **Play order**: as on the pedal, the morph applies first, then the toggles, then the macros, so a toggled parameter holds its value through an A/B sweep. A toggle starts in the middle.
 
 ## A/B Morph
 

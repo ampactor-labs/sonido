@@ -6,9 +6,9 @@
 
 use proptest::prelude::*;
 use sonido_patch::{
-    GlobalControls, GlobalParam, MAX_NODES, MAX_PARAMS, MacroMappingSpec, MacroTarget, MorphConfig,
-    MorphCurve, MorphMode, NUM_MACROS, Patch, PatchEdge, PatchEndpoint, PatchNode, SECTOR_SIZE,
-    binary,
+    GlobalControls, GlobalParam, MAX_NODES, MAX_PARAMS, MAX_TOGGLE_MAPPINGS, MacroMappingSpec,
+    MacroTarget, MorphConfig, MorphCurve, MorphMode, NUM_MACROS, NUM_TOGGLES, Patch, PatchEdge,
+    PatchEndpoint, PatchNode, SECTOR_SIZE, ToggleDef, ToggleMappingSpec, binary,
 };
 
 #[test]
@@ -94,6 +94,13 @@ prop_compose! {
         master in -40.0f32..6.0,
         curve in arb_curve(),
         global in prop::bool::ANY,
+        toggle_name in "[ -~]{0,16}",
+        labels in prop::array::uniform3("[ -~]{0,8}"),
+        toggle_values in prop::collection::vec(
+            prop::array::uniform3(-100.0f32..100.0),
+            0..=MAX_TOGGLE_MAPPINGS,
+        ),
+        toggle in 0..NUM_TOGGLES,
     ) -> Patch {
         let n = nodes.len();
         let mut p = Patch::linear_chain(name, nodes);
@@ -108,6 +115,20 @@ prop_compose! {
         };
         p.macros[0].name = "M1".into();
         p.macros[0].mappings.push(MacroMappingSpec { target, min: 0.0, max: 1.0, curve });
+        // One toggle, possibly unused (then no toggle section is written).
+        let toggle_target = if global || n == 0 {
+            MacroTarget::Global(GlobalParam::InputGain)
+        } else {
+            MacroTarget::Slot { slot: 0, param: 0 }
+        };
+        p.toggles[toggle] = ToggleDef {
+            name: toggle_name,
+            positions: labels,
+            mappings: toggle_values
+                .into_iter()
+                .map(|values| ToggleMappingSpec { target: toggle_target, values })
+                .collect(),
+        };
         p
     }
 }
@@ -141,8 +162,9 @@ proptest! {
 
 #[test]
 fn worst_case_patch_fits_one_sector() {
-    // 8 nodes × 16 params (A+B) + 6 macros × 8 mappings + 24 edges: the design's
-    // worst case must fit a single 4 KB sector with headroom.
+    // 8 nodes × 16 params (A+B) + 6 macros × 8 mappings + 16 edges + both
+    // toggles × 8 mappings: the design's worst case must fit a single 4 KB
+    // sector with headroom.
     let nodes: Vec<PatchNode> = (0..MAX_NODES)
         .map(|i| {
             let mut n = PatchNode::new((i as u16) + 1, vec![0.5; MAX_PARAMS]);
@@ -162,6 +184,19 @@ fn worst_case_patch_fits_one_sector() {
             });
         }
     }
+    for t in &mut p.toggles {
+        *t = ToggleDef {
+            name: "ToggleNameSixteen".into(),
+            positions: ["Position".into(), "Position".into(), "Position".into()],
+            mappings: vec![
+                ToggleMappingSpec {
+                    target: MacroTarget::Slot { slot: 0, param: 0 },
+                    values: [0.0, 0.5, 1.0],
+                };
+                MAX_TOGGLE_MAPPINGS
+            ],
+        };
+    }
     // Pad edges toward the worst case.
     for i in 0..(MAX_NODES - 1) {
         p.edges.push(PatchEdge::new(
@@ -173,9 +208,9 @@ fn worst_case_patch_fits_one_sector() {
     let mut buf = [0u8; SECTOR_SIZE];
     let len = binary::encode(&p, &mut buf).expect("worst case must fit a sector");
     assert!(len <= SECTOR_SIZE, "len {len} exceeds sector");
-    // Confirm comfortable headroom (design claim: < 2 KB).
+    // Confirm comfortable headroom (design claim: under 2.25 KB of 4).
     assert!(
-        len < 2048,
-        "worst-case patch is {len} bytes, expected < 2048"
+        len < 2304,
+        "worst-case patch is {len} bytes, expected < 2304"
     );
 }

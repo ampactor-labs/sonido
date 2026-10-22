@@ -9,6 +9,7 @@
 
 use sonido_core::{ParamDescriptor, ParamScale};
 
+use crate::NUM_TOGGLES;
 use crate::pedal::{JAM_SLOTS, Topology};
 
 /// Rig bank slots the pedal keeps in flash.
@@ -64,9 +65,53 @@ pub enum Toggle {
     T3,
 }
 
-/// Whether `toggle` does anything (T1 and T3 are the jam's; a rig ignores them).
-pub fn toggle_active(toggle: Toggle, jam: bool) -> bool {
-    jam || toggle == Toggle::T2
+impl Toggle {
+    /// Its place on the pedal, left to right (0, 1, 2), as the hardware reads
+    /// it.
+    pub fn index(self) -> usize {
+        match self {
+            Self::T1 => 0,
+            Self::T2 => 1,
+            Self::T3 => 2,
+        }
+    }
+
+    /// For people: "T1", "T2", "T3".
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::T1 => "T1",
+            Self::T2 => "T2",
+            Self::T3 => "T3",
+        }
+    }
+}
+
+/// The toggles a rig assigns, in `Patch::toggles` order (T2 is always
+/// [`Mode`]).
+pub const RIG_TOGGLES: [Toggle; NUM_TOGGLES] = [Toggle::T1, Toggle::T3];
+
+/// What a toggle does.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ToggleRole {
+    /// The jam's T1: the slot the knobs edit ([`slot`]).
+    Slot,
+    /// T2, always: [`Mode`].
+    Mode,
+    /// The jam's T3: how its slots are wired ([`Topology`]).
+    Routing,
+    /// T1 or T3 in a rig: that rig's own toggle, `Patch::toggles[i]` (which
+    /// does nothing if the rig leaves it unused).
+    Rig(usize),
+}
+
+/// What `toggle` does in the jam or in a rig.
+pub fn toggle_role(toggle: Toggle, jam: bool) -> ToggleRole {
+    match (toggle, jam) {
+        (Toggle::T2, _) => ToggleRole::Mode,
+        (Toggle::T1, true) => ToggleRole::Slot,
+        (Toggle::T3, true) => ToggleRole::Routing,
+        (t, false) => ToggleRole::Rig(RIG_TOGGLES.iter().position(|&r| r == t).unwrap_or(0)),
+    }
 }
 
 /// The jam slot (0-based) T1 at `position` selects.
@@ -310,6 +355,18 @@ mod tests {
             footswitch(Footswitch::Fs2, Press::Tap, Mode::Morph),
             Action::Glide
         );
+    }
+
+    #[test]
+    fn the_jam_owns_t1_and_t3_a_rig_assigns_them() {
+        assert_eq!(toggle_role(Toggle::T1, true), ToggleRole::Slot);
+        assert_eq!(toggle_role(Toggle::T3, true), ToggleRole::Routing);
+        for jam in [true, false] {
+            assert_eq!(toggle_role(Toggle::T2, jam), ToggleRole::Mode);
+        }
+        for (i, &t) in RIG_TOGGLES.iter().enumerate() {
+            assert_eq!(toggle_role(t, false), ToggleRole::Rig(i));
+        }
     }
 
     #[test]

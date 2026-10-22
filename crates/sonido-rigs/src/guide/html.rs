@@ -6,11 +6,13 @@
 use std::fmt::Write as _;
 
 use sonido_patch::Patch;
-use sonido_patch::controls::{self, Footswitch, KnobPage, Mode, PowerOn, Press, Toggle};
+use sonido_patch::controls::{
+    self, Footswitch, KnobPage, Mode, PowerOn, Press, Toggle, ToggleRole,
+};
 use sonido_patch::pedal::{JAM_SLOTS, Topology};
 use sonido_registry::{EffectRegistry, JAM_EFFECT_IDS};
 
-use super::{KnobMode, jam_effect_knobs, knob_modes, rig_knobs, t2_place};
+use super::{KnobMode, jam_effect_knobs, knob_modes, rig_knobs, rig_toggles, t2_place};
 
 /// The guide page.
 pub fn html_guide() -> String {
@@ -368,15 +370,14 @@ fn toggle_callout(toggle: Toggle, name: &str, label: impl Fn(u8) -> String, jam:
         .iter()
         .map(|&(p, arrow)| format!("{arrow} {}", label(p)))
         .collect();
-    let rig = if controls::toggle_active(toggle, false) {
-        "in a rig: the same"
-    } else {
-        "in a rig: nothing (yet)"
+    let rig = match controls::toggle_role(toggle, false) {
+        ToggleRole::Rig(_) => "in a rig: the rig's own switch (on its card below)",
+        _ => "in a rig: the same",
     };
     Callout::new(name)
         .line(positions.join(" · "))
         .line(jam.to_owned())
-        .line(rig)
+        .mode(KnobPage::Macros, rig)
 }
 
 /// A footswitch's callout: tap and hold, with any T2-middle variant.
@@ -575,7 +576,9 @@ fn rig_cards(b: &mut String, rigs: &[Patch], modes: &[KnobMode]) {
         .map(|m| m.knobs.clone());
     b.push_str(
         "<section id=rigs><h2>The factory rigs</h2><p class=note>In a rig the knobs are \
-         the rig's own. The bottom row is each rig's sound.</p><div class=cards>",
+         the rig's own: the bottom row is each rig's sound. Where a rig uses T1 or T3, \
+         each switches part of its sound three ways (▲ · ● · ▼); it starts in the \
+         middle.</p><div class=cards>",
     );
     for rig in rigs {
         let knobs = rig_knobs(rig);
@@ -588,6 +591,14 @@ fn rig_cards(b: &mut String, rigs: &[Patch], modes: &[KnobMode]) {
             esc(&rig.name)
         );
         knob_grid(b, &knobs, &muted);
+        for (t, name, labels) in rig_toggles(rig) {
+            let _ = write!(
+                b,
+                "<div class=tog><span class=tk>{t}</span><b>{}</b><span>{}</span></div>",
+                esc(&name),
+                esc(&labels.join(" · "))
+            );
+        }
         b.push_str("</div>");
     }
     b.push_str("</div></section>");
@@ -725,6 +736,11 @@ text-transform:uppercase}
 .knobg{width:28px;height:28px;border-radius:50%;background:#26272a;position:relative}
 .knobg::after{content:"";position:absolute;left:12.5px;top:3px;width:3px;height:9px;
 background:#fff;border-radius:2px}
+.tog{display:flex;gap:8px;align-items:baseline;margin-top:10px;padding-top:8px;
+border-top:1px dashed var(--line);font-size:13px}
+.tog .tk{font-size:11px;font-weight:700;color:#fff;background:var(--rig);border-radius:4px;
+padding:0 5px}
+.tog span:last-child{color:var(--muted)}
 .flow{display:flex;flex-wrap:wrap;align-items:center;gap:6px}
 .pill{background:var(--card);border:1px solid var(--line);border-radius:999px;padding:4px 12px;
 font-weight:600}

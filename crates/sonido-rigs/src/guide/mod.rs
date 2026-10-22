@@ -17,7 +17,7 @@ pub use html::html_guide;
 pub use text::{Style, effect_card, text_card};
 
 use sonido_patch::Patch;
-use sonido_patch::controls::{self, KnobPage, Mode, SETUP_LEVELS};
+use sonido_patch::controls::{self, KnobPage, Mode, RIG_TOGGLES, SETUP_LEVELS, ToggleRole};
 use sonido_platform::knob_mapping::{NULL_KNOB, knob_map};
 use sonido_registry::{EffectRegistry, JAM_EFFECT_IDS};
 
@@ -66,6 +66,26 @@ pub(crate) fn rig_knobs(rig: &Patch) -> [String; 6] {
             name.clone()
         }
     })
+}
+
+/// The toggles a rig assigns ("T1", "T3"), from `controls::toggle_role`.
+pub(crate) fn rig_owned_toggles() -> Vec<&'static str> {
+    RIG_TOGGLES
+        .iter()
+        .filter(|&&t| matches!(controls::toggle_role(t, false), ToggleRole::Rig(_)))
+        .map(|t| t.label())
+        .collect()
+}
+
+/// A rig's toggles in use: switch ("T1"), name, and the labels up, middle
+/// and down.
+pub(crate) fn rig_toggles(rig: &Patch) -> Vec<(&'static str, String, [String; 3])> {
+    RIG_TOGGLES
+        .iter()
+        .zip(&rig.toggles)
+        .filter(|(_, def)| def.is_active())
+        .map(|(t, def)| (t.label(), def.name.clone(), def.positions.clone()))
+        .collect()
 }
 
 /// One way of reading the knobs: the page, where it applies, and each

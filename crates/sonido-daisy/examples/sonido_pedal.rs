@@ -101,7 +101,7 @@ use sonido_daisy::{
     usb_task,
 };
 use sonido_patch::controls::{
-    self, Action, Footswitch, KnobPage, LedShows, Mode, PowerOn, Press, Toggle,
+    self, Action, Footswitch, KnobPage, LedShows, Mode, PowerOn, Press, Toggle, ToggleRole,
 };
 use sonido_patch::link::{self, ErrorCode, FrameDecoder, Info, Reply, Request, Status};
 use sonido_patch::pedal::{
@@ -614,15 +614,20 @@ fn control_tick(cb: &mut Cb) {
     };
     let jam = pedal.active == RigRef::Jam;
 
-    // ── Toggles ──
-    if controls::toggle_active(Toggle::T1, jam) {
-        let focused = controls::slot(CONTROLS.read_toggle(0));
-        if focused != cb.focused {
-            cb.focused = focused;
-            rearm_takeover(cb);
+    // ── Toggles: the jam's slot and routing, or the rig's own T1 and T3 ──
+    let t1 = CONTROLS.read_toggle(Toggle::T1.index());
+    match controls::toggle_role(Toggle::T1, jam) {
+        ToggleRole::Slot => {
+            let focused = controls::slot(t1);
+            if focused != cb.focused {
+                cb.focused = focused;
+                rearm_takeover(cb);
+            }
         }
+        ToggleRole::Rig(i) => player.set_toggle(i, t1),
+        ToggleRole::Mode | ToggleRole::Routing => {}
     }
-    let mode = Mode::from_toggle(CONTROLS.read_toggle(1));
+    let mode = Mode::from_toggle(CONTROLS.read_toggle(Toggle::T2.index()));
     if mode != cb.mode {
         if mode == Mode::Morph {
             cb.morph_t = if cb.mode == Mode::B { 1.0 } else { 0.0 };
@@ -634,12 +639,19 @@ fn control_tick(cb: &mut Cb) {
         cb.mode = mode;
         rearm_takeover(cb);
     }
-    // T3 is the jam's routing; the jam reads it again when it loads.
-    let topology = Topology::from_toggle(CONTROLS.read_toggle(2));
-    if controls::toggle_active(Toggle::T3, jam) && topology != pedal.topology {
-        pedal.topology = topology;
-        request(RigRef::Jam);
-        mark_dirty();
+    // The jam's routing is read again when the jam loads.
+    let t3 = CONTROLS.read_toggle(Toggle::T3.index());
+    match controls::toggle_role(Toggle::T3, jam) {
+        ToggleRole::Routing => {
+            let topology = Topology::from_toggle(t3);
+            if topology != pedal.topology {
+                pedal.topology = topology;
+                request(RigRef::Jam);
+                mark_dirty();
+            }
+        }
+        ToggleRole::Rig(i) => player.set_toggle(i, t3),
+        ToggleRole::Slot | ToggleRole::Mode => {}
     }
 
     // ── Footswitches: taps act at release, holds as they reach HOLD_TICKS ──
@@ -1078,6 +1090,9 @@ async fn load(rig: RigRef) -> Result<(), LoadError> {
             if rig != RigRef::Jam {
                 for k in 0..6 {
                     player.set_macro(k, CONTROLS.read_knob(k));
+                }
+                for (i, &t) in controls::RIG_TOGGLES.iter().enumerate() {
+                    player.set_toggle(i, CONTROLS.read_toggle(t.index()));
                 }
             }
             player.set_tempo_context(&pedal.tempo());

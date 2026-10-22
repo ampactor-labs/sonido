@@ -6,11 +6,13 @@
 //!
 //! # Versioning & migration
 //!
-//! v2 added the canonical macro/morph/B-snapshot fields and v3 adds the live
-//! `macro_positions` / `morph_position` knob state. Every added field is
-//! `#[serde(default)]`, so an older file loads transparently: macros come up
-//! empty, morph defaults, knob positions zero, and each effect's B snapshot
-//! mirrors its A snapshot. No separate migration pass is needed.
+//! v2 added the canonical macro/morph/B-snapshot fields, v3 the live
+//! `macro_positions` / `morph_position` knob state, and v4 the rig's T1/T3
+//! `toggles` and their positions. Every added field is `#[serde(default)]`,
+//! so an older file loads transparently: macros and toggles come up empty,
+//! morph defaults, knob positions zero, toggles in the middle, and each
+//! effect's B snapshot mirrors its A snapshot. No separate migration pass is
+//! needed.
 //!
 //! [`Session::to_patch`] projects a session into the canonical
 //! [`sonido_patch::Patch`] used for export to a CLAP plugin or the pedal.
@@ -21,8 +23,8 @@ use std::path::Path;
 
 use sonido_core::{MacroMap, MacroMapping};
 use sonido_patch::{
-    GlobalControls, MacroDef, MacroMappingSpec, MorphConfig, NUM_MACROS, Patch, PatchEdge,
-    PatchEndpoint, PatchNode,
+    GlobalControls, MacroDef, MacroMappingSpec, MorphConfig, NUM_MACROS, NUM_TOGGLES, Patch,
+    PatchEdge, PatchEndpoint, PatchNode, ToggleDef,
 };
 use sonido_registry::effect_uid;
 
@@ -40,6 +42,10 @@ pub struct PerformanceCapture {
     pub macros: [MacroDef; NUM_MACROS],
     /// Live macro knob positions (0.0–1.0), restored on load.
     pub macro_positions: [f32; NUM_MACROS],
+    /// The rig's T1 and T3.
+    pub toggles: [ToggleDef; NUM_TOGGLES],
+    /// Their live positions (0 up, 1 middle, 2 down), restored on load.
+    pub toggle_positions: [u8; NUM_TOGGLES],
     /// Morph behaviour: speed, mode, and per-slot lock bitfield.
     pub morph: MorphConfig,
     /// Current A→B crossfade position (0.0–1.0).
@@ -119,6 +125,13 @@ pub struct Session {
     /// Live macro knob positions (0.0–1.0). Absent in v1/v2 sessions ⇒ all 0.0.
     #[serde(default = "default_macro_positions")]
     pub macro_positions: [f32; NUM_MACROS],
+    /// The rig's T1 and T3. Unused in v1–v3 sessions.
+    #[serde(default)]
+    pub toggles: [ToggleDef; NUM_TOGGLES],
+    /// Live toggle positions (0 up, 1 middle, 2 down). Absent before v4 ⇒ the
+    /// middle.
+    #[serde(default = "default_toggle_positions")]
+    pub toggle_positions: [u8; NUM_TOGGLES],
     /// A/B morph configuration. Default in v1 sessions.
     #[serde(default)]
     pub morph: MorphConfig,
@@ -142,6 +155,11 @@ fn default_macros() -> [MacroDef; NUM_MACROS] {
 
 fn default_macro_positions() -> [f32; NUM_MACROS] {
     [0.0; NUM_MACROS]
+}
+
+/// Toggles start in the middle, as on the pedal.
+pub fn default_toggle_positions() -> [u8; NUM_TOGGLES] {
+    [sonido_patch::runtime::TOGGLE_DEFAULT_POSITION; NUM_TOGGLES]
 }
 
 /// A node entry with type and 2D position.
@@ -203,9 +221,10 @@ impl EffectState {
 impl Session {
     /// Current schema version.
     ///
-    /// v3 adds `macro_positions` and `morph_position` (live knob/crossfade
-    /// state). Both are `#[serde(default)]`, so v1/v2 files load unchanged.
-    pub const VERSION: u32 = 3;
+    /// v3 added `macro_positions` and `morph_position` (live knob/crossfade
+    /// state); v4 adds `toggles` and `toggle_positions`. All are
+    /// `#[serde(default)]`, so older files load unchanged.
+    pub const VERSION: u32 = 4;
 
     /// Serialize to pretty JSON, without touching the filesystem.
     ///
@@ -219,7 +238,7 @@ impl Session {
         serde_json::to_string_pretty(self)
     }
 
-    /// Parse a session from a JSON string (v1, v2, or v3), without the
+    /// Parse a session from a JSON string (v1–v4), without the
     /// filesystem. Shared by native [`load`](Self::load) and the browser upload.
     ///
     /// # Errors
@@ -239,7 +258,7 @@ impl Session {
         Ok(())
     }
 
-    /// Load a session from a JSON file (v1, v2, or v3).
+    /// Load a session from a JSON file (v1–v4).
     ///
     /// # Errors
     ///
@@ -311,6 +330,7 @@ impl Session {
             nodes,
             edges,
             macros: self.macros.clone(),
+            toggles: self.toggles.clone(),
             morph: self.morph,
             globals: GlobalControls {
                 input_gain_db: self.input_gain,
@@ -361,6 +381,8 @@ mod tests {
             master_volume: -3.0,
             macros: default_macros(),
             macro_positions: default_macro_positions(),
+            toggles: Default::default(),
+            toggle_positions: default_toggle_positions(),
             morph: MorphConfig::default(),
             morph_position: 0.0,
             name: default_rig_name(),
@@ -372,10 +394,37 @@ mod tests {
         let session = sample_session();
         let json = serde_json::to_string(&session).unwrap();
         let restored: Session = serde_json::from_str(&json).unwrap();
-        assert_eq!(restored.version, 3);
+        assert_eq!(restored.version, Session::VERSION);
         assert_eq!(restored.nodes.len(), 3);
         assert_eq!(restored.wires.len(), 2);
         assert_eq!(restored.master_volume, -3.0);
+    }
+
+    #[test]
+    fn toggles_reach_the_rig_and_survive_json() {
+        let mut session = sample_session();
+        session.toggles[1] = ToggleDef {
+            name: "Space".into(),
+            positions: ["Big".into(), "Mid".into(), "Small".into()],
+            mappings: vec![sonido_patch::ToggleMappingSpec {
+                target: sonido_core::MacroTarget::Slot { slot: 0, param: 1 },
+                values: [0.9, 0.7, 0.2],
+            }],
+        };
+        session.toggle_positions = [1, 2];
+        let restored = Session::from_json(&session.to_json().unwrap()).unwrap();
+        assert_eq!(restored.toggles, session.toggles);
+        assert_eq!(restored.toggle_positions, [1, 2]);
+        assert_eq!(session.to_patch("t").toggles, session.toggles);
+
+        // A v3 file has neither: unused toggles, in the middle.
+        let mut v3: serde_json::Value = serde_json::from_str(&session.to_json().unwrap()).unwrap();
+        let fields = v3.as_object_mut().unwrap();
+        fields.remove("toggles");
+        fields.remove("toggle_positions");
+        let old: Session = serde_json::from_value(v3).unwrap();
+        assert!(old.toggles.iter().all(|t| !t.is_active()));
+        assert_eq!(old.toggle_positions, default_toggle_positions());
     }
 
     #[test]
@@ -464,6 +513,8 @@ mod tests {
             master_volume: 0.0,
             macros: default_macros(),
             macro_positions: default_macro_positions(),
+            toggles: Default::default(),
+            toggle_positions: default_toggle_positions(),
             morph: MorphConfig::default(),
             morph_position: 0.0,
             name: default_rig_name(),

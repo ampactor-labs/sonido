@@ -114,7 +114,7 @@ pub fn check_for_pedal(patch: &Patch) -> anyhow::Result<()> {
             Severity::Error => "error",
             Severity::Warning => "warning",
         };
-        eprintln!("{level}: {}", f.message);
+        eprintln!("{level}: {f}");
     }
     if has_errors(&findings) {
         anyhow::bail!("'{}' won't run on the pedal", patch.name);
@@ -262,6 +262,29 @@ pub fn print_rig(patch: &Patch) {
                 println!(
                     "      {:?}  [{:.3} .. {:.3}] {:?}",
                     map.target, map.min, map.max, map.curve
+                );
+            }
+        }
+    }
+
+    let toggles: Vec<_> = sonido_patch::controls::RIG_TOGGLES
+        .iter()
+        .zip(&patch.toggles)
+        .filter(|(_, t)| t.is_active())
+        .collect();
+    if !toggles.is_empty() {
+        println!("Toggles:");
+        for (switch, t) in toggles {
+            println!(
+                "  {}: \"{}\"  {}",
+                switch.label(),
+                t.name,
+                t.positions.join(" · ")
+            );
+            for map in &t.mappings {
+                println!(
+                    "      {:?}  [{:.3} · {:.3} · {:.3}]",
+                    map.target, map.values[0], map.values[1], map.values[2]
                 );
             }
         }

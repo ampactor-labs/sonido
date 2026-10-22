@@ -10,8 +10,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
-use sonido_patch::{Patch, PatchNode, PatchPlayer};
-use sonido_registry::{EffectRegistry, effect_by_uid, effect_uid};
+use sonido_patch::{Patch, PatchPlayer};
+use sonido_registry::{EffectRegistry, effect_by_uid};
 
 use crate::egui_bridge;
 use crate::graph_editor::GraphModel;
@@ -24,7 +24,7 @@ const BLOCK: usize = 256;
 
 /// Open `effect_id`'s editor (or `"graph-player"`'s) in its own window
 /// until it is closed (or, with `snapshot`, until it has saved a PNG after
-/// `frames` frames). `demo_rig` preloads the graph player with a sample rig.
+/// `frames` frames). `demo_rig` preloads the graph player with a factory rig.
 pub fn run(
     effect_id: &'static str,
     scale: f64,
@@ -73,18 +73,10 @@ pub fn run(
     let _ = audio.join();
 }
 
-/// A four-effect demo rig: distortion, chorus, delay, reverb.
+/// The demo rig: the first factory rig.
 fn demo_patch() -> Patch {
-    let node = |id: &str| PatchNode::new(effect_uid(id).expect("registered"), Vec::new());
-    Patch::linear_chain(
-        "Neon Drive",
-        vec![
-            node("distortion"),
-            node("chorus"),
-            node("delay"),
-            node("reverb"),
-        ],
-    )
+    // A factory rig, so the deck shows a real rig's macros and toggles.
+    sonido_rigs::factory_rigs().swap_remove(0)
 }
 
 /// One block of the test riff into `l`/`r`, starting at sample `n`.

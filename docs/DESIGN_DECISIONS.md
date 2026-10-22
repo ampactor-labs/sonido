@@ -1479,7 +1479,7 @@ One rule for the footswitches and one for the knobs, in every rig and every T2 p
 - The jam's effect list, renamed `JAM_EFFECT_IDS`, is the pick knobs' zone order and is no longer append-only, since jams are stored by effect UID.
 - A newly picked effect starts at its voiced defaults, not at the knobs' positions.
 - Tap tempo is not available with T2 in the middle, where FS2 glides.
-- T1 and T3 do nothing in a rig; assignable toggles in rigs are future work.
+- In a rig, T1 and T3 are the rig's own (`Patch::toggles`, `controls::toggle_role`): each is a three-way switch that sets the targets mapped to it to a value per position, applied after the morph and before the knobs, so a knob on the same parameter wins. A toggle may set effect parameters, the input gain or the master volume, never the morph (T2 and FS2 own it), and starts in the middle. Every factory rig gives both a job (Shimmer Cathedral's interval, Fuzz Lab's clipping and filter type, …), each setting only what its morph and knobs leave alone, with the rig's own value in the middle so its level trim holds; `tests/factory.rs` holds every position within 4 dB and requires each one to change the sound. In the editor, a parameter's right-click menu maps it to T1 or T3, and turning it records into the toggle's current position. The firmware learned this at link protocol 3; `sonido pedal push` and the editor's Send to pedal say so when older firmware would play a rig without its toggles.
 - A firmware update needs the power-on gesture or a USB host; without either, the bootloader is reached with the Seed's RESET and BOOT buttons, inside the enclosure (`docs/EMBEDDED.md`, Bootloader Behavior).
 
 ### References

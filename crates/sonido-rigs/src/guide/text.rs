@@ -10,7 +10,7 @@
 use std::fmt::Write as _;
 
 use sonido_patch::controls::{
-    self, Footswitch, KnobPage, LedShows, Mode, PowerOn, Press, SETUP_LEVELS, Toggle,
+    self, Footswitch, KnobPage, LedShows, Mode, PowerOn, Press, SETUP_LEVELS,
 };
 use sonido_patch::pedal::{JAM_SLOTS, Topology};
 use sonido_platform::knob_mapping::{NULL_KNOB, knob_map, knob_to_param};
@@ -73,6 +73,7 @@ pub fn text_card(style: Style) -> String {
     setup_page(o, st);
     jam_effects(o, st);
     factory_rigs(o, st);
+    rig_toggles(o, st);
     rig_list_and_power_on(o, st);
     let _ = writeln!(
         o,
@@ -104,6 +105,13 @@ fn face(o: &mut String) {
                 Mode::from_toggle(p).label(),
                 Topology::from_toggle(p).label(),
             ),
+        );
+    }
+    let owned = super::rig_owned_toggles();
+    if !owned.is_empty() {
+        line(
+            o,
+            &format!("   (the jam's; in a rig {} are its own)", owned.join(", ")),
         );
     }
     line(o, "");
@@ -226,18 +234,6 @@ fn knobs(o: &mut String, st: Style) {
         })
         .collect();
     t2_table(o, st, &rows);
-    let jam_only: Vec<&str> = [(Toggle::T1, "T1"), (Toggle::T3, "T3")]
-        .into_iter()
-        .filter(|(t, _)| !controls::toggle_active(*t, false))
-        .map(|(_, n)| n)
-        .collect();
-    if !jam_only.is_empty() {
-        let _ = writeln!(
-            o,
-            "   {}",
-            st.dim(&format!("{} act in the jam only.", jam_only.join(" and ")))
-        );
-    }
 }
 
 fn short_page(page: KnobPage) -> String {
@@ -368,6 +364,48 @@ fn factory_rigs(o: &mut String, st: Style) {
         })
         .collect();
     knob_table(o, st, &rows);
+}
+
+/// Each factory rig's own toggles, one line per toggle.
+fn rig_toggles(o: &mut String, st: Style) {
+    let owned = super::rig_owned_toggles();
+    let _ = writeln!(
+        o,
+        "\n{}  {}",
+        st.head("RIG TOGGLES"),
+        st.dim(&format!(
+            "in a rig, {} are the rig's own: ▲ · ● · ▼",
+            owned.join(" and ")
+        ))
+    );
+    let rows: Vec<(String, &str, String, [String; 3])> = crate::factory_rigs()
+        .into_iter()
+        .flat_map(|rig| {
+            super::rig_toggles(&rig)
+                .into_iter()
+                .map(move |(t, name, labels)| (rig.name.clone(), t, name, labels))
+        })
+        .collect();
+    if rows.is_empty() {
+        let _ = writeln!(o, "   {}", st.dim("none of the factory rigs uses them"));
+    }
+    let mut last = String::new();
+    for (rig, t, name, labels) in rows {
+        let shown = if rig == last {
+            String::new()
+        } else {
+            rig.clone()
+        };
+        last = rig;
+        let _ = writeln!(
+            o,
+            "   {:<20}{} {:<12}{}",
+            shown,
+            st.key(t),
+            name,
+            labels.join(" · ")
+        );
+    }
 }
 
 fn rig_list_and_power_on(o: &mut String, st: Style) {

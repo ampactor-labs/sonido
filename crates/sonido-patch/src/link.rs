@@ -19,14 +19,24 @@
 #[cfg(not(feature = "std"))]
 use alloc::{string::String, vec, vec::Vec};
 
-use crate::SECTOR_SIZE;
 use crate::binary::crc32;
 use crate::pedal::RigRef;
+use crate::{Patch, SECTOR_SIZE, ToggleDef};
 
 /// Frame sync bytes.
 pub const SYNC: [u8; 2] = *b"SL";
-/// Protocol version reported in [`Info`].
-pub const PROTOCOL_VERSION: u8 = 2;
+/// Protocol version reported in [`Info`]. 2 added the bootloader request; 3
+/// is firmware that plays a rig's own T1 and T3 ([`Patch::toggles`]).
+pub const PROTOCOL_VERSION: u8 = 3;
+
+/// What firmware on link `protocol` would leave out of `rig`, if anything:
+/// before protocol 3 the pedal plays a rig with its T1 and T3 doing nothing.
+pub fn unplayed(rig: &Patch, protocol: u8) -> Option<&'static str> {
+    (protocol < 3 && rig.toggles.iter().any(ToggleDef::is_active)).then_some(
+        "its T1 and T3 toggles: the pedal's firmware predates them \
+         (`sonido pedal update` brings it up to date)",
+    )
+}
 /// Largest payload: one rig sector.
 pub const MAX_PAYLOAD: usize = SECTOR_SIZE;
 /// Bytes around the payload (sync, kind, argument, length, CRC).
@@ -393,6 +403,18 @@ mod tests {
         let mut frames = Vec::new();
         d.feed(bytes, |f| frames.push((f.kind, f.arg, f.payload.to_vec())));
         (frames, d.dropped())
+    }
+
+    #[test]
+    fn older_firmware_plays_a_rig_without_its_toggles() {
+        let mut rig = Patch::new("t");
+        assert_eq!(unplayed(&rig, 2), None);
+        rig.toggles[0].mappings.push(crate::ToggleMappingSpec {
+            target: crate::MacroTarget::Global(crate::GlobalParam::InputGain),
+            values: [0.0; 3],
+        });
+        assert!(unplayed(&rig, 2).is_some());
+        assert_eq!(unplayed(&rig, PROTOCOL_VERSION), None);
     }
 
     #[test]

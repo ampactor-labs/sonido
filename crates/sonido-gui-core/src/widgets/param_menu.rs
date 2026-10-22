@@ -1,7 +1,8 @@
 //! Right-click parameter → macro-mapping action plumbing.
 //!
 //! A parameter knob's context menu lets the user bind that parameter to one of
-//! the six performance macros (K1–K6) or clear its binding. The menu is drawn
+//! the six performance macros (K1–K6) or a rig toggle (T1, T3), or clear its
+//! binding. The menu is drawn
 //! deep inside an effect panel ([`GenericPanel`](crate::effects_ui::GenericPanel)),
 //! but the macro map lives in the host application. The chosen action is
 //! therefore surfaced through egui temp-data: [`param_macro_menu`] stashes it and
@@ -10,11 +11,12 @@
 //! editor and the plugin reuse the same menu.
 
 use egui::{Id, Response};
+use sonido_patch::controls::RIG_TOGGLES;
 
 use crate::{ParamIndex, SlotIndex};
 
 /// Number of performance macros (K1–K6) the context menu offers.
-pub const NUM_MACROS: usize = 6;
+pub use sonido_patch::NUM_MACROS;
 
 /// egui temp-data key under which the pending [`MacroAction`] is stashed.
 const PENDING_ACTION: &str = "sonido.pending_macro_action";
@@ -34,7 +36,17 @@ pub enum MacroAction {
         /// Destination macro, 0-based (`0` ⇒ K1).
         macro_index: usize,
     },
-    /// Remove any macro binding for parameter `param` of `slot`.
+    /// Bind parameter `param` of `slot` to rig toggle `toggle` (0 ⇒ T1,
+    /// 1 ⇒ T3; see `sonido_patch::controls::RIG_TOGGLES`).
+    MapToggle {
+        /// Chain slot index of the parameter's effect.
+        slot: usize,
+        /// Parameter index within that slot.
+        param: usize,
+        /// Destination toggle, 0-based.
+        toggle: usize,
+    },
+    /// Remove any macro or toggle binding for parameter `param` of `slot`.
     Clear {
         /// Chain slot index of the parameter's effect.
         slot: usize,
@@ -43,7 +55,8 @@ pub enum MacroAction {
     },
 }
 
-/// Attach a "Map to Macro 1–6 / Clear" context menu to a parameter widget.
+/// Attach a "Map to Macro 1–6 / T1 / T3 / Clear" context menu to a parameter
+/// widget.
 ///
 /// Right-clicking `response` opens the menu; the chosen action is stashed in
 /// egui temp-data for the host to drain with [`take_macro_action`]. Call this on
@@ -68,8 +81,25 @@ pub fn param_macro_menu(response: &Response, slot: SlotIndex, param: ParamIndex)
                 ui.close_menu();
             }
         }
+        for (t, toggle) in RIG_TOGGLES.iter().enumerate() {
+            if ui
+                .button(format!("Map to toggle {}", toggle.label()))
+                .on_hover_text("Each position sets its own value: flip it, then turn this knob")
+                .clicked()
+            {
+                stash(
+                    ui.ctx(),
+                    MacroAction::MapToggle {
+                        slot: slot.0,
+                        param: param.0,
+                        toggle: t,
+                    },
+                );
+                ui.close_menu();
+            }
+        }
         ui.separator();
-        if ui.button("Clear macro mapping").clicked() {
+        if ui.button("Clear mapping").clicked() {
             stash(
                 ui.ctx(),
                 MacroAction::Clear {

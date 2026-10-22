@@ -219,6 +219,9 @@ pub fn run(args: PedalArgs) -> anyhow::Result<()> {
                 patch.name,
                 slot + 1
             );
+            if let Some(what) = sonido_patch::link::unplayed(&patch, link.info()?.protocol) {
+                eprintln!("warning: the pedal plays it without {what}");
+            }
         }
         PedalCommand::Pull { what, output } => {
             let mut link = open()?;

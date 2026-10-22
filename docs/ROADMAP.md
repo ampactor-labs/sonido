@@ -136,7 +136,7 @@ Effect plugins support host-negotiated window resize via atomic `PendingResize` 
 
 **Status:** Headless core and rig-browser editor complete
 
-The graph player (`crates/sonido-plugin/src/graph_player.rs`, `com.sonido.graph-player`) runs a whole exported `Patch` as one plugin via `PatchPlayer`, the runtime the pedal firmware also plays rigs through: six macro params, morph position/speed, input and master gain, bypass. Its state is the patch JSON the GUI exports ("Export as CLAP patch"). Its editor (`graph_editor.rs`) is a RIG cabinet with a rig selector over the factory rigs (`sonido_rigs::factory_rigs`, the same six the pedal ships) and the rig library folder the GUI exports to. The rig itself is edited in the GUI, not inside the plugin.
+The graph player (`crates/sonido-plugin/src/graph_player.rs`, `com.sonido.graph-player`) runs a whole exported `Patch` as one plugin via `PatchPlayer`, the runtime the pedal firmware also plays rigs through: six macro params (at noon by default, where every rig is voiced), the rig's T1 and T3, morph position/speed, input and master gain, bypass. The deck shows the macros and toggles under the rig's own names and labels. Its state is the patch JSON the GUI exports ("Export as CLAP patch"). Its editor (`graph_editor.rs`) is a RIG cabinet with a rig selector over the factory rigs (`sonido_rigs::factory_rigs`, the same six the pedal ships) and the rig library folder the GUI exports to. The rig itself is edited in the GUI, not inside the plugin.
 
 ### Benchmark Baseline Tracking in CI
 
@@ -405,7 +405,7 @@ See ADR-025 in `docs/DESIGN_DECISIONS.md` for full architectural rationale.
 
 ### Pedal Firmware (Rig Player)
 
-**Status:** Complete, with its host tools (`sonido_patch::client`, `sonido pedal`, the editor's Send to pedal). Assignable toggles in rigs remain.
+**Status:** Complete, with its host tools (`sonido_patch::client`, `sonido pedal`, the editor's Send to pedal), including assignable T1/T3 toggles in rigs.
 
 Pedal firmware on Hothouse/Daisy Seed (`crates/sonido-daisy/examples/sonido_pedal.rs`), a rig player: every sound is a `Patch` played by `PatchPlayer` with registry-built effects, as in the graph-player plugin. The rig list is the jam (three slots, each one of 8 effects or empty; T1 selects the slot, T3 the topology: linear 1→2→3, parallel split, fan 1→[2,3]), up to 15 rigs in the QSPI rig bank, and the six factory rigs (`crates/sonido-rigs`); a footswitch held 0.4 s steps through it (FS1 back, FS2 forward) and it powers on into the last rig played. One control rule (ADR-032): FS1 tap is on/off, FS2 tap is tap tempo (with T2 in the middle, a glide between A and B); the top row of knobs is levels, K3 always a volume, and the bottom row the sound. T2 is A / Morph / B for any rig; on a rig the knobs are its six macros, in the jam they edit the selected slot's A or B, and with T2 in the middle they are the jam's setup page (K1 input, K2 morph time, K3 master; K4–K6 pick slot 1–3's effect). The jam, its settings, the active rig and the tapped tempo are saved to a flash state sector; the USB rig link (`sonido_patch::link`) reads, writes and activates bank rigs while it plays, and restarts the pedal into its bootloader for a firmware update. LED 2 blinks the rig's position or a refusal's error code, shows the morph position as PWM with T2 in the middle and the output level otherwise. See `docs/EMBEDDED.md`.
 

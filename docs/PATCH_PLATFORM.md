@@ -13,10 +13,10 @@ player's.
 ```
                  sonido_patch::Patch
    nodes (stable effect UID) · edges (Input/Output/Split/Merge) ·
-   per-node A/B param snapshots · bypass · 6 macros · morph config · globals
+   per-node A/B param snapshots · bypass · 6 macros · 2 toggles · morph · globals
       │                      │                         │
       ▼ JSON (serde)         ▼ JSON                     ▼ binary codec (4 KB sector)
- GUI session (v3)       CLAP plugin state          QSPI rig bank (15 slots)
+ GUI session (v4)       CLAP plugin state          QSPI rig bank (15 slots)
  (+ node positions)     (graph-player)             pedal plays it; written over
                                                    the USB rig link
 ```
@@ -40,8 +40,8 @@ Runtime layering:
 - `PatchPlayer` (`sonido-patch/runtime.rs`) runs a patch live: the graph-player
   plugin and the pedal firmware (`examples/sonido_pedal.rs`) both play every rig
   through it, with effects built by the same `EffectRegistry::create`. Per
-  control tick the order is **morph first, then macros** (macros win on
-  overlap). A freshly built player starts at its values
+  control tick the order is **morph first, then toggles, then macros** (a
+  toggle overrides the morph on what it sets; a macro wins over both). A freshly built player starts at its values
   (`apply_controls_now`, which snaps every parameter) rather than sweeping
   there from the effects' defaults.
 - The GUI editor projects its session into a `Patch` for export; it does not run

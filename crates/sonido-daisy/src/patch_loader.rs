@@ -6,7 +6,8 @@
 //! same on the pedal as in a DAW. [`check_rig`] applies the rule the editor's
 //! export check applies (`sonido_patch::validate_for_pedal` with
 //! `sonido_platform::cycle_table`): every effect available, routing valid, CPU
-//! within [`cycle_table::CHAIN_FRACTION`] of the block, memory within SDRAM.
+//! within [`sonido_platform::cycle_table::CHAIN_FRACTION`] of the block, memory
+//! within SDRAM.
 
 extern crate alloc;
 
@@ -14,9 +15,8 @@ use alloc::boxed::Box;
 
 use sonido_core::EffectWithParams;
 use sonido_patch::link::ErrorCode;
-use sonido_patch::validate::{has_errors, validate_structure};
+use sonido_patch::validate::{Severity, daisy_load, has_errors, validate_structure};
 use sonido_patch::{Patch, PatchBuildError, PatchError, SECTOR_SIZE};
-use sonido_platform::cycle_table;
 use sonido_registry::{EffectRegistry, effect_by_uid};
 
 use crate::qspi_flash::{QspiFlash, patch_slot_addr};
@@ -73,11 +73,8 @@ pub fn check_rig(patch: &Patch) -> Result<(), ErrorCode> {
     if has_errors(&validate_structure(patch)) {
         return Err(ErrorCode::BadRig);
     }
-    let uids = || patch.nodes.iter().map(|n| n.effect_uid);
-    let sdram: u64 = uids()
-        .map(|u| u64::from(cycle_table::effect_sdram(u).unwrap_or(0)))
-        .sum();
-    if !cycle_table::chain_fits(uids()) || sdram > u64::from(cycle_table::SDRAM_BUDGET_BYTES) {
+    // The same CPU and memory rule export applies.
+    if daisy_load(patch.nodes.iter().map(|n| n.effect_uid)).severity() == Some(Severity::Error) {
         return Err(ErrorCode::OverBudget);
     }
     Ok(())

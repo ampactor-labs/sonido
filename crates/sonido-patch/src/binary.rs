@@ -10,7 +10,7 @@
 //! Header (16 bytes)
 //!   0   u32  magic = "SNDP"
 //!   4   u16  format_version
-//!   6   u16  flags (reserved, 0)
+//!   6   u16  flags: bit 0 = the toggle section follows the edges
 //!   8   u32  crc32 of the payload
 //!   12  u16  payload_len
 //!   14  u16  reserved (0)
@@ -20,7 +20,12 @@
 //!   6 × macro: name[16] · count u8 · count × (target[3] · min f32 · max f32 · curve u8)
 //!   node_count u8 · nodes: uid u16 · bypassed u8 · pcount u8 · A[pc]f32 · B[pc]f32
 //!   edge_count u8 · edges: from[2] · to[2]
+//!   if flags bit 0, 2 × toggle: name[16] · 3 × label[8] · count u8 ·
+//!     count × (target[3] · up f32 · middle f32 · down f32)
 //! ```
+//!
+//! The toggle section is written only for a rig that uses its toggles, so a
+//! rig without them (the jam among them) encodes as it did before toggles.
 //!
 //! `decode` is fully bounds-checked and never panics: a truncated or corrupt
 //! sector returns [`PatchError`], so the firmware can fall back to a known-good
@@ -32,12 +37,16 @@ use alloc::{string::String, vec::Vec};
 use sonido_core::{GlobalParam, MacroTarget, MorphCurve, MorphMode};
 
 use crate::{
-    GlobalControls, MACRO_NAME_LEN, MAX_NODES, MAX_PARAMS, MacroDef, MacroMappingSpec, MorphConfig,
-    NUM_MACROS, PATCH_FORMAT_VERSION, PATCH_MAGIC, PATCH_NAME_LEN, Patch, PatchEdge, PatchEndpoint,
-    PatchNode, SECTOR_SIZE,
+    GlobalControls, MACRO_NAME_LEN, MAX_NODES, MAX_PARAMS, MAX_TOGGLE_MAPPINGS, MacroDef,
+    MacroMappingSpec, MorphConfig, NUM_MACROS, NUM_TOGGLES, PATCH_FORMAT_VERSION, PATCH_MAGIC,
+    PATCH_NAME_LEN, Patch, PatchEdge, PatchEndpoint, PatchNode, SECTOR_SIZE, TOGGLE_LABEL_LEN,
+    ToggleDef, ToggleMappingSpec,
 };
 
 const HEADER_LEN: usize = 16;
+
+/// Header flag: the toggle section follows the edges.
+const FLAG_TOGGLES: u16 = 1;
 
 /// Errors from [`encode`] / [`decode`].
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -66,6 +75,8 @@ pub enum PatchError {
     TooManyParams(usize),
     /// A node's A/B snapshots differ in length.
     SnapshotLenMismatch,
+    /// A toggle sets more than [`MAX_TOGGLE_MAPPINGS`] targets.
+    TooManyToggleMappings(usize),
     /// An enum tag byte was out of range. `what` names the field.
     BadTag {
         /// Field whose tag was invalid.
@@ -92,6 +103,9 @@ impl core::fmt::Display for PatchError {
             Self::TooManyNodes(n) => write!(f, "{n} nodes exceeds max {MAX_NODES}"),
             Self::TooManyParams(n) => write!(f, "{n} params exceeds max {MAX_PARAMS}"),
             Self::SnapshotLenMismatch => write!(f, "A/B snapshot length mismatch"),
+            Self::TooManyToggleMappings(n) => {
+                write!(f, "a toggle sets {n} targets, max {MAX_TOGGLE_MAPPINGS}")
+            }
             Self::BadTag { what, tag } => write!(f, "invalid {what} tag {tag}"),
         }
     }
@@ -355,6 +369,7 @@ fn read_endpoint(r: &mut Reader) -> Result<PatchEndpoint, PatchError> {
 /// Caps are enforced here: [`TooManyNodes`](PatchError::TooManyNodes),
 /// [`TooManyParams`](PatchError::TooManyParams),
 /// [`SnapshotLenMismatch`](PatchError::SnapshotLenMismatch),
+/// [`TooManyToggleMappings`](PatchError::TooManyToggleMappings),
 /// [`BufferTooSmall`](PatchError::BufferTooSmall), and
 /// [`TooLarge`](PatchError::TooLarge) (payload > 4 KB sector).
 pub fn encode(patch: &Patch, out: &mut [u8]) -> Result<usize, PatchError> {
@@ -369,9 +384,17 @@ pub fn encode(patch: &Patch, out: &mut [u8]) -> Result<usize, PatchError> {
             return Err(PatchError::TooManyParams(n.params_a.len()));
         }
     }
+    if let Some(t) = patch
+        .toggles
+        .iter()
+        .find(|t| t.mappings.len() > MAX_TOGGLE_MAPPINGS)
+    {
+        return Err(PatchError::TooManyToggleMappings(t.mappings.len()));
+    }
     if out.len() < HEADER_LEN {
         return Err(PatchError::BufferTooSmall);
     }
+    let toggles = patch.toggles != <[ToggleDef; NUM_TOGGLES]>::default();
 
     // Write the payload after the header, then backfill the header.
     let payload_len = {
@@ -414,6 +437,22 @@ pub fn encode(patch: &Patch, out: &mut [u8]) -> Result<usize, PatchError> {
             write_endpoint(&mut w, e.from)?;
             write_endpoint(&mut w, e.to)?;
         }
+
+        if toggles {
+            for t in &patch.toggles {
+                w.fixed_str(&t.name, MACRO_NAME_LEN)?;
+                for label in &t.positions {
+                    w.fixed_str(label, TOGGLE_LABEL_LEN)?;
+                }
+                w.u8(t.mappings.len() as u8)?;
+                for spec in &t.mappings {
+                    write_target(&mut w, spec.target)?;
+                    for &v in &spec.values {
+                        w.f32(v)?;
+                    }
+                }
+            }
+        }
         w.pos
     };
 
@@ -429,7 +468,7 @@ pub fn encode(patch: &Patch, out: &mut [u8]) -> Result<usize, PatchError> {
     let mut h = Writer::new(&mut out[..HEADER_LEN]);
     h.u32(PATCH_MAGIC)?;
     h.u16(PATCH_FORMAT_VERSION)?;
-    h.u16(0)?; // flags
+    h.u16(if toggles { FLAG_TOGGLES } else { 0 })?;
     h.u32(crc)?;
     h.u16(payload_len as u16)?;
     h.u16(0)?; // reserved
@@ -458,7 +497,7 @@ pub fn decode(data: &[u8]) -> Result<Patch, PatchError> {
     if version > PATCH_FORMAT_VERSION {
         return Err(PatchError::UnsupportedVersion(version));
     }
-    let _flags = h.u16()?;
+    let flags = h.u16()?;
     let stored_crc = h.u32()?;
     let payload_len = h.u16()? as usize;
 
@@ -541,12 +580,32 @@ pub fn decode(data: &[u8]) -> Result<Patch, PatchError> {
         edges.push(PatchEdge { from, to });
     }
 
+    let mut toggles: [ToggleDef; NUM_TOGGLES] = Default::default();
+    if flags & FLAG_TOGGLES != 0 {
+        for t in toggles.iter_mut() {
+            t.name = r.fixed_str(MACRO_NAME_LEN)?;
+            for label in t.positions.iter_mut() {
+                *label = r.fixed_str(TOGGLE_LABEL_LEN)?;
+            }
+            let count = r.u8()? as usize;
+            if count > MAX_TOGGLE_MAPPINGS {
+                return Err(PatchError::TooManyToggleMappings(count));
+            }
+            for _ in 0..count {
+                let target = read_target(&mut r)?;
+                let values = [r.f32()?, r.f32()?, r.f32()?];
+                t.mappings.push(ToggleMappingSpec { target, values });
+            }
+        }
+    }
+
     Ok(Patch {
         name,
         format_version: version,
         nodes,
         edges,
         macros,
+        toggles,
         morph,
         globals,
     })
@@ -607,6 +666,75 @@ mod tests {
         // because payload_len is explicit).
         let back_full = decode(&buf).unwrap();
         assert_eq!(p, back_full);
+    }
+
+    fn with_toggles(mut p: Patch) -> Patch {
+        p.toggles[0] = ToggleDef {
+            name: "Interval".into(),
+            positions: ["+7".into(), "+12".into(), "+19".into()],
+            mappings: vec![ToggleMappingSpec {
+                target: MacroTarget::Slot { slot: 1, param: 0 },
+                values: [7.0, 12.0, 19.0],
+            }],
+        };
+        p.toggles[1].name = "Boost".into();
+        p.toggles[1].mappings.push(ToggleMappingSpec {
+            target: MacroTarget::Global(GlobalParam::InputGain),
+            values: [0.0, 3.0, 6.0],
+        });
+        p
+    }
+
+    #[test]
+    fn toggles_roundtrip() {
+        let p = with_toggles(sample_patch());
+        let mut buf = [0u8; SECTOR_SIZE];
+        let len = encode(&p, &mut buf).unwrap();
+        assert_eq!(u16::from_le_bytes([buf[6], buf[7]]), FLAG_TOGGLES);
+        assert_eq!(decode(&buf[..len]).unwrap(), p);
+    }
+
+    #[test]
+    fn a_rig_without_toggles_has_no_toggle_section() {
+        let p = sample_patch();
+        let mut plain = [0u8; SECTOR_SIZE];
+        let plain_len = encode(&p, &mut plain).unwrap();
+        assert_eq!(u16::from_le_bytes([plain[6], plain[7]]), 0);
+        let mut toggled = [0u8; SECTOR_SIZE];
+        let toggled_len = encode(&with_toggles(p.clone()), &mut toggled).unwrap();
+        assert!(toggled_len > plain_len);
+        // A sector without the flag decodes to unused toggles.
+        assert_eq!(decode(&plain[..plain_len]).unwrap().toggles, p.toggles);
+        assert!(!decode(&plain[..plain_len]).unwrap().toggles[0].is_active());
+    }
+
+    #[test]
+    fn too_many_toggle_mappings_rejected() {
+        let mut p = sample_patch();
+        p.toggles[0].mappings = vec![
+            ToggleMappingSpec {
+                target: MacroTarget::Slot { slot: 0, param: 0 },
+                values: [0.0; 3],
+            };
+            MAX_TOGGLE_MAPPINGS + 1
+        ];
+        let mut buf = [0u8; SECTOR_SIZE];
+        assert_eq!(
+            encode(&p, &mut buf),
+            Err(PatchError::TooManyToggleMappings(MAX_TOGGLE_MAPPINGS + 1))
+        );
+        // A forged count is refused on decode too.
+        let mut ok = with_toggles(sample_patch());
+        ok.toggles[1].mappings.clear();
+        let len = encode(&ok, &mut buf).unwrap();
+        let count_at = len - 1; // T3's mapping count is the last byte
+        buf[count_at] = (MAX_TOGGLE_MAPPINGS + 1) as u8;
+        let crc = crc32(&buf[HEADER_LEN..len]);
+        buf[8..12].copy_from_slice(&crc.to_le_bytes());
+        assert_eq!(
+            decode(&buf[..len]),
+            Err(PatchError::TooManyToggleMappings(MAX_TOGGLE_MAPPINGS + 1))
+        );
     }
 
     #[test]

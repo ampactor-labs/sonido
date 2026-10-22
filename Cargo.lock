@@ -4301,6 +4301,7 @@ version = "0.1.0"
 dependencies = [
  "egui",
  "sonido-core",
+ "sonido-patch",
  "sonido-registry",
 ]
 

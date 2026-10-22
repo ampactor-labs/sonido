@@ -17,12 +17,23 @@
 //! crate's `calibrate` example), and K4–K6 the rig's own three controls. The
 //! A/B morph moves the parameters the macros leave alone, so a knob never
 //! fights the morph.
+//!
+//! # Toggles
+//!
+//! Every rig gives T1 and T3 a job (`Patch::toggles`): each switches part of
+//! its sound three ways, such as Shimmer Cathedral's interval or Fuzz Lab's
+//! clipping. A toggle sets only what the morph and the knobs leave alone, and
+//! its middle position is the rig's own value, so the rig starts as its trim
+//! was measured and every position plays near the same loudness.
 
 pub mod guide;
 pub mod trims;
 
 use sonido_core::{GlobalParam, MacroTarget, MorphCurve};
-use sonido_patch::{MacroDef, MacroMappingSpec, Patch, PatchEdge, PatchEndpoint, PatchNode};
+use sonido_patch::{
+    MacroDef, MacroMappingSpec, Patch, PatchEdge, PatchEndpoint, PatchNode, ToggleDef,
+    ToggleMappingSpec,
+};
 use sonido_registry::{EffectRegistry, effect_uid};
 
 /// A rig being built: nodes with A/B values set by parameter name.
@@ -132,6 +143,70 @@ impl<'r> Rig<'r> {
         };
     }
 
+    /// Toggle `t` (0 = T1, 1 = T3) named `name`, with a label per position
+    /// (up, middle, down), setting each node's `param` to its value there.
+    ///
+    /// Call after the knobs. Panics unless each param holds still through the
+    /// morph, no knob turns it, the middle value is the rig's own and every
+    /// value is in range (the crate rule: see the crate docs).
+    fn toggle(
+        &mut self,
+        t: usize,
+        name: &str,
+        labels: [&str; 3],
+        sets: &[(PatchEndpoint, &str, [f32; 3])],
+    ) {
+        let mappings = sets
+            .iter()
+            .map(|&(node, param, values)| {
+                let PatchEndpoint::Node(n) = node else {
+                    panic!("toggles target effect nodes");
+                };
+                let p = self.param(n as usize, param);
+                let rig = &self.patch.name;
+                let at = &self.patch.nodes[n as usize];
+                assert_eq!(
+                    at.params_a[p], at.params_b[p],
+                    "{rig}: {name} sets {param}, which the morph moves"
+                );
+                assert!(
+                    (at.params_a[p] - values[1]).abs() < 1e-6,
+                    "{rig}: {name}'s middle {param} is {}, not the rig's {}",
+                    values[1],
+                    at.params_a[p]
+                );
+                let target = MacroTarget::Slot {
+                    slot: n,
+                    param: p as u8,
+                };
+                assert!(
+                    !self
+                        .patch
+                        .macros
+                        .iter()
+                        .any(|m| m.mappings.iter().any(|m| m.target == target)),
+                    "{rig}: {name} sets {param}, which a knob turns"
+                );
+                let effect = self.registry.create(self.ids[n as usize], 48_000.0);
+                let desc = effect.and_then(|e| e.effect_param_info(p)).unwrap();
+                for v in values {
+                    assert!(
+                        (desc.min..=desc.max).contains(&v),
+                        "{rig}: {name} {param} = {v} is outside {}..{}",
+                        desc.min,
+                        desc.max
+                    );
+                }
+                ToggleMappingSpec { target, values }
+            })
+            .collect();
+        self.patch.toggles[t] = ToggleDef {
+            name: name.into(),
+            positions: labels.map(String::from),
+            mappings,
+        };
+    }
+
     /// K1–K3 (see the crate docs); `trim_db` is the master volume at noon.
     fn finish(mut self, trim_db: f32) -> Patch {
         let global = |label: &str, target, min, max, curve| MacroDef {
@@ -214,6 +289,18 @@ fn shimmer_cathedral(r: &EffectRegistry) -> Patch {
     rig.knob(3, "Shimmer", pitch, "Mix", (0.0, 100.0), Linear);
     rig.knob(4, "Wash", plate, "Output", (-6.0, 6.0), Linear);
     rig.knob(5, "Echo", delay, "Mix", (0.0, 70.0), Linear);
+    rig.toggle(
+        0,
+        "Interval",
+        ["+19", "+12", "+7"],
+        &[(pitch, "Semitones", [19.0, 12.0, 7.0])],
+    );
+    rig.toggle(
+        1,
+        "Echo",
+        ["Long", "Mid", "Short"],
+        &[(delay, "Delay Time", [630.0, 420.0, 280.0])],
+    );
     rig.finish(trims::SHIMMER_CATHEDRAL)
 }
 
@@ -272,6 +359,18 @@ fn fuzz_lab(r: &EffectRegistry) -> Patch {
     rig.knob(3, "Fuzz", fuzz, "Drive", (12.0, 40.0), Linear);
     rig.knob(4, "Filter", filter, "Cutoff", (300.0, 8000.0), Logarithmic);
     rig.knob(5, "Crush", crush, "Mix", (0.0, 100.0), Linear);
+    rig.toggle(
+        0,
+        "Clip",
+        ["Hard", "Asym", "Fold"],
+        &[(fuzz, "Waveshape", [1.0, 3.0, 2.0])],
+    );
+    rig.toggle(
+        1,
+        "Filter",
+        ["Band", "Low", "High"],
+        &[(filter, "Type", [2.0, 0.0, 1.0])],
+    );
     rig.finish(trims::FUZZ_LAB)
 }
 
@@ -316,6 +415,18 @@ fn space_echo(r: &EffectRegistry) -> Patch {
     rig.knob(3, "Echo", delay, "Mix", (0.0, 80.0), Linear);
     rig.knob(4, "Spring", spring, "Mix", (0.0, 60.0), Linear);
     rig.knob(5, "Grit", pre, "Gain", (0.0, 30.0), Linear);
+    rig.toggle(
+        0,
+        "Tone",
+        ["Bright", "Mid", "Dark"],
+        &[(pre, "Tone", [6.0, 2.0, -3.0])],
+    );
+    rig.toggle(
+        1,
+        "Spring",
+        ["Tight", "Med", "Loose"],
+        &[(spring, "Tension", [85.0, 55.0, 25.0])],
+    );
     rig.finish(trims::SPACE_ECHO)
 }
 
@@ -367,6 +478,18 @@ fn granular_drift(r: &EffectRegistry) -> Patch {
     rig.knob(3, "Cloud", grains, "Output", (-36.0, 6.0), Linear);
     rig.knob(4, "Stretch", stretch, "Output", (-36.0, 6.0), Linear);
     rig.knob(5, "Stutter", glitch, "Mix", (0.0, 100.0), Linear);
+    rig.toggle(
+        0,
+        "Glitch",
+        ["Reverse", "Stutter", "Shuffle"],
+        &[(glitch, "Mode", [2.0, 0.0, 3.0])],
+    );
+    rig.toggle(
+        1,
+        "Grains",
+        ["Big", "Mid", "Small"],
+        &[(grains, "Size", [450.0, 250.0, 100.0])],
+    );
     rig.finish(trims::GRANULAR_DRIFT)
 }
 
@@ -403,6 +526,18 @@ fn harmonic_habitat(r: &EffectRegistry) -> Patch {
     rig.knob(3, "Habitat", habitat, "Mix", (0.0, 100.0), Linear);
     rig.knob(4, "Chorus", chorus, "Mix", (0.0, 80.0), Linear);
     rig.knob(5, "Echo", delay, "Mix", (0.0, 70.0), Linear);
+    rig.toggle(
+        0,
+        "Tail",
+        ["Bright", "Mid", "Dark"],
+        &[(habitat, "Damping", [15.0, 45.0, 80.0])],
+    );
+    rig.toggle(
+        1,
+        "Swirl",
+        ["Fast", "Slow", "Drift"],
+        &[(chorus, "Rate", [1.2, 0.4, 0.1])],
+    );
     rig.finish(trims::HARMONIC_HABITAT)
 }
 
@@ -426,6 +561,18 @@ fn amp_stack(r: &EffectRegistry) -> Patch {
     rig.knob(3, "Bass", amp, "Bass", (0.0, 100.0), Linear);
     rig.knob(4, "Mid", amp, "Mid", (0.0, 100.0), Linear);
     rig.knob(5, "Treble", amp, "Treble", (0.0, 100.0), Linear);
+    rig.toggle(
+        0,
+        "Gate",
+        ["Tight", "Normal", "Open"],
+        &[(gate, "Threshold", [-50.0, -62.0, -80.0])],
+    );
+    rig.toggle(
+        1,
+        "Bright",
+        ["On", "Off", "Off"],
+        &[(amp, "Bright", [1.0, 0.0, 0.0])],
+    );
     rig.finish(trims::AMP_STACK)
 }
 

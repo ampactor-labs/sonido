@@ -258,12 +258,13 @@ preset.save(&user_presets_dir().join("my_preset.toml"))?;
 
 ### sonido-patch
 
-The canonical rig format, `Patch`: graph topology, per-node A/B parameters, six macros, morph configuration and globals, by stable effect UID. Builds `no_std` (with `alloc`) for the firmware; the default `std` feature adds JSON (serde) and the host tools.
+The canonical rig format, `Patch`: graph topology, per-node A/B parameters, six macros, the rig's two toggles (T1, T3), morph configuration and globals, by stable effect UID. Builds `no_std` (with `alloc`) for the firmware; the default `std` feature adds JSON (serde) and the host tools.
 
 **Key modules:**
-- `binary`: one `Patch` ↔ one 4 KB QSPI sector (`encode`, `decode`)
+- `binary`: one `Patch` ↔ one 4 KB QSPI sector (`encode`, `decode`); the toggle section is written only for a rig that uses its toggles (header flag bit 0)
 - `build`, `runtime`: `build_graph_from_patch` and `PatchPlayer`, which runs a rig in the graph-player plugin and on the pedal
-- `validate`: structural and pedal-fit checks; `validate_for_daisy` is the one pedal check the editor, the CLI and the factory-rig tests use (`sonido_platform::cycle_table`)
+- `validate`: structural and pedal-fit checks; `validate_for_daisy` is the one pedal check the editor, the CLI and the factory-rig tests use (`sonido_platform::cycle_table`), and `daisy_load` the same CPU and memory estimate as numbers (the editor's status bar, the firmware's `check_rig`). A `Finding` is data (`Problem`) formatted only when shown, so the firmware carries no message text
+- `controls`: what every footswitch press, toggle (`toggle_role`), knob page, LED and power-on gesture does; the firmware dispatches through it and `sonido_rigs::guide` draws it
 - `pedal`: the jam (`jam_patch`, `JamSettings`) and the pedal's saved state (`PedalState`)
 - `link`: the USB serial protocol between the pedal and the host (frames, requests incl. `Bootloader`, replies)
 - `client` (`std`): the host side of the link. `LinkClient`, generic over `Read + Write`; `send_rig` replaces the bank rig with the same name, otherwise takes the first empty slot; `enter_bootloader`; with the `serial` feature, `open_pedal` / `pedal_ports` find the pedal by USB id `1209:0001`

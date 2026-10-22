@@ -879,8 +879,8 @@ row (K1 K2 K3) is levels, with K3 (top right) always a volume, and the bottom ro
 
 | Control | Jam | Rig |
 |---------|-----|-----|
-| T1 | Which slot the knobs edit (1 / 2 / 3) | — |
-| T3 | Routing: Linear / Parallel / Fan, read when the jam loads | — |
+| T1 | Which slot the knobs edit (1 / 2 / 3) | The rig's own T1 (factory rigs: see below) |
+| T3 | Routing: Linear / Parallel / Fan, read when the jam loads | The rig's own T3 |
 | Knobs, T2 up or down | The T1 slot's A or B sound through the effect's `knob_map`: K1 its extra control, K2 mix, K3 output, K4–K6 its three main controls; a knob takes over once moved | The rig's six macros |
 | Knobs, T2 middle | The setup page: K1 input, K2 morph time, K3 master; K4 K5 K6 pick slot 1, 2, 3's effect | The rig's six macros (factory rigs: K1 input, K2 morph time, K3 master, K4–K6 the rig's own controls) |
 
@@ -902,9 +902,24 @@ no slot clear and no both-footswitch gesture.
 | **T2** | **A**: hear/edit A | **Morph**: FS2 taps glide between A and B; the jam's setup page | **B**: hear/edit B |
 | **T3** | **Linear**: 1 → 2 → 3 | **Parallel**: split → [1,2,3] → merge | **Fan**: 1 → split → [2,3] → merge |
 
-T1 and T3 only act on the jam; T3 is the jam's routing, read when the jam loads, and
-moving it while the jam plays rebuilds it. In a rig, T1 and T3 do nothing
-(assignable toggles in rigs are future work). Empty slots are skipped when wiring
+In the jam, T3 is the routing, read when the jam loads, and moving it while the jam
+plays rebuilds it. In a rig, T1 and T3 are the rig's own three-way switches
+(`Patch::toggles`; `controls::toggle_role` says which role a toggle has): each sets
+the targets mapped to it (effect parameters, the input gain or the master volume) to
+a value per position, applied after the morph and before the knobs, so a knob on the
+same parameter wins. A rig loads with its toggles where they sit; a rig that leaves a
+toggle unused ignores it. The factory rigs' toggles:
+
+| Rig | T1 (up · mid · down) | T3 (up · mid · down) |
+|-----|----------------------|----------------------|
+| Shimmer Cathedral | Interval: +19 · +12 · +7 | Echo: Long · Mid · Short |
+| Fuzz Lab | Clip: Hard · Asym · Fold | Filter: Band · Low · High |
+| Space Echo | Tone: Bright · Mid · Dark | Spring: Tight · Med · Loose |
+| Granular Drift | Glitch: Reverse · Stutter · Shuffle | Grains: Big · Mid · Small |
+| Harmonic Habitat | Tail: Bright · Mid · Dark | Swirl: Fast · Slow · Drift |
+| Amp Stack | Gate: Tight · Normal · Open | Bright: On · Off · Off |
+
+`sonido pedal controls` draws them from the rigs themselves. Empty slots are skipped when wiring
 (`sonido_patch::pedal::jam_patch`), so with one populated slot every topology is a
 plain chain. T2 sets the morph position of whatever plays: A = 0, B = 1, Morph =
 wherever the glides leave it. Moving T2 into the middle starts the morph from the
@@ -1334,7 +1349,7 @@ Audio callback (every block, ~1500 Hz):
 ├── PLAYER.process_block_stereo()  (in bypass too: the rig keeps running)
 ├── sanitize_stereo → bypass crossfade (to dry while BYPASSED) → f32 → u24
 └── Every CONTROL_POLL_EVERY (15) blocks (~100 Hz): controls()
-    ├── Toggles: T1 slot, T2 mode (first move out of A seeds B), T3 topology (jam: requests a rebuild)
+    ├── Toggles: by controls::toggle_role — jam: T1 slot, T3 topology (requests a rebuild); rig: T1/T3 set_toggle; T2 mode (first move out of A seeds B)
     ├── Footswitches: holds (0.4 s) = previous/next rig (request);
     │   taps at release: FS1 = bypass, FS2 = tap_tempo() or, T2 middle, glide A↔B
     ├── Knobs: rig → set_macro(k); jam A/B → edit_jam_slot (knob_map + knob_to_param,

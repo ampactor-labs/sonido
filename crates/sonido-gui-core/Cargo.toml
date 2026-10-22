@@ -14,6 +14,8 @@ egui = { workspace = true }
 sonido-core = { workspace = true, features = ["std"] }
 # Effect catalog (names, categories) for family accents and display names
 sonido-registry = { workspace = true, features = ["std"] }
+# The rig's controls (macro and toggle counts, T1/T3) for the mapping menu
+sonido-patch = { workspace = true, features = ["std"] }
 
 [lints]
 workspace = true
