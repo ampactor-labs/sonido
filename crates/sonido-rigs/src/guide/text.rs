@@ -1,13 +1,13 @@
-//! `sonido pedal controls`: the pedal's controls, drawn from the code that
-//! runs them, so the card can't fall out of date.
+//! The pedal's controls as an 80-column terminal card
+//! (`sonido pedal controls --text`), drawn from the code that runs them, so
+//! it can't fall out of date.
 //!
 //! The footswitches, toggles, knob pages, LEDs and power-on gestures come from
 //! `sonido_patch::controls`, the functions the firmware itself dispatches
 //! through; each jam effect's knobs from `sonido_platform::knob_mapping` and
-//! the effect's own parameters; the factory rigs' knobs from `sonido_rigs`.
+//! the effect's own parameters; the factory rigs' knobs from this crate.
 
 use std::fmt::Write as _;
-use std::io::IsTerminal;
 
 use sonido_patch::controls::{
     self, Footswitch, KnobPage, LedShows, Mode, PowerOn, Press, SETUP_LEVELS, Toggle,
@@ -23,34 +23,38 @@ const WIDTH: usize = 80;
 const POSITIONS: [u8; 3] = [0, 1, 2];
 const PLACES: [&str; 3] = ["up", "middle", "down"];
 
-/// ANSI styling, on only for a terminal that hasn't asked for `NO_COLOR`.
-struct Style(bool);
+/// How the card is styled: plain text, or ANSI bold/dim/colour for a
+/// terminal (the caller decides, e.g. from `IsTerminal` and `NO_COLOR`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Style {
+    /// No escape codes.
+    Plain,
+    /// ANSI escape codes.
+    Ansi,
+}
 
 impl Style {
-    fn detect() -> Self {
-        Self(std::io::stdout().is_terminal() && std::env::var_os("NO_COLOR").is_none())
-    }
-    fn paint(&self, code: &str, s: &str) -> String {
-        if self.0 {
+    fn paint(self, code: &str, s: &str) -> String {
+        if self == Self::Ansi {
             format!("\x1b[{code}m{s}\x1b[0m")
         } else {
             s.to_owned()
         }
     }
-    fn head(&self, s: &str) -> String {
+    fn head(self, s: &str) -> String {
         self.paint("1", s)
     }
-    fn dim(&self, s: &str) -> String {
+    fn dim(self, s: &str) -> String {
         self.paint("2", s)
     }
-    fn key(&self, s: &str) -> String {
+    fn key(self, s: &str) -> String {
         self.paint("36", s)
     }
 }
 
 /// The whole card.
-pub fn card() -> String {
-    let st = Style::detect();
+pub fn text_card(style: Style) -> String {
+    let st = style;
     let mut out = String::new();
     let o = &mut out;
     let _ = writeln!(
@@ -63,13 +67,13 @@ pub fn card() -> String {
         ))
     );
     face(o);
-    footswitches(o, &st);
-    leds(o, &st);
-    knobs(o, &st);
-    setup_page(o, &st);
-    jam_effects(o, &st);
-    factory_rigs(o, &st);
-    rig_list_and_power_on(o, &st);
+    footswitches(o, st);
+    leds(o, st);
+    knobs(o, st);
+    setup_page(o, st);
+    jam_effects(o, st);
+    factory_rigs(o, st);
+    rig_list_and_power_on(o, st);
     let _ = writeln!(
         o,
         "\n{}",
@@ -114,7 +118,7 @@ fn face(o: &mut String) {
 }
 
 /// A table with one column per T2 position.
-fn t2_table(o: &mut String, st: &Style, rows: &[(String, [String; 3])]) {
+fn t2_table(o: &mut String, st: Style, rows: &[(String, [String; 3])]) {
     let heads: Vec<String> = POSITIONS
         .iter()
         .map(|&p| {
@@ -145,7 +149,7 @@ fn t2_table(o: &mut String, st: &Style, rows: &[(String, [String; 3])]) {
     }
 }
 
-fn footswitches(o: &mut String, st: &Style) {
+fn footswitches(o: &mut String, st: Style) {
     let _ = writeln!(
         o,
         "\n{}  {}",
@@ -169,7 +173,7 @@ fn footswitches(o: &mut String, st: &Style) {
     t2_table(o, st, &rows);
 }
 
-fn leds(o: &mut String, st: &Style) {
+fn leds(o: &mut String, st: Style) {
     let _ = writeln!(
         o,
         "\n{}  {}",
@@ -206,7 +210,7 @@ fn leds(o: &mut String, st: &Style) {
     }
 }
 
-fn knobs(o: &mut String, st: &Style) {
+fn knobs(o: &mut String, st: Style) {
     let _ = writeln!(
         o,
         "\n{}  {}",
@@ -245,7 +249,7 @@ fn short_page(page: KnobPage) -> String {
     .into()
 }
 
-fn setup_page(o: &mut String, st: &Style) {
+fn setup_page(o: &mut String, st: Style) {
     let _ = writeln!(
         o,
         "\n{}  {}",
@@ -287,7 +291,7 @@ fn setup_page(o: &mut String, st: &Style) {
 }
 
 /// A table of K1–K6 labels per row: the top row's three, then the bottom's.
-fn knob_table(o: &mut String, st: &Style, rows: &[(String, [String; 6])]) {
+fn knob_table(o: &mut String, st: Style, rows: &[(String, [String; 6])]) {
     let name_w = rows
         .iter()
         .map(|(n, _)| n.chars().count())
@@ -327,7 +331,7 @@ fn knob_table(o: &mut String, st: &Style, rows: &[(String, [String; 6])]) {
     }
 }
 
-fn jam_effects(o: &mut String, st: &Style) {
+fn jam_effects(o: &mut String, st: Style) {
     let _ = writeln!(
         o,
         "\n{}  {}",
@@ -337,40 +341,19 @@ fn jam_effects(o: &mut String, st: &Style) {
     let registry = EffectRegistry::new();
     let rows: Vec<(String, [String; 6])> = JAM_EFFECT_IDS
         .iter()
-        .filter_map(|&id| Some((id.to_owned(), knob_labels(&registry, id)?)))
+        .filter_map(|&id| Some((id.to_owned(), super::knob_labels(&registry, id)?)))
         .collect();
     knob_table(o, st, &rows);
 }
 
-/// Each knob's parameter name for `id` ("—" for an unmapped knob).
-fn knob_labels(registry: &EffectRegistry, id: &str) -> Option<[String; 6]> {
-    let map = knob_map(id)?;
-    let effect = registry.create(id, SR)?;
-    Some(core::array::from_fn(|k| {
-        if map[k] == NULL_KNOB {
-            return "—".to_owned();
-        }
-        effect.effect_param_info(usize::from(map[k])).map_or_else(
-            || "?".to_owned(),
-            |d| {
-                if d.name.chars().count() > 11 {
-                    d.short_name.to_owned()
-                } else {
-                    d.name.to_owned()
-                }
-            },
-        )
-    }))
-}
-
-fn factory_rigs(o: &mut String, st: &Style) {
+fn factory_rigs(o: &mut String, st: Style) {
     let _ = writeln!(
         o,
         "\n{}  {}",
         st.head("FACTORY RIGS"),
         st.dim("in a rig, the knobs are the rig's own")
     );
-    let rows: Vec<(String, [String; 6])> = sonido_rigs::factory_rigs()
+    let rows: Vec<(String, [String; 6])> = crate::factory_rigs()
         .into_iter()
         .map(|rig| {
             let cells = core::array::from_fn(|k| {
@@ -387,7 +370,7 @@ fn factory_rigs(o: &mut String, st: &Style) {
     knob_table(o, st, &rows);
 }
 
-fn rig_list_and_power_on(o: &mut String, st: &Style) {
+fn rig_list_and_power_on(o: &mut String, st: Style) {
     let _ = writeln!(
         o,
         "\n{}  jam → bank rigs 1–{} (the filled ones) → factory rigs",
@@ -435,8 +418,12 @@ fn rig_list_and_power_on(o: &mut String, st: &Style) {
 
 /// One effect's page: each knob's parameter, its travel and its noon, as the
 /// pedal maps it.
-pub fn effect_card(id: &str) -> anyhow::Result<String> {
-    let st = Style::detect();
+///
+/// # Errors
+///
+/// An effect without a pedal knob map, listing the ones that have one.
+pub fn effect_card(id: &str, style: Style) -> Result<String, String> {
+    let st = style;
     let registry = EffectRegistry::new();
     let map = knob_map(id).ok_or_else(|| {
         let mapped: Vec<&str> = sonido_registry::EFFECT_UIDS
@@ -444,14 +431,14 @@ pub fn effect_card(id: &str) -> anyhow::Result<String> {
             .map(|(id, _)| *id)
             .filter(|id| knob_map(id).is_some())
             .collect();
-        anyhow::anyhow!(
+        format!(
             "'{id}' has no pedal knob map; these do: {}",
             mapped.join(", ")
         )
     })?;
     let effect = registry
         .create(id, SR)
-        .ok_or_else(|| anyhow::anyhow!("no effect '{id}'"))?;
+        .ok_or_else(|| format!("no effect '{id}'"))?;
     let mut out = String::new();
     let o = &mut out;
     let jam = JAM_EFFECT_IDS.contains(&id);
@@ -543,7 +530,7 @@ mod tests {
 
     #[test]
     fn card_shows_every_control_and_the_jam_and_factory_rigs() {
-        let card = card();
+        let card = text_card(Style::Plain);
         for word in [
             "FS1 tap",
             "FS2 hold",
@@ -558,18 +545,18 @@ mod tests {
         for id in JAM_EFFECT_IDS {
             assert!(card.contains(id), "card is missing jam effect {id}");
         }
-        for rig in sonido_rigs::factory_rigs() {
+        for rig in crate::factory_rigs() {
             assert!(card.contains(&rig.name), "card is missing {}", rig.name);
         }
     }
 
     #[test]
     fn card_fits_an_80_column_terminal() {
-        let pages = std::iter::once(card()).chain(
+        let pages = std::iter::once(text_card(Style::Plain)).chain(
             sonido_registry::EFFECT_UIDS
                 .iter()
                 .filter(|(id, _)| knob_map(id).is_some())
-                .map(|(id, _)| effect_card(id).unwrap()),
+                .map(|(id, _)| effect_card(id, Style::Plain).unwrap()),
         );
         for page in pages {
             for line in page.lines() {
@@ -582,10 +569,10 @@ mod tests {
     fn every_mapped_effect_has_a_page() {
         for (id, _) in sonido_registry::EFFECT_UIDS {
             if knob_map(id).is_some() {
-                let page = effect_card(id).unwrap();
+                let page = effect_card(id, Style::Plain).unwrap();
                 assert!(page.contains("K6"), "{id}");
             }
         }
-        assert!(effect_card("not-an-effect").is_err());
+        assert!(effect_card("not-an-effect", Style::Plain).is_err());
     }
 }

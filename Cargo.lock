@@ -4381,6 +4381,7 @@ dependencies = [
  "sonido-analysis",
  "sonido-core",
  "sonido-patch",
+ "sonido-platform",
  "sonido-registry",
 ]
 

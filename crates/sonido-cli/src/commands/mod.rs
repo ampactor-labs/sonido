@@ -9,7 +9,6 @@ pub mod generate;
 pub mod info;
 pub mod patch;
 pub mod pedal;
-pub mod pedal_card;
 pub mod play;
 pub mod presets;
 pub mod process;

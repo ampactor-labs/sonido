@@ -25,7 +25,8 @@ Applications
 Libraries
   sonido-gui-core ─▶ core, registry              widgets, Cabinet, ParamBridge
   sonido-graph-dsl ▶ core, registry, config      text DSL → ProcessingGraph
-  sonido-rigs ─────▶ core, registry, patch      the factory rigs           [std]
+  sonido-rigs ─────▶ core, registry, patch,     the factory rigs and       [std]
+                     platform                    the pedal guide
   sonido-config ───▶ core, registry, patch       presets + paths            [std]
   sonido-io ───────▶ core                        WAV + cpal audio I/O       [std]
   sonido-analysis ─▶ core                        FFT, spectral analysis     [std]
@@ -270,7 +271,7 @@ The canonical rig format, `Patch`: graph topology, per-node A/B parameters, six 
 
 ### sonido-rigs
 
-The factory rigs: six `sonido_patch::Patch`es built from registry effects (`factory_rigs()`: Shimmer Cathedral, Fuzz Lab, Space Echo, Granular Drift, Harmonic Habitat, Amp Stack). One set serves the pedal (its `build.rs` encodes them into the firmware image) and the graph-player plugin's rig library. Every rig maps its macros by the pedal's knob rule: K1 input gain, K2 morph time, K3 master volume around a level-matching trim (generated into `src/trims.rs` by `cargo run -p sonido-rigs --example calibrate --release`), and K4–K6 the rig's own controls; `tests/factory.rs` holds every rig at the dry guitar's loudness, to the pedal's CPU and memory rule (`validate_for_daisy`), and to a binary round trip. Requires `std`.
+The factory rigs: six `sonido_patch::Patch`es built from registry effects (`factory_rigs()`: Shimmer Cathedral, Fuzz Lab, Space Echo, Granular Drift, Harmonic Habitat, Amp Stack). One set serves the pedal (its `build.rs` encodes them into the firmware image) and the graph-player plugin's rig library. Every rig maps its macros by the pedal's knob rule: K1 input gain, K2 morph time, K3 master volume around a level-matching trim (generated into `src/trims.rs` by `cargo run -p sonido-rigs --example calibrate --release`), and K4–K6 the rig's own controls; `tests/factory.rs` holds every rig at the dry guitar's loudness, to the pedal's CPU and memory rule (`validate_for_daisy`), and to a binary round trip. `guide` draws how to play the pedal from `sonido_patch::controls`, the knob maps (`sonido_platform::knob_mapping`) and these rigs: `html_guide()` is a self-contained infographic (an annotated drawing of the pedal, the knobs' pages by mode, the effect-pick dial, every jam effect and rig), `text_card()`/`effect_card()` the same as a terminal card; `sonido pedal controls` shows them. Requires `std`.
 
 ### sonido-platform
 

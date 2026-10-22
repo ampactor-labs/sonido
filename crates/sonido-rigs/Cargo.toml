@@ -11,6 +11,7 @@ description = "Sonido's factory rigs: one set for the pedal, the graph-player pl
 sonido-core = { workspace = true, features = ["std"] }
 sonido-patch = { workspace = true, features = ["std"] }
 sonido-registry = { workspace = true, features = ["std"] }
+sonido-platform = { workspace = true }
 
 [dev-dependencies]
 sonido-analysis = { workspace = true }

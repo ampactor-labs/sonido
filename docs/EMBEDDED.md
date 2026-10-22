@@ -858,7 +858,8 @@ position; LED 1 then blinks the rig's position (the jam is 1).
 
 ### Controls
 
-`sonido pedal controls` prints this whole section as a card, drawn from the code
+`sonido pedal controls` draws this whole section as an illustrated guide (or,
+with `--text`, a terminal card), from the code
 that runs it: what every footswitch press, toggle, knob page, LED and power-on
 gesture does lives in `crates/sonido-patch/src/controls.rs`, and the firmware's
 control tick (`control_tick()` in `sonido_pedal.rs`) dispatches through those
@@ -1191,7 +1192,7 @@ bootloader then starts whatever is in QSPI.
 
 Each LED shows what the footswitch below it does (`controls::led1` / `led2` in
 `crates/sonido-patch/src/controls.rs`, which the firmware calls and
-`sonido pedal controls` prints).
+`sonido pedal controls` draws).
 
 The LEDs are on/off: `hothouse_control_task` drives each GPIO from the value the
 callback last wrote (threshold 0.5) at the 100 Hz control rate, too slow to dim

@@ -18,6 +18,7 @@
 //! A/B morph moves the parameters the macros leave alone, so a knob never
 //! fights the morph.
 
+pub mod guide;
 pub mod trims;
 
 use sonido_core::{GlobalParam, MacroTarget, MorphCurve};

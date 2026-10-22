@@ -5,6 +5,7 @@
 //! here with the CPU rule the pedal enforces, then again by the pedal), read
 //! rigs and the jam back as editor JSON, and update its firmware.
 
+use std::io::IsTerminal;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -14,6 +15,7 @@ use sonido_patch::dfu;
 use sonido_patch::pedal::RigRef;
 use sonido_patch::{Patch, link::Info};
 use sonido_registry::effect_by_uid;
+use sonido_rigs::guide;
 
 use super::patch::{RigSource, check_for_pedal, print_rig};
 
@@ -30,11 +32,17 @@ pub struct PedalArgs {
 /// Subcommands for `sonido pedal`.
 #[derive(Subcommand)]
 enum PedalCommand {
-    /// How to play the pedal: every control, drawn from this build's source
-    /// (no pedal needed). Give an effect for its knobs with their ranges.
+    /// How to play the pedal: an illustrated guide to every control, opened in
+    /// your browser and drawn from this build's source (no pedal needed).
     Controls {
-        /// An effect, e.g. `distortion`.
+        /// Jump to an effect's knobs (with --text: its knob travel and noon).
         effect: Option<String>,
+        /// Print the guide as a terminal card instead.
+        #[arg(long)]
+        text: bool,
+        /// Write the guide's HTML to this file instead of opening it.
+        #[arg(long, value_name = "FILE")]
+        html: Option<PathBuf>,
     },
     /// Firmware, CPU load, and what the pedal is playing.
     Info,
@@ -79,10 +87,50 @@ enum PedalCommand {
 pub fn run(args: PedalArgs) -> anyhow::Result<()> {
     let open = || -> anyhow::Result<_> { Ok(open_pedal(args.port.as_deref())?) };
     match args.command {
-        PedalCommand::Controls { effect } => match effect {
-            Some(id) => print!("{}", super::pedal_card::effect_card(&id)?),
-            None => print!("{}", super::pedal_card::card()),
-        },
+        PedalCommand::Controls { effect, text, html } => {
+            let style = if std::io::stdout().is_terminal() && std::env::var_os("NO_COLOR").is_none()
+            {
+                guide::Style::Ansi
+            } else {
+                guide::Style::Plain
+            };
+            if text {
+                match effect {
+                    Some(id) => {
+                        print!(
+                            "{}",
+                            guide::effect_card(&id, style).map_err(anyhow::Error::msg)?
+                        )
+                    }
+                    None => print!("{}", guide::text_card(style)),
+                }
+                return Ok(());
+            }
+            if let Some(id) = &effect {
+                // The guide has a section for each jam effect only.
+                guide::effect_card(id, guide::Style::Plain).map_err(anyhow::Error::msg)?;
+                anyhow::ensure!(
+                    sonido_registry::JAM_EFFECT_IDS.contains(&id.as_str()),
+                    "'{id}' isn't one of the jam's effects ({}); `--text {id}` shows its knobs",
+                    sonido_registry::JAM_EFFECT_IDS.join(", ")
+                );
+            }
+            let page = guide::html_guide();
+            if let Some(path) = html {
+                std::fs::write(&path, page)?;
+                println!("Wrote the pedal guide to {}", path.display());
+            } else {
+                let path = std::env::temp_dir().join("sonido-pedal-guide.html");
+                std::fs::write(&path, page)?;
+                let anchor = effect.map(|id| format!("#fx-{id}")).unwrap_or_default();
+                let url = format!("file://{}{anchor}", path.display());
+                if open_in_browser(&url).is_err() {
+                    println!("Open {url} in a browser (or use --text).");
+                } else {
+                    println!("Opened the pedal guide: {url}");
+                }
+            }
+        }
         PedalCommand::Info => {
             let mut link = open()?;
             let info = link.info()?;
@@ -291,4 +339,30 @@ fn effects(patch: &Patch) -> String {
         .map(|n| effect_by_uid(n.effect_uid).unwrap_or("?"))
         .collect::<Vec<_>>()
         .join(" · ")
+}
+
+/// Open `url` with the desktop's default handler.
+fn open_in_browser(url: &str) -> std::io::Result<()> {
+    let mut cmd = if cfg!(target_os = "macos") {
+        let mut c = std::process::Command::new("open");
+        c.arg(url);
+        c
+    } else if cfg!(target_os = "windows") {
+        let mut c = std::process::Command::new("cmd");
+        c.args(["/C", "start", "", url]);
+        c
+    } else {
+        let mut c = std::process::Command::new("xdg-open");
+        c.arg(url);
+        c
+    };
+    let status = cmd
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(std::io::Error::other("no browser opened"))
+    }
 }
