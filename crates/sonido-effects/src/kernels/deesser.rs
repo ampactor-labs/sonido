@@ -49,6 +49,7 @@
 
 use sonido_core::kernel::{DspKernel, SmoothingStyle};
 use sonido_core::kernel_params;
+use sonido_core::level::Level;
 use sonido_core::{
     Biquad, Cached, EnvelopeFollower, ParamDescriptor, ParamId, ParamScale, ParamUnit,
     fast_db_to_linear, fast_linear_to_db, highpass_coefficients, math::flush_denormal,
@@ -293,6 +294,7 @@ impl DeesserKernel {
 
 impl DspKernel for DeesserKernel {
     type Params = DeesserParams;
+    const LEVEL: Level = crate::calibration::DEESSER;
 
     /// Process a mono sample through the de-esser.
     ///

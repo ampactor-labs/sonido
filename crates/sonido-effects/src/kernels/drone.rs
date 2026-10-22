@@ -48,6 +48,7 @@ extern crate alloc;
 use sonido_core::kernel::KernelParams;
 use sonido_core::kernel::{DspKernel, SmoothingStyle};
 use sonido_core::kernel_params;
+use sonido_core::level::Level;
 use sonido_core::{ParamDescriptor, ParamFlags, ParamId, ParamUnit, fast_db_to_linear};
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -231,6 +232,7 @@ impl DroneKernel {
 
 impl DspKernel for DroneKernel {
     type Params = DroneParams;
+    const LEVEL: Level = crate::calibration::DRONE;
 
     fn process_stereo(&mut self, left: f32, right: f32, params: &DroneParams) -> (f32, f32) {
         let mono = (left + right) * 0.5;

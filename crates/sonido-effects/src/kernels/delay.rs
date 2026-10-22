@@ -53,11 +53,11 @@
 use libm::{ceilf, logf};
 use sonido_core::kernel::{DspKernel, KernelParams, SmoothingStyle};
 use sonido_core::kernel_params;
+use sonido_core::level::Level;
 use sonido_core::{
     AllpassFilter, Biquad, DIVISION_LABELS, InterpolatedDelay, NoteDivision, OnePole,
     ParamDescriptor, ParamFlags, ParamId, ParamScale, ParamUnit, TempoContext, TempoManager,
-    fast_db_to_linear, flush_denormal, highpass_coefficients, index_to_division, wet_dry_mix,
-    wet_dry_mix_stereo,
+    fast_db_to_linear, flush_denormal, highpass_coefficients, index_to_division,
 };
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -94,12 +94,12 @@ const DIFFUSION_AP2_S: f32 = 0.007;
 ///
 /// | Index | Field | Unit | Range | Default |
 /// |-------|-------|------|-------|---------|
-/// | 0 | `time_ms` | ms | 1–2000 | 300.0 |
-/// | 1 | `feedback_pct` | % | 0–95 | 40.0 |
-/// | 2 | `mix_pct` | % | 0–100 | 50.0 |
+/// | 0 | `time_ms` | ms | 1–2000 | 380.0 |
+/// | 1 | `feedback_pct` | % | 0–95 | 35.0 |
+/// | 2 | `mix_pct` | % | 0–100 | 35.0 |
 /// | 3 | `ping_pong` | index | 0–1 | 0 (Off) |
-/// | 4 | `fb_lp_hz` | Hz | 200–20000 | 20000.0 |
-/// | 5 | `fb_hp_hz` | Hz | 20–2000 | 20.0 |
+/// | 4 | `fb_lp_hz` | Hz | 200–20000 | 6000.0 |
+/// | 5 | `fb_hp_hz` | Hz | 20–2000 | 80.0 |
 /// | 6 | `diffusion_pct` | % | 0–100 | 0.0 |
 /// | 7 | `sync` | index | 0–1 | 0 (Off) |
 /// | 8 | `division` | index | 0–11 | 2 (Quarter) |
@@ -171,12 +171,12 @@ impl Default for DelayParams {
     /// Defaults match the original pre-kernel `Delay` effect's descriptor defaults exactly.
     fn default() -> Self {
         Self {
-            time_ms: 300.0,
-            feedback_pct: 40.0,
-            mix_pct: 50.0,
+            time_ms: 380.0,
+            feedback_pct: 35.0,
+            mix_pct: 35.0,
             ping_pong: 0.0,
-            fb_lp_hz: 20000.0,
-            fb_hp_hz: 20.0,
+            fb_lp_hz: 6000.0,
+            fb_hp_hz: 80.0,
             diffusion_pct: 0.0,
             sync: 0.0,
             division: 2.0,
@@ -224,7 +224,7 @@ impl DelayParams {
 
 kernel_params! {
     DelayParams, this {
-        [0] ParamDescriptor::time_ms("Delay Time", "Time", 1.0, 2000.0, 300.0)
+        [0] ParamDescriptor::time_ms("Delay Time", "Time", 1.0, 2000.0, 380.0)
                 .with_id(ParamId(1100), "dly_time")
                 .with_scale(ParamScale::Logarithmic),
             smoothing: SmoothingStyle::Slow, // time_ms — 20 ms, prevents zipper/pitch clicks
@@ -242,12 +242,14 @@ kernel_params! {
                 flags: ParamFlags::AUTOMATABLE,
                 ..ParamDescriptor::mix()
             }
-            .with_id(ParamId(1101), "dly_feedback"),
+            .with_id(ParamId(1101), "dly_feedback")
+            .with_default(35.0),
             smoothing: SmoothingStyle::Standard, // feedback_pct — 10 ms
             get: this.feedback_pct,
             set: |v| this.feedback_pct = v;
 
-        [2] ParamDescriptor::mix().with_id(ParamId(1102), "dly_mix"),
+        [2] ParamDescriptor::mix().with_id(ParamId(1102), "dly_mix")
+            .with_default(35.0),
             smoothing: SmoothingStyle::Standard, // mix_pct — 10 ms
             get: this.mix_pct,
             set: |v| this.mix_pct = v;
@@ -269,7 +271,7 @@ kernel_params! {
             get: this.ping_pong,
             set: |v| this.ping_pong = v;
 
-        [4] ParamDescriptor::custom("Feedback LP", "Fb LP", 200.0, 20000.0, 20000.0)
+        [4] ParamDescriptor::custom("Feedback LP", "Fb LP", 200.0, 20000.0, 6000.0)
                 .with_id(ParamId(1105), "dly_fb_lp")
                 .with_unit(ParamUnit::Hertz)
                 .with_scale(ParamScale::Logarithmic),
@@ -277,7 +279,7 @@ kernel_params! {
             get: this.fb_lp_hz,
             set: |v| this.fb_lp_hz = v;
 
-        [5] ParamDescriptor::custom("Feedback HP", "Fb HP", 20.0, 2000.0, 20.0)
+        [5] ParamDescriptor::custom("Feedback HP", "Fb HP", 20.0, 2000.0, 80.0)
                 .with_id(ParamId(1106), "dly_fb_hp")
                 .with_unit(ParamUnit::Hertz)
                 .with_scale(ParamScale::Logarithmic),
@@ -546,6 +548,7 @@ impl DelayKernel {
 
 impl DspKernel for DelayKernel {
     type Params = DelayParams;
+    const LEVEL: Level = crate::calibration::DELAY;
 
     /// Process one stereo sample pair through the delay effect.
     ///
@@ -600,7 +603,7 @@ impl DspKernel for DelayKernel {
         // is high, keeping perceived loudness consistent regardless of tail length.
         let comp = sonido_core::gain::feedback_wet_compensation(feedback);
         let (out_l, out_r) =
-            wet_dry_mix_stereo(left, right, delayed_l * comp, delayed_r * comp, mix);
+            Self::blend_stereo(left, right, delayed_l * comp, delayed_r * comp, mix);
 
         (out_l * output_gain, out_r * output_gain)
     }
@@ -623,7 +626,7 @@ impl DspKernel for DelayKernel {
         self.delay_line_l.write(flush_denormal(input + filtered));
 
         let comp = sonido_core::gain::feedback_wet_compensation(feedback);
-        wet_dry_mix(input, delayed * comp, mix) * output_gain
+        Self::blend(input, delayed * comp, mix) * output_gain
     }
 
     fn reset(&mut self) {
@@ -1021,6 +1024,35 @@ mod tests {
     /// Feeds alternating-polarity samples (high-frequency content) into both
     /// kernels. After priming, collects the tail energy. The aggressively
     /// LP-filtered version must accumulate less total energy.
+    #[test]
+    fn diffusion_in_the_feedback_loop_stays_stable() {
+        // Regression: the diffusion allpasses had up to ~2x gain each, so with
+        // feedback above ~40% any diffusion made the loop run away (a 0.18
+        // peak grew to 1,100 at 56% feedback and 10% diffusion).
+        let sr = 48000.0_f32;
+        for diffusion in [10.0, 50.0, 100.0] {
+            let mut kernel = DelayKernel::new(sr);
+            let params = DelayParams {
+                time_ms: 330.0,
+                feedback_pct: 95.0,
+                mix_pct: 100.0,
+                diffusion_pct: diffusion,
+                ..DelayParams::default()
+            };
+            let mut peak = 0.0f32;
+            for n in 0..(sr as usize * 4) {
+                let x = if n < 4800 {
+                    0.3 * (n as f32 * 0.05).sin()
+                } else {
+                    0.0
+                };
+                let (l, r) = kernel.process_stereo(x, x, &params);
+                peak = peak.max(l.abs()).max(r.abs());
+            }
+            assert!(peak < 1.0, "diffusion {diffusion}: peak {peak}");
+        }
+    }
+
     #[test]
     fn feedback_lp_darkens() {
         let sr = 48000.0_f32;

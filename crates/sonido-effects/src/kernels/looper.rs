@@ -72,9 +72,9 @@ extern crate alloc;
 
 use sonido_core::kernel::{DspKernel, KernelParams, SmoothingStyle};
 use sonido_core::kernel_params;
+use sonido_core::level::Level;
 use sonido_core::{
     LoopBuffer, ParamDescriptor, ParamFlags, ParamId, ParamUnit, fast_db_to_linear, flush_denormal,
-    wet_dry_mix_stereo,
 };
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -364,6 +364,7 @@ impl LooperKernel {
 
 impl DspKernel for LooperKernel {
     type Params = LooperParams;
+    const LEVEL: Level = crate::calibration::LOOPER;
 
     /// Process one stereo sample pair through the looper.
     ///
@@ -404,7 +405,7 @@ impl DspKernel for LooperKernel {
             MODE_PLAY => {
                 // Read from loop buffer and mix with dry.
                 let (loop_l, loop_r) = self.buffer.read();
-                wet_dry_mix_stereo(left, right, loop_l, loop_r, mix)
+                Self::blend_stereo(left, right, loop_l, loop_r, mix)
             }
             _ => {
                 // Read existing loop content at write_pos for feedback blend.
@@ -416,7 +417,7 @@ impl DspKernel for LooperKernel {
 
                 // Read the loop at the (now-advanced) read position for output.
                 let (loop_l, loop_r) = self.buffer.read();
-                wet_dry_mix_stereo(left, right, loop_l, loop_r, mix)
+                Self::blend_stereo(left, right, loop_l, loop_r, mix)
             }
         };
 

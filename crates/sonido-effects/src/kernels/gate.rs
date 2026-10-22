@@ -54,6 +54,7 @@
 
 use sonido_core::kernel::{DspKernel, KernelParams, SmoothingStyle};
 use sonido_core::kernel_params;
+use sonido_core::level::Level;
 use sonido_core::{
     Biquad, Cached, EnvelopeFollower, ParamDescriptor, ParamFlags, ParamId, ParamScale, ParamUnit,
     fast_db_to_linear, highpass_coefficients, math::db_to_linear,
@@ -94,7 +95,7 @@ enum GateState {
 /// | Index | Field | Unit | Range | Default |
 /// |-------|-------|------|-------|---------|
 /// | 0 | `threshold_db` | dB | −80–0 | −40.0 |
-/// | 1 | `attack_ms` | ms | 0.1–50 | 1.0 |
+/// | 1 | `attack_ms` | ms | 0.1–50 | 5.0 |
 /// | 2 | `release_ms` | ms | 10–1000 | 100.0 |
 /// | 3 | `hold_ms` | ms | 0–500 | 50.0 |
 /// | 4 | `range_db` | dB | −80–0 | −80.0 |
@@ -176,7 +177,7 @@ impl Default for GateParams {
     fn default() -> Self {
         Self {
             threshold_db: -40.0,
-            attack_ms: 1.0,
+            attack_ms: 5.0,
             release_ms: 100.0,
             hold_ms: 50.0,
             range_db: -80.0,
@@ -252,7 +253,8 @@ kernel_params! {
                 flags: ParamFlags::AUTOMATABLE,
                 ..ParamDescriptor::mix()
             }
-            .with_id(ParamId(401), "gate_attack"),
+            .with_id(ParamId(401), "gate_attack")
+            .with_default(5.0),
             smoothing: SmoothingStyle::Standard, // attack — timing param
             get: this.attack_ms,
             set: |v| this.attack_ms = v;
@@ -674,6 +676,7 @@ impl GateKernel {
 
 impl DspKernel for GateKernel {
     type Params = GateParams;
+    const LEVEL: Level = crate::calibration::GATE;
 
     /// Process a single mono sample through the noise gate.
     ///

@@ -50,10 +50,11 @@
 use libm::{expf, powf};
 use sonido_core::kernel::{DspKernel, KernelParams, SmoothingStyle};
 use sonido_core::kernel_params;
+use sonido_core::level::Level;
 use sonido_core::math::soft_limit;
 use sonido_core::{
     AllpassFilter, InterpolatedDelay, OnePole, ParamDescriptor, ParamFlags, ParamId, ParamUnit,
-    db_to_linear, flush_denormal, wet_dry_mix,
+    db_to_linear, flush_denormal, needs_update,
 };
 
 // ── Constants ───────────────────────────────────────────────────────────────
@@ -150,13 +151,15 @@ fn decay_to_delay_len(decay_s: f32, sr: f32) -> f32 {
     (base * (decay_s / 2.0).clamp(0.25, 5.0)).clamp(min_len, max_len)
 }
 
-/// Compute feedback gain from decay time in seconds.
+/// Feedback gain for an RT60 of `decay_s`, applied once per trip around a
+/// loop `loop_len` samples long: `g = 10^(-3 * loop_len / (decay_s * sr))`.
 ///
-/// `g = exp(-3 * ln(10) / (decay_s * sr))` — same formula as plate reverb.
+/// (A per-sample gain applied per trip, as this once was, is ~0.99999 for any
+/// decay: the clamp made it a fixed 0.97 and the Decay control did nothing.)
 #[inline]
-fn decay_to_gain(decay_s: f32, sr: f32) -> f32 {
-    let g = expf(-3.0 * core::f32::consts::LN_10 / (decay_s * sr));
-    g.clamp(0.0, 0.97)
+fn decay_to_gain(decay_s: f32, loop_len: f32, sr: f32) -> f32 {
+    let g = expf(-3.0 * core::f32::consts::LN_10 * loop_len / (decay_s.max(0.01) * sr));
+    g.clamp(0.0, 0.99)
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -346,6 +349,9 @@ pub struct SpringReverbKernel {
     feedback_gain: f32,
     /// Current feedback delay length in samples.
     feedback_delay_len: f32,
+    /// Total delay of the dispersion allpasses (fixed at construction), which
+    /// sit inside the feedback loop.
+    chain_len: f32,
     /// Current allpass delay lengths in samples.
     allpass_lens: [usize; NUM_ALLPASSES],
 }
@@ -368,8 +374,12 @@ impl SpringReverbKernel {
         let fb_delay = InterpolatedDelay::new(MAX_FB_DELAY_SAMPLES);
         let fb_damp = OnePole::new(sample_rate, damp_to_hz(50.0));
 
-        let feedback_gain = decay_to_gain(2.0, sample_rate);
+        // Each allpass delays by its capacity − 1 samples.
+        let chain_len: f32 = (0..NUM_ALLPASSES)
+            .map(|i| (scale(ALLPASS_LENS_44K[i], sample_rate) * 3 + 3) as f32)
+            .sum();
         let feedback_delay_len = decay_to_delay_len(2.0, sample_rate);
+        let feedback_gain = decay_to_gain(2.0, feedback_delay_len + chain_len + 1.0, sample_rate);
 
         Self {
             allpasses,
@@ -382,6 +392,7 @@ impl SpringReverbKernel {
             cached_damp: f32::NAN,
             feedback_gain,
             feedback_delay_len,
+            chain_len,
             allpass_lens,
         }
     }
@@ -390,12 +401,14 @@ impl SpringReverbKernel {
     #[inline]
     fn update_derived(&mut self, decay_s: f32, tension_pct: f32, damp_pct: f32) {
         let eps = 0.001;
-        if (decay_s - self.cached_decay).abs() > eps {
+        if needs_update(self.cached_decay, decay_s, eps) {
             self.cached_decay = decay_s;
-            self.feedback_gain = decay_to_gain(decay_s, self.sample_rate);
             self.feedback_delay_len = decay_to_delay_len(decay_s, self.sample_rate);
+            // One trip: the allpass chain, the feedback delay, one sample of state.
+            let loop_len = self.chain_len + self.feedback_delay_len + 1.0;
+            self.feedback_gain = decay_to_gain(decay_s, loop_len, self.sample_rate);
         }
-        if (tension_pct - self.cached_tension).abs() > eps {
+        if needs_update(self.cached_tension, tension_pct, eps) {
             self.cached_tension = tension_pct;
             for i in 0..NUM_ALLPASSES {
                 self.allpass_lens[i] =
@@ -409,7 +422,7 @@ impl SpringReverbKernel {
                 self.allpasses[i].set_feedback(adjusted_fb);
             }
         }
-        if (damp_pct - self.cached_damp).abs() > eps {
+        if needs_update(self.cached_damp, damp_pct, eps) {
             self.cached_damp = damp_pct;
             self.fb_damp.set_frequency(damp_to_hz(damp_pct));
         }
@@ -418,6 +431,7 @@ impl SpringReverbKernel {
 
 impl DspKernel for SpringReverbKernel {
     type Params = SpringReverbParams;
+    const LEVEL: Level = crate::calibration::SPRING_REVERB;
 
     fn process_stereo(&mut self, left: f32, right: f32, params: &Self::Params) -> (f32, f32) {
         self.update_derived(params.decay_s, params.tension_pct, params.damping_pct);
@@ -454,7 +468,7 @@ impl DspKernel for SpringReverbKernel {
 
         // 8. Wet/dry mix → gain
         let gain = db_to_linear(params.output_db);
-        let mixed = wet_dry_mix(mono, wet, params.mix_pct * 0.01) * gain;
+        let mixed = Self::blend(mono, wet, params.mix_pct * 0.01) * gain;
 
         // Mono (dual-mono output)
         (mixed, mixed)

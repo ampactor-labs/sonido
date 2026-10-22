@@ -55,6 +55,7 @@ use alloc::vec::Vec;
 use sonido_core::kernel::KernelParams;
 use sonido_core::kernel::{DspKernel, SmoothingStyle};
 use sonido_core::kernel_params;
+use sonido_core::level::Level;
 use sonido_core::{
     ParamDescriptor, ParamFlags, ParamId, ParamUnit, TempoContext, fast_db_to_linear,
 };
@@ -360,6 +361,7 @@ impl TimeStretchKernel {
 
 impl DspKernel for TimeStretchKernel {
     type Params = TimeStretchParams;
+    const LEVEL: Level = crate::calibration::TIME_STRETCH;
 
     fn process_stereo(&mut self, left: f32, right: f32, params: &TimeStretchParams) -> (f32, f32) {
         let sr = self.sample_rate;

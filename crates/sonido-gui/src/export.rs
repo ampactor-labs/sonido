@@ -26,7 +26,9 @@ pub fn validate_patch_for_pedal(patch: &Patch) -> Vec<Finding> {
         cycle_table: cycle_table::EFFECT_CYCLES,
         sdram_table: cycle_table::EFFECT_SDRAM,
         cycle_budget: cycle_table::CYCLE_BUDGET_PER_BLOCK,
+        chain_fraction: cycle_table::CHAIN_FRACTION,
         warn_fraction: cycle_table::WARN_FRACTION,
+        node_overhead: cycle_table::NODE_OVERHEAD_CYCLES,
         sdram_budget: cycle_table::SDRAM_BUDGET_BYTES,
     };
     validate_for_pedal(patch, &limits)
@@ -112,29 +114,46 @@ mod tests {
     }
 
     #[test]
-    fn non_pedal_effect_blocks_pedal_export() {
-        // tape is UID 9 — not in the pedal set.
-        let patch = Patch::linear_chain("nope", vec![PatchNode::new(9, vec![])]);
+    fn unknown_effect_blocks_pedal_export() {
+        let patch = Patch::linear_chain("nope", vec![PatchNode::new(99, vec![])]);
         assert!(!can_export_to_pedal(&patch));
     }
 
     #[test]
-    fn heavy_chain_warns_or_blocks() {
-        // Two reverbs (UID 11, 64k each) + delay (40k) → 168k + overhead, ~53% —
-        // under budget but a four-reverb stack would warn/block. Sanity-check the
-        // wiring produces findings of the right shape.
+    fn every_effect_can_go_to_the_pedal() {
+        assert_eq!(pedal_allowed_uids().len(), 36);
+    }
+
+    #[test]
+    fn editor_and_pedal_apply_the_same_cpu_rule() {
+        // The pedal checks rigs with `cycle_table::chain_fits`; the editor with
+        // `validate_for_pedal`. They must agree on every rig.
+        let rigs: [&[u16]; 5] = [
+            &[1, 11, 17],
+            &[11, 11],
+            &[35],
+            &[11, 36],
+            &[9, 6, 3, 2, 1, 1],
+        ];
+        for uids in rigs {
+            let nodes = uids.iter().map(|&u| PatchNode::new(u, vec![])).collect();
+            let patch = Patch::linear_chain("rig", nodes);
+            assert_eq!(
+                can_export_to_pedal(&patch),
+                cycle_table::chain_fits(uids.iter().copied()),
+                "{uids:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn two_reverbs_are_refused() {
+        // 2 × 179k measured worst blocks = 112% of the budget.
         let patch = Patch::linear_chain(
             "stack",
-            vec![
-                PatchNode::new(11, vec![]),
-                PatchNode::new(11, vec![]),
-                PatchNode::new(11, vec![]),
-                PatchNode::new(11, vec![]),
-                PatchNode::new(11, vec![]),
-            ],
+            vec![PatchNode::new(11, vec![]), PatchNode::new(11, vec![])],
         );
         let findings = validate_patch_for_pedal(&patch);
-        // 5 × 64k = 320k + overhead > budget → an error.
         assert!(findings.iter().any(|f| f.severity == Severity::Error));
     }
 

@@ -6,8 +6,15 @@
 //!
 //! Since Cargo features are additive and we can't disable their `memory-x`
 //! generation, we overwrite all generated `memory.x` files with our BOOT_SRAM layout.
+//!
+//! It also encodes the shared factory rigs (`sonido_rigs::factory_rigs`) into
+//! `$OUT_DIR/factory_rigs.rs`, which `src/rigs.rs` includes: the pedal ships
+//! the same rigs as the plugin and the editor, as bytes, with none of the code
+//! that builds them.
 
 fn main() {
+    write_factory_rigs();
+
     let target_dir = std::env::var("OUT_DIR")
         .map(std::path::PathBuf::from)
         .unwrap();
@@ -37,4 +44,22 @@ fn main() {
     }
 
     println!("cargo:rerun-if-changed=memory.x");
+}
+
+/// Encode every factory rig to its binary patch form, as Rust byte arrays.
+fn write_factory_rigs() {
+    let out = std::path::PathBuf::from(std::env::var("OUT_DIR").unwrap()).join("factory_rigs.rs");
+    let mut code = String::from(
+        "/// The factory rigs, encoded by `build.rs` from `sonido_rigs::factory_rigs`.\n\
+         pub const FACTORY_RIGS: &[&[u8]] = &[\n",
+    );
+    for rig in sonido_rigs::factory_rigs() {
+        let mut buf = vec![0u8; sonido_patch::SECTOR_SIZE];
+        let n = sonido_patch::encode(&rig, &mut buf)
+            .unwrap_or_else(|e| panic!("factory rig {} does not encode: {e}", rig.name));
+        code.push_str(&format!("    // {}\n    &{:?},\n", rig.name, &buf[..n]));
+    }
+    code.push_str("];\n");
+    std::fs::write(out, code).expect("write factory_rigs.rs");
+    println!("cargo:rerun-if-changed=../sonido-rigs/src");
 }

@@ -28,7 +28,7 @@
 //! `sonido-core` rather than `sonido-registry` — both `Effect` and
 //! `ParameterInfo` are defined here, and the graph engine depends on it.
 
-#[cfg(not(feature = "std"))]
+#[cfg(all(feature = "param-text", not(feature = "std")))]
 use alloc::string::String;
 
 use crate::effect::Effect;
@@ -55,13 +55,17 @@ pub trait EffectWithParams: Effect {
     /// Format a parameter value as display text.
     ///
     /// Delegates to [`ParamDescriptor::format_value()`]. Returns `None`
-    /// if the index is out of range.
+    /// if the index is out of range. Needs the `param-text` feature (on with
+    /// `std`): every trait object's vtable links this, and with it float
+    /// formatting, which the pedal firmware has no room or use for.
+    #[cfg(feature = "param-text")]
     fn effect_format_value(&self, index: usize, value: f32) -> Option<String>;
 
     /// Parse display text back to a parameter value.
     ///
     /// Delegates to [`ParamDescriptor::parse_value()`]. Returns `None`
-    /// if the index is out of range or parsing fails.
+    /// if the index is out of range or parsing fails. Needs `param-text`.
+    #[cfg(feature = "param-text")]
     fn effect_parse_value(&self, index: usize, text: &str) -> Option<f32>;
 }
 
@@ -83,10 +87,12 @@ impl<T: Effect + ParameterInfo> EffectWithParams for T {
         self.set_param(index, value)
     }
 
+    #[cfg(feature = "param-text")]
     fn effect_format_value(&self, index: usize, value: f32) -> Option<String> {
         self.param_info(index).map(|desc| desc.format_value(value))
     }
 
+    #[cfg(feature = "param-text")]
     fn effect_parse_value(&self, index: usize, text: &str) -> Option<f32> {
         self.param_info(index)
             .and_then(|desc| desc.parse_value(text))

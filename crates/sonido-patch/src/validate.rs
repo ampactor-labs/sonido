@@ -122,8 +122,12 @@ pub struct PedalLimits<'a> {
     pub sdram_table: &'a [(u16, u32)],
     /// Audio-block cycle budget (e.g. 320_000 at 48 kHz / 32-sample blocks).
     pub cycle_budget: u32,
+    /// Refuse once estimated cycles cross this fraction of the budget (e.g. 0.8).
+    pub chain_fraction: f32,
     /// Warn once estimated cycles cross this fraction of the budget (e.g. 0.7).
     pub warn_fraction: f32,
+    /// Graph cost per node, added to the effects' cycles.
+    pub node_overhead: u32,
     /// Total SDRAM available to effects (bytes).
     pub sdram_budget: u32,
 }
@@ -149,7 +153,7 @@ pub fn validate_for_pedal(patch: &Patch, limits: &PedalLimits) -> Vec<Finding> {
         }
     }
 
-    // CPU budget — sum measured cycles, plus a small per-node graph overhead.
+    // CPU budget — sum measured cycles, plus a per-node graph overhead.
     let mut total_cycles: u64 = 0;
     let mut missing_cycle_data = false;
     for node in &patch.nodes {
@@ -157,9 +161,8 @@ pub fn validate_for_pedal(patch: &Patch, limits: &PedalLimits) -> Vec<Finding> {
             Some(c) => total_cycles += c as u64,
             None => missing_cycle_data = true,
         }
+        total_cycles += limits.node_overhead as u64;
     }
-    // Graph scheduling/buffer overhead grows with node count.
-    total_cycles += (patch.nodes.len() as u64) * 400;
 
     if missing_cycle_data {
         out.push(Finding::warn(
@@ -168,20 +171,23 @@ pub fn validate_for_pedal(patch: &Patch, limits: &PedalLimits) -> Vec<Finding> {
     }
     let budget = limits.cycle_budget as u64;
     if budget > 0 {
-        if total_cycles > budget {
+        let limit = (budget as f32 * limits.chain_fraction) as u64;
+        if total_cycles > limit {
             out.push(Finding::error(format!(
-                "estimated {total_cycles} cycles/block exceeds the {budget} budget — \
-                 this patch will not run in real time on the pedal"
+                "estimated {:.0}% of the pedal's CPU, over its {:.0}% limit — \
+                 this rig would drop out on the pedal",
+                100.0 * total_cycles as f32 / budget as f32,
+                100.0 * limits.chain_fraction
             )));
         } else if (total_cycles as f32) > (budget as f32) * limits.warn_fraction {
             out.push(Finding::warn(format!(
-                "estimated {total_cycles} cycles/block is {:.0}% of the budget",
+                "estimated {:.0}% of the pedal's CPU",
                 100.0 * total_cycles as f32 / budget as f32
             )));
         }
     }
 
-    // SDRAM — warn only (never the gating constraint at these sizes).
+    // SDRAM — an allocation past the heap would crash the pedal.
     let mut total_sdram: u64 = 0;
     for node in &patch.nodes {
         if let Some(b) = lookup(limits.sdram_table, node.effect_uid) {
@@ -189,9 +195,10 @@ pub fn validate_for_pedal(patch: &Patch, limits: &PedalLimits) -> Vec<Finding> {
         }
     }
     if limits.sdram_budget > 0 && total_sdram > limits.sdram_budget as u64 {
-        out.push(Finding::warn(format!(
-            "estimated {total_sdram} bytes SDRAM exceeds the {} budget",
-            limits.sdram_budget
+        out.push(Finding::error(format!(
+            "needs {:.1} MB of the pedal's {:.0} MB SDRAM",
+            total_sdram as f32 / 1_048_576.0,
+            limits.sdram_budget as f32 / 1_048_576.0
         )));
     }
 
@@ -246,7 +253,9 @@ mod tests {
             cycle_table: &[(1, 1000), (11, 1000)],
             sdram_table: &[],
             cycle_budget: 320_000,
+            chain_fraction: 0.8,
             warn_fraction: 0.7,
+            node_overhead: 400,
             sdram_budget: 64 * 1024 * 1024,
         };
         assert!(has_errors(&validate_for_pedal(&p, &limits)));
@@ -260,7 +269,9 @@ mod tests {
             cycle_table: &[(1, 200_000), (11, 200_000)],
             sdram_table: &[],
             cycle_budget: 320_000,
+            chain_fraction: 0.8,
             warn_fraction: 0.7,
+            node_overhead: 400,
             sdram_budget: 0,
         };
         let findings = validate_for_pedal(&p, &limits);
@@ -268,14 +279,49 @@ mod tests {
     }
 
     #[test]
+    fn between_the_chain_limit_and_the_budget_is_error() {
+        // 259.2k of 320k is 81%: inside the block, but over the 80% rule.
+        let p = two_node();
+        let limits = PedalLimits {
+            allowed_uids: &[1, 11],
+            cycle_table: &[(1, 129_200), (11, 129_200)],
+            sdram_table: &[],
+            cycle_budget: 320_000,
+            chain_fraction: 0.8,
+            warn_fraction: 0.7,
+            node_overhead: 400,
+            sdram_budget: 0,
+        };
+        assert!(has_errors(&validate_for_pedal(&p, &limits)));
+    }
+
+    #[test]
+    fn sdram_overflow_is_error() {
+        let p = two_node();
+        let limits = PedalLimits {
+            allowed_uids: &[1, 11],
+            cycle_table: &[(1, 1000), (11, 1000)],
+            sdram_table: &[(1, 40 << 20), (11, 30 << 20)],
+            cycle_budget: 320_000,
+            chain_fraction: 0.8,
+            warn_fraction: 0.7,
+            node_overhead: 400,
+            sdram_budget: 64 << 20,
+        };
+        assert!(has_errors(&validate_for_pedal(&p, &limits)));
+    }
+
+    #[test]
     fn near_budget_warns_but_allows() {
         let p = two_node();
         let limits = PedalLimits {
             allowed_uids: &[1, 11],
-            cycle_table: &[(1, 130_000), (11, 110_000)], // 240k + overhead = 75% of 320k
+            cycle_table: &[(1, 130_000), (11, 110_000)], // 240k + overhead = 75% of 320k, under 80%
             sdram_table: &[],
             cycle_budget: 320_000,
+            chain_fraction: 0.8,
             warn_fraction: 0.7,
+            node_overhead: 400,
             sdram_budget: 0,
         };
         let findings = validate_for_pedal(&p, &limits);

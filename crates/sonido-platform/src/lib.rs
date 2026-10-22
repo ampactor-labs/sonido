@@ -60,7 +60,6 @@ extern crate alloc;
 pub mod control_mapper;
 pub mod cycle_table;
 pub mod knob_mapping;
-pub mod noon;
 pub mod param_map;
 
 // Re-export sonido-core types for convenience
@@ -69,7 +68,6 @@ pub use sonido_core::{ParamDescriptor, ParamUnit, ParameterInfo};
 // Re-export main types at crate root
 pub use control_mapper::ControlMapper;
 pub use knob_mapping::{NULL_KNOB, knob_map, knob_to_param};
-pub use noon::{HARDWARE_MAPPED, noon_value};
 pub use param_map::{adc_to_param, adc_to_param_biased};
 
 /// Namespace identifiers for control sources.

@@ -69,6 +69,7 @@
 use sonido_core::biquad::{highpass_coefficients, lowpass_coefficients};
 use sonido_core::kernel::{DspKernel, KernelParams, SmoothingStyle};
 use sonido_core::kernel_params;
+use sonido_core::level::Level;
 use sonido_core::math::ms_to_samples;
 use sonido_core::{
     Biquad, Cached, InterpolatedDelay, ParamDescriptor, ParamFlags, ParamId, ParamUnit,
@@ -296,6 +297,7 @@ impl StereoWidenerKernel {
 
 impl DspKernel for StereoWidenerKernel {
     type Params = StereoWidenerParams;
+    const LEVEL: Level = crate::calibration::STEREO_WIDENER;
 
     fn process_stereo(
         &mut self,

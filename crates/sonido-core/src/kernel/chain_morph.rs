@@ -83,6 +83,24 @@ impl ChainMorph {
         }
     }
 
+    /// One parameter of a slot's corner `A` (0) or `B` (1), if in range.
+    pub fn corner_param(&self, slot: usize, corner: usize, param: usize) -> Option<f32> {
+        let s = self.slots.get(slot)?;
+        (corner < s.space.snapshot_count() && param < s.space.param_count())
+            .then(|| s.space.snapshot(corner)[param])
+    }
+
+    /// Set one parameter of a slot's corner `A` (0) or `B` (1); out-of-range
+    /// indices are ignored.
+    pub fn set_corner_param(&mut self, slot: usize, corner: usize, param: usize, value: f32) {
+        if let Some(s) = self.slots.get_mut(slot)
+            && corner < s.space.snapshot_count()
+            && param < s.space.param_count()
+        {
+            s.space.set_snapshot_param(corner, param, value);
+        }
+    }
+
     /// Set a slot's bypass state for corner `A` (0) or `B` (1).
     pub fn set_bypass(&mut self, slot: usize, corner: usize, bypassed: bool) {
         if let Some(s) = self.slots.get_mut(slot) {
@@ -194,6 +212,20 @@ mod tests {
         assert_eq!(out, vec![0.0, 100.0]);
         cm.apply(1.0, |_, p, v| out[p] = v, |_, _| {});
         assert_eq!(out, vec![10.0, 200.0]);
+    }
+
+    #[test]
+    fn corner_params_read_and_write_in_place() {
+        let mut cm = ChainMorph::new(&[2]);
+        cm.set_corner(0, 1, &[1.0, 2.0]);
+        cm.set_corner_param(0, 1, 1, 7.0);
+        assert_eq!(cm.corner_param(0, 1, 1), Some(7.0));
+        assert_eq!(cm.corner_param(0, 1, 0), Some(1.0));
+        // Out of range: ignored on write, None on read.
+        cm.set_corner_param(3, 0, 0, 9.0);
+        cm.set_corner_param(0, 0, 5, 9.0);
+        assert_eq!(cm.corner_param(0, 0, 5), None);
+        assert_eq!(cm.corner_param(1, 0, 0), None);
     }
 
     #[test]

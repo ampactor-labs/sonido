@@ -48,9 +48,8 @@ use alloc::vec::Vec;
 use sonido_core::kernel::KernelParams;
 use sonido_core::kernel::{DspKernel, SmoothingStyle};
 use sonido_core::kernel_params;
-use sonido_core::{
-    ParamDescriptor, ParamFlags, ParamId, ParamUnit, fast_db_to_linear, wet_dry_mix,
-};
+use sonido_core::level::Level;
+use sonido_core::{ParamDescriptor, ParamFlags, ParamId, ParamUnit, fast_db_to_linear};
 
 // ═══════════════════════════════════════════════════════════════════════════
 //  Constants
@@ -302,6 +301,7 @@ impl TextureKernel {
 
 impl DspKernel for TextureKernel {
     type Params = TextureParams;
+    const LEVEL: Level = crate::calibration::TEXTURE;
 
     fn process_stereo(&mut self, left: f32, right: f32, params: &TextureParams) -> (f32, f32) {
         // ── Write input to capture buffer ─────────────────────────────────
@@ -358,8 +358,8 @@ impl DspKernel for TextureKernel {
         let mix = params.mix_pct / 100.0;
         let output_gain = fast_db_to_linear(params.output_db);
 
-        let out_l = wet_dry_mix(left, wet_l, mix) * output_gain;
-        let out_r = wet_dry_mix(right, wet_r, mix) * output_gain;
+        let (out_l, out_r) = Self::blend_stereo(left, right, wet_l, wet_r, mix);
+        let (out_l, out_r) = (out_l * output_gain, out_r * output_gain);
 
         (out_l, out_r)
     }

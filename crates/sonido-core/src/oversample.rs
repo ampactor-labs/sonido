@@ -412,6 +412,10 @@ impl<const FACTOR: usize, E: Effect> Effect for Oversampled<FACTOR, E> {
         self.effect.reset();
     }
 
+    fn snap_params(&mut self) {
+        self.effect.snap_params();
+    }
+
     fn latency_samples(&self) -> usize {
         // Filter latency (group delay) + inner effect latency
         // FIR filter group delay = (taps - 1) / 2 for symmetric filter

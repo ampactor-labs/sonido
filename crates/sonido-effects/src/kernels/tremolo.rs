@@ -52,6 +52,7 @@
 //! ```
 
 use sonido_core::kernel_params;
+use sonido_core::level::Level;
 use sonido_core::{
     DIVISION_LABELS, Lfo, LfoWaveform, ParamDescriptor, ParamFlags, ParamId, ParamUnit,
     TempoManager, fast_db_to_linear, index_to_division,
@@ -295,6 +296,7 @@ impl TremoloKernel {
 
 impl DspKernel for TremoloKernel {
     type Params = TremoloParams;
+    const LEVEL: Level = crate::calibration::TREMOLO;
 
     fn process_stereo(&mut self, left: f32, right: f32, params: &TremoloParams) -> (f32, f32) {
         // ── Unit conversion (user-facing → internal) ──

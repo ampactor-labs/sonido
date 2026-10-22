@@ -46,10 +46,10 @@
 use libm::ceilf;
 use sonido_core::kernel::{DspKernel, KernelParams, SmoothingStyle};
 use sonido_core::kernel_params;
+use sonido_core::level::Level;
 use sonido_core::{
     DIVISION_LABELS, InterpolatedDelay, Lfo, NoteDivision, ParamDescriptor, ParamFlags, ParamId,
     ParamUnit, TempoContext, TempoManager, fast_db_to_linear, flush_denormal, index_to_division,
-    wet_dry_mix_stereo,
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -64,7 +64,7 @@ use sonido_core::{
 /// | Index | Field | Unit | Range | Default |
 /// |-------|-------|------|-------|---------|
 /// | 0 | `rate` | Hz | 0.05–5.0 | 0.5 |
-/// | 1 | `depth_pct` | % | 0–100 | 35.0 |
+/// | 1 | `depth_pct` | % | 0–100 | 50.0 |
 /// | 2 | `feedback_pct` | % | −95–95 | 50.0 |
 /// | 3 | `mix_pct` | % | 0–100 | 50.0 |
 /// | 4 | `tzf` | index | 0–1 | 0 (Off) |
@@ -130,7 +130,7 @@ impl Default for FlangerParams {
     fn default() -> Self {
         Self {
             rate: 0.5,
-            depth_pct: 35.0,
+            depth_pct: 50.0,
             feedback_pct: 50.0,
             mix_pct: 50.0,
             tzf: 0.0,
@@ -185,7 +185,8 @@ kernel_params! {
                 default: 35.0,
                 ..ParamDescriptor::depth()
             }
-            .with_id(ParamId(801), "flgr_depth"),
+            .with_id(ParamId(801), "flgr_depth")
+            .with_default(50.0),
             smoothing: SmoothingStyle::Standard, // depth — modulation amount
             get: this.depth_pct,
             set: |v| this.depth_pct = v;
@@ -354,6 +355,7 @@ impl FlangerKernel {
 
 impl DspKernel for FlangerKernel {
     type Params = FlangerParams;
+    const LEVEL: Level = crate::calibration::FLANGER;
 
     /// Process one stereo sample pair.
     ///
@@ -434,7 +436,7 @@ impl DspKernel for FlangerKernel {
         // is high, keeping perceived loudness consistent.
         let comp = sonido_core::gain::feedback_wet_compensation(libm::fabsf(feedback));
         let (out_l, out_r) =
-            wet_dry_mix_stereo(dry_l, dry_r, delayed_l * comp, delayed_r * comp, mix);
+            Self::blend_stereo(dry_l, dry_r, delayed_l * comp, delayed_r * comp, mix);
 
         (out_l * output_gain, out_r * output_gain)
     }

@@ -49,10 +49,8 @@ use libm::fabsf;
 use sonido_core::fast_math::fast_sin_turns;
 use sonido_core::kernel::{DspKernel, KernelParams, SmoothingStyle};
 use sonido_core::kernel_params;
-use sonido_core::{
-    ParamDescriptor, ParamFlags, ParamId, ParamScale, ParamUnit, fast_db_to_linear,
-    wet_dry_mix_stereo,
-};
+use sonido_core::level::Level;
+use sonido_core::{ParamDescriptor, ParamFlags, ParamId, ParamScale, ParamUnit, fast_db_to_linear};
 
 // ═══════════════════════════════════════════════════════════════════════════
 //  Parameters
@@ -65,8 +63,8 @@ use sonido_core::{
 ///
 /// | Index | Field | Unit | Range | Default |
 /// |-------|-------|------|-------|---------|
-/// | 0 | `freq_hz` | Hz | 20–2000 | 220.0 |
-/// | 1 | `depth_pct` | % | 0–100 | 50.0 |
+/// | 0 | `freq_hz` | Hz | 20–2000 | 300.0 |
+/// | 1 | `depth_pct` | % | 0–100 | 100.0 |
 /// | 2 | `waveform` | index | 0–2 (Sine/Triangle/Square) | 0.0 |
 /// | 3 | `mix_pct` | % | 0–100 | 50.0 |
 /// | 4 | `output_db` | dB | −6–+6 | 0.0 |
@@ -87,8 +85,8 @@ pub struct RingModParams {
 impl Default for RingModParams {
     fn default() -> Self {
         Self {
-            freq_hz: 220.0,
-            depth_pct: 50.0,
+            freq_hz: 300.0,
+            depth_pct: 100.0,
             waveform: 0.0,
             mix_pct: 50.0,
             output_db: 0.0,
@@ -132,7 +130,7 @@ impl RingModParams {
 
 kernel_params! {
     RingModParams, this {
-        [0] ParamDescriptor::custom("Frequency", "Freq", 20.0, 2000.0, 220.0)
+        [0] ParamDescriptor::custom("Frequency", "Freq", 20.0, 2000.0, 300.0)
                 .with_unit(ParamUnit::Hertz)
                 .with_scale(ParamScale::Logarithmic)
                 .with_id(ParamId(1800), "ring_freq"),
@@ -142,7 +140,8 @@ kernel_params! {
 
         // Matches the original pre-kernel effect: ParamDescriptor::depth() with id 1801.
         // depth() factory: "Depth"/"Depth", 0–100 %, default 50.0
-        [1] ParamDescriptor::depth().with_id(ParamId(1801), "ring_depth"),
+        [1] ParamDescriptor::depth().with_id(ParamId(1801), "ring_depth")
+            .with_default(100.0),
             smoothing: SmoothingStyle::Standard, // depth — standard AM depth transitions
             get: this.depth_pct,
             set: |v| this.depth_pct = v;
@@ -251,6 +250,7 @@ impl RingModKernel {
 
 impl DspKernel for RingModKernel {
     type Params = RingModParams;
+    const LEVEL: Level = crate::calibration::RINGMOD;
 
     fn process_stereo(&mut self, left: f32, right: f32, params: &RingModParams) -> (f32, f32) {
         // ── Unit conversion (user-facing → internal) ──
@@ -272,7 +272,7 @@ impl DspKernel for RingModKernel {
         let mod_r = right * coeff;
 
         // ── Wet/dry mix → output level ──
-        let (mixed_l, mixed_r) = wet_dry_mix_stereo(left, right, mod_l, mod_r, mix);
+        let (mixed_l, mixed_r) = Self::blend_stereo(left, right, mod_l, mod_r, mix);
         (mixed_l * output, mixed_r * output)
     }
 
@@ -497,7 +497,7 @@ mod tests {
         assert_eq!(freq_desc.name, "Frequency");
         assert_eq!(freq_desc.min, 20.0);
         assert_eq!(freq_desc.max, 2000.0);
-        assert_eq!(freq_desc.default, 220.0);
+        assert_eq!(freq_desc.default, 300.0);
         assert_eq!(freq_desc.id, ParamId(1800));
 
         // Depth (index 1)

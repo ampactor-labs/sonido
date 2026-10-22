@@ -42,9 +42,8 @@ use alloc::vec::Vec;
 use sonido_core::kernel::KernelParams;
 use sonido_core::kernel::{DspKernel, SmoothingStyle};
 use sonido_core::kernel_params;
-use sonido_core::{
-    ParamDescriptor, ParamFlags, ParamId, ParamScale, ParamUnit, fast_db_to_linear, wet_dry_mix,
-};
+use sonido_core::level::Level;
+use sonido_core::{ParamDescriptor, ParamFlags, ParamId, ParamScale, ParamUnit, fast_db_to_linear};
 
 // ═══════════════════════════════════════════════════════════════════════════
 //  Constants
@@ -261,6 +260,7 @@ impl GlitchKernel {
 
 impl DspKernel for GlitchKernel {
     type Params = GlitchParams;
+    const LEVEL: Level = crate::calibration::GLITCH;
 
     fn process_stereo(&mut self, left: f32, right: f32, params: &GlitchParams) -> (f32, f32) {
         let sr = self.sample_rate;
@@ -370,8 +370,8 @@ impl DspKernel for GlitchKernel {
         let mix = params.mix_pct / 100.0;
         let output_gain = fast_db_to_linear(params.output_db);
 
-        let out_l = wet_dry_mix(left, wet_l, mix) * output_gain;
-        let out_r = wet_dry_mix(right, wet_r, mix) * output_gain;
+        let (out_l, out_r) = Self::blend_stereo(left, right, wet_l, wet_r, mix);
+        let (out_l, out_r) = (out_l * output_gain, out_r * output_gain);
 
         (out_l, out_r)
     }

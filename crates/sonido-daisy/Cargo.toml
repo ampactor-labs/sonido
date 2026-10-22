@@ -6,9 +6,14 @@ license = "AGPL-3.0-or-later"
 description = "Sonido DSP firmware for Electrosmith Daisy Seed (STM32H750 Cortex-M7)"
 publish = false
 
+[build-dependencies]
+# Encodes the shared factory rigs into the image (see build.rs).
+sonido-rigs = { path = "../sonido-rigs" }
+sonido-patch = { path = "../sonido-patch", features = ["std"] }
+
 [features]
 ## Enables `Adapter`/`DirectPolicy` re-exports, `adc_to_param`, and DSP-dependent library modules.
-## Required by the examples that use these modules (graph_audio_test, qspi_read_test,
+## Required by the examples that use these modules (graph_audio_test, qspi_test,
 ## single_reverb, single_delay, single_effect, sonido_pedal — see `required-features` below).
 ## Not needed for the others (blinky, passthrough, bench_kernels, hothouse_diag, ...).
 alloc = []
@@ -36,6 +41,7 @@ embassy-executor = { version = "0.9", features = ["arch-cortex-m", "executor-thr
 embassy-time = { version = "0.5", features = ["tick-hz-32_768"] }
 embassy-stm32 = { version = "0.5", features = ["stm32h750ib", "defmt", "time-driver-tim5"] }
 embassy-usb = "0.5"
+embassy-sync = "0.7"
 
 # Cortex-M
 cortex-m = { version = "0.7", features = ["critical-section-single-core"] }
@@ -63,7 +69,7 @@ name = "sonido_pedal"
 required-features = ["alloc", "platform"]
 
 [[example]]
-name = "qspi_read_test"
+name = "qspi_test"
 required-features = ["alloc"]
 
 
@@ -84,3 +90,27 @@ name = "convert_passthrough"
 
 [[example]]
 name = "simple_gain"
+
+# The crate sits outside the workspace, so the workspace profile doesn't apply.
+# Fat LTO and one codegen unit let dead code go across crates: the pedal must
+# fit the 480 KB the bootloader copies into AXI SRAM.
+[profile.release]
+lto = "fat"
+codegen-units = 1
+opt-level = 3
+debug = 2
+
+# Size-optimize everything but the per-sample code (kernels, core DSP, libm):
+# the HAL, USB, executor, registry constructors and patch runtime run at
+# control rate or once. This is what fits all 36 effects in 480 KB.
+[profile.release.package."*"]
+opt-level = "s"
+
+[profile.release.package.sonido-effects]
+opt-level = 3
+
+[profile.release.package.sonido-core]
+opt-level = 3
+
+[profile.release.package.libm]
+opt-level = 3

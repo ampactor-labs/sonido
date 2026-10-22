@@ -2000,6 +2000,16 @@ impl ProcessingGraph {
         }
     }
 
+    /// Jumps every effect node's smoothed parameters to their targets
+    /// ([`Effect::snap_params`]), keeping their state and tails.
+    pub fn snap_params(&mut self) {
+        for node in self.nodes.iter_mut().flatten() {
+            if let NodeKind::Effect(ref mut effect) = node.kind {
+                effect.snap_params();
+            }
+        }
+    }
+
     /// Returns the total graph latency in samples (longest path).
     ///
     /// Returns 0 if the graph hasn't been compiled.

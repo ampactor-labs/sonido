@@ -290,6 +290,52 @@ async fn main(spawner: Spawner) {
             budget
         );
     }
+    // --- Second pass: the path a rig takes on the pedal ---
+    // The registry's smoothed adapter (what `PatchPlayer` builds), one
+    // `process_block_stereo` per block, with every parameter re-set to its own
+    // value every 15th block, as the pedal's 100 Hz control tick does.
+    let registry = sonido_registry::EffectRegistry::new();
+    for id in NAMES {
+        defmt::info!("bench rig {}", id);
+        let Some(mut effect) = registry.create(id, SAMPLE_RATE) else {
+            continue;
+        };
+        let params = effect.effect_param_count();
+        let (mut l, mut r) = ([0.0f32; BLOCK_SIZE], [0.0f32; BLOCK_SIZE]);
+        let (mut out_l, mut out_r) = ([0.0f32; BLOCK_SIZE], [0.0f32; BLOCK_SIZE]);
+        let mut block = |b: usize| {
+            for i in 0..BLOCK_SIZE {
+                l[i] = input[b * BLOCK_SIZE + i];
+                r[i] = -l[i];
+            }
+            if b.is_multiple_of(15) {
+                for p in 0..params {
+                    let v = effect.effect_get_param(p);
+                    effect.effect_set_param(p, v);
+                }
+            }
+            effect.process_block_stereo(&l, &r, &mut out_l, &mut out_r);
+            core::hint::black_box(&out_l);
+        };
+        for b in 0..WARMUP_BLOCKS {
+            block(b);
+        }
+        let (mut total, mut worst) = (0u64, 0u32);
+        for b in WARMUP_BLOCKS..WARMUP_BLOCKS + TIMED_BLOCKS {
+            let c = measure_cycles(|| block(b));
+            total += u64::from(c);
+            worst = worst.max(c);
+        }
+        defmt::info!(
+            "rig={} mean={} worst={} budget={}",
+            id,
+            (total / TIMED_BLOCKS as u64) as u32,
+            worst,
+            budget
+        );
+        embassy_time::Timer::after_millis(1).await;
+    }
+
     defmt::info!("=== Benchmarks complete, starting USB serial ===");
 
     // --- Format results into a static buffer ---

@@ -50,10 +50,11 @@
 
 use sonido_core::kernel::{DspKernel, KernelParams, SmoothingStyle};
 use sonido_core::kernel_params;
+use sonido_core::level::Level;
 use sonido_core::{
     EnvelopeFollower, ParamDescriptor, ParamId, ParamUnit,
     gain::output_param_descriptor,
-    math::{db_to_linear, flush_denormal, wet_dry_mix},
+    math::{db_to_linear, flush_denormal},
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -280,6 +281,7 @@ impl TransientShaperKernel {
 
 impl DspKernel for TransientShaperKernel {
     type Params = TransientShaperParams;
+    const LEVEL: Level = crate::calibration::TRANSIENT_SHAPER;
 
     /// Process a stereo sample pair with linked-mono transient detection.
     ///
@@ -310,8 +312,7 @@ impl DspKernel for TransientShaperKernel {
         let wet_r = flush_denormal(right * gain);
 
         let mix = params.mix_pct / 100.0;
-        let out_l = wet_dry_mix(left, wet_l, mix);
-        let out_r = wet_dry_mix(right, wet_r, mix);
+        let (out_l, out_r) = Self::blend_stereo(left, right, wet_l, wet_r, mix);
 
         let output_linear = db_to_linear(params.output_db);
         (

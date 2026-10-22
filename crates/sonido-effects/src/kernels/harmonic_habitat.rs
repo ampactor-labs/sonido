@@ -11,9 +11,10 @@ use libm::{ceilf, expf, powf, roundf, sqrtf};
 use sonido_core::fast_math::fast_sin_turns;
 use sonido_core::kernel::{DspKernel, KernelParams, SmoothingStyle};
 use sonido_core::kernel_params;
+use sonido_core::level::Level;
 use sonido_core::{
     Biquad, InterpolatedDelay, Interpolation, OnePole, ParamDescriptor, ParamFlags, ParamId,
-    ParamUnit, fast_db_to_linear, flush_denormal, peaking_eq_coefficients, wet_dry_mix_stereo,
+    ParamUnit, fast_db_to_linear, flush_denormal, peaking_eq_coefficients,
 };
 
 // ── Reverb constants ────────────────────────────────────────────────────────
@@ -629,6 +630,7 @@ impl HarmonicHabitatKernel {
 
 impl DspKernel for HarmonicHabitatKernel {
     type Params = HarmonicHabitatParams;
+    const LEVEL: Level = crate::calibration::HARMONIC_HABITAT;
 
     fn process_stereo(
         &mut self,
@@ -667,7 +669,7 @@ impl DspKernel for HarmonicHabitatKernel {
         let final_l = mid + side * width;
         let final_r = mid - side * width;
 
-        let (out_l, out_r) = wet_dry_mix_stereo(left, right, final_l, final_r, mix);
+        let (out_l, out_r) = Self::blend_stereo(left, right, final_l, final_r, mix);
         (
             sonido_core::math::soft_limit(out_l * output, 3.0),
             sonido_core::math::soft_limit(out_r * output, 3.0),

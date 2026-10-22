@@ -15,6 +15,7 @@ members = [
     "crates/sonido-plugin",
     "crates/sonido-graph-dsl",
     "crates/sonido-patch",
+    "crates/sonido-rigs",
 ]
 exclude = [
     "crates/sonido-daisy",
@@ -33,6 +34,7 @@ default-members = [
     "crates/sonido-synth",
     "crates/sonido-graph-dsl",
     "crates/sonido-patch",
+    "crates/sonido-rigs",
 ]
 
 [workspace.package]
@@ -64,6 +66,7 @@ sonido-synth = { path = "crates/sonido-synth", default-features = false }
 sonido-gui-core = { path = "crates/sonido-gui-core" }
 sonido-graph-dsl = { path = "crates/sonido-graph-dsl" }
 sonido-patch = { path = "crates/sonido-patch", default-features = false }
+sonido-rigs = { path = "crates/sonido-rigs" }
 
 # GUI framework
 egui = "0.31"

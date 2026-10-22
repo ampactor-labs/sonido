@@ -55,9 +55,10 @@
 
 use sonido_core::kernel::{DspKernel, KernelParams, SmoothingStyle};
 use sonido_core::kernel_params;
+use sonido_core::level::Level;
 use sonido_core::{
     FixedDelayLine, Lfo, LfoWaveform, ParamDescriptor, ParamFlags, ParamId, ParamUnit,
-    fast_db_to_linear, wet_dry_mix, wet_dry_mix_stereo,
+    fast_db_to_linear,
 };
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -171,7 +172,7 @@ impl VibratoUnit {
 ///
 /// | Index | Field | Unit | Range | Default |
 /// |-------|-------|------|-------|---------|
-/// | 0 | `depth_pct` | % | 0–400 | 100.0 |
+/// | 0 | `depth_pct` | % | 0–400 | 50.0 |
 /// | 1 | `mix_pct` | % | 0–100 | 100.0 |
 /// | 2 | `output_db` | dB | −6–+6 | 0.0 |
 #[derive(Debug, Clone, Copy)]
@@ -193,7 +194,7 @@ impl Default for VibratoParams {
     /// Defaults match the original pre-kernel `MultiVibrato` effect's descriptor defaults exactly.
     fn default() -> Self {
         Self {
-            depth_pct: 100.0,
+            depth_pct: 50.0,
             mix_pct: 100.0,
             output_db: 0.0,
         }
@@ -229,7 +230,8 @@ kernel_params! {
                 flags: ParamFlags::AUTOMATABLE,
                 ..ParamDescriptor::mix()
             }
-            .with_id(ParamId(1300), "vib_depth"),
+            .with_id(ParamId(1300), "vib_depth")
+            .with_default(50.0),
             smoothing: SmoothingStyle::Standard, // depth_pct — 10 ms, click-free depth sweeps
             get: this.depth_pct,
             set: |v| this.depth_pct = v;
@@ -325,6 +327,7 @@ impl VibratoKernel {
 
 impl DspKernel for VibratoKernel {
     type Params = VibratoParams;
+    const LEVEL: Level = crate::calibration::VIBRATO;
 
     /// Process a stereo sample pair through all six vibrato units per channel.
     ///
@@ -355,7 +358,7 @@ impl DspKernel for VibratoKernel {
         wet_r *= INV_NUM_VIBRATOS;
 
         // ── Wet/dry mix → output level ──
-        let (out_l, out_r) = wet_dry_mix_stereo(left, right, wet_l, wet_r, mix);
+        let (out_l, out_r) = Self::blend_stereo(left, right, wet_l, wet_r, mix);
         (out_l * output, out_r * output)
     }
 
@@ -374,7 +377,7 @@ impl DspKernel for VibratoKernel {
         }
         wet *= INV_NUM_VIBRATOS;
 
-        wet_dry_mix(input, wet, mix) * output
+        Self::blend(input, wet, mix) * output
     }
 
     fn reset(&mut self) {

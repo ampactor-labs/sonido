@@ -74,6 +74,7 @@
 
 use sonido_core::kernel::{DspKernel, KernelParams, SmoothingStyle};
 use sonido_core::kernel_params;
+use sonido_core::level::Level;
 use sonido_core::math::soft_limit;
 use sonido_core::{
     Adaa1, Biquad, Cached, EnvelopeFollower, InterpolatedDelay, Lfo, LfoWaveform, OnePole,
@@ -722,6 +723,7 @@ impl TapeKernel {
 
 impl DspKernel for TapeKernel {
     type Params = TapeParams;
+    const LEVEL: Level = crate::calibration::TAPE;
 
     /// Process one stereo sample pair through the full tape machine model.
     ///

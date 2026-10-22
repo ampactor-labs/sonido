@@ -68,6 +68,7 @@
 
 use sonido_core::kernel::{DspKernel, KernelParams, SmoothingStyle};
 use sonido_core::kernel_params;
+use sonido_core::level::Level;
 use sonido_core::math::soft_limit;
 use sonido_core::{
     Biquad, Cached, ParamDescriptor, ParamFlags, ParamId, ParamScale, ParamUnit, fast_db_to_linear,
@@ -547,6 +548,7 @@ impl EqKernel {
 
 impl DspKernel for EqKernel {
     type Params = EqParams;
+    const LEVEL: Level = crate::calibration::EQ;
 
     fn process_stereo(&mut self, left: f32, right: f32, params: &EqParams) -> (f32, f32) {
         // ── Coefficient decimation ────────────────────────────────────────────

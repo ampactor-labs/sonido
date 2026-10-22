@@ -44,9 +44,8 @@
 use libm::{floorf, powf};
 use sonido_core::kernel::{DspKernel, KernelParams, SmoothingStyle};
 use sonido_core::kernel_params;
-use sonido_core::{
-    ParamDescriptor, ParamFlags, ParamId, ParamUnit, fast_db_to_linear, wet_dry_mix_stereo,
-};
+use sonido_core::level::Level;
+use sonido_core::{ParamDescriptor, ParamFlags, ParamId, ParamUnit, fast_db_to_linear};
 
 // ═══════════════════════════════════════════════════════════════════════════
 //  Parameters
@@ -60,7 +59,7 @@ use sonido_core::{
 /// | Index | Field | Unit | Range | Default |
 /// |-------|-------|------|-------|---------|
 /// | 0 | `bits` | steps | 2–16 | 8.0 |
-/// | 1 | `rate` | steps | 1–64 | 1.0 |
+/// | 1 | `rate` | steps | 1–64 | 4.0 |
 /// | 2 | `jitter_pct` | % | 0–100 | 0.0 |
 /// | 3 | `mix_pct` | % | 0–100 | 100.0 |
 /// | 4 | `output_db` | dB | −6–+6 | 0.0 |
@@ -82,7 +81,7 @@ impl Default for BitcrusherParams {
     fn default() -> Self {
         Self {
             bits: 8.0,
-            rate: 1.0,
+            rate: 4.0,
             jitter_pct: 0.0,
             mix_pct: 100.0,
             output_db: 0.0,
@@ -116,7 +115,7 @@ kernel_params! {
             get: this.bits,
             set: |v| this.bits = v;
 
-        [1] ParamDescriptor::custom("Downsample", "Down", 1.0, 64.0, 1.0)
+        [1] ParamDescriptor::custom("Downsample", "Down", 1.0, 64.0, 4.0)
                 .with_step(1.0)
                 .with_id(ParamId(1701), "crush_down")
                 .with_flags(ParamFlags::AUTOMATABLE.union(ParamFlags::STEPPED)),
@@ -261,6 +260,7 @@ impl BitcrusherKernel {
 
 impl DspKernel for BitcrusherKernel {
     type Params = BitcrusherParams;
+    const LEVEL: Level = crate::calibration::BITCRUSHER;
 
     /// Process a stereo sample pair through the bitcrusher.
     ///
@@ -291,7 +291,7 @@ impl DspKernel for BitcrusherKernel {
             self.counter -= floorf(self.counter);
         }
 
-        let (wet_l, wet_r) = wet_dry_mix_stereo(left, right, self.held_l, self.held_r, mix);
+        let (wet_l, wet_r) = Self::blend_stereo(left, right, self.held_l, self.held_r, mix);
         (wet_l * output_gain, wet_r * output_gain)
     }
 
@@ -377,7 +377,7 @@ mod tests {
         assert_eq!(d1.name, "Downsample");
         assert_eq!(d1.min, 1.0);
         assert_eq!(d1.max, 64.0);
-        assert_eq!(d1.default, 1.0);
+        assert_eq!(d1.default, 4.0);
         assert_eq!(d1.id, ParamId(1701));
         assert!(d1.flags.contains(ParamFlags::STEPPED));
 
@@ -539,8 +539,8 @@ mod tests {
             "bits default should be 8.0"
         );
         assert!(
-            (params.rate - 1.0).abs() < 1e-6,
-            "rate default should be 1.0"
+            (params.rate - 4.0).abs() < 1e-6,
+            "rate default should be 4.0"
         );
         assert!(
             (params.jitter_pct - 0.0).abs() < 1e-6,

@@ -3,7 +3,6 @@
 //! Maps are keyed by effect registry ID (e.g., `"distortion"`, `"reverb"`).
 //! Used by `EffectSlot` in sonido-daisy and host-side test harnesses.
 
-use crate::noon;
 use crate::param_map::adc_to_param_biased;
 use sonido_core::ParamDescriptor;
 
@@ -58,14 +57,19 @@ fn knob_min_override(effect_id: &str, param_idx: usize) -> Option<f32> {
         // perceived as discrete repeats — that range is for sound design, not
         // pedal performance.
         ("delay", 0) => Some(30.0),
+        // Filter cutoff: below ~150 Hz a resonant low-pass on guitar is
+        // silence, not a sound.
+        ("filter", 0) => Some(150.0),
+        // Bit depth: below 5 bits a guitar at instrument level never crosses
+        // the first quantization step, and the output is silence.
+        ("bitcrusher", 0) => Some(5.0),
         _ => None,
     }
 }
 
-/// Combined noon + biased ADC conversion: normalized knob → native param value.
-///
-/// Looks up the noon preset for `effect_id` at `param_idx`, falls back to the
-/// descriptor's default if no noon preset is defined. Applies a per-effect
+/// Biased ADC conversion: normalized knob → native param value, with the
+/// knob at noon selecting the parameter's default (the effect's voiced sweet
+/// spot, level-matched by `sonido_core::level`). Applies a per-effect
 /// knob floor override (see `knob_min_override`) when one is defined.
 ///
 /// # Parameters
@@ -80,7 +84,7 @@ pub fn knob_to_param(
     desc: &ParamDescriptor,
     normalized: f32,
 ) -> f32 {
-    let noon = noon::noon_value(effect_id, param_idx).unwrap_or(desc.default);
+    let noon = desc.default;
     if let Some(floor) = knob_min_override(effect_id, param_idx) {
         let floor = floor.clamp(desc.min, desc.max);
         let mut shifted = *desc;
@@ -120,9 +124,10 @@ mod tests {
     #[test]
     fn knob_to_param_uses_noon() {
         let desc = ParamDescriptor::gain_db("Drive", "Drive", 0.0, 40.0, 8.0);
-        // At knob center (0.5), should return the noon value for distortion drive (15.0)
+        // At knob center (0.5), should return the parameter's default.
+        let noon = desc.default;
         let val = knob_to_param("distortion", 0, &desc, 0.5);
-        assert!((val - 15.0).abs() < 0.1, "expected ~15.0, got {val}");
+        assert!((val - noon).abs() < 0.1, "expected ~{noon}, got {val}");
     }
 
     #[test]

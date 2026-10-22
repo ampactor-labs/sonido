@@ -63,6 +63,7 @@
 use sonido_core::kernel::KernelParams;
 use sonido_core::kernel::{DspKernel, SmoothingStyle};
 use sonido_core::kernel_params;
+use sonido_core::level::Level;
 use sonido_core::{
     Biquad, Cached, EnvelopeFollower, ParamDescriptor, ParamId, ParamScale, ParamUnit,
     fast_db_to_linear, fast_linear_to_db, highpass_coefficients, lowpass_coefficients,
@@ -506,6 +507,7 @@ impl MultibandCompKernel {
 
 impl DspKernel for MultibandCompKernel {
     type Params = MultibandCompParams;
+    const LEVEL: Level = crate::calibration::MULTIBAND_COMP;
 
     /// Process a mono sample through the multiband compressor.
     ///

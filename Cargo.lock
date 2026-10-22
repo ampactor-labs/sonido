@@ -4283,7 +4283,9 @@ name = "sonido-platform"
 version = "0.1.0"
 dependencies = [
  "libm",
+ "sonido-analysis",
  "sonido-core",
+ "sonido-registry",
 ]
 
 [[package]]
@@ -4317,6 +4319,17 @@ version = "0.1.0"
 dependencies = [
  "sonido-core",
  "sonido-effects",
+]
+
+[[package]]
+name = "sonido-rigs"
+version = "0.1.0"
+dependencies = [
+ "sonido-analysis",
+ "sonido-core",
+ "sonido-patch",
+ "sonido-platform",
+ "sonido-registry",
 ]
 
 [[package]]

@@ -56,6 +56,7 @@
 
 use sonido_core::kernel::{DspKernel, KernelParams, SmoothingStyle};
 use sonido_core::kernel_params;
+use sonido_core::level::Level;
 use sonido_core::math::soft_limit;
 use sonido_core::{
     Biquad, Cached, ParamDescriptor, ParamFlags, ParamId, ParamScale, ParamUnit,
@@ -74,8 +75,8 @@ use sonido_core::{
 ///
 /// | Index | Field | Unit | Range | Default |
 /// |-------|-------|------|-------|---------|
-/// | 0 | `cutoff_hz` | Hz | 20–20000 | 1000.0 |
-/// | 1 | `resonance` | ratio (Q) | 0.1–20.0 | 0.707 |
+/// | 0 | `cutoff_hz` | Hz | 20–20000 | 2200.0 |
+/// | 1 | `resonance` | ratio (Q) | 0.1–20.0 | 3.0 |
 /// | 2 | `output_db` | dB | −6–+6 | 0.0 |
 /// | 3 | `filter_type` | index | 0–3 | 0 (LPF) |
 #[derive(Debug, Clone, Copy)]
@@ -93,8 +94,8 @@ pub struct FilterParams {
 impl Default for FilterParams {
     fn default() -> Self {
         Self {
-            cutoff_hz: 1000.0,
-            resonance: 0.707,
+            cutoff_hz: 2200.0,
+            resonance: 3.0,
             output_db: 0.0,
             filter_type: 0.0,
         }
@@ -131,7 +132,8 @@ kernel_params! {
                 ..ParamDescriptor::mix()
             }
             .with_id(ParamId(1200), "flt_cutoff")
-            .with_scale(ParamScale::Logarithmic),
+            .with_scale(ParamScale::Logarithmic)
+            .with_default(2200.0),
             smoothing: SmoothingStyle::Slow, // cutoff — filter coefficient, avoid zipper
             get: this.cutoff_hz,
             set: |v| this.cutoff_hz = v;
@@ -147,7 +149,8 @@ kernel_params! {
                 flags: ParamFlags::AUTOMATABLE,
                 ..ParamDescriptor::mix()
             }
-            .with_id(ParamId(1201), "flt_resonance"),
+            .with_id(ParamId(1201), "flt_resonance")
+            .with_default(3.0),
             smoothing: SmoothingStyle::Slow, // resonance — filter coefficient, avoid zipper
             get: this.resonance,
             set: |v| this.resonance = v;
@@ -261,6 +264,7 @@ impl FilterKernel {
 
 impl DspKernel for FilterKernel {
     type Params = FilterParams;
+    const LEVEL: Level = crate::calibration::FILTER;
 
     fn process_stereo(&mut self, left: f32, right: f32, params: &FilterParams) -> (f32, f32) {
         // ── Coefficient update (only when cutoff, resonance, or filter type changes) ──
@@ -357,7 +361,7 @@ mod tests {
         assert_eq!(desc0.name, "Cutoff");
         assert!((desc0.min - 20.0).abs() < 0.01);
         assert!((desc0.max - 20000.0).abs() < 0.01);
-        assert!((desc0.default - 1000.0).abs() < 0.01);
+        assert!((desc0.default - 2200.0).abs() < 0.01);
         assert_eq!(desc0.id, ParamId(1200));
         assert_eq!(desc0.string_id, "flt_cutoff");
 
@@ -365,7 +369,7 @@ mod tests {
         assert_eq!(desc1.name, "Resonance");
         assert!((desc1.min - 0.1).abs() < 0.001);
         assert!((desc1.max - 20.0).abs() < 0.01);
-        assert!((desc1.default - 0.707).abs() < 0.001);
+        assert!((desc1.default - 3.0).abs() < 0.001);
         assert_eq!(desc1.id, ParamId(1201));
         assert_eq!(desc1.string_id, "flt_resonance");
 

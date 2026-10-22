@@ -1,0 +1,20 @@
+[package]
+name = "sonido-rigs"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Sonido's factory rigs: one set for the pedal, the graph-player plugin and the editor"
+
+[dependencies]
+sonido-core = { workspace = true, features = ["std"] }
+sonido-patch = { workspace = true, features = ["std"] }
+sonido-registry = { workspace = true, features = ["std"] }
+
+[dev-dependencies]
+sonido-analysis = { workspace = true }
+sonido-platform = { workspace = true }
+
+[lints]
+workspace = true

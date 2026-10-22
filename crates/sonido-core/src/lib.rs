@@ -128,6 +128,7 @@ pub mod fast_math;
 pub mod gain;
 pub mod graph;
 pub mod kernel;
+pub mod level;
 pub mod lfo;
 pub mod loop_buffer;
 pub mod macro_map;
@@ -148,7 +149,7 @@ pub use biquad::{
     Biquad, bandpass_coefficients, highpass_coefficients, lowpass_coefficients, notch_coefficients,
     peaking_eq_coefficients,
 };
-pub use cached::Cached;
+pub use cached::{Cached, needs_update};
 pub use comb::{CombFilter, ModulatedComb};
 pub use compose::{EffectNode, GraphBuilder, feedback, par, seq};
 pub use dc_blocker::DcBlocker;

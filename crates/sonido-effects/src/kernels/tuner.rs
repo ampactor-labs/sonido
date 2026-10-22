@@ -52,6 +52,7 @@ use alloc::vec::Vec;
 use sonido_core::kernel::KernelParams;
 use sonido_core::kernel::{DspKernel, SmoothingStyle};
 use sonido_core::kernel_params;
+use sonido_core::level::Level;
 use sonido_core::{ParamDescriptor, ParamFlags, ParamId, ParamScale, ParamUnit, fast_db_to_linear};
 
 /// YIN threshold: lower = more accurate but more misses; 0.15 is a good balance.
@@ -428,6 +429,7 @@ impl TunerKernel {
 
 impl DspKernel for TunerKernel {
     type Params = TunerParams;
+    const LEVEL: Level = crate::calibration::TUNER;
 
     fn process_stereo(&mut self, left: f32, right: f32, params: &TunerParams) -> (f32, f32) {
         // ── Decimate (box average) into the analysis ring ──

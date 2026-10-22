@@ -63,10 +63,11 @@
 
 use sonido_core::kernel::{DspKernel, KernelParams, SmoothingStyle};
 use sonido_core::kernel_params;
+use sonido_core::level::Level;
 use sonido_core::{
     Biquad, Cached, DetectionMode, EnvelopeFollower, ParamDescriptor, ParamFlags, ParamId,
     ParamScale, ParamUnit, fast_db_to_linear, fast_linear_to_db, highpass_coefficients,
-    math::soft_limit, wet_dry_mix_stereo,
+    math::soft_limit,
 };
 
 // ── Constants ────────────────────────────────────────────────────────────────
@@ -577,6 +578,7 @@ impl CompressorKernel {
 
 impl DspKernel for CompressorKernel {
     type Params = CompressorParams;
+    const LEVEL: Level = crate::calibration::COMPRESSOR;
 
     /// Process a stereo sample pair with linked-stereo compression.
     ///
@@ -626,7 +628,7 @@ impl DspKernel for CompressorKernel {
 
         // ── Wet/dry blend ─────────────────────────────────────────────────
         let mix = params.mix_pct / 100.0;
-        let (mixed_l, mixed_r) = wet_dry_mix_stereo(left, right, comp_l, comp_r, mix);
+        let (mixed_l, mixed_r) = Self::blend_stereo(left, right, comp_l, comp_r, mix);
 
         // ── Soft limit → output level ─────────────────────────────────────
         let output = fast_db_to_linear(params.output_db);
@@ -687,7 +689,7 @@ impl DspKernel for CompressorKernel {
 
         // ── Wet/dry blend ─────────────────────────────────────────────────
         let mix = params.mix_pct / 100.0;
-        let (mixed_l, mixed_r) = wet_dry_mix_stereo(left, right, comp_l, comp_r, mix);
+        let (mixed_l, mixed_r) = Self::blend_stereo(left, right, comp_l, comp_r, mix);
 
         // ── Soft limit → output level ─────────────────────────────────────
         let output = fast_db_to_linear(params.output_db);

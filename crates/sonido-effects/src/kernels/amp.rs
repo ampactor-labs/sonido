@@ -88,6 +88,7 @@ use sonido_core::biquad::Biquad;
 use sonido_core::dsp::{GainStage, ToneStack};
 use sonido_core::kernel::{DspKernel, KernelParams, SmoothingStyle};
 use sonido_core::kernel_params;
+use sonido_core::level::Level;
 use sonido_core::math::{
     asymmetric_clip, asymmetric_clip_ad, db_to_linear, soft_clip, soft_clip_ad,
 };
@@ -539,6 +540,7 @@ impl AmpKernel {
 
 impl DspKernel for AmpKernel {
     type Params = AmpParams;
+    const LEVEL: Level = crate::calibration::AMP;
 
     fn process_stereo(&mut self, left: f32, right: f32, params: &AmpParams) -> (f32, f32) {
         // ── Coefficient update: presence shelf ──────────────────────────────

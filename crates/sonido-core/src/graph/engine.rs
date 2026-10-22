@@ -245,6 +245,18 @@ impl GraphEngine {
         Some(effect)
     }
 
+    /// Consumes the engine and returns its effects in slot order, state intact.
+    ///
+    /// Lets a caller rebuild a different topology around effects that keep
+    /// their state (a reverb's tail, a delay's buffer) instead of starting
+    /// fresh. Works for linear and DAG engines alike.
+    pub fn into_effects(mut self) -> Vec<Box<dyn EffectWithParams + Send>> {
+        let ids = core::mem::take(&mut self.chain_order);
+        ids.into_iter()
+            .filter_map(|id| self.graph.take_effect(id))
+            .collect()
+    }
+
     /// Removes an effect by slot index and returns it.
     ///
     /// Elements after the removed slot shift left (preserves ordering).
@@ -566,6 +578,12 @@ impl GraphEngine {
         self.graph.set_tempo_context(ctx);
     }
 
+    /// Jumps every effect's smoothed parameters to their targets, keeping
+    /// state and tails ([`Effect::snap_params`](crate::Effect::snap_params)).
+    pub fn snap_params(&mut self) {
+        self.graph.snap_params();
+    }
+
     // --- Processing ---
 
     /// Processes a block of stereo audio through the graph.
@@ -775,6 +793,14 @@ mod tests {
 
     fn gain(factor: f32) -> Box<dyn EffectWithParams + Send> {
         Box::new(Gain { factor })
+    }
+
+    #[test]
+    fn into_effects_returns_slots_in_order_with_state() {
+        let engine = GraphEngine::from_chain(vec![gain(2.0), gain(3.0)], 48000.0, 64).unwrap();
+        let effects = engine.into_effects();
+        let factors: Vec<f32> = effects.iter().map(|e| e.effect_get_param(0)).collect();
+        assert_eq!(factors, vec![2.0, 3.0]);
     }
 
     /// Process enough blocks to let the crossfade settle.

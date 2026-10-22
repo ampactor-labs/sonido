@@ -302,6 +302,12 @@ impl Effect for EffectChain {
         }
     }
 
+    fn snap_params(&mut self) {
+        for entry in &mut self.entries {
+            entry.effect.snap_params();
+        }
+    }
+
     fn latency_samples(&self) -> usize {
         self.entries
             .iter()

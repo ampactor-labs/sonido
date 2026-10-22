@@ -31,11 +31,12 @@
 
 use sonido_core::kernel::{DspKernel, KernelParams, SmoothingStyle};
 use sonido_core::kernel_params;
+use sonido_core::level::Level;
 use sonido_core::math::soft_limit;
 use sonido_core::{
     Adaa1, Biquad, Cached, EnvelopeFollower, ParamDescriptor, ParamFlags, ParamId, ParamUnit,
     asymmetric_clip, asymmetric_clip_ad, fast_db_to_linear, foldback, foldback_ad, hard_clip,
-    hard_clip_ad, peaking_eq_coefficients, soft_clip, soft_clip_ad, wet_dry_mix_stereo,
+    hard_clip_ad, peaking_eq_coefficients, soft_clip, soft_clip_ad,
 };
 
 // ── ADAA function-pointer aliases ──
@@ -78,8 +79,8 @@ const FOLDBACK_THRESHOLD: f32 = 0.8;
 ///
 /// | Index | Field | Unit | Range | Default |
 /// |-------|-------|------|-------|---------|
-/// | 0 | `drive_db` | dB | 0–40 | 8.0 |
-/// | 1 | `tone_db` | dB | −12–12 | 0.0 |
+/// | 0 | `drive_db` | dB | 0–40 | 26.0 |
+/// | 1 | `tone_db` | dB | −12–12 | 1.5 |
 /// | 2 | `output_db` | dB | −24–+6 | 0.0 |
 /// | 3 | `shape` | index | 0–3 | 0 (SoftClip) |
 /// | 4 | `mix_pct` | % | 0–100 | 100.0 |
@@ -108,8 +109,8 @@ pub struct DistortionParams {
 impl Default for DistortionParams {
     fn default() -> Self {
         Self {
-            drive_db: 8.0,
-            tone_db: 0.0,
+            drive_db: 26.0,
+            tone_db: 1.5,
             output_db: 0.0,
             shape: 0.0,
             mix_pct: 100.0,
@@ -137,13 +138,13 @@ impl DistortionParams {
 
 kernel_params! {
     DistortionParams, this {
-        [0] ParamDescriptor::gain_db("Drive", "Drive", 0.0, 40.0, 8.0)
+        [0] ParamDescriptor::gain_db("Drive", "Drive", 0.0, 40.0, 26.0)
                 .with_id(ParamId(200), "dist_drive"),
             smoothing: SmoothingStyle::Fast, // drive — fast response for feel
             get: this.drive_db,
             set: |v| this.drive_db = v;
 
-        [1] ParamDescriptor::custom("Tone", "Tone", -12.0, 12.0, 0.0)
+        [1] ParamDescriptor::custom("Tone", "Tone", -12.0, 12.0, 1.5)
                 .with_unit(ParamUnit::Decibels)
                 .with_step(0.5)
                 .with_id(ParamId(201), "dist_tone"),
@@ -286,6 +287,7 @@ impl DistortionKernel {
 
 impl DspKernel for DistortionKernel {
     type Params = DistortionParams;
+    const LEVEL: Level = crate::calibration::DISTORTION;
 
     fn process_stereo(&mut self, left: f32, right: f32, params: &DistortionParams) -> (f32, f32) {
         // ── Coefficient update (only when tone_db changes beyond epsilon) ──
@@ -349,7 +351,7 @@ impl DspKernel for DistortionKernel {
         let toned_r = self.tone_filter_r.process(shaped_r) * makeup;
 
         // ── Mix → Soft Limit → Output Level ──
-        let (mixed_l, mixed_r) = wet_dry_mix_stereo(left, right, toned_l, toned_r, mix);
+        let (mixed_l, mixed_r) = Self::blend_stereo(left, right, toned_l, toned_r, mix);
         (
             soft_limit(mixed_l, 1.0) * output,
             soft_limit(mixed_r, 1.0) * output,
@@ -388,8 +390,8 @@ mod tests {
     #[test]
     fn kernel_default_params() {
         let params = DistortionParams::default();
-        assert_eq!(params.drive_db, 8.0);
-        assert_eq!(params.tone_db, 0.0);
+        assert_eq!(params.drive_db, 26.0);
+        assert_eq!(params.tone_db, 1.5);
         assert_eq!(params.output_db, 0.0);
         assert_eq!(params.shape, 0.0);
         assert_eq!(params.mix_pct, 100.0);

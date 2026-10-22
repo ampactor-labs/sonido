@@ -414,6 +414,32 @@ impl LufsMeter {
 //  Tests
 // ═══════════════════════════════════════════════════════════════════════════
 
+/// Loudness change an effect makes to `input` (mono, fed to both sides), in
+/// dB of integrated LUFS: positive means the effect plays louder.
+///
+/// The shared measurement behind Sonido's level contract
+/// (`sonido_core::level`): the `calibrate` tool and the `level_contract` test
+/// both use it, with the reference guitar from [`crate::signals`].
+pub fn effect_gain_db(
+    effect: &mut dyn sonido_core::Effect,
+    input: &[f32],
+    sample_rate: f32,
+) -> f32 {
+    let mut output_l = Vec::with_capacity(input.len());
+    let mut output_r = Vec::with_capacity(input.len());
+    for chunk in input.chunks(32) {
+        let (mut l, mut r) = (chunk.to_vec(), chunk.to_vec());
+        effect.process_block_stereo_inplace(&mut l, &mut r);
+        output_l.extend_from_slice(&l);
+        output_r.extend_from_slice(&r);
+    }
+    let mut dry = LufsMeter::new(sample_rate);
+    dry.push_samples(input, input);
+    let mut wet = LufsMeter::new(sample_rate);
+    wet.push_samples(&output_l, &output_r);
+    wet.integrated() - dry.integrated()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

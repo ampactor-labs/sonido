@@ -74,6 +74,7 @@ use std::collections::VecDeque;
 use libm::{expf, fabsf};
 use sonido_core::kernel::{DspKernel, KernelParams, SmoothingStyle};
 use sonido_core::kernel_params;
+use sonido_core::level::Level;
 use sonido_core::{ParamDescriptor, ParamId, ParamScale, fast_db_to_linear, math::db_to_linear};
 
 /// Maximum lookahead in milliseconds — sizes the fixed delay buffers at construction.
@@ -398,6 +399,7 @@ impl LimiterKernel {
 
 impl DspKernel for LimiterKernel {
     type Params = LimiterParams;
+    const LEVEL: Level = crate::calibration::LIMITER;
 
     /// Process a stereo sample pair through the brickwall lookahead limiter.
     ///

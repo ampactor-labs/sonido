@@ -2,13 +2,10 @@
 //!
 //! Owns the compiled [`GraphEngine`], a [`MacroMap`] over the six knobs, a
 //! [`ChainMorph`] for A/B, the morph position/speed, the graph-level gains, and
-//! a whole-rig bypass. The graph-player plugin (`sonido-plugin`) wraps it.
-//!
-//! The Daisy firmware does **not** use `PatchPlayer`: it drives a
-//! `ProcessingGraph` directly, and its `patch_loader` module builds a patch
-//! with [`build_graph_from_patch`] alone, without the macro, morph or gain
-//! stages here. What host and pedal share is the effect kernels, the [`Patch`]
-//! format, and the graph build.
+//! a whole-rig bypass. The graph-player plugin (`sonido-plugin`) and the pedal
+//! firmware (`sonido-daisy`'s `sonido_pedal`) both run rigs through it, so a
+//! rig morphs and responds to its macros the same way in a DAW and on the
+//! pedal.
 //!
 //! Per control tick the order is **morph, then macros** (macros win on overlap),
 //! exactly as the design specifies; a macro that targets the morph position
@@ -136,6 +133,29 @@ impl PatchPlayer {
         self.engine.set_tempo_context(ctx);
     }
 
+    /// Morph ramp speed from the patch (or the last macro that set it).
+    pub fn morph_speed(&self) -> f32 {
+        self.morph_speed
+    }
+
+    /// One parameter of node `slot`'s A (`corner` 0) or B (1) state.
+    pub fn corner_param(&self, slot: usize, corner: usize, param: usize) -> Option<f32> {
+        self.morph.corner_param(slot, corner, param)
+    }
+
+    /// Set one parameter of node `slot`'s A (`corner` 0) or B (1) state; the
+    /// next [`apply_controls`](Self::apply_controls) hears it.
+    pub fn set_corner_param(&mut self, slot: usize, corner: usize, param: usize, value: f32) {
+        self.morph.set_corner_param(slot, corner, param, value);
+    }
+
+    /// Consume the player and return its effects in node order, state intact,
+    /// so a rebuilt rig can keep an unchanged node's reverb tail or delay
+    /// buffer (pass them back through `make_effect`).
+    pub fn into_effects(self) -> Vec<Box<dyn EffectWithParams + Send>> {
+        self.engine.into_effects()
+    }
+
     /// Borrow the underlying engine (e.g. for latency reporting).
     pub fn engine(&self) -> &GraphEngine {
         &self.engine
@@ -167,6 +187,18 @@ impl PatchPlayer {
         // next morph apply), per the documented ordering.
         self.morph_t = morph_t.clamp(0.0, 1.0);
         self.morph_speed = morph_speed;
+    }
+
+    /// [`apply_controls`](Self::apply_controls), then jump every parameter
+    /// straight to its new value instead of smoothing there.
+    ///
+    /// For a rig that has just been built: it starts at its values rather than
+    /// sweeping from the effects' defaults (an audible swoosh and, on the
+    /// pedal, a CPU spike from every coefficient being redesigned per sample
+    /// at once). Effects keep their state, so a reused effect keeps its tail.
+    pub fn apply_controls_now(&mut self) {
+        self.apply_controls();
+        self.engine.snap_params();
     }
 
     /// Process one stereo block in place, applying input gain, the graph, master
@@ -232,6 +264,46 @@ mod tests {
         let mut p = player(&patch);
         assert_eq!(p.slot_count(), 1);
         assert!(finite(&mut p));
+    }
+
+    #[test]
+    fn apply_controls_now_starts_at_the_values() {
+        // Distortion output (param 2) at -20 dB, not its 0 dB default.
+        let registry = EffectRegistry::new();
+        let mut reference = registry.create("distortion", 48_000.0).unwrap();
+        let params: Vec<f32> = (0..reference.effect_param_count())
+            .map(|i| {
+                if i == 2 {
+                    -20.0
+                } else {
+                    reference.effect_get_param(i)
+                }
+            })
+            .collect();
+        for (i, &v) in params.iter().enumerate() {
+            reference.effect_set_param(i, v);
+        }
+        reference.reset();
+        let patch = Patch::linear_chain(
+            "s",
+            vec![PatchNode::new(effect_uid("distortion").unwrap(), params)],
+        );
+        let first_block = |p: &mut dyn FnMut(&mut [f32], &mut [f32])| {
+            let (mut l, mut r) = ([0.1f32; 32], [0.1f32; 32]);
+            p(&mut l, &mut r);
+            l
+        };
+        let want = first_block(&mut |l, r| reference.process_block_stereo_inplace(l, r));
+
+        let mut now = player(&patch);
+        now.apply_controls_now();
+        let got = first_block(&mut |l, r| now.process_block_stereo(l, r));
+        assert_eq!(got, want, "a loaded rig starts at its values");
+
+        let mut smoothed = player(&patch);
+        smoothed.apply_controls();
+        let swept = first_block(&mut |l, r| smoothed.process_block_stereo(l, r));
+        assert_ne!(swept, want, "without it, the output sweeps from 0 dB");
     }
 
     #[test]

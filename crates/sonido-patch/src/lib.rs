@@ -10,12 +10,12 @@
 //! |-----------------|------------------------------------------------|---------------------------|
 //! | JSON            | GUI `.json` export, graph-player state/presets | `serde` derives           |
 //! | 4 KB binary     | QSPI flash sector on the pedal                 | [`binary`]                |
-//! | runtime engine  | graph-player plugin ([`PatchPlayer`])          | [`build`], [`runtime`]    |
+//! | runtime engine  | graph-player plugin and pedal ([`PatchPlayer`])| [`build`], [`runtime`]    |
 //!
 //! The GUI editor projects its own session into a `Patch` for export; it does
-//! not run patches. The Daisy firmware's `patch_loader` can build a patch's
-//! graph with [`build_graph_from_patch`], but the shipping pedal firmware
-//! does not use [`PatchPlayer`].
+//! not run patches. The pedal plays every rig through [`PatchPlayer`],
+//! including the jam built on its footswitches ([`pedal`]), and the editor and
+//! CLI send it rigs over USB serial ([`link`]).
 //!
 //! # Identity, not position
 //!
@@ -27,8 +27,8 @@
 //!
 //! # no_std
 //!
-//! Builds `no_std + alloc`. The firmware enables only the binary [`decode`]
-//! path; it never needs `serde`. Host crates enable the default `std` feature
+//! Builds `no_std + alloc`. The firmware uses the binary codec, the runtime,
+//! [`pedal`] and [`link`]; it never needs `serde`. Host crates enable the default `std` feature
 //! for JSON and file helpers.
 
 #![cfg_attr(not(feature = "std"), no_std)]
@@ -39,6 +39,8 @@ use alloc::{string::String, vec::Vec};
 
 pub mod binary;
 pub mod build;
+pub mod link;
+pub mod pedal;
 pub mod runtime;
 pub mod validate;
 
@@ -211,7 +213,9 @@ impl MacroDef {
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct MorphConfig {
-    /// Ramp speed (units per control tick scale; consumer-defined).
+    /// Ramp speed in A/B positions per second: at 2.0 a full A→B sweep takes
+    /// half a second. The editor's morph bar and the pedal's footswitch ramp
+    /// both move at this speed.
     pub speed: f32,
     /// How a footswitch/gesture drives the morph position.
     pub mode: MorphMode,

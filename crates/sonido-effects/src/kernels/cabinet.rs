@@ -41,9 +41,10 @@
 use sonido_core::kernel::KernelParams;
 use sonido_core::kernel::{DspKernel, SmoothingStyle};
 use sonido_core::kernel_params;
+use sonido_core::level::Level;
 use sonido_core::{
     Biquad, ParamDescriptor, ParamFlags, ParamId, ParamScale, ParamUnit, fast_db_to_linear,
-    highpass_coefficients, wet_dry_mix,
+    highpass_coefficients,
 };
 
 /// Number of samples in each factory impulse response (≈5.3 ms at 48 kHz).
@@ -211,6 +212,18 @@ fn generate_ir(ir_type: u8, sample_rate: f32) -> [f32; IR_LEN] {
         }
     }
 
+    // Polarity: make the largest tap positive. The bursts come out with an
+    // arbitrary sign, and all three landed inverted against the dry signal,
+    // so the Mix control cancelled the guitar instead of blending into it.
+    let peak = ir
+        .iter()
+        .fold(0.0f32, |p, &s| if s.abs() > p.abs() { s } else { p });
+    if peak < 0.0 {
+        for s in ir.iter_mut() {
+            *s = -*s;
+        }
+    }
+
     ir
 }
 
@@ -284,7 +297,7 @@ impl CabinetKernel {
     /// Update HPF coefficients when low_cut_hz changes.
     #[inline]
     fn update_low_cut(&mut self, low_cut_hz: f32) {
-        if (self.last_low_cut_hz - low_cut_hz).abs() > 0.01 {
+        if sonido_core::needs_update(self.last_low_cut_hz, low_cut_hz, 0.01) {
             let (b0, b1, b2, a0, a1, a2) =
                 highpass_coefficients(low_cut_hz, 0.707, self.sample_rate);
             self.low_cut_l.set_coefficients(b0, b1, b2, a0, a1, a2);
@@ -311,6 +324,7 @@ impl CabinetKernel {
 
 impl DspKernel for CabinetKernel {
     type Params = CabinetParams;
+    const LEVEL: Level = crate::calibration::CABINET;
 
     fn process_stereo(&mut self, left: f32, right: f32, params: &CabinetParams) -> (f32, f32) {
         // ── Coefficient / IR updates ──
@@ -342,8 +356,8 @@ impl DspKernel for CabinetKernel {
         let mix = params.mix_pct / 100.0;
         let output_gain = fast_db_to_linear(params.output_db);
 
-        let out_l = wet_dry_mix(left, filtered_l, mix) * output_gain;
-        let out_r = wet_dry_mix(right, filtered_r, mix) * output_gain;
+        let (out_l, out_r) = Self::blend_stereo(left, right, filtered_l, filtered_r, mix);
+        let (out_l, out_r) = (out_l * output_gain, out_r * output_gain);
 
         (out_l, out_r)
     }
@@ -379,7 +393,8 @@ mod tests {
 
     /// Each IR, fully wet, plays guitar-band material at unity loudness:
     /// tones from 100 Hz to 4 kHz average 0 dB of power gain (±1 dB). The
-    /// old peak normalization left these +5 to +14 dB hot.
+    /// old peak normalization left these +5 to +14 dB hot. The measured
+    /// level trim (`CabinetKernel::LEVEL`) is divided out: this is the IR.
     #[test]
     fn every_ir_is_unity_loud_across_the_guitar_band() {
         let sr = 48_000.0_f32;
@@ -398,6 +413,7 @@ mod tests {
                 for n in 0..9600 {
                     let x = 0.25 * libm::sinf(2.0 * core::f32::consts::PI * f * n as f32 / sr);
                     let (y, _) = kernel.process_stereo(x, x, &params);
+                    let y = y / CabinetKernel::LEVEL.trim;
                     if n >= 2400 {
                         e_in += f64::from(x * x);
                         e_out += f64::from(y * y);

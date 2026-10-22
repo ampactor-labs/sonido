@@ -76,6 +76,7 @@
 use sonido_core::biquad::{highpass_coefficients, lowpass_coefficients};
 use sonido_core::kernel::{DspKernel, KernelParams, SmoothingStyle};
 use sonido_core::kernel_params;
+use sonido_core::level::Level;
 use sonido_core::math::ms_to_samples;
 use sonido_core::{
     Biquad, Cached, DcBlocker, InterpolatedDelay, ParamDescriptor, ParamFlags, ParamId, ParamScale,
@@ -119,7 +120,7 @@ const MAX_HAAS_SECONDS: f32 = 0.03;
 /// | 7 | `bass_mono` | index | 0–1 | 0 (Off) |
 /// | 8 | `bass_freq_hz` | Hz | 20–500 | 120.0 |
 /// | 9 | `haas_ms` | ms | 0–30 | 0.0 |
-/// | 10 | `haas_side` | index | 0–1 | 1 (Right) |
+/// | 10 | `haas_side` | index | 0–1 | 0.0 |
 /// | 11 | `output_db` | dB | −6–+6 | 0.0 |
 #[derive(Clone, Copy)]
 pub struct StageParams {
@@ -203,7 +204,7 @@ impl Default for StageParams {
             bass_mono: 0.0,
             bass_freq_hz: 120.0,
             haas_ms: 0.0,
-            haas_side: 1.0,
+            haas_side: 0.0,
             output_db: 0.0,
         }
     }
@@ -337,7 +338,7 @@ kernel_params! {
             get: this.haas_ms,
             set: |v| this.haas_ms = v;
 
-        [10] ParamDescriptor::custom("Haas Side", "HSde", 0.0, 1.0, 1.0)
+        [10] ParamDescriptor::custom("Haas Side", "HSde", 0.0, 1.0, 0.0)
                 .with_step(1.0)
                 .with_id(ParamId(1910), "stage_haas_side")
                 .with_flags(ParamFlags::AUTOMATABLE.union(ParamFlags::STEPPED))
@@ -482,6 +483,7 @@ impl StageKernel {
 
 impl DspKernel for StageKernel {
     type Params = StageParams;
+    const LEVEL: Level = crate::calibration::STAGE;
 
     /// Process a stereo sample pair through the Stage signal chain.
     ///

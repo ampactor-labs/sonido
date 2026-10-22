@@ -89,6 +89,7 @@ pub mod loudness;
 pub mod phase;
 pub mod pitch;
 pub mod resample;
+pub mod signals;
 pub mod spectrogram;
 pub mod spectrum;
 pub mod stereo;

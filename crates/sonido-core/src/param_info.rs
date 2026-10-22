@@ -799,6 +799,15 @@ impl ParamDescriptor {
         self
     }
 
+    /// Sets the default value, for a factory method like
+    /// [`ParamDescriptor::depth`] whose default doesn't suit this effect.
+    ///
+    /// Builder pattern — call after a factory method or struct literal.
+    pub const fn with_default(mut self, default: f32) -> Self {
+        self.default = default;
+        self
+    }
+
     /// Sets the parameter unit type.
     ///
     /// Builder pattern — call after a factory method or struct literal.

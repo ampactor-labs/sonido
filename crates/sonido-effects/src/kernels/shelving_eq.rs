@@ -62,6 +62,7 @@
 
 use sonido_core::kernel::{DspKernel, KernelParams, SmoothingStyle};
 use sonido_core::kernel_params;
+use sonido_core::level::Level;
 use sonido_core::{
     Biquad, Cached, ParamDescriptor, ParamFlags, ParamId, ParamScale, ParamUnit, fast_db_to_linear,
 };
@@ -422,6 +423,7 @@ impl ShelvingEqKernel {
 
 impl DspKernel for ShelvingEqKernel {
     type Params = ShelvingEqParams;
+    const LEVEL: Level = crate::calibration::SHELVING_EQ;
 
     fn process_stereo(&mut self, left: f32, right: f32, params: &ShelvingEqParams) -> (f32, f32) {
         // ── Coefficient decimation ──────────────────────────────────────────

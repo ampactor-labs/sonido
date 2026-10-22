@@ -36,6 +36,7 @@
 use sonido_core::Effect;
 use sonido_core::kernel::{DspKernel, KernelParams, SmoothingStyle};
 use sonido_core::kernel_params;
+use sonido_core::level::Level;
 use sonido_core::math::soft_limit;
 use sonido_core::{
     EnvelopeFollower, ParamDescriptor, ParamFlags, ParamId, ParamUnit, StateVariableFilter,
@@ -336,6 +337,7 @@ impl WahKernel {
 
 impl DspKernel for WahKernel {
     type Params = WahParams;
+    const LEVEL: Level = crate::calibration::WAH;
 
     fn process_stereo(&mut self, left: f32, right: f32, params: &WahParams) -> (f32, f32) {
         // ── Unit conversion (user-facing → internal) ──
