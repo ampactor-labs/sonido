@@ -1,10 +1,10 @@
 //! Default parity: `XxxParams::default()` must equal each descriptor's default.
 //!
-//! The plugin/editor path starts a kernel from its descriptor defaults
-//! (`Adapter::new` → `KernelParams::from_defaults`), while the pedal and
-//! direct use start from `XxxParams::default()`. "One kernel, every target"
-//! requires both to be the same sound, so every param of every kernel is
-//! checked here.
+//! The registry path (plugins, editor, pedal) starts a kernel from its
+//! descriptor defaults (`Adapter::new` → `KernelParams::from_defaults`), while
+//! direct kernel use starts from `XxxParams::default()`. "One kernel, every
+//! target" requires both to be the same sound, so every param of every kernel
+//! is checked here.
 
 use sonido_core::KernelParams;
 use sonido_effects::kernels::*;

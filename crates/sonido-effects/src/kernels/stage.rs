@@ -590,7 +590,7 @@ impl DspKernel for StageKernel {
 
         // ── 9. Output level ──
         let output_gain = fast_db_to_linear(params.output_db);
-        (l * output_gain, r * output_gain)
+        Self::level_stereo(l * output_gain, r * output_gain)
     }
 
     fn reset(&mut self) {

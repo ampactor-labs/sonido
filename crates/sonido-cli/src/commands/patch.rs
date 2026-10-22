@@ -24,7 +24,8 @@ pub struct PatchArgs {
 /// Subcommands for `sonido patch`.
 #[derive(Subcommand)]
 pub enum PatchCommand {
-    /// Export a preset TOML or DSL chain as a rig: `.json` or a `.bin` sector.
+    /// Convert a rig (`.json`, `.bin`), preset TOML or DSL chain to a `.json`
+    /// rig or a `.bin` pedal sector.
     Export {
         #[command(flatten)]
         rig: RigSource,
@@ -51,9 +52,10 @@ pub struct RigSource {
     /// A DSL chain instead of a file (e.g. "distortion:drive=20 | reverb:mix=30").
     #[arg(long, conflicts_with = "file")]
     pub from_dsl: Option<String>,
-    /// Topology for a preset or DSL chain: `linear` or `parallel`.
-    #[arg(short, long, default_value = "linear")]
-    pub topology: String,
+    /// Topology for a preset or DSL chain: `linear` or `parallel` (default:
+    /// the preset's own, else linear).
+    #[arg(short, long)]
+    pub topology: Option<String>,
     /// Name the rig (defaults to the file's or preset's name).
     #[arg(long)]
     pub name: Option<String>,
@@ -83,7 +85,7 @@ impl RigSource {
                 let converted = sonido_config::preset_to_patch(
                     &preset,
                     &name,
-                    Some(&self.topology),
+                    self.topology.as_deref(),
                     &registry,
                 )?;
                 for warning in &converted.warnings {
@@ -168,10 +170,11 @@ fn export_patch(patch: &Patch, output: &Path) -> anyhow::Result<()> {
     let bytes = if json {
         serde_json::to_vec_pretty(patch)?
     } else {
-        let mut buf = [0u8; SECTOR_SIZE];
-        let len = binary::encode(patch, &mut buf)
+        // A whole sector, as the pedal's bank stores it (and the editor saves).
+        let mut buf = vec![0u8; SECTOR_SIZE];
+        binary::encode(patch, &mut buf)
             .map_err(|e| anyhow::anyhow!("Failed to encode patch: {e}"))?;
-        buf[..len].to_vec()
+        buf
     };
     std::fs::write(output, &bytes)
         .map_err(|e| anyhow::anyhow!("Failed to write '{}': {}", output.display(), e))?;
@@ -190,7 +193,7 @@ fn inspect(file: &Path) -> anyhow::Result<()> {
     let patch = RigSource {
         file: Some(file.to_owned()),
         from_dsl: None,
-        topology: "linear".into(),
+        topology: None,
         name: None,
     }
     .load()?;

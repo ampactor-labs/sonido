@@ -176,7 +176,7 @@ The MORPH band crossfades the whole rig between two poses, A and B. Every effect
 - **Left-click A or B**: park the rig at that pose and *sculpt* it; every knob you turn is recorded into it. The readout says `editing A` / `editing B`.
 - **Right-click (or double-click) A or B**: grab the current sound into that pose.
 - **Drag the LED bar**: perform; the readout shows `A→B nn%`.
-- **RAMP / MOM / LATCH**: the mode for the **A⇄B** trigger, saved in the patch (the pedal ignores it: its footswitches ramp toward A or B while held, at the patch's morph speed). Ramp glides, Momentary holds B while pressed, and Latch toggles. **A⇄B** is enabled once some effect has distinct poses.
+- **RAMP / MOM / LATCH**: the mode for the **A⇄B** trigger, saved in the patch (the pedal ignores it: with its A/B toggle in the middle, an FS2 tap glides to the other side at the patch's morph speed, and a tap mid-glide turns back). Ramp glides, Momentary holds B while pressed, and Latch toggles. **A⇄B** is enabled once some effect has distinct poses.
 
 Interpolation is per parameter and curve-aware (`curve_lerp`). Linear parameters interpolate linearly, logarithmic ones (frequencies) geometrically, and snap/stepped ones switch at the midpoint. Per-effect bypass switches at `t = 0.5`. Locked effects are left alone.
 
@@ -211,13 +211,14 @@ The buffer size is fixed at launch by `--buffer-size`; there is no in-app select
 
 ## Sessions
 
-**Save / Load** write and read a JSON session: topology and node positions, every effect's parameters and bypass (A and B poses), the six macros with names, mappings and knob positions, the morph mode, locks and position, and the input gain and master volume. Older session versions load; missing fields take defaults. Loading a session clears undo history. Native uses OS file dialogs; the web build downloads `sonido-rig.json` and uses the browser file picker.
+**Save / Load** write and read a JSON session: topology and node positions, every effect's parameters and bypass (A and B poses), the six macros with names, mappings and knob positions, the morph mode, locks and position, the input gain and master volume, and the rig's name (`Session::name`, "My Rig" for a new rig or an older session). Older session versions load; missing fields take defaults. Loading a session clears undo history. Native uses OS file dialogs; the web build downloads `sonido-rig.json` and uses the browser file picker.
 
 ## Export
 
 The **Export** menu projects the rig to a canonical `sonido_patch::Patch` and offers:
 
-- **Export as CLAP patch** (native): writes `<name>.sonidopatch.json` to the rig library, `sonido_config::paths::rig_library_dir()`. The graph-player plugin's RIG selector lists these alongside its built-in factory rigs. The directory is created on first export.
+- **Name**, a field at the top of the menu: the rig's name, which the pedal and the graph player show. It is saved in the session, and sending to the pedal again under the same name replaces the rig there.
+- **Export as CLAP patch** (native): writes `<name>.sonidopatch.json` (the rig's name, made file-safe) to the rig library, `sonido_config::paths::rig_library_dir()`. The graph-player plugin's RIG selector lists these alongside its built-in factory rigs. The directory is created on first export.
 
 | Platform | Rig library |
 |----------|-------------|
@@ -226,7 +227,7 @@ The **Export** menu projects the rig to a canonical `sonido_patch::Patch` and of
 | Windows | `%APPDATA%\sonido\patches` |
 
 - **Save patch JSON…**: the same patch, anywhere.
-- **Pedal (Daisy)**: the rig is validated against the pedal's supported effects and its CPU-cycle and SDRAM budgets. The menu shows `✓ fits pedal budget` or `✗ exceeds pedal limits` with each finding. When it fits, you can choose **Save pedal binary (.bin)…** (a 4 KB patch sector) or **Flash to pedal (DFU)** (native only; put the pedal in bootloader by holding both footswitches about 3 s, and the patch is flashed to slot 0 of the pedal's rig bank). The pedal checks it against the same rule and lists it after it restarts; hold a footswitch to step to it ([EMBEDDED.md](EMBEDDED.md#the-pedal-rig-player), [PATCH_PLATFORM.md](PATCH_PLATFORM.md)).
+- **Pedal (Daisy)**: the rig is validated against the pedal's supported effects and its CPU-cycle and SDRAM budgets. The menu shows `✓ fits pedal budget` or `✗ exceeds pedal limits` with each finding. The check is `sonido_patch::validate::validate_for_daisy`, the one the CLI uses. When it fits, you can choose **Save pedal binary (.bin)…** (a 4 KB patch sector) or **Send to pedal** (native only). Send to pedal talks to the playing pedal over its USB port (`sonido_patch::client`, the first pedal found): the rig replaces the bank rig with the same name, or takes the first empty bank slot, and the pedal checks it against the same rule and plays it at once; the result names the bank slot ([EMBEDDED.md](EMBEDDED.md#usb-rig-link), [PATCH_PLATFORM.md](PATCH_PLATFORM.md)).
 
 The result appears in the header.
 

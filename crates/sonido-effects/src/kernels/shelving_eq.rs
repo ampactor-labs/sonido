@@ -462,7 +462,7 @@ impl DspKernel for ShelvingEqKernel {
         let left_out = self.high_l.process(self.low_l.process(left)) * output_gain;
         let right_out = self.high_r.process(self.low_r.process(right)) * output_gain;
 
-        (left_out, right_out)
+        Self::level_stereo(left_out, right_out)
     }
 
     fn reset(&mut self) {

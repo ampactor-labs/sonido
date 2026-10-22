@@ -14,7 +14,7 @@
 //!
 //! The GUI editor projects its own session into a `Patch` for export; it does
 //! not run patches. The pedal plays every rig through [`PatchPlayer`],
-//! including the jam built on its footswitches ([`pedal`]), and the editor and
+//! including the jam built on its knobs ([`pedal`]), and the editor and
 //! CLI send it rigs over USB serial ([`link`]).
 //!
 //! # Identity, not position

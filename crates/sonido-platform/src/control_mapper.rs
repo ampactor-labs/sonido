@@ -289,7 +289,8 @@ impl<const N: usize> ControlMapper<N> {
     ///
     /// Like [`apply()`](Self::apply), but instead of linear denormalization,
     /// calls `map_fn` with the parameter descriptor and normalized value.
-    /// Use for biased mapping (e.g., noon presets on embedded hardware).
+    /// Use for biased mapping (e.g., noon at the parameter's default on the
+    /// pedal's knobs).
     ///
     /// Returns `true` if the parameter was set, `false` if the mapping
     /// or parameter info was not found.
@@ -298,7 +299,7 @@ impl<const N: usize> ControlMapper<N> {
     ///
     /// ```rust,ignore
     /// mapper.apply_with_fn(ctrl_id, state.value, &mut effect, |desc, norm| {
-    ///     adc_to_param_biased(desc, noon_value, norm)
+    ///     adc_to_param_biased(desc, desc.default, norm)
     /// });
     /// ```
     pub fn apply_with_fn<E, F>(

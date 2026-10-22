@@ -145,20 +145,20 @@ kernel_params! {
     TimeStretchParams, this {
         [0] ParamDescriptor::custom("Time Ratio", "Time", 0.25, 4.0, 1.0)
                 .with_unit(ParamUnit::None)
-                .with_id(ParamId(3600), "ts_time_ratio"),
+                .with_id(ParamId(3700), "ts_time_ratio"),
             smoothing: SmoothingStyle::Interpolated, // 50 ms (avoids artifacts)
             get: this.time_ratio,
             set: |v| this.time_ratio = v;
 
         [1] ParamDescriptor::custom("Pitch Ratio", "Pitch", 0.25, 4.0, 1.0)
                 .with_unit(ParamUnit::None)
-                .with_id(ParamId(3601), "ts_pitch_ratio"),
+                .with_id(ParamId(3701), "ts_pitch_ratio"),
             smoothing: SmoothingStyle::Interpolated, // 50 ms
             get: this.pitch_ratio,
             set: |v| this.pitch_ratio = v;
 
         [2] ParamDescriptor::time_ms("Grain Size", "Grain", 10.0, 100.0, 50.0)
-                .with_id(ParamId(3602), "ts_grain_size"),
+                .with_id(ParamId(3702), "ts_grain_size"),
             smoothing: SmoothingStyle::Slow, // 20 ms
             get: this.grain_size,
             set: |v| this.grain_size = v;
@@ -169,7 +169,7 @@ kernel_params! {
                 flags: ParamFlags::AUTOMATABLE,
                 ..ParamDescriptor::mix()
             }
-            .with_id(ParamId(3603), "ts_density"),
+            .with_id(ParamId(3703), "ts_density"),
             smoothing: SmoothingStyle::Standard, // 10 ms
             get: this.density,
             set: |v| this.density = v;
@@ -181,7 +181,7 @@ kernel_params! {
                 flags: ParamFlags::AUTOMATABLE,
                 ..ParamDescriptor::mix()
             }
-            .with_id(ParamId(3604), "ts_randomize"),
+            .with_id(ParamId(3704), "ts_randomize"),
             smoothing: SmoothingStyle::Standard, // 10 ms
             get: this.randomize,
             set: |v| this.randomize = v;
@@ -189,7 +189,7 @@ kernel_params! {
         [5] ParamDescriptor::custom("Freeze", "Freeze", 0.0, 1.0, 0.0)
                 .with_unit(ParamUnit::None)
                 .with_step(1.0)
-                .with_id(ParamId(3605), "ts_freeze")
+                .with_id(ParamId(3705), "ts_freeze")
                 .with_flags(ParamFlags::AUTOMATABLE.union(ParamFlags::STEPPED))
                 .with_step_labels(&["Off", "On"]),
             smoothing: SmoothingStyle::None, // stepped
@@ -199,7 +199,7 @@ kernel_params! {
         [6] ParamDescriptor::custom("Sync", "Sync", 0.0, 1.0, 0.0)
                 .with_unit(ParamUnit::None)
                 .with_step(1.0)
-                .with_id(ParamId(3606), "ts_sync")
+                .with_id(ParamId(3706), "ts_sync")
                 .with_flags(ParamFlags::AUTOMATABLE.union(ParamFlags::STEPPED))
                 .with_step_labels(&["Off", "On"]),
             smoothing: SmoothingStyle::None, // stepped
@@ -207,7 +207,7 @@ kernel_params! {
             set: |v| this.sync = v;
 
         [7] ParamDescriptor::gain_db("Output", "Out", -60.0, 6.0, 0.0)
-                .with_id(ParamId(3607), "ts_output")
+                .with_id(ParamId(3707), "ts_output")
                 .with_flags(ParamFlags::AUTOMATABLE.union(ParamFlags::MACRO_EXCLUDE)),
             smoothing: SmoothingStyle::Fast, // 5 ms
             get: this.output_db,
@@ -446,7 +446,7 @@ impl DspKernel for TimeStretchKernel {
 
         // ── Output gain ───────────────────────────────────────────────────
         let output_gain = fast_db_to_linear(params.output_db);
-        (wet_l * output_gain, wet_r * output_gain)
+        Self::level_stereo(wet_l * output_gain, wet_r * output_gain)
     }
 
     fn reset(&mut self) {

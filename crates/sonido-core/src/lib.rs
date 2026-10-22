@@ -17,7 +17,8 @@
 //! - [`DspKernel`] / [`KernelParams`] - Pure DSP separated from parameter ownership;
 //!   every effect in `sonido-effects` is a kernel
 //! - [`Adapter`] - Wraps a kernel as an `Effect`, with per-sample smoothing
-//!   ([`SmoothedPolicy`]) or direct writes ([`DirectPolicy`], used on the Daisy pedal)
+//!   ([`SmoothedPolicy`], every target including the pedal) or direct writes
+//!   ([`DirectPolicy`], for single-effect examples and tests)
 //!
 //! ## Graph Routing
 //!

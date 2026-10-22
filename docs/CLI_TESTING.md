@@ -73,7 +73,7 @@ sonido --help
 sonido --version
 ```
 
-- [ ] Help shows all 12 commands: process, realtime, generate, analyze, compare, devices, effects, info, play, presets, daisy, patch
+- [ ] Help shows all 12 commands: process, realtime, generate, analyze, compare, devices, effects, info, play, presets, patch, pedal
 
 ### 1.2 List Effects
 
@@ -728,8 +728,9 @@ For a few effects of different families (e.g. distortion, compressor, tremolo, r
 
 ### 7.7 Export
 
-- [ ] Export menu: "Save patch JSON…" writes a patch file
-- [ ] "Save pedal binary (.bin)…" is enabled only when the patch passes pedal validation
+- [ ] Export menu: the **Name** field at the top names the rig; "Save patch JSON…" writes a patch file carrying that name
+- [ ] "Save pedal binary (.bin)…" and "Send to pedal" are enabled only when the patch passes pedal validation
+- [ ] With the pedal on USB, "Send to pedal" reports the bank slot and the pedal plays the rig; sending again under the same name reuses that slot
 
 ### 7.8 Performance
 

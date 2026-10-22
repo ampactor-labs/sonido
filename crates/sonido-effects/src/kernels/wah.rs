@@ -375,8 +375,8 @@ impl DspKernel for WahKernel {
 
         // ── Soft limit → output level ──
         (
-            soft_limit(out_l, 1.0) * output,
-            soft_limit(out_r, 1.0) * output,
+            soft_limit(Self::level(out_l), 1.0) * output,
+            soft_limit(Self::level(out_r), 1.0) * output,
         )
     }
 

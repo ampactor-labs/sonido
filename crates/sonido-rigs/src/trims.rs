@@ -4,19 +4,19 @@
 //! not edit by hand: the `factory` test fails when this table is out of date.
 
 /// `Shimmer Cathedral` master volume at noon.
-pub const SHIMMER_CATHEDRAL: f32 = 2.56;
+pub const SHIMMER_CATHEDRAL: f32 = 2.47;
 
 /// `Fuzz Lab` master volume at noon.
-pub const FUZZ_LAB: f32 = 2.93;
+pub const FUZZ_LAB: f32 = 3.05;
 
 /// `Space Echo` master volume at noon.
-pub const SPACE_ECHO: f32 = -4.11;
+pub const SPACE_ECHO: f32 = -1.97;
 
 /// `Granular Drift` master volume at noon.
-pub const GRANULAR_DRIFT: f32 = 3.62;
+pub const GRANULAR_DRIFT: f32 = 3.82;
 
 /// `Harmonic Habitat` master volume at noon.
-pub const HARMONIC_HABITAT: f32 = -0.50;
+pub const HARMONIC_HABITAT: f32 = -0.61;
 
 /// `Amp Stack` master volume at noon.
 pub const AMP_STACK: f32 = 3.82;

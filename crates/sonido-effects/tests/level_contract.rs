@@ -5,7 +5,8 @@
 //!    within 0.5 dB of the dry loudness. If this fails, run
 //!    `cargo run -p sonido-effects --example calibrate --release`.
 //! 2. The mix control keeps the level: across 0–100% and at the default mix,
-//!    within 1.5 dB, which is what each kernel's `MIX_LAW` is for.
+//!    within 1.5 dB, which the correlation-normalized blend
+//!    (`sonido_core::level::blend`, with each kernel's measured `LEVEL`) is for.
 
 use sonido_analysis::loudness::effect_gain_db;
 use sonido_analysis::signals::reference_guitar;

@@ -36,19 +36,38 @@ use crate::flush_denormal;
 pub struct AllpassFilter {
     delay: InterpolatedDelay,
     feedback: f32,
+    /// Delay in samples, at most the capacity.
+    length: usize,
 }
 
 impl AllpassFilter {
-    /// Create a new allpass filter with the given delay size in samples.
+    /// Create a new allpass filter with the given delay size in samples (also
+    /// its capacity: [`set_length`](Self::set_length) can shorten it).
     ///
     /// # Arguments
     ///
     /// * `delay_samples` - The delay length in samples
     pub fn new(delay_samples: usize) -> Self {
+        let delay = InterpolatedDelay::new(delay_samples.max(1));
         Self {
-            delay: InterpolatedDelay::new(delay_samples),
+            length: delay.capacity(),
+            delay,
             feedback: 0.5,
         }
+    }
+
+    /// Set the delay length in samples, from 1 up to the capacity it was made
+    /// with. A length change takes effect at once (no interpolation): tune it
+    /// in small steps while it runs.
+    #[inline]
+    pub fn set_length(&mut self, samples: usize) {
+        self.length = samples.clamp(1, self.delay.capacity());
+    }
+
+    /// The delay length in samples.
+    #[inline]
+    pub fn length(&self) -> usize {
+        self.length
     }
 
     /// Set the feedback coefficient.
@@ -73,8 +92,8 @@ impl AllpassFilter {
     /// output = v[n−D] − g·v[n]
     #[inline]
     pub fn process(&mut self, input: f32) -> f32 {
-        // Integer read — no interpolation needed for fixed delay
-        let delayed = self.delay.read_integer(self.delay.capacity() - 1);
+        // Integer read: the sample written `length` samples ago.
+        let delayed = self.delay.read_integer(self.length - 1);
 
         // Schroeder allpass: v[n] = x[n] + g·v[n−D], y[n] = v[n−D] − g·v[n].
         let v = flush_denormal(input + delayed * self.feedback);
@@ -160,6 +179,20 @@ mod tests {
                 assert!((gain - 1.0).abs() < 0.01, "g={g} f={freq}: gain {gain}");
             }
         }
+    }
+
+    #[test]
+    fn set_length_moves_the_echo() {
+        // With feedback 0 the allpass is a pure delay of `length` samples.
+        let mut ap = AllpassFilter::new(64);
+        ap.set_feedback(0.0);
+        ap.set_length(10);
+        let out: Vec<f32> = (0..20)
+            .map(|n| ap.process(if n == 0 { 1.0 } else { 0.0 }))
+            .collect();
+        assert_eq!(out.iter().position(|&v| v == 1.0), Some(10));
+        ap.set_length(1000);
+        assert_eq!(ap.length(), 64, "clamped to the capacity");
     }
 
     #[test]

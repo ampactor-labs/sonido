@@ -812,8 +812,8 @@ impl DspKernel for TapeKernel {
 
         // Soft limit -> output gain
         (
-            soft_limit(filt_l, 1.0) * output,
-            soft_limit(filt_r, 1.0) * output,
+            soft_limit(Self::level(filt_l), 1.0) * output,
+            soft_limit(Self::level(filt_r), 1.0) * output,
         )
     }
 

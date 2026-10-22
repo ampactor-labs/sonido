@@ -9,7 +9,7 @@
 //! input → bandwidth LP → predelay → [4 input diffusers (allpass)] → tank
 //!                                                                      ↓
 //!                         tank: [modulated allpass L] ←→ [delay + damp] ←→ [modulated allpass R]
-//!                                        ↓ tap L                                   ↓ tap R
+//!                                   ↓ taps from both halves (Dattorro)       ↓
 //!                                   wet_L (true stereo)               wet_R (true stereo)
 //!                                           ↓
 //!                               wet/dry mix → output gain
@@ -23,7 +23,8 @@
 //! 4. Recirculate through two tank halves each containing:
 //!    - Modulated allpass (decorrelates via slow LFO)
 //!    - Long delay line with one-pole HF damping in the feedback path
-//! 5. L/R tapped from the two different tank positions (true stereo)
+//! 5. Each output adds a tap from its own tank half and subtracts one from the
+//!    other (Dattorro), so L and R share the tail's energy, not its waveform
 //! 6. Wet/dry mix → output gain
 //!
 //! # References
@@ -576,13 +577,9 @@ impl DspKernel for PlateReverbKernel {
         //
         // Each tank half: modulated allpass → delay line → one-pole damp → feedback.
         // Cross-coupling: output of delay[0] feeds into input of path[1] and vice versa.
-        // Wet taps: short-position reads from each delay line (well before the feedback
-        // recirculation point) so output appears quickly, independent of tail length.
-
-        // Tap wet output at fixed short positions (in samples) scaled to sample rate.
-        // These are early taps within the delay lines — they appear quickly (well before
-        // the full recirculation cycle) and differ between L/R for stereo decorrelation.
-        // At 44.1 kHz: tap_l ≈ 12 ms, tap_r ≈ 20 ms.
+        // Wet taps: fixed early positions in the tank delays (Dattorro's,
+        // given in samples at 44.1 kHz and scaled to the sample rate), so the
+        // output appears quickly, independent of the tail length.
         let max_tap_l = (self.tank_delay[0].capacity() - 2) as f32;
         let max_tap_r = (self.tank_delay[1].capacity() - 2) as f32;
         // Dattorro-style output: each channel sums a tap from its own tank

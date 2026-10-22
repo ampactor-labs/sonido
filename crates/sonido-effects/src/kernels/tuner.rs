@@ -468,7 +468,7 @@ impl DspKernel for TunerKernel {
         if muted {
             (0.0, 0.0)
         } else {
-            (left * output_gain, right * output_gain)
+            Self::level_stereo(left * output_gain, right * output_gain)
         }
     }
 

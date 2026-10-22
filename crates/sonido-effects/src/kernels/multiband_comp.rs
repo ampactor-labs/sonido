@@ -546,7 +546,7 @@ impl DspKernel for MultibandCompKernel {
             + mid * mid_gr * fast_db_to_linear(params.mid_gain_db)
             + high * high_gr * fast_db_to_linear(params.high_gain_db);
 
-        flush_denormal(out) * fast_db_to_linear(params.output_db)
+        Self::level(flush_denormal(out) * fast_db_to_linear(params.output_db))
     }
 
     /// Process a stereo sample pair through the multiband compressor.
@@ -624,7 +624,7 @@ impl DspKernel for MultibandCompKernel {
                 * output_gain,
         );
 
-        (out_l, out_r)
+        Self::level_stereo(out_l, out_r)
     }
 
     fn reset(&mut self) {

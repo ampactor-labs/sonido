@@ -145,7 +145,7 @@ impl StereoWidenerParams {
     /// |----------|-------|-----------|-------|
     /// | `width` | 0 | `width_pct` | 0–200 % |
     /// | `haas` | 1 | `haas_delay_ms` | 0–30 ms |
-    /// | `bass_mono` | 2 | `bass_mono_hz` | 0–500 Hz (log) |
+    /// | `bass_mono` | 2 | `bass_mono_hz` | 0–500 Hz |
     /// | `output` | 3 | `output_db` | −6–+6 dB |
     pub fn from_knobs(width: f32, haas: f32, bass_mono: f32, output: f32) -> Self {
         Self::from_normalized(&[width, haas, bass_mono, output])
@@ -353,7 +353,7 @@ impl DspKernel for StereoWidenerKernel {
 
         // ── 4. Output level ───────────────────────────────────────────────────
         let output_gain = fast_db_to_linear(params.output_db);
-        (l * output_gain, r * output_gain)
+        Self::level_stereo(l * output_gain, r * output_gain)
     }
 
     fn reset(&mut self) {

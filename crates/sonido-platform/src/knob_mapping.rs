@@ -122,17 +122,8 @@ mod tests {
         }
     }
 
-    fn jam_ids() -> [&'static str; 8] {
-        [
-            "distortion",
-            "bitcrusher",
-            "filter",
-            "ringmod",
-            "chorus",
-            "phaser",
-            "delay",
-            "reverb",
-        ]
+    fn jam_ids() -> &'static [&'static str] {
+        sonido_registry::JAM_EFFECT_IDS
     }
 
     #[test]

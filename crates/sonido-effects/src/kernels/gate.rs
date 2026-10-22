@@ -700,7 +700,7 @@ impl DspKernel for GateKernel {
         };
 
         let output_gain = fast_db_to_linear(params.output_db);
-        input * self.gain * output_gain
+        Self::level(input * self.gain * output_gain)
     }
 
     /// Process a stereo sample pair through the noise gate.
@@ -726,7 +726,7 @@ impl DspKernel for GateKernel {
         };
 
         let output_gain = fast_db_to_linear(params.output_db);
-        (
+        Self::level_stereo(
             left * self.gain * output_gain,
             right * self.gain * output_gain,
         )
@@ -763,7 +763,7 @@ impl DspKernel for GateKernel {
         };
 
         let output_gain = fast_db_to_linear(params.output_db);
-        (
+        Self::level_stereo(
             left * self.gain * output_gain,
             right * self.gain * output_gain,
         )

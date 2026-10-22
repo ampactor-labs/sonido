@@ -437,18 +437,6 @@ fn track_peaks(peaks: &mut (f32, f32), abs_l: f32, abs_r: f32) {
     }
 }
 
-/// The level trim the adapter applies to a kernel's output: its
-/// [`LEVEL`](DspKernel::LEVEL) trim when it has no mix control, else 1
-/// (kernels with a mix control trim their wet signal in `blend`).
-#[inline]
-fn output_trim<K: DspKernel>() -> f32 {
-    if K::LEVEL.mix_correlation.is_none() {
-        K::LEVEL.trim
-    } else {
-        1.0
-    }
-}
-
 // ── Effect impl ──────────────────────────────────────────────────────────────
 
 impl<K: DspKernel, S: SmoothingPolicy> Effect for Adapter<K, S> {
@@ -460,7 +448,7 @@ impl<K: DspKernel, S: SmoothingPolicy> Effect for Adapter<K, S> {
         }
 
         self.advance_params();
-        let out = self.kernel.process(input, &self.snapshot) * output_trim::<K>();
+        let out = self.kernel.process(input, &self.snapshot);
         self.kernel.update_diagnostics(&mut self.snapshot);
 
         if S::tracks_peaks() {
@@ -479,7 +467,6 @@ impl<K: DspKernel, S: SmoothingPolicy> Effect for Adapter<K, S> {
 
         self.advance_params();
         let (l, r) = self.kernel.process_stereo(left, right, &self.snapshot);
-        let (l, r) = (l * output_trim::<K>(), r * output_trim::<K>());
         // Write READ_ONLY diagnostic values (gain reduction, gate state, LFO phase, etc.)
         // back into the snapshot so get_param() can return live values.
         self.kernel.update_diagnostics(&mut self.snapshot);
@@ -500,7 +487,7 @@ impl<K: DspKernel, S: SmoothingPolicy> Effect for Adapter<K, S> {
             }
 
             self.advance_params();
-            *out = self.kernel.process(*inp, &self.snapshot) * output_trim::<K>();
+            *out = self.kernel.process(*inp, &self.snapshot);
             self.kernel.update_diagnostics(&mut self.snapshot);
 
             if S::tracks_peaks() {
@@ -531,8 +518,8 @@ impl<K: DspKernel, S: SmoothingPolicy> Effect for Adapter<K, S> {
                 .kernel
                 .process_stereo(left_in[i], right_in[i], &self.snapshot);
             self.kernel.update_diagnostics(&mut self.snapshot);
-            left_out[i] = l * output_trim::<K>();
-            right_out[i] = r * output_trim::<K>();
+            left_out[i] = l;
+            right_out[i] = r;
 
             if S::tracks_peaks() {
                 track_peaks(&mut self.peak_out, l.abs(), r.abs());

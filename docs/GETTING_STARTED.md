@@ -498,7 +498,7 @@ This is faster than `trunk build` and sufficient to verify the wasm target compi
 ### What Doesn't Work on Wasm
 
 - **Direct file system access**: sessions and exports go through browser downloads/uploads, not paths on disk.
-- **CLAP-folder export and USB DFU flashing**: the Export menu's CLAP sidecar write and pedal flash need the native app.
+- **CLAP-folder export and sending to the pedal**: the Export menu's CLAP sidecar write and Send to pedal (USB serial) need the native app.
 - **Synchronous file dialogs**: `rfd::FileDialog` (blocking) is replaced by `rfd::AsyncFileDialog` on wasm.
 
 ### Architecture Notes

@@ -228,9 +228,11 @@ table by the error it measures, so it assumes the kernel applies that trim.
 
 `Level` holds a `trim` and, for an effect with a mix control, the measured
 correlation of its wet signal with the dry input (`mix_correlation`).
-`Self::blend` applies the trim to the wet signal. For an effect without a mix
-control, `Adapter` multiplies the kernel's output by the trim; a kernel driven
-directly, without an `Adapter`, does not get it.
+`Self::blend` applies the trim to the wet signal. An effect without a mix
+control passes its sound through `Self::level` (or `Self::level_stereo`) where
+it leaves the processing: before the output knob and any `soft_limit`, so the
+limiter guards the final level. Either way the kernel itself is calibrated,
+with or without an `Adapter`.
 
 Run the example again whenever you change a kernel's sound or its defaults.
 The level contract test fails until you do:

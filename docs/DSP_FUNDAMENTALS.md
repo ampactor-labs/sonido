@@ -793,7 +793,7 @@ pub struct Level {
 }
 ```
 
-A kernel with a mix control applies the trim to its wet signal inside `Self::blend` ([below](#level-preserving-mix)). For a kernel without one, `Adapter` multiplies the kernel's output by the trim (`output_trim` in `crates/sonido-core/src/kernel/adapter.rs`), after the kernel's own output level.
+A kernel with a mix control applies the trim to its wet signal inside `Self::blend` ([below](#level-preserving-mix)). A kernel without one passes its sound through `Self::level` / `Self::level_stereo` where it leaves the processing, before its output level and any safety limiter, so the limiter guards the final level (a +12 dB trim after the wah's limiter could reach +18 dBFS).
 
 The calibration is measured, never hand-tuned. `cargo run -p sonido-effects --example calibrate --release` regenerates `crates/sonido-effects/src/calibration.rs`: it plays `sonido_analysis::signals::reference_guitar`, a synthetic strummed open-E chord (one strum a second, 6 s) peaking at `NOMINAL_PEAK_DBFS` = -20 dBFS (the median measured from a humbucker guitar into the Hothouse's line-level converter), through every registered effect, fully wet if it has a mix control and at its defaults otherwise. `sonido_analysis::loudness::effect_gain_db` measures the change in integrated loudness (ITU-R BS.1770-4 LUFS), the trim is scaled to cancel it, and for a mix control the zero-lag correlation of the fully wet output with the input becomes ρ. `crates/sonido-effects/tests/level_contract.rs` fails when an entry is more than 0.5 dB off, or when the mix moves the level more than 1.5 dB at 0, 25, 50 or 75% or at the default mix; rerun the example after changing a kernel's sound or defaults. The looper and tuner are uncalibrated utilities (unity trim).
 

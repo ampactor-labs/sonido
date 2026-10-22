@@ -422,6 +422,8 @@ impl DspKernel for LimiterKernel {
     /// respectively). This keeps the hot path free of expensive transcendentals.
     #[inline]
     fn process_stereo(&mut self, left: f32, right: f32, params: &LimiterParams) -> (f32, f32) {
+        // The level trim goes in front, so the ceiling still holds after it.
+        let (left, right) = Self::level_stereo(left, right);
         // ── Coefficient update (only when params change) ──
         if (params.release_ms - self.last_release_ms).abs() > 0.01 {
             self.release_coeff = compute_release_coeff(params.release_ms, self.sample_rate);

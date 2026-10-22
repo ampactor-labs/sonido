@@ -191,7 +191,8 @@ pub struct VibratoParams {
 }
 
 impl Default for VibratoParams {
-    /// Defaults match the original pre-kernel `MultiVibrato` effect's descriptor defaults exactly.
+    /// The voiced defaults (what a pedal knob gives at noon); `default_parity`
+    /// holds them equal to the descriptor defaults.
     fn default() -> Self {
         Self {
             depth_pct: 50.0,
@@ -682,7 +683,7 @@ mod tests {
 
     /// At 0% mix the output must match the dry input exactly.
     ///
-    /// With `mix_pct = 0.0` the `wet_dry_mix_stereo` function returns the dry
+    /// With `mix_pct = 0.0` the blend (`Self::blend_stereo`) returns the dry
     /// signal unchanged. The default output level is 0 dB (unity gain).
     #[test]
     fn mix_at_zero_is_dry() {

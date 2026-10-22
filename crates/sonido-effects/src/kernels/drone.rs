@@ -304,7 +304,7 @@ impl DspKernel for DroneKernel {
         let wet = tone_sum * self.env_gain * output_gain;
 
         // Tones add to dry; each mix param controls individual voice level
-        (left + wet, right + wet)
+        Self::level_stereo(left + wet, right + wet)
     }
 
     fn reset(&mut self) {

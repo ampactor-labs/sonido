@@ -175,7 +175,7 @@ mod tests {
 
     #[test]
     fn biased_full_range() {
-        // Drive [0, 40] with noon=8: noon is 20% from min, well above 5%.
+        // Drive [0, 40] with noon=8: both halves reach their ends.
         let desc = linear(0.0, 40.0, 8.0);
         let at_zero = adc_to_param_biased(&desc, 8.0, 0.0);
         let at_one = adc_to_param_biased(&desc, 8.0, 1.0);

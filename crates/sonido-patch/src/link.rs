@@ -26,7 +26,7 @@ use crate::pedal::RigRef;
 /// Frame sync bytes.
 pub const SYNC: [u8; 2] = *b"SL";
 /// Protocol version reported in [`Info`].
-pub const PROTOCOL_VERSION: u8 = 1;
+pub const PROTOCOL_VERSION: u8 = 2;
 /// Largest payload: one rig sector.
 pub const MAX_PAYLOAD: usize = SECTOR_SIZE;
 /// Bytes around the payload (sync, kind, argument, length, CRC).

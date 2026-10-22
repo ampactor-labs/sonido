@@ -604,12 +604,12 @@ impl DspKernel for EqKernel {
         // Left channel through L filters
         let left_low = self.low_l.process(left);
         let left_mid = self.mid_l.process(left_low);
-        let left_out = soft_limit(self.high_l.process(left_mid), 1.0) * output_gain;
+        let left_out = soft_limit(Self::level(self.high_l.process(left_mid)), 1.0) * output_gain;
 
         // Right channel through R filters
         let right_low = self.low_r.process(right);
         let right_mid = self.mid_r.process(right_low);
-        let right_out = soft_limit(self.high_r.process(right_mid), 1.0) * output_gain;
+        let right_out = soft_limit(Self::level(self.high_r.process(right_mid)), 1.0) * output_gain;
 
         (left_out, right_out)
     }

@@ -35,6 +35,7 @@ Architecture Decision Records (ADRs) for the Sonido DSP framework. Each record c
 - [ADR-029: Hardware Serves the Kernel — Embedded Design Principle](#adr-029-hardware-serves-the-kernel--embedded-design-principle)
 - [ADR-030: Noon Mapping Belongs in the Embedded Layer](#adr-030-noon-mapping-belongs-in-the-embedded-layer)
 - [ADR-031: One Measured Level Contract](#adr-031-one-measured-level-contract)
+- [ADR-032: One Control Rule for the Pedal](#adr-032-one-control-rule-for-the-pedal)
 
 ---
 
@@ -1398,7 +1399,7 @@ Level matching was a per-effect choice: each kernel set its own output default a
 One measured level contract, `sonido_core::level` (`crates/sonido-core/src/level.rs`): at its defaults every effect plays at the loudness of its input, and its mix control does not change that loudness.
 
 1. **One declaration per kernel.** `DspKernel::LEVEL` is a `Level { trim, mix_correlation }`, and every kernel sets `const LEVEL: Level = crate::calibration::NAME;`. `trim` brings the wet signal (or, without a mix control, the output) to the input's loudness; `mix_correlation` is the measured correlation `ρ` of the wet signal with the dry input, `None` without a mix control.
-2. **One mix law.** Kernels with a mix control blend through `Self::blend` / `Self::blend_stereo`: the wet is trimmed, then mixed with the constant-power gains `cos(πm/2)`, `sin(πm/2)` normalized by `1/√(1 + ρ·sin(πm))`, constant loudness at any mix for that correlation. Kernels without one are trimmed on their output by the `Adapter` (`output_trim` in `crates/sonido-core/src/kernel/adapter.rs`).
+2. **One mix law.** Kernels with a mix control blend through `Self::blend` / `Self::blend_stereo`: the wet is trimmed, then mixed with the constant-power gains `cos(πm/2)`, `sin(πm/2)` normalized by `1/√(1 + ρ·sin(πm))`, constant loudness at any mix for that correlation. Kernels without one pass their sound through `Self::level` / `Self::level_stereo` before their output knob and any safety limiter (the trim used to be applied by the `Adapter` after everything, which let a +12 dB trim defeat the wah's limiter).
 3. **Measured, never hand-tuned.** `cargo run -p sonido-effects --example calibrate --release` generates `crates/sonido-effects/src/calibration.rs`: it plays `sonido_analysis::signals::reference_guitar` (a strummed guitar peaking at `NOMINAL_PEAK_DBFS` = -20 dBFS, the median measured from a humbucker into the Hothouse) through every registered effect, fully wet if it has a mix control and at its defaults otherwise, and measures integrated LUFS (ITU-R BS.1770-4, `sonido_analysis::loudness::effect_gain_db`). The looper and tuner are utilities and stay uncalibrated.
 4. **Held by a test.** `crates/sonido-effects/tests/level_contract.rs`: within 0.5 dB of the dry loudness fully wet (or at the defaults), and within 1.5 dB at 0/25/50/75% mix and at the default mix.
 5. **Rigs too.** The factory rigs (`crates/sonido-rigs`) get master trims generated into `crates/sonido-rigs/src/trims.rs` by `cargo run -p sonido-rigs --example calibrate --release` and checked by `crates/sonido-rigs/tests/factory.rs`.
@@ -1432,3 +1433,59 @@ One measured level contract, `sonido_core::level` (`crates/sonido-core/src/level
 - `crates/sonido-rigs/examples/calibrate.rs`, `crates/sonido-rigs/src/trims.rs`, `crates/sonido-rigs/tests/factory.rs`
 - ADR-017 — Shared DSP Vocabulary (`wet_dry_mix()`, superseded for kernels)
 - ADR-030 — Noon Mapping (noon selects the default, where levels are calibrated)
+
+---
+
+## ADR-032: One Control Rule for the Pedal
+
+**Status:** Accepted
+
+**Date:** 2026-10-22
+
+### Context
+
+The pedal has six knobs in two rows of three, three toggles, two footswitches and no display. Its controls had grown per mode. In the jam with T2 on A or B, footswitch taps scrolled the T1 slot's effect and a second FS1 tap within 350 ms cleared it; on a rig, an FS2 tap set the tempo; in Morph (then T2 down), held footswitches ramped toward A or B; both footswitches together toggled bypass, and held for 3 s restarted the pedal into its bootloader (raised from 1.5 s after a bypass stomp rebooted it). The knob roles ran from K1 "primary" to K6 "level", so the jam's volume knob sat bottom right, while the factory rigs put input, morph time and master on K4–K6. What a footswitch did depended on the rig and the T2 position, and the one action that silences the pedal, a restart into DFU, sat on a gesture a stomp can make by accident.
+
+### Decision
+
+One rule for the footswitches and one for the knobs, in every rig and every T2 position (`controls()` in `crates/sonido-daisy/examples/sonido_pedal.rs`):
+
+1. **Footswitches: left on/off, right time, hold = rig.** An FS1 tap toggles bypass, a 5 ms crossfade to the dry input while the rig keeps running. An FS2 tap is tap tempo, and in the jam the delay's time follows it; with T2 in the middle it glides between A and B instead (the morph's time), and a tap mid-glide turns back. Either footswitch held for 0.4 s changes rig right then, while still held: FS1 back, FS2 forward.
+2. **T2: up A, middle Morph, down B**, so Morph sits between the two sounds it moves between.
+3. **Knobs: the top row is levels, the bottom row is the sound.** K1 K2 K3 are levels and extras, and K3 (top right) is always a volume: an effect's output on the jam's effect pages, the master on the jam's setup page and in the factory rigs. K4 K5 K6 are the three controls that shape the sound most, K4 the main one. Every `knob_map` (`crates/sonido-platform/src/knob_mapping.rs`), the factory rigs (K1 input, K2 morph time, K3 master, K4–K6 the rig's own controls; `crates/sonido-rigs/src/lib.rs`) and the jam's setup page (K1 input, K2 morph time, K3 master, K4–K6 pick slot 1–3's effect) follow it.
+4. **No dangerous mid-song gesture.** The bootloader is a power-on gesture (both footswitches held) or a USB request (`Request::Bootloader`, sent by `sonido pedal update`), never a hold during play. Footswitch scrolling and the FS1 slot clear are gone: effects are picked with the setup page's knobs, a pick loads only once its knob has rested for 0.3 s, and a pick that would break the CPU rule is refused.
+
+### Rationale
+
+- **Muscle memory without a display.** A control that means the same thing in every rig and mode can be used without looking, and the pedal has no screen to say which mode is active.
+- **On/off and time are what a player stomps mid-song.** A rig change is rarer, so it costs a hold, which acts at 0.4 s while the footswitch is still down rather than at release.
+- **One volume knob in one place.** Whatever plays, K3 fixes a level jump.
+- **Knobs pick absolutely.** A pick knob's zones are fixed (fully left empty, then each jam effect), so a slot's effect is chosen directly instead of stepped through, and no effect is built for each step on the way.
+- **Nothing on stage reboots the pedal.** A gesture during play that restarts into DFU is one stomp from silence, whatever its hold time; a power-on gesture or a USB request cannot happen mid-song.
+
+### Alternatives Considered
+
+- **Per-mode footswitch meanings** (the previous state): more functions on two switches, at the cost of knowing the mode before stomping.
+- **A longer bootloader hold**: 1.5 s was already raised to 3 s after an accidental reboot; a longer hold is rarer, not impossible.
+- **Scrolling effects on the footswitches**: kept the knobs free for the sound, but made the footswitches modal and built every effect passed on the way.
+- **Parameter pages on a footswitch hold** (`docs/ROADMAP.md`, Embedded Hardening): the hold now changes rig; the jam's setup page sits on T2's middle position instead.
+
+### Consequences
+
+- Every `knob_map` was reordered. `knob_mapping.rs`'s tests hold each jam effect to the rule (K3 mapped, K4 = param 0), and `crates/sonido-platform/tests/knob_calibration.rs` gives K3 the level knob's wider range.
+- The factory rigs' macros moved: K1 input, K2 morph time, K3 master, K4–K6 the rig. Rigs from the editor map their six macros however their author did; the rule binds the pedal's own pages and the factory rigs.
+- The jam needed levels of its own: `JamSettings` (input, master, morph time, `crates/sonido-patch/src/pedal.rs`) travels in the jam patch's globals and is saved in the state sector.
+- The jam's effect list, renamed `JAM_EFFECT_IDS`, is the pick knobs' zone order and is no longer append-only, since jams are stored by effect UID.
+- A newly picked effect starts at its voiced defaults, not at the knobs' positions.
+- Tap tempo is not available with T2 in the middle, where FS2 glides.
+- T1 and T3 do nothing in a rig; assignable toggles in rigs are future work.
+- A firmware update needs the power-on gesture or a USB host; without either, the bootloader is reached with the Seed's RESET and BOOT buttons, inside the enclosure (`docs/EMBEDDED.md`, Bootloader Behavior).
+
+### References
+
+- `crates/sonido-daisy/examples/sonido_pedal.rs` — the module docs' control tables, `controls()`, `setup_page()`, `tap_tempo()`, `enter_daisy_bootloader()`
+- `crates/sonido-platform/src/knob_mapping.rs` — `knob_map()` and its rule test
+- `crates/sonido-rigs/src/lib.rs` — the factory rigs' macros
+- `crates/sonido-patch/src/pedal.rs` — `JamSettings`; `crates/sonido-patch/src/link.rs` — `Request::Bootloader`
+- `docs/EMBEDDED.md` — The Pedal: Controls, The Jam, Bypass and Bootloader
+- ADR-030 — Noon Mapping (the curve every knob page uses)

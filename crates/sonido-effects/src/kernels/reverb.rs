@@ -578,8 +578,13 @@ impl ReverbKernel {
             fdn_compensation: 1.0,
             er_room_scale: 1.0,
         };
-        // Prime the coefficient cache with the default param values (room=0.5, decay=0.5, damp=0.5).
-        kernel.update_derived(0.5, 0.5, 0.5);
+        // Prime the coefficient cache with the default param values.
+        let d = ReverbParams::default();
+        kernel.update_derived(
+            d.room_size_pct / 100.0,
+            d.decay_pct / 100.0,
+            d.damping_pct / 100.0,
+        );
         kernel
     }
 

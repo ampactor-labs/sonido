@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 """Rewrite EFFECT_CYCLES in sonido-platform's cycle table from a bench log.
 
-    cd crates/sonido-daisy
-    probe-rs run --chip STM32H750IBKx --protocol swd \
-        target/thumbv7em-none-eabihf/release/examples/bench_kernels | tee bench.log
+    (cd crates/sonido-daisy && probe-rs run --chip STM32H750IBKx --protocol swd \
+        target/thumbv7em-none-eabihf/release/examples/bench_kernels | tee bench.log)
     python3 scripts/update_cycle_table.py crates/sonido-daisy/bench.log
 
 Each effect's entry becomes its measured rig-path worst block, rounded up to

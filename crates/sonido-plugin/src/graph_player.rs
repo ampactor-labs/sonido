@@ -5,14 +5,10 @@
 //! master gain, and a bypass. Its state *is* the patch JSON the Studio GUI
 //! exports — so "Export as CLAP" is the same blob.
 //!
-//! What the plugin shares with the pedal is the effect kernels and the
-//! [`Patch`] format (the firmware's `patch_loader` decodes the 4 KB binary form
-//! and builds it with the same `build_graph_from_patch`). It does not share this
-//! runtime: the firmware never uses `PatchPlayer`, so it has none of its macro,
-//! morph or gain handling. The shipping pedal (`sonido_pedal.rs`) runs its own
-//! `ProcessingGraph` of up to 3 of 8 effects through unsmoothed
-//! `Adapter::new_direct` wrappers and does not load patches yet, so a rig is not
-//! guaranteed to sound the same in the DAW and on the pedal.
+//! The pedal plays rigs through this same runtime: `sonido_pedal.rs` is a
+//! `PatchPlayer` of effects built by the same registry, so a rig's macros,
+//! morph and gains behave the same in the DAW and on the pedal (and the same
+//! [`Patch`] travels between them, as JSON here and as a 4 KB sector there).
 //!
 //! Its editor is the design system's cabinet in the RIG family: the loaded
 //! rig's chain on the screen, a rig browser, the six macros, morph and gains

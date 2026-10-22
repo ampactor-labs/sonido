@@ -17,7 +17,7 @@ build without `std` (with `alloc`).
 
 ```
 Applications
-  sonido-cli ──────▶ core, registry, analysis, io, config, synth, graph-dsl, patch
+  sonido-cli ──────▶ core, registry, analysis, io, config, synth, graph-dsl, patch, rigs
   sonido-gui ──────▶ core, effects, gui-core, registry, graph-dsl, patch, platform, io
   sonido-plugin ───▶ core, effects, registry, config, patch, rigs, gui-core   (CLAP/VST3 bundle)
   sonido-daisy ────▶ core, effects, registry, patch, platform*     (firmware, no_std;
@@ -30,7 +30,7 @@ Libraries
   sonido-io ───────▶ core                        WAV + cpal audio I/O       [std]
   sonido-analysis ─▶ core                        FFT, spectral analysis     [std]
   sonido-registry ─▶ core, effects               effect factory             [no_std]
-  sonido-patch ────▶ core                        canonical Patch format     [no_std]
+  sonido-patch ────▶ core, platform              canonical Patch format     [no_std]
   sonido-synth ────▶ core                        synthesis                  [no_std]
   sonido-platform ─▶ core                        controls + knob mapping    [no_std]
   sonido-effects ──▶ core                        36 effect kernels          [no_std]
@@ -97,7 +97,7 @@ All 36 effects have kernel-architecture implementations in `crates/sonido-effect
 
 2. **`DspKernel`** (`XxxKernel`) — owns ONLY DSP state (filters, delay buffers, ADAA processors, LFO phases). Receives `&Params` by reference each sample. No `SmoothedParam`, no platform types.
 
-3. **`Adapter<K, SmoothedPolicy>`** — bridges kernel to `Effect + ParameterInfo`. Owns per-parameter `SmoothedParam` instances configured from `KernelParams::smoothing()`. Advances smoothers per sample, writes into a params snapshot, passes to `kernel.process_stereo()`, and applies the kernel's level trim to the output when it has no mix control.
+3. **`Adapter<K, SmoothedPolicy>`** — bridges kernel to `Effect + ParameterInfo`. Owns per-parameter `SmoothedParam` instances configured from `KernelParams::smoothing()`. Advances smoothers per sample, writes into a params snapshot, and passes to `kernel.process_stereo()`. (Each kernel applies its own level trim, in `Self::blend` or `Self::level` / `Self::level_stereo`.)
 
 **Every target that plays rigs** uses `Adapter<K, SmoothedPolicy>`: the registry creates `Adapter<XxxKernel, SmoothedPolicy>` for all 36 effects, and the plugins, the editor, the CLI and the pedal firmware all build effects through it. The pedal (`crates/sonido-daisy/examples/sonido_pedal.rs`) plays every rig through `sonido_patch::PatchPlayer` with registry-built effects (`patch_loader::make_effect`) on an SDRAM heap, so a rig sounds the same as in the graph-player plugin. `Adapter<K, DirectPolicy>` (`Adapter::new_direct`) — the same `Effect + ParameterInfo` interface with no smoothing — remains for firmware examples that drive one kernel (`single_effect.rs`, `graph_audio_test.rs`); `single_delay.rs` and `single_reverb.rs` call the kernel directly with `XxxParams::from_knobs()`.
 
@@ -215,6 +215,7 @@ Central registry for discovering and instantiating effects. Provides a unified A
 - `EffectCategory`: Effect categorization (Dynamics, Distortion, Modulation, etc.)
 - `EffectWithParams`: Helper trait for accessing ParameterInfo through boxed effects (defined in `sonido-core`, re-exported)
 - `EFFECT_UIDS` / `effect_uid` / `effect_by_uid`: Stable numeric effect UIDs used by the patch format
+- `JAM_EFFECT_IDS`: the eight effects the pedal's jam offers, in the order of its pick knobs' zones (the jam is saved by UID, so the order is free to change)
 
 **Usage:**
 ```rust
@@ -254,9 +255,22 @@ preset.effects = vec![
 preset.save(&user_presets_dir().join("my_preset.toml"))?;
 ```
 
+### sonido-patch
+
+The canonical rig format, `Patch`: graph topology, per-node A/B parameters, six macros, morph configuration and globals, by stable effect UID. Builds `no_std` (with `alloc`) for the firmware; the default `std` feature adds JSON (serde) and the host tools.
+
+**Key modules:**
+- `binary`: one `Patch` ↔ one 4 KB QSPI sector (`encode`, `decode`)
+- `build`, `runtime`: `build_graph_from_patch` and `PatchPlayer`, which runs a rig in the graph-player plugin and on the pedal
+- `validate`: structural and pedal-fit checks; `validate_for_daisy` is the one pedal check the editor, the CLI and the factory-rig tests use (`sonido_platform::cycle_table`)
+- `pedal`: the jam (`jam_patch`, `JamSettings`) and the pedal's saved state (`PedalState`)
+- `link`: the USB serial protocol between the pedal and the host (frames, requests incl. `Bootloader`, replies)
+- `client` (`std`): the host side of the link. `LinkClient`, generic over `Read + Write`; `send_rig` replaces the bank rig with the same name, otherwise takes the first empty slot; `enter_bootloader`; with the `serial` feature, `open_pedal` / `pedal_ports` find the pedal by USB id `1209:0001`
+- `dfu` (`std`, not wasm): firmware updates through `dfu-util`, to the Daisy bootloader's QSPI region only (`0x90000000`, firmware at `0x90040000`); rigs never go this way
+
 ### sonido-rigs
 
-The factory rigs: six `sonido_patch::Patch`es built from registry effects (`factory_rigs()`: Shimmer Cathedral, Fuzz Lab, Space Echo, Granular Drift, Harmonic Habitat, Amp Stack). One set serves the pedal (its `build.rs` encodes them into the firmware image) and the graph-player plugin's rig library. Every rig maps K1–K3 to its own controls, K4 to input gain, K5 to morph time and K6 to master volume around a level-matching trim, generated into `src/trims.rs` by `cargo run -p sonido-rigs --example calibrate --release`; `tests/factory.rs` holds every rig at the dry guitar's loudness, to the pedal's CPU and memory rule, and to a binary round trip. Requires `std`.
+The factory rigs: six `sonido_patch::Patch`es built from registry effects (`factory_rigs()`: Shimmer Cathedral, Fuzz Lab, Space Echo, Granular Drift, Harmonic Habitat, Amp Stack). One set serves the pedal (its `build.rs` encodes them into the firmware image) and the graph-player plugin's rig library. Every rig maps its macros by the pedal's knob rule: K1 input gain, K2 morph time, K3 master volume around a level-matching trim (generated into `src/trims.rs` by `cargo run -p sonido-rigs --example calibrate --release`), and K4–K6 the rig's own controls; `tests/factory.rs` holds every rig at the dry guitar's loudness, to the pedal's CPU and memory rule (`validate_for_daisy`), and to a binary round trip. Requires `std`.
 
 ### sonido-platform
 
@@ -306,8 +320,8 @@ Command-line interface tying everything together.
 - `devices`: Audio device management
 - `effects`: List available effects
 - `presets`: Preset management (list, show, save, delete)
-- `patch`: Canonical patch export / inspection
-- `daisy`: Daisy Seed preset management (legacy binary format)
+- `patch`: Rig files: export a preset, DSL chain or rig as `.json` or a `.bin` sector, inspect a rig
+- `pedal`: The pedal over USB (`sonido_patch::client`): info, list, push, pull, erase, play, update
 
 **Additional analyze subcommands:**
 - `pac`: Phase-Amplitude Coupling analysis with surrogate testing
@@ -365,8 +379,8 @@ Standalone real-time audio effects processor and node-graph editor built on egui
 - `morph_state.rs`: A/B morph — one global position, per-effect A/B parameter poses
 - `macro_autoassign.rs`: Auto-assigns the six performance macros from the chain
 - `chain_manager.rs`: `GraphCommand` enum for GUI→audio thread topology mutations
-- `session.rs`: Session save/load (graph topology, node parameters, editor state)
-- `export.rs` / `dfu.rs`: Project the editor into a `Patch` and export it (`.bin` sector, `.json`, CLAP graph-player preset); flash the Daisy over `dfu-util` (native only)
+- `session.rs`: Session save/load (graph topology, node parameters, editor state, the rig's name)
+- `export.rs`: Project the editor into a `Patch` and export it (`.bin` sector, `.json`, CLAP graph-player preset) under the rig's name; the Export menu's Send to pedal goes over USB through `sonido_patch::client` (native only)
 - `file_player.rs`: WAV file playback (native + wasm)
 - `signal_generator.rs`: Built-in test/demo signals
 - `info_view.rs`: Contextual info strip (selection, live values, shortcuts)
@@ -683,14 +697,17 @@ The `sonido-platform` crate provides abstractions for hardware deployment:
 **The shipping firmware (`sonido_pedal.rs`)** is a rig player: it steps through
 the jam, up to 15 rigs in its QSPI flash bank and the six factory rigs
 (`sonido-rigs`), and plays each through `sonido_patch::PatchPlayer`. On a rig the
-six knobs are its macros; in the jam they edit the selected slot.
+six knobs are its macros; in the jam they edit the selected slot, or with T2 in
+the middle set the jam's levels and pick its effects. The footswitches mean the
+same everywhere: an FS1 tap is on/off, an FS2 tap is tap tempo (T2 middle: a glide
+A↔B), and either held 0.4 s changes rig.
 ```
 TOGGLE_1: Jam slot being edited (1 / 2 / 3)
-TOGGLE_2: Mode (A / B / Morph), for every rig
+TOGGLE_2: Mode (A / Morph / B), for every rig
 TOGGLE_3: Jam topology (linear 1→2→3 / parallel / fan 1→[2,3])
 ```
-Each of the jam's 3 slots holds one of 8 effects (chorus, phaser, distortion,
-bitcrusher, delay, reverb, ringmod, filter) or nothing.
+Each of the jam's 3 slots holds one of 8 effects (`JAM_EFFECT_IDS`: distortion,
+bitcrusher, filter, ringmod, chorus, phaser, delay, reverb) or nothing.
 
 See `docs/EMBEDDED.md` for detailed pin mappings and design patterns.
 

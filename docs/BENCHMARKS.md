@@ -111,7 +111,7 @@ Measured 2026-10-22 on an Intel i5-6300U (2 cores / 4 threads, 2.4 GHz base, 3.0
 
 ### Every effect
 
-`all_effects` runs each registered effect at its default parameters through the registry's `Adapter<K, SmoothedPolicy>` (the plugin and editor path): one stereo 256-frame block of a 440 Hz sine at 48 kHz. "One core" is the share of a single core that real-time processing at 48 kHz takes. The last column is the measured Cortex-M7 worst block on the rig path (next section), the number the pedal budgets with. Effects marked "(pedal)" are the eight the pedal's jam offers (`PEDAL_EFFECT_IDS`).
+`all_effects` runs each registered effect at its default parameters through the registry's `Adapter<K, SmoothedPolicy>` (the plugin and editor path): one stereo 256-frame block of a 440 Hz sine at 48 kHz. "One core" is the share of a single core that real-time processing at 48 kHz takes. The last column is the measured Cortex-M7 worst block on the rig path (next section), the number the pedal budgets with. Effects marked "(pedal)" are the eight the pedal's jam offers (`JAM_EFFECT_IDS`).
 
 | Effect | 256 frames | ns/frame | One core at 48 kHz | Cortex-M7, worst block |
 |---|---|---|---|---|
@@ -207,7 +207,7 @@ A rebuild alone moves an unchanged effect by up to ±8% through code layout, whi
 
 Every effect fits a block on its own, worst block included; the reverb (62%) is the heaviest jam effect and the tuner (64%) the heaviest overall.
 
-**The pedal's rule.** One rule decides whether a rig runs on the pedal, shared by the editor's export check (`sonido_patch::validate_for_pedal`) and the pedal itself (which refuses rigs sent over USB and skips jam effects that would break it): the `EFFECT_CYCLES` of a rig's effects plus `NODE_OVERHEAD_CYCLES` (400) per node must stay within `CHAIN_FRACTION` (80%) of the block budget (`chain_cycles`, `chain_fits`); the editor warns past `WARN_FRACTION` (70%). The heaviest three-effect jams that fit are reverb and distortion with filter, ringmod or bitcrusher (79–80%); reverb, distortion and delay (86%) does not. The pedal running distortion → reverb → ringmod in a Hothouse measured 74% mean and 83–85% at its slowest callbacks, with no block over budget ([Embedded](EMBEDDED.md#chain-configurations)).
+**The pedal's rule.** One rule decides whether a rig runs on the pedal, shared by the editor's export check and the CLI (`sonido_patch::validate::validate_for_daisy`) and the pedal itself (which refuses rigs sent over USB, and jam picks, that would break it): the `EFFECT_CYCLES` of a rig's effects plus `NODE_OVERHEAD_CYCLES` (400) per node must stay within `CHAIN_FRACTION` (80%) of the block budget (`chain_cycles`, `chain_fits`); the editor warns past `WARN_FRACTION` (70%). The heaviest three-effect jams that fit are reverb and distortion with filter, ringmod or bitcrusher (79–80%); reverb, distortion and delay (86%) does not. The pedal running distortion → reverb → ringmod in a Hothouse measured 74.7% mean and 84–85% at its slowest callbacks, with no block over budget ([Embedded](EMBEDDED.md#chain-configurations)).
 
 The tuner's mean and worst differ because its pitch analysis is periodic. The first on-device run found it doing a whole analysis inside one block: 9,166,077 cycles, 29× that block's budget (an audible dropout every 43 ms on the pedal). It now spreads the analysis one lag per decimated sample across each hop and analyzes its ring in place, which brought the worst block to about 63%.
 

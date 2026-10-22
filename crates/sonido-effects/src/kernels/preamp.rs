@@ -306,8 +306,8 @@ impl DspKernel for PreampKernel {
 
         // ── Safety limiter → Output level ──
         (
-            soft_limit(toned_l, 1.0) * output,
-            soft_limit(toned_r, 1.0) * output,
+            soft_limit(Self::level(toned_l), 1.0) * output,
+            soft_limit(Self::level(toned_r), 1.0) * output,
         )
     }
 
@@ -546,7 +546,9 @@ mod tests {
             kernel.process_stereo(0.5, 0.5, &params);
         }
         let (out_l, _) = kernel.process_stereo(0.5, 0.5, &params);
-        // At 0 dB gain, 0 dB tone, 0 dB output: output ≈ input (biquad flat)
+        let out_l = out_l / PreampKernel::LEVEL.trim;
+        // At 0 dB gain, 0 dB tone, 0 dB output: output ≈ input (biquad flat),
+        // the measured level trim divided out
         assert!(
             (out_l - 0.5).abs() < 0.01,
             "Unity gain should pass signal: expected ~0.5, got {out_l}"

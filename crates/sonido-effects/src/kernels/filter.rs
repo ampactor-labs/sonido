@@ -293,8 +293,8 @@ impl DspKernel for FilterKernel {
         let output_gain = fast_db_to_linear(params.output_db);
 
         // ── Biquad filtering → Soft limit → Output level ──
-        let out_l = soft_limit(self.biquad_l.process(left), 1.0) * output_gain;
-        let out_r = soft_limit(self.biquad_r.process(right), 1.0) * output_gain;
+        let out_l = soft_limit(Self::level(self.biquad_l.process(left)), 1.0) * output_gain;
+        let out_r = soft_limit(Self::level(self.biquad_r.process(right)), 1.0) * output_gain;
 
         (out_l, out_r)
     }
@@ -535,8 +535,13 @@ mod tests {
             kernel.process_stereo(1.0, 1.0, &params);
         }
 
-        // After settling the biquad memory should have reached near-unity for DC.
+        // After settling the biquad memory should have reached near-unity for
+        // DC (the measured level trim divided out: this is the filter).
         let (out_l, out_r) = kernel.process_stereo(1.0, 1.0, &params);
+        let (out_l, out_r) = (
+            out_l / FilterKernel::LEVEL.trim,
+            out_r / FilterKernel::LEVEL.trim,
+        );
         assert!(
             (out_l - 1.0).abs() < 0.05,
             "DC should pass filter with gain ≈1.0, got {out_l}"

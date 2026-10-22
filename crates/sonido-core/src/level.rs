@@ -8,7 +8,8 @@
 //! contract in its `level_contract` test.
 //!
 //! - [`Level::trim`] is a gain on the wet signal (or, for an effect without a
-//!   mix control, on its output) that brings it to the input's loudness.
+//!   mix control, on its sound before its output knob and safety limiter)
+//!   that brings it to the input's loudness.
 //! - [`Level::mix_correlation`] is the measured correlation `ρ` between the
 //!   wet signal and the dry input. Two signals with correlation `ρ` at gains
 //!   `a` and `b` sum to power `a² + b² + 2ρab`, so [`blend`] normalizes the

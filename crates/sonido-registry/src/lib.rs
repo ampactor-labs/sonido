@@ -872,6 +872,23 @@ mod tests {
         assert_eq!(effects.len(), 36);
     }
 
+    /// Every parameter's `ParamId` is unique across all effects: it is a
+    /// parameter's identity to hosts (automation, saved state).
+    #[test]
+    fn param_ids_are_unique_across_effects() {
+        let registry = EffectRegistry::new();
+        let mut seen: std::collections::HashMap<u32, String> = std::collections::HashMap::new();
+        for (id, _) in EFFECT_UIDS {
+            let effect = registry.create(id, 48_000.0).unwrap();
+            for i in 0..effect.effect_param_count() {
+                let pid = effect.effect_param_info(i).unwrap().id.0;
+                if let Some(other) = seen.insert(pid, format!("{id}[{i}]")) {
+                    panic!("ParamId({pid}) is both {other} and {id}[{i}]");
+                }
+            }
+        }
+    }
+
     #[test]
     fn uid_table_is_total_and_unique() {
         let registry = EffectRegistry::new();

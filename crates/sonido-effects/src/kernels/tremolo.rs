@@ -336,7 +336,7 @@ impl DspKernel for TremoloKernel {
         let gain_l = 1.0 - (depth * (1.0 - lfo_l_uni));
         let gain_r = 1.0 - (depth * (1.0 - lfo_r_uni));
 
-        (left * gain_l * output, right * gain_r * output)
+        Self::level_stereo(left * gain_l * output, right * gain_r * output)
     }
 
     fn is_true_stereo(&self) -> bool {
@@ -450,9 +450,12 @@ mod tests {
             ..Default::default()
         };
 
-        // With zero depth and 0 dB output, all samples should pass unchanged.
+        // With zero depth and 0 dB output, all samples should pass unchanged
+        // (the measured level trim divided out).
+        let trim = TremoloKernel::LEVEL.trim;
         for _ in 0..500 {
             let (l, r) = kernel.process_stereo(0.5, 0.75, &params);
+            let (l, r) = (l / trim, r / trim);
             assert!(
                 (l - 0.5).abs() < 1e-5,
                 "Zero depth should be passthrough: expected 0.5, got {l}"
@@ -509,7 +512,8 @@ mod tests {
         let n = 9600_usize;
         for _ in 0..n {
             let (l, r) = kernel.process_stereo(1.0, 1.0, &params);
-            sum_product += l * r;
+            let trim = TremoloKernel::LEVEL.trim;
+            sum_product += (l / trim) * (r / trim);
         }
 
         let avg = sum_product / n as f32;

@@ -22,7 +22,7 @@
 //! # Hardware validation
 //!
 //! This path cannot be unit-tested off-device. Validate it first with the
-//! `qspi_read_test` example, which probes the JEDEC id (`9D 60 17` for the
+//! `qspi_test` example, which probes the JEDEC id (`9D 60 17` for the
 //! IS25LP064A, `EF 40 17` for a W25Q64JV) before trusting sector reads.
 
 use embassy_stm32 as hal;

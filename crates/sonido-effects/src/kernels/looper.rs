@@ -39,9 +39,9 @@
 //!
 //! ```text
 //! Record:   input ──► buffer.write() ──► dry output
-//! Play:     buffer.read() ──► wet ──► wet_dry_mix(input, wet, mix) ──► output_gain
+//! Play:     buffer.read() ──► wet ──► blend(input, wet, mix) ──► output_gain
 //! Overdub:  buffer.read_at_write_pos() × feedback + input ──► buffer.write()
-//!           buffer.read() ──► wet ──► wet_dry_mix(input, wet, mix) ──► output_gain
+//!           buffer.read() ──► wet ──► blend(input, wet, mix) ──► output_gain
 //! Stop:     input ──► dry output (no buffer access)
 //! ```
 //!
@@ -110,7 +110,7 @@ const MODE_LABELS: &[&str] = &["Stop", "Record", "Play", "Overdub"];
 /// | Index | Field | Unit | Range | Default |
 /// |-------|-------|------|-------|---------|
 /// | 0 | `mode` | index | 0–3 (Stop/Record/Play/Overdub) | 0.0 |
-/// | 1 | `feedback_pct` | % | 0–100 | 50.0 |
+/// | 1 | `feedback_pct` | % | 0–100 | 80.0 |
 /// | 2 | `half_speed` | index | 0–1 | 0.0 |
 /// | 3 | `reverse` | index | 0–1 | 0.0 |
 /// | 4 | `mix_pct` | % | 0–100 | 50.0 |

@@ -38,16 +38,16 @@
 //! | Knobs, T2 middle | The setup page: K1 input, K2 morph time, K3 master; K4 K5 K6 pick slot 1, 2, 3's effect (fully left: empty) | The rig's six macros (factory rigs: K1 input, K2 morph time, K3 master, K4–K6 the rig's sound) |
 //!
 //! At power-on: hold FS1 to start in the jam, both footswitches to start the
-//! USB bootloader (DFU) for a firmware update; the editor and CLI can also
-//! request it over USB. A picked effect loads once its knob rests, starts at
+//! USB bootloader (DFU) for a firmware update (`sonido pedal update` can
+//! also request it over USB). A picked effect loads once its knob rests, starts at
 //! its voiced defaults, and is refused (LED 2 blinks 4) if it would take the
 //! jam past the CPU rule (`sonido_platform::cycle_table::chain_fits`).
 //!
 //! # USB
 //!
 //! The Seed's USB port is a serial device speaking `sonido_patch::link`: the
-//! editor and `sonido pedal` (CLI) list, send, read and erase rigs, read the
-//! jam back, and start the bootloader. A rig sent to a slot is checked
+//! editor sends rigs, and `sonido pedal` (CLI) lists, sends, reads and erases
+//! them, reads the jam back, and starts the bootloader. A rig sent to a slot is checked
 //! (effects, routing, CPU and memory) before it is written, and plays at once.
 //!
 //! # Build & run

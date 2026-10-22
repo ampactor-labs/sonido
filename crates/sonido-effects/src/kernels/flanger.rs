@@ -69,7 +69,7 @@ use sonido_core::{
 /// | 3 | `mix_pct` | % | 0–100 | 50.0 |
 /// | 4 | `tzf` | index | 0–1 | 0 (Off) |
 /// | 5 | `sync` | index | 0–1 | 0 (Off) |
-/// | 6 | `division` | index | 0–11 | 3 (Quarter) |
+/// | 6 | `division` | index | 0–11 | 3 (Eighth) |
 /// | 7 | `output_db` | dB | −6–+6 | 0.0 |
 /// | 8 | `lfo_phase` | 0–1 | READ_ONLY diagnostic | 0.0 |
 #[derive(Debug, Clone, Copy)]
@@ -113,7 +113,7 @@ pub struct FlangerParams {
     /// Note division index for tempo sync (0–11).
     ///
     /// Mapped via `index_to_division()`. Only active when `sync > 0.5`.
-    /// Default 3 (Quarter note).
+    /// Default 3 (Eighth note).
     pub division: f32,
 
     /// Output level in decibels.

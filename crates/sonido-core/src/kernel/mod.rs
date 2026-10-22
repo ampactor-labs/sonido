@@ -14,7 +14,8 @@
 //! 3. **[`Adapter<K, S>`]** — Platform bridge. Wraps a kernel and its params into
 //!    the existing [`Effect`](crate::Effect) + [`ParameterInfo`](crate::ParameterInfo)
 //!    interface. The smoothing policy `S` controls how parameter changes are applied:
-//!    [`SmoothedPolicy`] (desktop/plugin) or [`DirectPolicy`] (embedded).
+//!    [`SmoothedPolicy`] (every target: plugins, editor, pedal) or
+//!    [`DirectPolicy`] (direct writes, for single-effect examples and tests).
 //!
 //! # Why This Exists
 //!

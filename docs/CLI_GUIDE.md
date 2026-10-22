@@ -28,8 +28,8 @@ cargo install --path crates/sonido-cli
 | `devices` | List audio devices |
 | `effects` | List available effects |
 | `presets` | Manage effect presets |
-| `daisy` | Legacy Daisy Seed preset sectors (position-indexed) |
-| `patch` | Canonical patch sectors (UID-indexed; macros, morph, globals) |
+| `patch` | Rig files: export a preset or DSL chain as a rig, inspect a rig |
+| `pedal` | The pedal over USB: list, send, read and play rigs; update its firmware |
 
 ---
 
@@ -1123,6 +1123,57 @@ sonido presets paths
 
 ---
 
+## pedal
+
+Talk to a Sonido pedal over USB (`crates/sonido-cli/src/commands/pedal.rs`). While it
+plays, the pedal is a USB serial device (`1209:0001`) speaking the rig link
+(`sonido_patch::link`; see `docs/EMBEDDED.md`, USB Rig Link). These commands list and
+play its rigs, send rigs to its bank, read rigs and the jam back as editor JSON, and
+update its firmware.
+
+```bash
+sonido pedal info                         # firmware, CPU load, what it plays
+sonido pedal list                         # the rig list, in footswitch order
+sonido pedal push my_rig.json             # replaces the bank rig with its name, or takes the first empty slot
+sonido pedal push --from-dsl "distortion:drive=20 | reverb:mix=30" --name "Dirty Verb"
+sonido pedal push my_rig.json --slot 3    # into bank slot 3
+sonido pedal pull 3 -o slot3.json         # bank slot 3 as editor JSON
+sonido pedal pull jam                     # print the jam
+sonido pedal erase 3
+sonido pedal play "Space Echo"            # jam, a bank slot 1–15, or a factory rig
+sonido pedal update sonido_pedal.bin      # firmware update over USB DFU
+```
+
+### Subcommands
+
+| Subcommand | Description |
+|------------|-------------|
+| `info` | Firmware and link protocol, what the pedal plays (and whether it is off), its morph position and CPU load (last second's mean and peak), and its bank slots, factory rigs and effect count |
+| `list` | The rig list, in the order the footswitches step through it: the jam with its effects, each bank slot, the factory rigs; marks the one playing |
+| `push [FILE]` | Send a rig to the bank: it replaces the bank rig with the same name, or takes the first empty slot (`-s, --slot <N>`: bank slot 1–15 instead). Checked here with `validate_for_daisy`, then again by the pedal, which plays it at once |
+| `pull <WHAT>` | Save a bank rig (`1`–`15`) or the jam (`jam`) as editor JSON (`-o, --output <FILE>`); prints the rig without `-o` |
+| `erase <SLOT>` | Empty bank slot 1–15 (if it was playing, the pedal returns to the jam) |
+| `play <RIG>` | Play `jam`, a bank slot `1`–`15`, or a factory rig by name (case-insensitive) |
+| `update [FIRMWARE]` | Restart the pedal into its bootloader; with a firmware `.bin`, flash it with `dfu-util` (the pedal then restarts into it); without one, print the `dfu-util` command |
+
+`push` reads its rig like [`patch export`](#rig-export): a `.json` rig from the
+editor, a `.bin` sector, a preset `.toml`, or `--from-dsl`, with `-t, --topology` and
+`--name`. The global `--port <PORT>` names the serial port; without it the first
+Sonido pedal found is used. Bank slots are numbered 1–15 here (the link counts from 0).
+
+`update` asks the running pedal for its bootloader over USB, waits up to 10 s for the
+Daisy bootloader to appear, and flashes the image to `0x90040000`; it needs
+`dfu-util` installed, and it refuses the STM32 ROM bootloader (BOOT held through
+RESET), which cannot reach the pedal's QSPI flash. Build the image as in
+`crates/sonido-daisy/examples/sonido_pedal.rs`:
+
+```bash
+cd crates/sonido-daisy
+cargo objcopy --example sonido_pedal --release --features alloc,platform -- -O binary sonido_pedal.bin
+```
+
+---
+
 ## Preset Files
 
 Presets are TOML files defining effect chains with an optional topology
@@ -1151,7 +1202,9 @@ Parameter values follow the same rules as `--param`. An effect entry with
 
 The `topology` field is optional — omitting it defaults to linear chaining.
 Valid values: `"linear"`, `"parallel"`, `"fan"`. `process`, `realtime` and `play` always
-run a preset as a linear chain; the topology is used by `sonido daisy export`.
+run a preset as a linear chain, and `sonido patch export` and `sonido pedal push` take
+the topology from their `--topology` option (default `linear`, or `parallel`), not
+from this field.
 
 Use with:
 
@@ -1160,57 +1213,37 @@ sonido process input.wav output.wav --preset my_preset.toml
 sonido realtime --preset my_preset.toml
 ```
 
-### Daisy Export
+### Rig Export
 
-Export a preset to the legacy Daisy Seed binary format (a 4096-byte sector, magic
-`SOND`). The shipping pedal firmware does not read this format; use
-[Canonical Patch Export](#canonical-patch-export) for a sector the pedal plays:
+`sonido patch` (`crates/sonido-cli/src/commands/patch.rs`) works on rig files: the
+canonical `sonido-patch` model, which stores effects by stable UID and carries macros,
+morph and globals. `export` reads a rig (a `.json` from the editor or a `.bin`
+sector) or builds one from a preset `.toml` or a DSL chain, and writes it as `.json`
+(the editor and the graph player) or as a `.bin` pedal sector, chosen by the output
+file's extension:
 
 ```bash
-sonido daisy export my_preset.toml --output preset.bin --slot 0
-sonido daisy export --from-dsl "distortion:drive=20|reverb:mix=30" -o preset.bin
-sonido daisy inspect preset.bin  # verify round-trip
+sonido patch export my_preset.toml -o rig.json
+sonido patch export --from-dsl "distortion:drive=20 | reverb:mix=30" --name "Dirty Verb" -o rig.bin --pedal
+sonido patch export rig.json -o rig.bin     # editor JSON → pedal sector
+sonido patch inspect rig.bin                # or a .json rig
 ```
 
 | Option | Description |
 |--------|-------------|
-| `<PRESET>` | Preset TOML path (conflicts with `--from-dsl`) |
-| `--from-dsl <SPEC>` | Export a DSL string instead of a TOML file |
-| `-o, --output <FILE>` | Output binary file (required) |
-| `-s, --slot <N>` | Preset slot 0-7 (default: 0) |
-
-Constraints: max 3 effects, each a registry ID (aliases are not resolved here) from the
-pedal set `PEDAL_EFFECT_IDS`: chorus, phaser, distortion, bitcrusher, delay, reverb,
-ringmod, filter. Effects are stored by their position in that list, parameters must be
-plain numbers (clamped to range; unmatched keys keep defaults), and the topology is
-encoded as a single byte.
-
-### Canonical Patch Export
-
-`sonido patch` writes the canonical `sonido-patch` sector, which stores effects by
-stable UID and carries macros, morph and globals:
-
-```bash
-sonido patch export my_preset.toml -o patch.bin
-sonido patch export --from-dsl "distortion:drive=20 | reverb:mix=30" -o patch.bin --pedal
-sonido patch inspect patch.bin
-```
-
-| Option | Description |
-|--------|-------------|
-| `<PRESET>` | Preset TOML path (conflicts with `--from-dsl`) |
-| `--from-dsl <SPEC>` | Export a DSL string instead of a TOML file |
-| `-o, --output <FILE>` | Output `.bin` file (required) |
-| `-t, --topology <NAME>` | `linear` (default) or `parallel` (all effects between one split/merge) |
-| `--name <NAME>` | Patch name (default: the preset name, or `dsl`) |
-| `--pedal` | Fail unless every effect is in the jam's effect set (`PEDAL_EFFECT_IDS`); the pedal itself plays a rig of any registered effects that fits its CPU budget |
+| `[FILE]` | A rig (`.json` from the editor, a `.bin` sector) or a preset `.toml` (conflicts with `--from-dsl`) |
+| `--from-dsl <SPEC>` | A DSL chain instead of a file |
+| `-o, --output <FILE>` | Output file (required): `.json` writes JSON, any other extension the binary sector |
+| `-t, --topology <NAME>` | For a preset or DSL chain: `linear` (default) or `parallel` (all effects between one split/merge) |
+| `--name <NAME>` | Name the rig (default: the rig's own name, the preset's name, or `dsl`) |
+| `--pedal` | Fail unless the rig runs on the pedal: `sonido_patch::validate::validate_for_daisy`, the effect set and the CPU and memory rule the pedal itself enforces (warnings are printed; errors fail) |
 
 Up to 8 effects (`MAX_NODES`). Arbitrary split/merge graphs are authored in the GUI.
-This is the sector the pedal's rig bank holds: flashed over DFU to bank slot *n* at
-`0x907F0000 + n × 4096` (pedal in its bootloader), it appears in the pedal's rig list
-after the next boot (see `docs/EMBEDDED.md`, The Pedal).
-`inspect` prints the name, format version, globals, morph settings, each node's
-parameters (A/B where they differ), edges and active macros.
+The `.bin` is the sector the pedal's rig bank holds. To put a rig on the pedal, send
+it with [`sonido pedal push`](#pedal), which checks it the same way; the pedal plays
+it at once. `inspect` reads a `.bin` or `.json` rig and prints the name, format version,
+globals, morph settings, each node's parameters (A/B where they differ), edges and
+active macros.
 
 ### DSL Strings
 

@@ -40,7 +40,6 @@ The kernel architecture separates DSP math from parameter ownership:
           |  impl ParameterInfo           |  <- automatic
           |  impl EffectWithParams        |  <- blanket impl, free
           |  owns SmoothedParams          |  <- SmoothedPolicy only
-          |  K::LEVEL trim on the output  |  <- kernels without a mix
           |  load_snapshot()              |  <- preset recall
           |  snapshot()                   |  <- preset save
           +-------------------------------+
@@ -192,8 +191,10 @@ impl DspKernel for MyEffectKernel {
   and partly cancelling wets (`ρ < 0`) get the boost they need. `level::mix_gains` runs per
   sample, so it uses no transcendentals: a polynomial quarter-sine (within 6e-4 of the
   sine) and a bit-trick inverse square root (within 5 ppm).
-- **Without a mix control**, the kernel does nothing: the `Adapter` multiplies its output
-  by `LEVEL.trim` (`output_trim` in `crates/sonido-core/src/kernel/adapter.rs`).
+- **Without a mix control**, the kernel passes its sound through `Self::level` /
+  `Self::level_stereo` where it leaves the processing: before the output knob and any
+  `soft_limit`, so the limiter guards the final level. (The limiter kernel trims its input,
+  so its ceiling still holds.)
 - **Generated, never hand-tuned.** `crates/sonido-effects/src/calibration.rs` is written by
   `cargo run -p sonido-effects --example calibrate --release`, which plays
   `sonido_analysis::signals::reference_guitar` (a strummed guitar peaking at
@@ -380,8 +381,9 @@ Where this is used today:
 - **Standalone GUI** (`sonido-gui/src/morph_state.rs`) — its own A/B poses per
   effect, interpolated with `curve_lerp` / `MorphCurve`.
 - **Pedal firmware** (`sonido_pedal.rs`) — every rig, including the three-slot jam, has
-  an A and a B state; T2 selects A, B or Morph, and in Morph holding FS1/FS2 ramps toward
-  A or B through `PatchPlayer::set_morph_position`. The jam's A/B states are saved to
+  an A and a B state; T2 selects A, Morph (middle) or B, and in Morph an FS2 tap glides
+  to the other side through `PatchPlayer::set_morph_position` (a tap mid-glide turns
+  back). The jam's A/B states are saved to
   flash with the rest of the pedal state (`sonido_patch::pedal::PedalState`).
 
 ### Cross-effect morphing
@@ -544,10 +546,12 @@ default, so there is no per-effect noon table to fill. To let rigs use the effec
 pedal, add it to `crates/sonido-daisy/examples/bench_kernels.rs` and give it rows in
 `sonido-platform`'s `cycle_table.rs` (`EFFECT_CYCLES`, `EFFECT_SDRAM`), then fill its cycles
 from a hardware run with `scripts/update_cycle_table.py`; an effect without an entry never
-fits the CPU rule (`cycle_table::chain_fits`). To offer it in the jam as well, append it
-to `PEDAL_EFFECT_IDS` (`sonido-registry`) and give it a six-knob map in `sonido-platform`'s
-`knob_mapping.rs`; `crates/sonido-platform/tests/knob_calibration.rs` then checks its knobs
-(see `docs/EMBEDDED.md`).
+fits the CPU rule (`cycle_table::chain_fits`). To offer it in the jam as well, add it to
+`JAM_EFFECT_IDS` (`sonido-registry`) where its pick-knob zone should be, and give it a
+six-knob map in `sonido-platform`'s `knob_mapping.rs` (top row K1 K2 K3: an extra
+control, the mix, the output; bottom row K4 K5 K6: its three main controls);
+`crates/sonido-platform/tests/knob_calibration.rs` then checks its knobs (see
+`docs/EMBEDDED.md`).
 
 ### Step 7: Register in modules
 

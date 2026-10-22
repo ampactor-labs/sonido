@@ -58,12 +58,12 @@ egui node-graph editor compiling to both native desktop and `wasm32-unknown-unkn
 - Six performance macros (K1-K6) with per-mapping range, curve, and invert
 - A/B morph across the whole rig, curve-aware per parameter, with per-effect locks
 - Versioned JSON sessions (topology, params, snapshots, macros, morph) with undo/redo
-- Export: CLAP patch preset, portable JSON patch, Daisy pedal binary sector, or direct DFU flash
+- Export: CLAP patch preset, portable JSON patch, Daisy pedal binary sector, or Send to pedal over USB (by the rig's name)
 - Real-time audio via cpal (native) or WebAudio (wasm) over a lock-free atomic parameter bridge
 
 ### CLI
 
-12 commands: `process`, `realtime`, `effects`, `devices`, `generate`, `analyze`, `info`, `presets`, `play`, `compare`, `daisy`, `patch`.
+12 commands: `process`, `realtime`, `effects`, `devices`, `generate`, `analyze`, `info`, `presets`, `play`, `compare`, `patch`, `pedal`. `pedal` talks to the pedal over its USB rig link (info, list, push, pull, erase, play, update).
 
 ### Synthesis Engine
 
@@ -405,9 +405,9 @@ See ADR-025 in `docs/DESIGN_DECISIONS.md` for full architectural rationale.
 
 ### Pedal Firmware (Rig Player)
 
-**Status:** Complete; host tools for the USB rig link remain
+**Status:** Complete, with its host tools (`sonido_patch::client`, `sonido pedal`, the editor's Send to pedal). Assignable toggles in rigs remain.
 
-Pedal firmware on Hothouse/Daisy Seed (`crates/sonido-daisy/examples/sonido_pedal.rs`), a rig player: every sound is a `Patch` played by `PatchPlayer` with registry-built effects, as in the graph-player plugin. The rig list is the jam (three slots, each one of 8 effects or empty; T1 selects the slot, T3 the topology: linear 1→2→3, parallel split, fan 1→[2,3]), up to 15 rigs in the QSPI rig bank, and the six factory rigs (`crates/sonido-rigs`); FS holds step through it and it powers on into the last rig played. T2 selects A / B / Morph for any rig; on a rig the knobs are its six macros, in the jam they edit the selected slot's A or B (Morph: K5 morph time 0.1–5 s, K6 master −60..+12 dB). The jam, active rig and tapped tempo are saved to a flash state sector; the USB rig link (`sonido_patch::link`) reads, writes and activates bank rigs while it plays. LED 2 blinks the rig's position or a refusal's error code, shows the morph position as PWM in Morph mode and the output level otherwise. See `docs/EMBEDDED.md`.
+Pedal firmware on Hothouse/Daisy Seed (`crates/sonido-daisy/examples/sonido_pedal.rs`), a rig player: every sound is a `Patch` played by `PatchPlayer` with registry-built effects, as in the graph-player plugin. The rig list is the jam (three slots, each one of 8 effects or empty; T1 selects the slot, T3 the topology: linear 1→2→3, parallel split, fan 1→[2,3]), up to 15 rigs in the QSPI rig bank, and the six factory rigs (`crates/sonido-rigs`); a footswitch held 0.4 s steps through it (FS1 back, FS2 forward) and it powers on into the last rig played. One control rule (ADR-032): FS1 tap is on/off, FS2 tap is tap tempo (with T2 in the middle, a glide between A and B); the top row of knobs is levels, K3 always a volume, and the bottom row the sound. T2 is A / Morph / B for any rig; on a rig the knobs are its six macros, in the jam they edit the selected slot's A or B, and with T2 in the middle they are the jam's setup page (K1 input, K2 morph time, K3 master; K4–K6 pick slot 1–3's effect). The jam, its settings, the active rig and the tapped tempo are saved to a flash state sector; the USB rig link (`sonido_patch::link`) reads, writes and activates bank rigs while it plays, and restarts the pedal into its bootloader for a firmware update. LED 2 blinks the rig's position or a refusal's error code, shows the morph position as PWM with T2 in the middle and the output level otherwise. See `docs/EMBEDDED.md`.
 
 ---
 
@@ -460,6 +460,7 @@ Hardware interface features required for production pedal deployment on Hothouse
 - Footswitch long-press cycles through parameter pages
 - LED blink pattern indicates current page (1 blink = page 1, 2 blinks = page 2, etc.)
 - Each page maps 6 knobs to different parameters — extends 6-knob hardware to 18-36 parameters
+- Since ADR-032 a footswitch hold changes rig, so pages would need another control; the jam's setup page (T2 in the middle) is the one page that exists
 
 **Debounce utility:**
 - Software debounce for toggles and footswitches (configurable, default 30ms)

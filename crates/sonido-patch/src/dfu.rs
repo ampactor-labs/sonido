@@ -2,7 +2,7 @@
 //!
 //! The pedal restarts into its bootloader on the rig link's
 //! [`Request::Bootloader`](crate::link::Request::Bootloader) (`sonido pedal
-//! update`, the editor), or when both footswitches are held at power-on. The
+//! update`), or when both footswitches are held at power-on. The
 //! Daisy bootloader then lists its QSPI flash at `0x90000000`, and firmware
 //! goes to [`FIRMWARE_ADDR`]. Holding BOOT through RESET starts the chip's ROM
 //! bootloader instead, which has the same USB id but cannot reach QSPI flash,

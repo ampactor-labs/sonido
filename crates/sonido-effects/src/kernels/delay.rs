@@ -168,7 +168,8 @@ pub struct DelayParams {
 }
 
 impl Default for DelayParams {
-    /// Defaults match the original pre-kernel `Delay` effect's descriptor defaults exactly.
+    /// The voiced defaults (what a pedal knob gives at noon); `default_parity`
+    /// holds them equal to the descriptor defaults.
     fn default() -> Self {
         Self {
             time_ms: 380.0,
@@ -460,8 +461,8 @@ impl DelayKernel {
             cached_hp_freq: 20.0,
             cached_diffusion: 0.0,
             cached_ping_pong: false,
-            cached_delay_samples: 300.0 / 1000.0 * sample_rate, // default 300 ms
-            cached_feedback: 0.4,                               // default 40 %
+            cached_delay_samples: DelayParams::default().time_ms / 1000.0 * sample_rate,
+            cached_feedback: DelayParams::default().feedback_pct / 100.0,
         }
     }
 
@@ -658,6 +659,17 @@ impl DspKernel for DelayKernel {
         self.diffusion_ap2_l = AllpassFilter::new(ap2.max(1));
         self.diffusion_ap1_r = AllpassFilter::new(ap1.max(1));
         self.diffusion_ap2_r = AllpassFilter::new(ap2.max(1));
+        // New allpasses start at their default feedback; keep the diffusion
+        // amount the cache says they have.
+        let ap_feedback = self.cached_diffusion * 0.6;
+        for ap in [
+            &mut self.diffusion_ap1_l,
+            &mut self.diffusion_ap2_l,
+            &mut self.diffusion_ap1_r,
+            &mut self.diffusion_ap2_r,
+        ] {
+            ap.set_feedback(ap_feedback);
+        }
 
         // Update one-pole filter sample rates and recalculate cached LP frequency.
         self.feedback_lp_l.set_sample_rate(sample_rate);

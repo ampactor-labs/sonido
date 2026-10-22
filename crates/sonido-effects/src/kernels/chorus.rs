@@ -714,7 +714,7 @@ mod tests {
 
     /// At 0% mix the output must approximate the dry input.
     ///
-    /// With `mix_pct = 0.0` the `wet_dry_mix_stereo` function returns the dry
+    /// With `mix_pct = 0.0` the blend (`Self::blend_stereo`) returns the dry
     /// signal. The subsequent `soft_limit` is transparent for signals below 1.0,
     /// and the default output level is 0 dB (unity gain).
     #[test]

@@ -193,8 +193,14 @@ pub fn run(args: PedalArgs) -> anyhow::Result<()> {
             println!("Playing {}.", rig_label(target, &info));
         }
         PedalCommand::Update { firmware } => {
-            open()?.enter_bootloader()?;
-            println!("The pedal is restarting into its bootloader.");
+            // Already there (both footswitches held at power-on)? Then there
+            // is no serial port to ask.
+            let waiting =
+                dfu::list_devices().is_ok_and(|devices| dfu::firmware_alt(&devices).is_some());
+            if !waiting {
+                open()?.enter_bootloader()?;
+                println!("The pedal is restarting into its bootloader.");
+            }
             let Some(bin) = firmware else {
                 println!(
                     "Flash it with: dfu-util -a 0 -s 0x{:08X}:leave -D sonido_pedal.bin",

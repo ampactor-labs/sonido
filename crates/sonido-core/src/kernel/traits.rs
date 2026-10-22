@@ -471,11 +471,31 @@ pub trait DspKernel: Send {
     type Params: KernelParams;
 
     /// This kernel's measured level calibration: its trim, and its wet/dry
-    /// correlation if it has a mix control (see [`crate::level`]). The
-    /// adapter applies the trim to the output of kernels without a mix
-    /// control; kernels with one blend through [`blend`](Self::blend).
-    /// Generated, never hand-tuned.
+    /// correlation if it has a mix control (see [`crate::level`]). Kernels
+    /// with a mix control apply it in [`blend`](Self::blend), kernels
+    /// without one with [`level`](Self::level); either way where the sound
+    /// leaves the processing, before the output knob and any safety limiter,
+    /// so the limiter guards the final level. Generated, never hand-tuned.
     const LEVEL: Level = Level::UNITY;
+
+    /// `x` at this kernel's calibrated level, for a kernel without a mix
+    /// control (one with a mix control is trimmed in [`blend`](Self::blend)).
+    #[inline]
+    fn level(x: f32) -> f32
+    where
+        Self: Sized,
+    {
+        x * Self::LEVEL.trim
+    }
+
+    /// [`level`](Self::level) for a stereo pair.
+    #[inline]
+    fn level_stereo(left: f32, right: f32) -> (f32, f32)
+    where
+        Self: Sized,
+    {
+        (left * Self::LEVEL.trim, right * Self::LEVEL.trim)
+    }
 
     /// Blend `dry` and `wet` by `mix` (0–1) at this kernel's calibrated level.
     #[inline]

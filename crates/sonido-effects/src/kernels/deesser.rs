@@ -308,7 +308,7 @@ impl DspKernel for DeesserKernel {
         let gr =
             self.compute_gain_reduction(detection, params.thresh_db, params.ratio, params.range_db);
 
-        flush_denormal(input * gr) * fast_db_to_linear(params.output_db)
+        Self::level(flush_denormal(input * gr) * fast_db_to_linear(params.output_db))
     }
 
     /// Process a stereo sample pair through the de-esser.
@@ -327,7 +327,7 @@ impl DspKernel for DeesserKernel {
             self.compute_gain_reduction(detection, params.thresh_db, params.ratio, params.range_db);
         let output_gain = fast_db_to_linear(params.output_db);
 
-        (
+        Self::level_stereo(
             flush_denormal(left * gr) * output_gain,
             flush_denormal(right * gr) * output_gain,
         )
@@ -353,7 +353,7 @@ impl DspKernel for DeesserKernel {
             self.compute_gain_reduction(sc_mid, params.thresh_db, params.ratio, params.range_db);
         let output_gain = fast_db_to_linear(params.output_db);
 
-        (
+        Self::level_stereo(
             flush_denormal(left * gr) * output_gain,
             flush_denormal(right * gr) * output_gain,
         )

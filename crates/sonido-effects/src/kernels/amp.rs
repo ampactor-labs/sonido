@@ -621,7 +621,7 @@ impl DspKernel for AmpKernel {
             output_linear,
         );
 
-        (out_l, out_r)
+        Self::level_stereo(out_l, out_r)
     }
 
     fn reset(&mut self) {

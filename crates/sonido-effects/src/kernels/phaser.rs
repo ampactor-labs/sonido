@@ -459,7 +459,8 @@ impl DspKernel for PhaserKernel {
     ///    Each stage is slightly offset by `1 + i·0.1` for a richer sound.
     /// 5. **Feedback + allpass cascade** — input mixed with `feedback_pct`% of the
     ///    previous cascade output, then processed through N active stages.
-    /// 6. **Mix + output** — `feedback_wet_compensation` + `wet_dry_mix` + output gain.
+    /// 6. **Mix + output** — `feedback_wet_compensation` + the level blend
+    ///    (`Self::blend_stereo`) + output gain.
     fn process_stereo(&mut self, left: f32, right: f32, params: &PhaserParams) -> (f32, f32) {
         // ── Unit conversion (user-facing → internal) ──
         let depth = params.depth_pct / 100.0;

@@ -443,7 +443,7 @@ mod tests {
 
     /// At 0% mix, output should equal the dry input (scaled only by output level).
     ///
-    /// When mix = 0, wet_dry_mix returns only the dry signal unchanged.
+    /// When mix = 0, the blend returns only the dry signal unchanged.
     #[test]
     fn dry_mix_passes_input() {
         let mut kernel = RingModKernel::new(48000.0);

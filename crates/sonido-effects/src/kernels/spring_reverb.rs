@@ -349,40 +349,20 @@ pub struct SpringReverbKernel {
     feedback_gain: f32,
     /// Current feedback delay length in samples.
     feedback_delay_len: f32,
-    /// Total delay of the dispersion allpasses (fixed at construction), which
-    /// sit inside the feedback loop.
+    /// Total delay of the dispersion allpasses (set by tension), which sit
+    /// inside the feedback loop.
     chain_len: f32,
-    /// Current allpass delay lengths in samples.
-    allpass_lens: [usize; NUM_ALLPASSES],
 }
 
 impl SpringReverbKernel {
     /// Create a new spring reverb kernel at the given sample rate.
     pub fn new(sample_rate: f32) -> Self {
-        // Allpass delay lengths at default tension (50%)
-        let allpass_lens: [usize; NUM_ALLPASSES] =
-            core::array::from_fn(|i| tension_scaled_len(ALLPASS_LENS_44K[i], 50.0, sample_rate));
-
-        // Allocate allpasses at maximum size (tension=0% → 2× base)
-        let allpasses: [AllpassFilter; NUM_ALLPASSES] = core::array::from_fn(|i| {
-            let max_len = scale(ALLPASS_LENS_44K[i], sample_rate) * 3 + 4;
-            let mut ap = AllpassFilter::new(max_len);
-            ap.set_feedback(ALLPASS_FB);
-            ap
-        });
-
         let fb_delay = InterpolatedDelay::new(MAX_FB_DELAY_SAMPLES);
         let fb_damp = OnePole::new(sample_rate, damp_to_hz(50.0));
-
-        // Each allpass delays by its capacity − 1 samples.
-        let chain_len: f32 = (0..NUM_ALLPASSES)
-            .map(|i| (scale(ALLPASS_LENS_44K[i], sample_rate) * 3 + 3) as f32)
-            .sum();
-        let feedback_delay_len = decay_to_delay_len(2.0, sample_rate);
-        let feedback_gain = decay_to_gain(2.0, feedback_delay_len + chain_len + 1.0, sample_rate);
-
+        // The caches start empty (NaN): the first block sets every length and
+        // coefficient from its parameters.
         Self {
-            allpasses,
+            allpasses: Self::dispersion_chain(sample_rate),
             fb_delay,
             fb_damp,
             fb_state: 0.0,
@@ -390,37 +370,48 @@ impl SpringReverbKernel {
             cached_decay: f32::NAN,
             cached_tension: f32::NAN,
             cached_damp: f32::NAN,
-            feedback_gain,
-            feedback_delay_len,
-            chain_len,
-            allpass_lens,
+            feedback_gain: 0.0,
+            feedback_delay_len: decay_to_delay_len(2.0, sample_rate),
+            chain_len: 0.0,
         }
+    }
+
+    /// The six dispersion allpasses, each with room for its loosest length
+    /// (tension 0%: twice the base).
+    fn dispersion_chain(sample_rate: f32) -> [AllpassFilter; NUM_ALLPASSES] {
+        core::array::from_fn(|i| {
+            let mut ap =
+                AllpassFilter::new(tension_scaled_len(ALLPASS_LENS_44K[i], 0.0, sample_rate));
+            ap.set_feedback(ALLPASS_FB);
+            ap
+        })
     }
 
     /// Recompute cached coefficients when parameters change by more than epsilon.
     #[inline]
     fn update_derived(&mut self, decay_s: f32, tension_pct: f32, damp_pct: f32) {
         let eps = 0.001;
-        if needs_update(self.cached_decay, decay_s, eps) {
+        let tension_changed = needs_update(self.cached_tension, tension_pct, eps);
+        if tension_changed {
+            // Tension sets the dispersion lengths: tight springs chirp short
+            // and bright, loose ones long and boingy.
+            self.cached_tension = tension_pct;
+            self.chain_len = 0.0;
+            for (i, ap) in self.allpasses.iter_mut().enumerate() {
+                ap.set_length(tension_scaled_len(
+                    ALLPASS_LENS_44K[i],
+                    tension_pct,
+                    self.sample_rate,
+                ));
+                self.chain_len += ap.length() as f32;
+            }
+        }
+        if tension_changed || needs_update(self.cached_decay, decay_s, eps) {
             self.cached_decay = decay_s;
             self.feedback_delay_len = decay_to_delay_len(decay_s, self.sample_rate);
             // One trip: the allpass chain, the feedback delay, one sample of state.
             let loop_len = self.chain_len + self.feedback_delay_len + 1.0;
             self.feedback_gain = decay_to_gain(decay_s, loop_len, self.sample_rate);
-        }
-        if needs_update(self.cached_tension, tension_pct, eps) {
-            self.cached_tension = tension_pct;
-            for i in 0..NUM_ALLPASSES {
-                self.allpass_lens[i] =
-                    tension_scaled_len(ALLPASS_LENS_44K[i], tension_pct, self.sample_rate);
-                // AllpassFilter uses fixed delay — we update feedback coeff here
-                // (length changes require reconstruction — we use max capacity
-                //  and update the read pointer indirectly via feedback)
-                // For now: tension only adjusts allpass feedback to simulate tightness
-                let tightness = tension_pct * 0.01;
-                let adjusted_fb = ALLPASS_FB * (1.0 - tightness * 0.3); // 0.7 → 0.49
-                self.allpasses[i].set_feedback(adjusted_fb);
-            }
         }
         if needs_update(self.cached_damp, damp_pct, eps) {
             self.cached_damp = damp_pct;
@@ -491,6 +482,7 @@ impl DspKernel for SpringReverbKernel {
 
     fn set_sample_rate(&mut self, sample_rate: f32) {
         self.sample_rate = sample_rate;
+        self.allpasses = Self::dispersion_chain(sample_rate);
         // Reset caches to force recomputation
         self.cached_decay = f32::NAN;
         self.cached_tension = f32::NAN;
@@ -528,6 +520,34 @@ mod tests {
             assert!(l.is_finite(), "left output is not finite on silence");
             assert!(r.is_finite(), "right output is not finite on silence");
         }
+    }
+
+    /// Tension sets the dispersion lengths: a tight spring's echo energy
+    /// gathers sooner than a loose one's (the first arrival is the feedback
+    /// delay either way, through the allpasses' direct path).
+    #[test]
+    fn tension_sets_the_dispersion_lengths() {
+        let centroid = |tension_pct: f32| {
+            let mut kernel = SpringReverbKernel::new(48_000.0);
+            let params = SpringReverbParams {
+                tension_pct,
+                mix_pct: 100.0,
+                ..Default::default()
+            };
+            let (mut weighted, mut total) = (0.0f64, 0.0f64);
+            for n in 0..24_000 {
+                let x = if n == 0 { 1.0 } else { 0.0 };
+                let e = f64::from(kernel.process_stereo(x, x, &params).0).powi(2);
+                weighted += e * n as f64;
+                total += e;
+            }
+            weighted / total
+        };
+        let (tight, loose) = (centroid(100.0), centroid(0.0));
+        assert!(
+            tight < loose,
+            "tight {tight:.0} should gather before loose {loose:.0}"
+        );
     }
 
     #[test]

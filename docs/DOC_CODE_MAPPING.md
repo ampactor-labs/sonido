@@ -37,7 +37,7 @@ When you modify a source file, you **must** update every documentation target li
 | `crates/sonido-synth/src/envelope.rs` | `docs/SYNTHESIS.md` | ADSR stages, curve shapes, gate behavior |
 | `crates/sonido-synth/src/voice.rs` | `docs/SYNTHESIS.md` | Voice allocation, stealing policy |
 | `crates/sonido-synth/src/mod_matrix.rs` | `docs/SYNTHESIS.md` | Routing, source/destination IDs, depth scaling |
-| `crates/sonido-registry/src/lib.rs` | `docs/ARCHITECTURE.md` (sonido-registry), `docs/DESIGN_DECISIONS.md` ADR-011 | Registration API, create-by-name pattern, `EFFECT_UIDS` |
+| `crates/sonido-registry/src/lib.rs` | `docs/ARCHITECTURE.md` (sonido-registry), `docs/DESIGN_DECISIONS.md` ADR-011, `docs/EMBEDDED.md` (Jam Effect List and Knob Mapping) | Registration API, create-by-name pattern, `EFFECT_UIDS`, `JAM_EFFECT_IDS` (the jam's pick order) |
 | `crates/sonido-analysis/src/cfc.rs` | `docs/reference/biosignal.md`, `docs/reference/cfc-analysis.md` | PAC algorithm, comodulogram, surrogate stats |
 | `crates/sonido-analysis/src/filterbank.rs` | `docs/reference/biosignal.md` | EEG band definitions, filter bank design |
 | `crates/sonido-analysis/src/hilbert.rs` | `docs/reference/biosignal.md` | Analytic signal, instantaneous phase/amplitude |
@@ -47,14 +47,16 @@ When you modify a source file, you **must** update every documentation target li
 | `crates/sonido-platform/tests/knob_calibration.rs` | `docs/EMBEDDED.md` (Knob Mapping Verification), `docs/TESTING.md` | Noon and knob-extreme loudness tolerances |
 | `crates/sonido-io/src/*.rs` | `docs/ARCHITECTURE.md` (sonido-io section), `docs/DESIGN_DECISIONS.md` ADR-023 | AudioBackend trait, CpalBackend, StreamHandle, BackendStreamConfig, WAV API |
 | `crates/sonido-cli/src/main.rs`, `commands/*.rs` | `docs/CLI_GUIDE.md`, `docs/CLI_TESTING.md`, `docs/ARCHITECTURE.md` (sonido-cli) | Command syntax, flags, examples |
+| `crates/sonido-cli/src/commands/pedal.rs`, `commands/patch.rs` | `docs/CLI_GUIDE.md` (pedal, Rig Export), `docs/EMBEDDED.md` (USB Rig Link, Bypass and Bootloader), `docs/PATCH_PLATFORM.md`, `README.md` | `sonido pedal` subcommands and `--port`, `patch export` inputs/outputs and `--pedal` |
 | `crates/sonido-graph-dsl/src/*.rs` | `docs/CLI_GUIDE.md` (graph syntax) | DSL grammar, split/merge semantics, topology examples, effect alias resolution |
 | `crates/sonido-patch/src/*.rs` | `docs/PATCH_PLATFORM.md` | Patch model, binary codec, `PatchPlayer`, `build_graph_from_patch` |
-| `crates/sonido-patch/src/pedal.rs`, `link.rs` | `docs/EMBEDDED.md` (The Pedal: Flash, USB Rig Link), `docs/PATCH_PLATFORM.md` | `PedalState` sector layout, jam patch, `RigRef` bytes, link frame/requests/error codes |
+| `crates/sonido-patch/src/pedal.rs`, `link.rs` | `docs/EMBEDDED.md` (The Pedal: The Jam, Flash, USB Rig Link), `docs/PATCH_PLATFORM.md` | `PedalState` sector layout, jam patch, `JamSettings`, `RigRef` bytes, link frame/requests (incl. `Bootloader`)/error codes |
+| `crates/sonido-patch/src/client.rs`, `dfu.rs` (moved from `sonido-gui`), `validate.rs` (`validate_for_daisy`) | `docs/EMBEDDED.md` (USB Rig Link, Bypass and Bootloader), `docs/PATCH_PLATFORM.md`, `docs/ARCHITECTURE.md` (sonido-patch), `docs/CLI_GUIDE.md` (pedal), `docs/GUI.md` (Export) | `LinkClient`, `send_rig` slot rule, `open_pedal`/`pedal_ports` (`serial` feature, USB id), firmware DFU (Daisy bootloader only, `FIRMWARE_ADDR`), the one pedal check |
 | `crates/sonido-rigs/src/*.rs`, `examples/calibrate.rs`, `tests/factory.rs` | `docs/EMBEDDED.md` (Factory Rigs), `docs/ARCHITECTURE.md` (sonido-rigs), `docs/PATCH_PLATFORM.md`, `README.md` | Rig list, signal paths, K1–K6 macros, generated trims (regenerate: `cargo run -p sonido-rigs --example calibrate --release`), test tolerances |
 | `crates/sonido-gui/src/graph_view.rs` | `docs/GUI.md`, `docs/ARCHITECTURE.md` | Visual node-graph editor, Snarl topology, compile_to_engine |
 | `crates/sonido-gui/src/morph_state.rs` | `docs/GUI.md`, `docs/PATCH_PLATFORM.md` | A/B morph poses, per-effect locks, `curve_lerp` interpolation |
-| `crates/sonido-gui/src/app.rs` | `docs/GUI.md`, `docs/PATCH_PLATFORM.md` (macros, morph, export) | GUI features, layout, controls |
-| `crates/sonido-gui/src/session.rs`, `export.rs`, `dfu.rs` | `docs/PATCH_PLATFORM.md` | Session version, patch projection, export destinations, DFU addresses |
+| `crates/sonido-gui/src/app.rs` | `docs/GUI.md`, `docs/PATCH_PLATFORM.md` (macros, morph, export) | GUI features, layout, controls, the Export menu (rig Name, Send to pedal) |
+| `crates/sonido-gui/src/session.rs`, `export.rs` | `docs/PATCH_PLATFORM.md`, `docs/GUI.md` (Sessions, Export) | Session version and fields (`name`), patch projection, export destinations |
 | `crates/sonido-gui/src/signal_generator.rs` | `docs/GUI.md` (Signal Generator section) | Signal types, SourceMode, generator controls |
 | `crates/sonido-gui-core/src/effects_ui/*.rs` | `docs/GUI.md` (Effects Reference, Generic Effect Panels) | `GenericPanel`, `LooperPanel`, `create_panel()` dispatch |
 | `crates/sonido-gui-core/src/theme.rs`, `cabinet.rs`, `widgets/*.rs` | `docs/DESIGN_SYSTEM.md`, `docs/ARCHITECTURE.md` (sonido-gui-core) | Tokens, Cabinet layout, widget list |
@@ -62,17 +64,17 @@ When you modify a source file, you **must** update every documentation target li
 | `scripts/bundle-clap.sh`, `scripts/bundle-vst3.sh`, `Makefile` (`plugins`, `plugins-vst3`) | `docs/GETTING_STARTED.md`, `docs/ARCHITECTURE.md` (sonido-plugin) | Bundle paths, install locations, build deps |
 | `crates/sonido-config/src/*.rs` | `docs/CLI_GUIDE.md` (presets, Preset Files), `docs/ARCHITECTURE.md` (sonido-config) | Preset format, config paths, validation, factory presets, `preset_to_patch` |
 | Any new crate | `docs/ARCHITECTURE.md` (crate diagram + responsibilities) | Crate purpose, no_std status, dependency position |
-| `crates/sonido-core/src/kernel/traits.rs`, `adapter.rs` | `docs/ARCHITECTURE.md` (Kernel Architecture), `docs/KERNEL_ARCHITECTURE.md`, `docs/DESIGN_DECISIONS.md` ADR-028 | DspKernel (`LEVEL`, `blend`, `blend_stereo`), KernelParams, SmoothingStyle, Adapter (SmoothedPolicy / DirectPolicy, `output_trim`) |
+| `crates/sonido-core/src/kernel/traits.rs`, `adapter.rs` | `docs/ARCHITECTURE.md` (Kernel Architecture), `docs/KERNEL_ARCHITECTURE.md`, `docs/DESIGN_DECISIONS.md` ADR-028 | DspKernel (`LEVEL`, `blend`, `blend_stereo`, `level`, `level_stereo`), KernelParams, SmoothingStyle, Adapter (SmoothedPolicy / DirectPolicy) |
 | `crates/sonido-core/src/kernel/morph.rs`, `chain_morph.rs`, `macro_map.rs` | `docs/KERNEL_ARCHITECTURE.md`, `docs/PATCH_PLATFORM.md` | MorphCurve, curve_lerp, ChainMorph, MacroMap |
 | `crates/sonido-effects/src/kernels/*.rs` | `docs/EFFECTS_REFERENCE.md` (Kernel Architecture), `docs/KERNEL_ARCHITECTURE.md` | Kernel implementations, parameter tables, from_knobs() |
 | `crates/sonido-core/src/compose.rs` | `docs/KERNEL_ARCHITECTURE.md` | `seq`, `par`, `feedback` combinators, `GraphBuilder` API |
 | `crates/sonido-core/src/graph/` | `docs/ARCHITECTURE.md` (DAG Processing), `docs/DESIGN_DECISIONS.md` ADR-025 | Node types, buffer pool, topological sort, `ProcessingGraph` API |
 | `crates/sonido-core/src/graph/engine.rs` | `docs/ARCHITECTURE.md` (DAG Processing), `docs/DESIGN_DECISIONS.md` ADR-027 | `GraphEngine` API and consumers |
 | `crates/sonido-gui/src/chain_manager.rs`, `audio_processor.rs`, `atomic_param_bridge.rs` | `docs/ARCHITECTURE.md` (Parameter Threading Model), `docs/GUI.md` | `GraphCommand` enum (Add/Remove/ReplaceTopology), param sync, memory ordering |
-| `crates/sonido-platform/src/param_map.rs`, `knob_mapping.rs` | `docs/EMBEDDED.md` (Biased Knob Mapping, Knob Mapping Verification), `docs/DESIGN_DECISIONS.md` ADR-030, `crates/sonido-effects/tests/noon_mapping.rs` | Biased mapping algorithm (noon = descriptor default), knob floors |
+| `crates/sonido-platform/src/param_map.rs`, `knob_mapping.rs` | `docs/EMBEDDED.md` (Biased Knob Mapping, Knob Mapping Verification, Jam Effect List and Knob Mapping), `docs/DESIGN_DECISIONS.md` ADR-030 and ADR-032, `crates/sonido-effects/tests/noon_mapping.rs` | Biased mapping algorithm (noon = descriptor default), knob floors, every `knob_map` (top row levels with K3 the output, bottom row the sound) |
 | `crates/sonido-daisy/src/*.rs` | `docs/EMBEDDED.md` | Firmware lib, DWT helpers, audio constants, `heartbeat` task, SDRAM init, clock profiles, knob hysteresis (`controls.rs`) |
 | `crates/sonido-daisy/src/qspi_flash.rs`, `patch_loader.rs`, `rigs.rs`, `build.rs` | `docs/EMBEDDED.md` (The Pedal: Loading a Rig, Real-Time Hardening, Flash), `docs/PATCH_PLATFORM.md` | Rig bank layout, page-chunked reads, `check_rig`, blink codes, factory rigs encoded at build time |
-| `crates/sonido-daisy/examples/sonido_pedal.rs` | `docs/EMBEDDED.md` (The Pedal (Rig Player)), `docs/ARCHITECTURE.md` (Hardware Targets), `README.md` | Rig list, controls table, jam, loading, state save, USB link, LEDs, load meter |
+| `crates/sonido-daisy/examples/sonido_pedal.rs` | `docs/EMBEDDED.md` (The Pedal (Rig Player)), `docs/ARCHITECTURE.md` (Hardware Targets), `docs/DESIGN_DECISIONS.md` ADR-032, `README.md` | Rig list, controls tables (the control rule), jam setup page and picks, bootloader gestures, loading, state save, USB link, LEDs, load meter |
 | `crates/sonido-daisy/examples/*.rs` | `docs/EMBEDDED.md` (Tier System, Getting Started, Diagnostics), `docs/PATCH_PLATFORM.md` (firmware integration) | bench_kernels, bench_mini, blinky, blinky_bare, convert_passthrough, graph_audio_test, heap_test, hothouse_diag, passthrough, passthrough_blink, qspi_test, silence, simple_gain, single_delay, single_effect, single_reverb, sonido_pedal, square_out, tone_out |
 | `LICENSE` (AGPL-3.0), `LICENSING.md` | `README.md` (License section) | License text, AGPL-3.0 + commercial dual-license references |
 | `docs/reference/signature-sounds.md` | `docs/ROADMAP.md` (cross-reference) | Brainstorming candidates, interaction patterns |

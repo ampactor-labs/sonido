@@ -55,11 +55,12 @@
 //!
 //! # Usage
 //!
-//! Effects are deployed via [`Adapter`](sonido_core::kernel::Adapter): the smoothing
-//! adapter (`Adapter::new`) for desktop/plugin use, and the zero-smoothing
-//! `Adapter::new_direct` (`DirectPolicy`) on embedded targets. The shipping Daisy
-//! pedal firmware wraps every kernel in `Adapter::new_direct`; only a few
-//! single-effect test examples call [`DspKernel`](sonido_core::DspKernel) directly.
+//! Effects are deployed via [`Adapter`](sonido_core::kernel::Adapter), built by
+//! the registry with the smoothing adapter (`Adapter::new`) for every target:
+//! plugins, the editor and the pedal firmware. The zero-smoothing
+//! `Adapter::new_direct` (`DirectPolicy`) and direct
+//! [`DspKernel`](sonido_core::DspKernel) calls are for single-effect examples
+//! and tests.
 //!
 //! ## Desktop / Plugin (via Adapter)
 //!
@@ -88,14 +89,14 @@
 //! }
 //! ```
 //!
-//! ## Embedded / Daisy Seed (via `Adapter::new_direct`, as in the pedal firmware)
+//! ## Direct writes (via `Adapter::new_direct`, as in the single-effect examples)
 //!
 //! ```rust,ignore
 //! use sonido_core::{Effect, ParameterInfo};
 //! use sonido_core::kernel::Adapter;
 //! use sonido_effects::kernels::DistortionKernel;
 //!
-//! // Same Effect + ParameterInfo interface as desktop, no per-sample smoothing
+//! // Same Effect + ParameterInfo interface, no per-sample smoothing
 //! let mut dist = Adapter::new_direct(DistortionKernel::new(48000.0), 48000.0);
 //! dist.set_param(0, 15.0); // drive_db, applied on the next sample
 //! let (left, right) = dist.process_stereo(input_l, input_r);
