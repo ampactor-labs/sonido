@@ -20,6 +20,7 @@ sonido-synth = { workspace = true, features = ["std"] }
 sonido-graph-dsl = { workspace = true }
 sonido-patch = { workspace = true, features = ["std", "serial"] }
 sonido-rigs = { workspace = true }
+sonido-platform = { workspace = true, features = ["std"] }
 
 clap = { workspace = true }
 serde = { workspace = true }

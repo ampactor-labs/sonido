@@ -850,11 +850,15 @@ start in the jam). The list wraps around, in this order:
    the image (`src/rigs.rs`, see [Factory Rigs](#factory-rigs)).
 
 Hold a footswitch to step through the list (FS1 back, FS2 forward), in any T2
-position; LED 2 then blinks the rig's position (the jam is 1).
+position; LED 1 then blinks the rig's position (the jam is 1).
 
 ### Controls
 
-The exact controls (`controls()` in `sonido_pedal.rs`) follow one rule for the
+`sonido pedal controls` prints this whole section as a card, drawn from the code
+that runs it: what every footswitch press, toggle, knob page, LED and power-on
+gesture does lives in `crates/sonido-patch/src/controls.rs`, and the firmware's
+control tick (`control_tick()` in `sonido_pedal.rs`) dispatches through those
+functions, so the card can't drift from the pedal. The controls follow one rule for the
 footswitches, in every rig and every T2 position: the left one is on/off, the right
 one is time, and holding either changes rig. And one rule for the knobs: the top
 row (K1 K2 K3) is levels, with K3 (top right) always a volume, and the bottom row
@@ -864,7 +868,7 @@ row (K1 K2 K3) is levels, with K3 (top right) always a volume, and the bottom ro
 |---------|------------|
 | FS1 tap | On/off: bypass crossfades to the dry input (5 ms) while the rig keeps running |
 | FS1 hold | Previous rig, at 0.4 s, while still held |
-| FS2 tap | Tap tempo (LED 1 flashes it; in the jam the delay's time follows it). With T2 in the middle: glide to the other side of the morph; a tap mid-glide turns back |
+| FS2 tap | Tap tempo (LED 2 flashes it; in the jam the delay's time follows it). With T2 in the middle: glide to the other side of the morph; a tap mid-glide turns back |
 | FS2 hold | Next rig, at 0.4 s, while still held |
 | T2 | Up A, middle Morph, down B |
 
@@ -919,7 +923,7 @@ rested in its zone for 0.3 s (`PICK_SETTLE_TICKS` = 30 polls), so sweeping past
 effects does not build each one. A newly picked effect starts at its voiced defaults
 (what noon gives on every knob), with A and B equal. A pick that would take the jam
 past the pedal's CPU rule (`cycle_table::chain_fits`, see
-[Chain Configurations](#chain-configurations)) is refused, and LED 2 blinks 4 (over
+[Chain Configurations](#chain-configurations)) is refused, and LED 1 blinks 4 (over
 budget); with a reverb loaded that rules out a second reverb, and next to reverb and
 distortion only filter, ringmod or bitcrusher fit.
 
@@ -1021,7 +1025,7 @@ A rig change (footswitch hold, a jam pick or T3, USB) is a request the
    decoded from the image, and either is checked with `patch_loader::check_rig`
    (every effect available, routing valid, CPU within `CHAIN_FRACTION`, SDRAM
    within budget) *before* the old rig stops. A refused rig leaves the current
-   one playing, and LED 2 blinks the reason (`error_blink_code`): 2 = empty or
+   one playing, and LED 1 blinks the reason (`error_blink_code`): 2 = empty or
    corrupt slot, 3 = an effect this firmware lacks, 4 = too heavy for the CPU or
    memory, 5 = routing that does not build.
 2. **Ramp to dry.** `UPDATING` makes the audio callback crossfade to the dry input
@@ -1036,7 +1040,7 @@ A rig change (footswitch hold, a jam pick or T3, USB) is a request the
 5. `UPDATING` clears and the callback ramps back to the rig. A rig whose graph
    does not build falls back to the jam.
 
-On success LED 2 blinks the rig's position, and the active rig is marked for the
+On success LED 1 blinks the rig's position, and the active rig is marked for the
 next state save.
 
 ### Real-Time Hardening
@@ -1177,12 +1181,17 @@ bootloader then starts whatever is in QSPI.
 
 | LED | Meaning |
 |-----|---------|
-| LED1 | On while the pedal is active, dark for 70 ms on every tapped beat (`BEAT_FLASH_S`); off in bypass |
-| LED2 | Blinks the rig's position after a rig change, or an error code for a refused rig or a refused jam pick (4: over budget). Otherwise: T2 in the middle, duty cycle = morph position (10-poll software PWM); T2 up or down, output level meter. Off in bypass |
+| LED1 (over FS1, on/off) | Lit while the pedal is on, dark when off. Blinks the rig's position after a rig change, or an error code for a refused rig or a refused jam pick (4: over budget) |
+| LED2 (over FS2, time) | T2 up or down: a 70 ms flash on every beat of the tapped tempo (`BEAT_FLASH_S`). T2 in the middle, where FS2 glides: dark at A, lit at B, flickering while it glides. Dark when off |
 
-LED duty is approximate: `hothouse_control_task` drives the GPIO on/off from the
-value the callback last wrote (threshold 0.5), so the software PWM is sampled at
-the 100 Hz control rate.
+Each LED shows what the footswitch below it does (`controls::led1` / `led2` in
+`crates/sonido-patch/src/controls.rs`, which the firmware calls and
+`sonido pedal controls` prints).
+
+The LEDs are on/off: `hothouse_control_task` drives each GPIO from the value the
+callback last wrote (threshold 0.5) at the 100 Hz control rate, too slow to dim
+one. A glide always runs to an end, so the morph rests only at A or B, and
+on/off shows it.
 
 ### Jam Effect List and Knob Mapping
 
@@ -1303,7 +1312,7 @@ nothing (a large captured future starved the executor and caused SAI overruns â€
 see the [v2 design note](superpowers/specs/2026-04-09-sonido-pedal-v2-design.md)):
 `PLAYER` (`Option<PatchPlayer>`), `CB` (`Cb`, everything the callback keeps between
 blocks: mode, morph position and glide, takeover anchors, pick-knob zones,
-footswitch timers, LED and meter state) and `PEDAL` (`Pedal`: the active rig, which
+footswitch timers, LED blink and beat state, meters) and `PEDAL` (`Pedal`: the active rig, which
 bank slots hold rigs, the jam slots and their pick cursors, topology, `JamSettings`,
 BPM). They are `static mut`: the callback runs on the audio executor and uses them
 freely, except while `UPDATING` is set, when the rebuild task owns them and the

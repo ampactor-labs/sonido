@@ -47,6 +47,7 @@ When you modify a source file, you **must** update every documentation target li
 | `crates/sonido-platform/tests/knob_calibration.rs` | `docs/EMBEDDED.md` (Knob Mapping Verification), `docs/TESTING.md` | Noon and knob-extreme loudness tolerances |
 | `crates/sonido-io/src/*.rs` | `docs/ARCHITECTURE.md` (sonido-io section), `docs/DESIGN_DECISIONS.md` ADR-023 | AudioBackend trait, CpalBackend, StreamHandle, BackendStreamConfig, WAV API |
 | `crates/sonido-cli/src/main.rs`, `commands/*.rs` | `docs/CLI_GUIDE.md`, `docs/CLI_TESTING.md`, `docs/ARCHITECTURE.md` (sonido-cli) | Command syntax, flags, examples |
+| `crates/sonido-patch/src/controls.rs`, `crates/sonido-cli/src/commands/pedal_card.rs` | `docs/EMBEDDED.md` (Controls, LED Feedback), `docs/DESIGN_DECISIONS.md` ADR-032, `docs/CLI_GUIDE.md` (pedal controls) | What each footswitch press, toggle, knob page, LED and power-on gesture does (the firmware dispatches through it); the `sonido pedal controls` card drawn from it |
 | `crates/sonido-cli/src/commands/pedal.rs`, `commands/patch.rs` | `docs/CLI_GUIDE.md` (pedal, Rig Export), `docs/EMBEDDED.md` (USB Rig Link, Bypass and Bootloader), `docs/PATCH_PLATFORM.md`, `README.md` | `sonido pedal` subcommands and `--port`, `patch export` inputs/outputs and `--pedal` |
 | `crates/sonido-graph-dsl/src/*.rs` | `docs/CLI_GUIDE.md` (graph syntax) | DSL grammar, split/merge semantics, topology examples, effect alias resolution |
 | `crates/sonido-patch/src/*.rs` | `docs/PATCH_PLATFORM.md` | Patch model, binary codec, `PatchPlayer`, `build_graph_from_patch` |

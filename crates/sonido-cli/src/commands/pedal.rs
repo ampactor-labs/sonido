@@ -30,6 +30,12 @@ pub struct PedalArgs {
 /// Subcommands for `sonido pedal`.
 #[derive(Subcommand)]
 enum PedalCommand {
+    /// How to play the pedal: every control, drawn from this build's source
+    /// (no pedal needed). Give an effect for its knobs with their ranges.
+    Controls {
+        /// An effect, e.g. `distortion`.
+        effect: Option<String>,
+    },
     /// Firmware, CPU load, and what the pedal is playing.
     Info,
     /// The rig list, in the order the footswitches step through it.
@@ -73,6 +79,10 @@ enum PedalCommand {
 pub fn run(args: PedalArgs) -> anyhow::Result<()> {
     let open = || -> anyhow::Result<_> { Ok(open_pedal(args.port.as_deref())?) };
     match args.command {
+        PedalCommand::Controls { effect } => match effect {
+            Some(id) => print!("{}", super::pedal_card::effect_card(&id)?),
+            None => print!("{}", super::pedal_card::card()),
+        },
         PedalCommand::Info => {
             let mut link = open()?;
             let info = link.info()?;

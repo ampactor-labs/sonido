@@ -4193,6 +4193,7 @@ dependencies = [
  "sonido-graph-dsl",
  "sonido-io",
  "sonido-patch",
+ "sonido-platform",
  "sonido-registry",
  "sonido-rigs",
  "sonido-synth",

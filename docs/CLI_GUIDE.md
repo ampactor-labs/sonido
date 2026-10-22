@@ -1132,6 +1132,8 @@ play its rigs, send rigs to its bank, read rigs and the jam back as editor JSON,
 update its firmware.
 
 ```bash
+sonido pedal controls                     # how to play it: every control, as a card (no pedal needed)
+sonido pedal controls delay               # one effect's knobs, with their travel and noon
 sonido pedal info                         # firmware, CPU load, what it plays
 sonido pedal list                         # the rig list, in footswitch order
 sonido pedal push my_rig.json             # replaces the bank rig with its name, or takes the first empty slot
@@ -1148,6 +1150,7 @@ sonido pedal update sonido_pedal.bin      # firmware update over USB DFU
 
 | Subcommand | Description |
 |------------|-------------|
+| `controls [EFFECT]` | Print how to play the pedal: its face, what each footswitch press does in each T2 position, the LEDs, the knob pages, the jam's setup page and pick zones, every jam effect's K1–K6, every factory rig's knobs, the rig list and the power-on gestures. With an effect, that effect's knobs with each one's travel (fully left … fully right, including the pedal's knob floors) and noon. Needs no pedal: it is drawn from this build's `sonido_patch::controls`, knob maps, effect parameters and factory rigs, so it matches firmware built from the same source |
 | `info` | Firmware and link protocol, what the pedal plays (and whether it is off), its morph position and CPU load (last second's mean and peak), and its bank slots, factory rigs and effect count |
 | `list` | The rig list, in the order the footswitches step through it: the jam with its effects, each bank slot, the factory rigs; marks the one playing |
 | `push [FILE]` | Send a rig to the bank: it replaces the bank rig with the same name, or takes the first empty slot (`-s, --slot <N>`: bank slot 1–15 instead). Checked here with `validate_for_daisy`, then again by the pedal, which plays it at once |

@@ -41,6 +41,7 @@ pub mod binary;
 pub mod build;
 #[cfg(feature = "std")]
 pub mod client;
+pub mod controls;
 #[cfg(all(feature = "std", not(target_arch = "wasm32")))]
 pub mod dfu;
 pub mod link;

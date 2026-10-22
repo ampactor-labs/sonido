@@ -7,7 +7,7 @@
 //! # The rig list
 //!
 //! The pedal powers on into the rig it last played. Hold a footswitch to step
-//! through the list (FS1 back, FS2 forward); LED 2 blinks the rig's position
+//! through the list (FS1 back, FS2 forward); LED 1 blinks the rig's position
 //! (the jam is 1):
 //!
 //! 1. **Jam**: three slots you fill on the pedal from the eight
@@ -26,7 +26,7 @@
 //! |---------|------------|
 //! | FS1 tap | On/off |
 //! | FS1 hold | Previous rig (at 0.4 s, while held) |
-//! | FS2 tap | Tap tempo (LED 1 flashes it; in the jam the delay follows it). With T2 in the middle: glide to the other side of the morph (tap again mid-glide to turn back) |
+//! | FS2 tap | Tap tempo (LED 2 flashes it; in the jam the delay follows it). With T2 in the middle: glide to the other side of the morph (tap again mid-glide to turn back) |
 //! | FS2 hold | Next rig |
 //! | T2 | Up A, middle Morph, down B |
 //!
@@ -40,7 +40,7 @@
 //! At power-on: hold FS1 to start in the jam, both footswitches to start the
 //! USB bootloader (DFU) for a firmware update (`sonido pedal update` can
 //! also request it over USB). A picked effect loads once its knob rests, starts at
-//! its voiced defaults, and is refused (LED 2 blinks 4) if it would take the
+//! its voiced defaults, and is refused (LED 1 blinks 4) if it would take the
 //! jam past the CPU rule (`sonido_platform::cycle_table::chain_fits`).
 //!
 //! # USB
@@ -87,7 +87,7 @@ use embedded_alloc::LlffHeap as Heap;
 use panic_probe as _;
 use static_cell::StaticCell;
 
-use sonido_core::{EffectWithParams, ParamDescriptor, ParamScale, TempoContext};
+use sonido_core::{EffectWithParams, TempoContext};
 use sonido_daisy::audio::{Interface, Running};
 use sonido_daisy::controls::HothouseBuffer;
 use sonido_daisy::effect_slot::{self, BypassCrossfade, sanitize_stereo};
@@ -99,6 +99,9 @@ use sonido_daisy::tap_tempo::TapTempo;
 use sonido_daisy::{
     BLOCK_SIZE, ClockProfile, SAMPLE_RATE, f32_to_u24, heartbeat, led::UserLed, u24_to_f32,
     usb_task,
+};
+use sonido_patch::controls::{
+    self, Action, Footswitch, KnobPage, LedShows, Mode, PowerOn, Press, Toggle,
 };
 use sonido_patch::link::{self, ErrorCode, FrameDecoder, Info, Reply, Request, Status};
 use sonido_patch::pedal::{
@@ -131,7 +134,7 @@ static UPDATING: AtomicBool = AtomicBool::new(false);
 /// Rig to load next, as a [`RigRef`] byte, or [`NO_REQUEST`].
 static REQUEST: AtomicU16 = AtomicU16::new(NO_REQUEST);
 const NO_REQUEST: u16 = 0x100;
-/// LED 2 blinks requested by a task (rig position or error code).
+/// LED 1 blinks requested by a task (rig position or error code).
 static BLINK: AtomicU8 = AtomicU8::new(0);
 /// The jam or the active rig changed since the state sector was written.
 static STATE_DIRTY: AtomicBool = AtomicBool::new(false);
@@ -184,12 +187,13 @@ static FLASH: Mutex<CriticalSectionRawMutex, Option<QspiFlash<'static>>> = Mutex
 
 // ── Constants ───────────────────────────────────────────────────────────────
 
-/// A footswitch held this long changes rig right then (control polls at
-/// 100 Hz → 400 ms); a shorter press is a tap, acted on at release.
-const HOLD_TICKS: u32 = 40;
-/// A pick knob's effect loads once its zone has held this long (300 ms), so
-/// sweeping past effects doesn't build each one.
-const PICK_SETTLE_TICKS: u16 = 30;
+/// The control tick: every `CONTROL_POLL_EVERY` blocks, 100 Hz.
+const POLL_MS: u32 = 10;
+/// [`controls::HOLD_MS`] in control polls.
+const HOLD_TICKS: u32 = controls::HOLD_MS / POLL_MS;
+/// [`controls::PICK_SETTLE_MS`] in control polls.
+const PICK_SETTLE_TICKS: u16 = (controls::PICK_SETTLE_MS / POLL_MS) as u16;
+const _: () = assert!(PATCH_SLOT_COUNT == controls::BANK_SLOTS);
 /// Touch takeover: after a slot or mode change, a knob takes over its
 /// parameter once it moves this far (fraction of travel). Untouched knobs leave
 /// the stored values alone; there is no display to show where they are, so
@@ -199,7 +203,7 @@ const TOUCH_TRAVEL: f32 = 0.02;
 const SAVE_QUIET_MS: u32 = 2_000;
 /// Tempo before the first tap.
 const DEFAULT_BPM: f32 = 120.0;
-/// LED 1 goes dark for this long at each beat.
+/// LED 2 lights for this long on each beat.
 const BEAT_FLASH_S: f32 = 0.07;
 /// Longest rig list: jam, every bank slot, every factory rig.
 const MAX_RIGS: usize = 1 + PATCH_SLOT_COUNT + FACTORY_RIG_COUNT;
@@ -213,24 +217,6 @@ const BACKUP_SRAM_ADDR: *mut u32 = 0x3880_0000 as *mut u32;
 const DAISY_INFINITE_TIMEOUT: u32 = 0xB007_4EFA;
 
 // ── The pedal's model ───────────────────────────────────────────────────────
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Mode {
-    A,
-    B,
-    Morph,
-}
-
-impl Mode {
-    /// T2: up A, middle Morph (between A and B), down B.
-    fn from_toggle(position: u8) -> Self {
-        match position {
-            1 => Self::Morph,
-            2 => Self::B,
-            _ => Self::A,
-        }
-    }
-}
 
 /// What the pedal plays and the jam it keeps.
 struct Pedal {
@@ -276,7 +262,7 @@ impl Pedal {
         (list, n)
     }
 
-    /// 1-based position of `rig` in the list (what LED 2 blinks).
+    /// 1-based position of `rig` in the list (what LED 1 blinks).
     fn position(&self, rig: RigRef) -> usize {
         let (list, n) = self.rigs();
         list[..n]
@@ -333,13 +319,11 @@ struct Cb {
     /// has since moved far enough to take over.
     anchor: [f32; 6],
     touched: [bool; 6],
-    /// Polls each footswitch has been down, and whether its hold has acted.
-    fs1_held: u32,
-    fs2_held: u32,
-    fs1_fired: bool,
-    fs2_fired: bool,
-    fs1_was: bool,
-    fs2_was: bool,
+    /// Per footswitch (FS1, FS2): polls it has been down, whether its hold
+    /// has acted, and whether it was down last poll.
+    fs_held: [u32; 2],
+    fs_fired: [bool; 2],
+    fs_was: [bool; 2],
     /// When FS2 went down (embassy ticks): a tap's beat starts at the press.
     fs2_down_at: u64,
     /// Setup page: the zone each pick knob (K4–K6) sits in (`usize::MAX`
@@ -348,7 +332,6 @@ struct Cb {
     pick_held: [u16; JAM_SLOTS],
     blink_left: u8,
     blink_timer: u16,
-    led_env: f32,
     tap: TapTempo,
     /// Position within the current beat, 0–1 (drives the tempo LED).
     beat: f32,
@@ -456,19 +439,17 @@ async fn main(spawner: embassy_executor::Spawner) {
         nodes: [None; JAM_SLOTS],
         bpm: state.bpm.unwrap_or(DEFAULT_BPM),
     };
-    // Power-on gestures: both footswitches start the bootloader for a
-    // firmware update; FS1 starts in the jam. Otherwise, the last rig played.
-    if CONTROLS.read_footswitch(0) && CONTROLS.read_footswitch(1) {
-        defmt::info!("both footswitches held at power-on: bootloader");
-        enter_daisy_bootloader();
-    }
-    let start = if CONTROLS.read_footswitch(0) {
-        defmt::info!("FS1 held at power-on: starting in the jam");
-        RigRef::Jam
-    } else if pedal.has(state.active) {
-        state.active
-    } else {
-        RigRef::Jam
+    let start = match controls::power_on(CONTROLS.read_footswitch(0), CONTROLS.read_footswitch(1)) {
+        PowerOn::Bootloader => {
+            defmt::info!("both footswitches held at power-on: bootloader");
+            enter_daisy_bootloader();
+        }
+        PowerOn::Jam => {
+            defmt::info!("FS1 held at power-on: starting in the jam");
+            RigRef::Jam
+        }
+        PowerOn::LastRig if pedal.has(state.active) => state.active,
+        PowerOn::LastRig => RigRef::Jam,
     };
     pedal.active = start;
     unsafe {
@@ -485,18 +466,14 @@ async fn main(spawner: embassy_executor::Spawner) {
             glide: 0.0,
             anchor: core::array::from_fn(|k| CONTROLS.read_knob(k)),
             touched: [false; 6],
-            fs1_held: 0,
-            fs2_held: 0,
-            fs1_fired: false,
-            fs2_fired: false,
-            fs1_was: false,
-            fs2_was: false,
+            fs_held: [0; 2],
+            fs_fired: [false; 2],
+            fs_was: [false; 2],
             fs2_down_at: 0,
             pick_zone: [usize::MAX; JAM_SLOTS],
             pick_held: [0; JAM_SLOTS],
             blink_left: 0,
             blink_timer: 0,
-            led_env: 0.0,
             tap: TapTempo::new(),
             beat: 0.0,
             in_peak: 0.0,
@@ -623,12 +600,14 @@ fn audio_block(input: &[u32], output: &mut [u32]) {
     cb.out_peak = cb.out_peak.max(peak);
     cb.poll = cb.poll.wrapping_add(1);
     if cb.poll.is_multiple_of(effect_slot::CONTROL_POLL_EVERY) {
-        controls(cb, peak);
+        control_tick(cb);
     }
 }
 
-/// The 100 Hz control tick: toggles, footswitches, knobs, morph, LEDs.
-fn controls(cb: &mut Cb, peak: f32) {
+/// The 100 Hz control tick: toggles, footswitches, knobs, morph, LEDs. What
+/// each control does comes from `sonido_patch::controls`, which
+/// `sonido pedal controls` draws.
+fn control_tick(cb: &mut Cb) {
     let pedal = unsafe { PEDAL.as_mut().unwrap() };
     let Some(player) = (unsafe { PLAYER.as_mut() }) else {
         return;
@@ -636,10 +615,12 @@ fn controls(cb: &mut Cb, peak: f32) {
     let jam = pedal.active == RigRef::Jam;
 
     // ── Toggles ──
-    let focused = (CONTROLS.read_toggle(0) as usize).min(JAM_SLOTS - 1);
-    if focused != cb.focused {
-        cb.focused = focused;
-        rearm_takeover(cb);
+    if controls::toggle_active(Toggle::T1, jam) {
+        let focused = controls::slot(CONTROLS.read_toggle(0));
+        if focused != cb.focused {
+            cb.focused = focused;
+            rearm_takeover(cb);
+        }
     }
     let mode = Mode::from_toggle(CONTROLS.read_toggle(1));
     if mode != cb.mode {
@@ -653,71 +634,55 @@ fn controls(cb: &mut Cb, peak: f32) {
         cb.mode = mode;
         rearm_takeover(cb);
     }
-    // In the jam, T3 is the routing; the jam picks it up when it loads.
+    // T3 is the jam's routing; the jam reads it again when it loads.
     let topology = Topology::from_toggle(CONTROLS.read_toggle(2));
-    if jam && topology != pedal.topology {
+    if controls::toggle_active(Toggle::T3, jam) && topology != pedal.topology {
         pedal.topology = topology;
         request(RigRef::Jam);
         mark_dirty();
     }
 
-    // ── Footswitches: taps act at release, holds change rig at 0.4 s ──
-    let fs1 = CONTROLS.read_footswitch(0);
-    let fs2 = CONTROLS.read_footswitch(1);
-    if fs2 && !cb.fs2_was {
+    // ── Footswitches: taps act at release, holds as they reach HOLD_TICKS ──
+    let down = [CONTROLS.read_footswitch(0), CONTROLS.read_footswitch(1)];
+    if down[1] && !cb.fs_was[1] {
         cb.fs2_down_at = Instant::now().as_ticks();
     }
-    if fs1 {
-        cb.fs1_held += 1;
-        if cb.fs1_held == HOLD_TICKS {
-            cb.fs1_fired = true;
-            request(pedal.step(-1));
-        }
-    }
-    if fs2 {
-        cb.fs2_held += 1;
-        if cb.fs2_held == HOLD_TICKS {
-            cb.fs2_fired = true;
-            request(pedal.step(1));
-        }
-    }
-    if cb.fs1_was && !fs1 && !cb.fs1_fired {
-        BYPASSED.store(!BYPASSED.load(Ordering::Relaxed), Ordering::Relaxed);
-    }
-    if cb.fs2_was && !fs2 && !cb.fs2_fired {
-        if cb.mode == Mode::Morph {
-            // Glide to the other side; mid-glide, turn back.
-            cb.glide = if cb.glide != 0.0 {
-                -cb.glide
-            } else if cb.morph_t < 0.5 {
-                1.0
-            } else {
-                -1.0
-            };
+    for (i, switch) in [Footswitch::Fs1, Footswitch::Fs2].into_iter().enumerate() {
+        if down[i] {
+            cb.fs_held[i] += 1;
+            if cb.fs_held[i] == HOLD_TICKS {
+                cb.fs_fired[i] = true;
+                act(
+                    controls::footswitch(switch, Press::Hold, cb.mode),
+                    cb,
+                    pedal,
+                    player,
+                );
+            }
         } else {
-            tap_tempo(cb, pedal, player);
+            if cb.fs_was[i] && !cb.fs_fired[i] {
+                act(
+                    controls::footswitch(switch, Press::Tap, cb.mode),
+                    cb,
+                    pedal,
+                    player,
+                );
+            }
+            cb.fs_held[i] = 0;
+            cb.fs_fired[i] = false;
         }
+        cb.fs_was[i] = down[i];
     }
-    if !fs1 {
-        cb.fs1_held = 0;
-        cb.fs1_fired = false;
-    }
-    if !fs2 {
-        cb.fs2_held = 0;
-        cb.fs2_fired = false;
-    }
-    cb.fs1_was = fs1;
-    cb.fs2_was = fs2;
 
     // ── Knobs ──
-    if !jam {
-        for k in 0..6 {
-            player.set_macro(k, CONTROLS.read_knob(k));
+    match controls::knob_page(jam, cb.mode) {
+        KnobPage::Macros => {
+            for k in 0..6 {
+                player.set_macro(k, CONTROLS.read_knob(k));
+            }
         }
-    } else if cb.mode == Mode::Morph {
-        setup_page(cb, pedal);
-    } else {
-        edit_jam_slot(cb, pedal, player);
+        KnobPage::Setup => setup_page(cb, pedal),
+        KnobPage::Sound => edit_jam_slot(cb, pedal, player),
     }
     if jam {
         player.set_input_gain_db(pedal.settings.input_db);
@@ -744,45 +709,61 @@ fn controls(cb: &mut Cb, peak: f32) {
     player.set_morph_position(t);
     player.apply_controls();
 
-    // ── LEDs ──
+    // ── LEDs: each shows what the footswitch below it does ──
     let bypassed = BYPASSED.load(Ordering::Relaxed);
     let blink = BLINK.swap(0, Ordering::Acquire);
     if blink > 0 {
         cb.blink_left = blink * 2;
         cb.blink_timer = 0;
     }
-    // LED 1: on while the pedal is on, dark for a moment on every beat.
-    cb.beat += 0.01 * pedal.bpm / 60.0;
-    if cb.beat >= 1.0 {
-        cb.beat -= 1.0;
-    }
-    let beat_dark = cb.beat < BEAT_FLASH_S * pedal.bpm / 60.0;
-    CONTROLS.write_led(0, if bypassed || beat_dark { 0.0 } else { 1.0 });
-    // LED 2: rig/error blinks, else the morph position, else the output level.
     if cb.blink_left > 0 {
         cb.blink_timer += 1;
         if cb.blink_timer >= 12 {
             cb.blink_timer = 0;
             cb.blink_left -= 1;
         }
-        let on = cb.blink_left % 2 == 1;
-        CONTROLS.write_led(1, if on { 1.0 } else { 0.0 });
-    } else if bypassed {
-        CONTROLS.write_led(1, 0.0);
-    } else if cb.mode == Mode::Morph {
-        let on = cb.poll % 10 < (cb.morph_t * 10.0) as u16;
-        CONTROLS.write_led(1, if on { 1.0 } else { 0.0 });
-    } else {
-        cb.led_env = if peak > cb.led_env {
-            peak
-        } else {
-            cb.led_env * 0.9
-        };
-        CONTROLS.write_led(1, (cb.led_env * 2.0).min(1.0));
+    }
+    cb.beat += 0.01 * pedal.bpm / 60.0;
+    if cb.beat >= 1.0 {
+        cb.beat -= 1.0;
+    }
+    let lit = |shows: LedShows| match shows {
+        LedShows::Lit => true,
+        LedShows::Dark => false,
+        LedShows::Count => cb.blink_left % 2 == 1,
+        LedShows::Beat => cb.beat < BEAT_FLASH_S * pedal.bpm / 60.0,
+        LedShows::MorphPosition if cb.glide != 0.0 => (cb.poll / 90).is_multiple_of(2),
+        LedShows::MorphPosition => cb.morph_t >= 0.5,
+    };
+    let led1 = lit(controls::led1(bypassed, cb.blink_left > 0));
+    let led2 = lit(controls::led2(bypassed, cb.mode));
+    CONTROLS.write_led(0, if led1 { 1.0 } else { 0.0 });
+    CONTROLS.write_led(1, if led2 { 1.0 } else { 0.0 });
+}
+
+/// Do what a footswitch press means (`controls::footswitch` says which).
+fn act(action: Action, cb: &mut Cb, pedal: &mut Pedal, player: &mut PatchPlayer) {
+    match action {
+        Action::OnOff => {
+            BYPASSED.store(!BYPASSED.load(Ordering::Relaxed), Ordering::Relaxed);
+        }
+        Action::TapTempo => tap_tempo(cb, pedal, player),
+        Action::Glide => {
+            // Glide to the other side; mid-glide, turn back.
+            cb.glide = if cb.glide != 0.0 {
+                -cb.glide
+            } else if cb.morph_t < 0.5 {
+                1.0
+            } else {
+                -1.0
+            };
+        }
+        Action::PreviousRig => request(pedal.step(-1)),
+        Action::NextRig => request(pedal.step(1)),
     }
 }
 
-/// FS2 tap: set the tempo (LED 1 and every tempo-synced effect follow it). In
+/// FS2 tap: set the tempo (LED 2 and every tempo-synced effect follow it). In
 /// the jam the delay's time becomes one beat, in A and B.
 fn tap_tempo(cb: &mut Cb, pedal: &mut Pedal, player: &mut PatchPlayer) {
     cb.tap.tap(cb.fs2_down_at);
@@ -911,19 +892,15 @@ fn edit_jam_slot(cb: &mut Cb, pedal: &mut Pedal, player: &mut PatchPlayer) {
 /// master, like the factory rigs; K4 K5 K6 pick slot 1, 2, 3's effect. A
 /// pick knob's travel is equal zones, fully left empty and then
 /// `JAM_EFFECT_IDS`; the pick loads once the knob has rested in its zone for
-/// [`PICK_SETTLE_TICKS`], and is refused (LED 2 blinks the over-budget code)
+/// [`PICK_SETTLE_TICKS`], and is refused (LED 1 blinks the over-budget code)
 /// if the jam would break the CPU rule.
 fn setup_page(cb: &mut Cb, pedal: &mut Pedal) {
-    const INPUT: ParamDescriptor = ParamDescriptor::gain_db("Input", "Input", -12.0, 12.0, 0.0);
-    const TIME: ParamDescriptor =
-        ParamDescriptor::custom("Morph Time", "Morph Time", 0.2, 5.0, 1.0)
-            .with_scale(ParamScale::Logarithmic);
-    const MASTER: ParamDescriptor = ParamDescriptor::gain_db("Master", "Master", -60.0, 12.0, 0.0);
+    let [(input, _), (time, _), (master, _)] = &controls::SETUP_LEVELS;
     let settings = &mut pedal.settings;
     for (k, desc, value) in [
-        (0, &INPUT, &mut settings.input_db),
-        (1, &TIME, &mut settings.morph_time_s),
-        (2, &MASTER, &mut settings.master_db),
+        (0, input, &mut settings.input_db),
+        (1, time, &mut settings.morph_time_s),
+        (2, master, &mut settings.master_db),
     ] {
         if let Some(knob) = take_over(cb, k) {
             let v = adc_to_param_biased(desc, desc.default, knob);
@@ -939,7 +916,7 @@ fn setup_page(cb: &mut Cb, pedal: &mut Pedal) {
         let Some(knob) = take_over(cb, 3 + s) else {
             continue;
         };
-        let zone = pick_zone(cb.pick_zone[s], knob, zones);
+        let zone = controls::pick_zone(cb.pick_zone[s], knob, zones);
         if zone != cb.pick_zone[s] {
             cb.pick_zone[s] = zone;
             cb.pick_held[s] = 0;
@@ -959,17 +936,6 @@ fn setup_page(cb: &mut Cb, pedal: &mut Pedal) {
             BLINK.store(patch_loader::error_blink_code(&refused), Ordering::Release);
         }
     }
-}
-
-/// The zone (0 = empty, then one per jam effect) a pick knob at `knob`
-/// (0–1) selects, holding `current` until the knob is clearly past its edge
-/// so a knob resting on a border doesn't flicker between two effects.
-fn pick_zone(current: usize, knob: f32, zones: usize) -> usize {
-    let x = knob * zones as f32;
-    if current < zones && (current as f32 - 0.15..current as f32 + 1.15).contains(&x) {
-        return current;
-    }
-    (x as usize).min(zones - 1)
 }
 
 // ── Rig loading ─────────────────────────────────────────────────────────────
