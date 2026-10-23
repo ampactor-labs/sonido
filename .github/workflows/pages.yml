@@ -29,8 +29,14 @@ jobs:
         with:
           targets: wasm32-unknown-unknown
 
+      # Pinned, from trunk's current home: jetli/trunk-action's "latest"
+      # still resolves through the old thedodd/trunk repo to v0.19.1, which
+      # fails on Trunk.toml's [watch] ignore of the not-yet-built dist.
       - name: Install Trunk
-        uses: jetli/trunk-action@v0.5.0
+        run: |
+          curl -sSfL https://github.com/trunk-rs/trunk/releases/download/v0.22.0/trunk-x86_64-unknown-linux-gnu.tar.gz \
+            | tar -xz -C "$HOME/.cargo/bin" trunk
+          trunk --version
 
       - name: Install system deps
         run: sudo apt-get update && sudo apt-get install -y libasound2-dev
