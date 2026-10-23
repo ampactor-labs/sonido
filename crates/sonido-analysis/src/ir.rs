@@ -515,7 +515,7 @@ mod tests {
     fn test_trim_ir_empty() {
         let ir: Vec<f32> = vec![];
         let (trimmed, start, end) = trim_ir(&ir, -20.0, -60.0);
-        assert!(trimmed.is_empty());
+        assert_eq!(trimmed, [] as [f32; 0]);
         assert_eq!(start, 0);
         assert_eq!(end, 0);
     }
@@ -524,7 +524,7 @@ mod tests {
     fn test_trim_ir_silence() {
         let ir = vec![0.0; 100];
         let (trimmed, _, _) = trim_ir(&ir, -20.0, -60.0);
-        assert!(trimmed.is_empty());
+        assert_eq!(trimmed, [] as [f32; 0]);
     }
 
     #[test]
@@ -557,7 +557,7 @@ mod tests {
     fn test_energy_decay_curve_empty() {
         let ir: Vec<f32> = vec![];
         let edc = energy_decay_curve(&ir);
-        assert!(edc.is_empty());
+        assert_eq!(edc, [] as [f32; 0]);
     }
 
     #[test]

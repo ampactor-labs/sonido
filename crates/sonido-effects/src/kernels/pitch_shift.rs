@@ -1,12 +1,12 @@
 //! Granular pitch shifter kernel — overlapping Hann-windowed grain crossfade.
 //!
-//! `PitchShiftKernel` implements pitch shifting via two overlapping grains that
-//! read from a circular delay buffer at a modified speed. The pitch ratio
+//! `PitchShiftKernel` implements pitch shifting via two (Quality = 0) or four
+//! (Quality = 1) overlapping grains that read from a circular delay buffer at a modified speed. The pitch ratio
 //! (`2^(semitones/12 + cents/1200)`) controls read speed relative to write.
 //! A Hann window crossfade between grains avoids clicks at grain boundaries.
 //! Parameters are received via `&PitchShiftParams` each sample. Deployed via
-//! [`Adapter`](sonido_core::kernel::Adapter) for desktop/plugin, or called
-//! directly on embedded targets.
+//! [`Adapter`](sonido_core::kernel::Adapter) for desktop/plugin, or via `Adapter::new_direct`
+//! (no smoothing) on embedded targets.
 //!
 //! # Signal Flow
 //!
@@ -18,13 +18,14 @@
 //!
 //! # Algorithm
 //!
-//! Two grains run in phase quadrature (offset by `grain_size/2`). Each grain:
+//! The active grains are staggered evenly in phase (grain `i` starts at
+//! `i / n_grains`; with two grains that is `grain_size/2` apart). Each grain:
 //! 1. Reads from the delay buffer at `read_pos` (fractional linear interpolation)
 //! 2. Multiplies by `Hann(phase) = 0.5 * (1 - cos(2π * phase))`
 //! 3. Advances `read_pos` by `ratio` (shift) and `phase` by `1/grain_size_samples`
 //! 4. When `phase >= 1.0`, wraps to 0 and repositions at write cursor
 //!
-//! The two grains overlap continuously: when grain 0 is at phase 0.5 (peak),
+//! In the two-grain case the grains overlap continuously: when grain 0 is at phase 0.5 (peak),
 //! grain 1 is just starting (phase 0), ensuring smooth crossfade with no holes.
 //!
 //! # Deployment
@@ -34,7 +35,10 @@
 //! let adapter = Adapter::new(PitchShiftKernel::new(48000.0), 48000.0);
 //! let mut effect: Box<dyn Effect> = Box::new(adapter);
 //!
-//! // Embedded / Daisy Seed (direct — no smoothing)
+//! // Embedded / Daisy Seed — zero-smoothing adapter, as the pedal firmware uses
+//! let effect = Adapter::new_direct(PitchShiftKernel::new(48000.0), 48000.0);
+//!
+//! // Or drive the kernel directly with a typed params struct (no adapter)
 //! let mut kernel = PitchShiftKernel::new(48000.0);
 //! let params = PitchShiftParams::default();
 //! let (left, right) = kernel.process_stereo(input_l, input_r, &params);
@@ -47,11 +51,10 @@ use alloc::vec::Vec;
 use sonido_core::kernel::KernelParams;
 use sonido_core::kernel::{DspKernel, SmoothingStyle};
 use sonido_core::kernel_params;
-use sonido_core::{
-    ParamDescriptor, ParamFlags, ParamId, ParamUnit, fast_db_to_linear, wet_dry_mix,
-};
+use sonido_core::level::Level;
+use sonido_core::{ParamDescriptor, ParamFlags, ParamId, ParamUnit, fast_db_to_linear};
 
-/// Circular delay buffer length: ~100 ms at 48 kHz (4800 samples, power of 2 for fast modulo).
+/// Circular delay buffer length: 8192 samples (~170 ms at 48 kHz, power of 2 for fast modulo).
 const BUF_LEN: usize = 8192; // ~170 ms at 48 kHz, power of 2
 
 /// Number of grains. Quality=0 uses 2, Quality=1 uses 4.
@@ -77,9 +80,9 @@ const GRAIN_MAX_SAMPLES: usize = 2400; // 50 ms at 48 kHz
 /// | 0 | `semitones` | semitones | −24–+24 | 0.0 |
 /// | 1 | `cents` | cents | −50–+50 | 0.0 |
 /// | 2 | `grain_ms` | ms | 10–50 | 20.0 |
-/// | 3 | `mix_pct` | % | 0–100 | 100.0 |
+/// | 3 | `mix_pct` | % | 0–100 | 50.0 |
 /// | 4 | `quality` | index | 0–1 | 0 (2 grains) |
-/// | 5 | `output_db` | dB | −60–+6 | 0.0 |
+/// | 5 | `output_db` | dB | −6–+6 | 0.0 |
 #[derive(Debug, Clone, Copy)]
 pub struct PitchShiftParams {
     /// Pitch shift in semitones. Range: −24.0 to +24.0.
@@ -97,7 +100,7 @@ pub struct PitchShiftParams {
     pub mix_pct: f32,
     /// Quality mode: 0 = 2 grains (lower CPU), 1 = 4 grains (smoother).
     pub quality: f32,
-    /// Output level in decibels. Range: −60.0 to +6.0 dB.
+    /// Output level in decibels. Range: −6.0 to +6.0 dB.
     pub output_db: f32,
 }
 
@@ -107,7 +110,7 @@ impl Default for PitchShiftParams {
             semitones: 0.0,
             cents: 0.0,
             grain_ms: 20.0,
-            mix_pct: 100.0,
+            mix_pct: 50.0,
             quality: 0.0,
             output_db: 0.0,
         }
@@ -295,6 +298,7 @@ impl PitchShiftKernel {
 
 impl DspKernel for PitchShiftKernel {
     type Params = PitchShiftParams;
+    const LEVEL: Level = crate::calibration::PITCH_SHIFT;
 
     fn process_stereo(&mut self, left: f32, right: f32, params: &PitchShiftParams) -> (f32, f32) {
         let ratio = Self::pitch_ratio(params.semitones, params.cents);
@@ -362,8 +366,8 @@ impl DspKernel for PitchShiftKernel {
         let mix = params.mix_pct / 100.0;
         let output_gain = fast_db_to_linear(params.output_db);
 
-        let out_l = wet_dry_mix(left, wet_l, mix) * output_gain;
-        let out_r = wet_dry_mix(right, wet_r, mix) * output_gain;
+        let (out_l, out_r) = Self::blend_stereo(left, right, wet_l, wet_r, mix);
+        let (out_l, out_r) = (out_l * output_gain, out_r * output_gain);
 
         (out_l, out_r)
     }

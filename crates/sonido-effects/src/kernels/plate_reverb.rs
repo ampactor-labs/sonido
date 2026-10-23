@@ -9,7 +9,7 @@
 //! input → bandwidth LP → predelay → [4 input diffusers (allpass)] → tank
 //!                                                                      ↓
 //!                         tank: [modulated allpass L] ←→ [delay + damp] ←→ [modulated allpass R]
-//!                                        ↓ tap L                                   ↓ tap R
+//!                                   ↓ taps from both halves (Dattorro)       ↓
 //!                                   wet_L (true stereo)               wet_R (true stereo)
 //!                                           ↓
 //!                               wet/dry mix → output gain
@@ -23,7 +23,8 @@
 //! 4. Recirculate through two tank halves each containing:
 //!    - Modulated allpass (decorrelates via slow LFO)
 //!    - Long delay line with one-pole HF damping in the feedback path
-//! 5. L/R tapped from the two different tank positions (true stereo)
+//! 5. Each output adds a tap from its own tank half and subtracts one from the
+//!    other (Dattorro), so L and R share the tail's energy, not its waveform
 //! 6. Wet/dry mix → output gain
 //!
 //! # References
@@ -38,7 +39,10 @@
 //! let adapter = Adapter::new(PlateReverbKernel::new(48000.0), 48000.0);
 //! let mut effect: Box<dyn Effect> = Box::new(adapter);
 //!
-//! // Embedded / Daisy Seed (direct — no smoothing, ADCs are hardware-filtered)
+//! // Embedded / Daisy Seed — zero-smoothing adapter, as the pedal firmware uses
+//! let effect = Adapter::new_direct(PlateReverbKernel::new(48000.0), 48000.0);
+//!
+//! // Or drive the kernel directly with a typed params struct (no adapter)
 //! let mut kernel = PlateReverbKernel::new(48000.0);
 //! let params = PlateReverbParams::from_knobs(adc_decay, adc_damp, adc_predelay,
 //!                                            adc_bw, adc_diff, adc_size, adc_mix, adc_out);
@@ -49,9 +53,10 @@ use libm::{ceilf, expf, powf};
 use sonido_core::fast_math::fast_sin_turns;
 use sonido_core::kernel::{DspKernel, KernelParams, SmoothingStyle};
 use sonido_core::kernel_params;
+use sonido_core::level::Level;
 use sonido_core::{
-    AllpassFilter, InterpolatedDelay, Interpolation, OnePole, ParamDescriptor, ParamId, ParamUnit,
-    flush_denormal, wet_dry_mix_stereo,
+    AllpassFilter, InterpolatedDelay, Interpolation, OnePole, ParamDescriptor, ParamFlags, ParamId,
+    ParamUnit, flush_denormal, needs_update,
 };
 
 // ── Constants ───────────────────────────────────────────────────────────────
@@ -114,16 +119,17 @@ fn bandwidth_to_hz(bw_pct: f32) -> f32 {
     200.0 * powf(100.0, t)
 }
 
-/// Compute per-sample decay feedback coefficient from decay time (seconds).
+/// Tank feedback gain for an RT60 of `decay_s`, applied once per pass through
+/// a tank side `loop_len` samples long.
 ///
-/// `feedback = exp(-3 * T60 / decay_s)` where T60 is one sample. Clamped
-/// to [0.0, 0.98] for stability.
+/// After `decay_s * sr / loop_len` passes the tail must be 60 dB down, so
+/// `g = 10^(-3 * loop_len / (decay_s * sr))`. (A per-sample gain applied per
+/// pass, as this once was, is ~0.99999 for every decay: the clamp made it a
+/// fixed 0.98 and the Decay control did nothing.)
 #[inline]
-fn decay_to_feedback(decay_s: f32, sr: f32) -> f32 {
-    // g^N = 10^(-3) for decay over `decay_s * sr` samples
-    // g = 10^(-3 / (decay_s * sr)) = exp(-3 * ln(10) / (decay_s * sr))
-    let g = expf(-3.0 * core::f32::consts::LN_10 / (decay_s * sr));
-    g.clamp(0.0, 0.98)
+fn decay_to_feedback(decay_s: f32, loop_len: f32, sr: f32) -> f32 {
+    let g = expf(-3.0 * core::f32::consts::LN_10 * loop_len / (decay_s.max(0.01) * sr));
+    g.clamp(0.0, 0.995)
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -140,8 +146,8 @@ fn decay_to_feedback(decay_s: f32, sr: f32) -> f32 {
 /// | 3 | `bandwidth_pct` | % | 0–100 | 80.0 |
 /// | 4 | `diffusion_pct` | % | 0–100 | 70.0 |
 /// | 5 | `size_pct` | % | 0–100 | 50.0 |
-/// | 6 | `mix_pct` | % | 0–100 | 30.0 |
-/// | 7 | `output_db` | dB | −60–+6 | 0.0 |
+/// | 6 | `mix_pct` | % | 0–100 | 50.0 |
+/// | 7 | `output_db` | dB | −6–+6 | 0.0 |
 #[derive(Debug, Clone, Copy)]
 pub struct PlateReverbParams {
     /// Decay time in seconds (0.1–10 s).
@@ -182,7 +188,7 @@ pub struct PlateReverbParams {
     /// Wet/dry mix as a percentage (0% = dry, 100% = wet).
     pub mix_pct: f32,
 
-    /// Output level in decibels (−60 to +6 dB).
+    /// Output level in decibels (−6 to +6 dB).
     pub output_db: f32,
 }
 
@@ -195,7 +201,7 @@ impl Default for PlateReverbParams {
             bandwidth_pct: 80.0,
             diffusion_pct: 70.0,
             size_pct: 50.0,
-            mix_pct: 30.0,
+            mix_pct: 50.0,
             output_db: 0.0,
         }
     }
@@ -237,6 +243,7 @@ kernel_params! {
                 max: 100.0,
                 default: 50.0,
                 step: 1.0,
+                flags: ParamFlags::AUTOMATABLE,
                 ..ParamDescriptor::mix()
             }
             .with_id(ParamId(2701), "plate_damping"),
@@ -260,6 +267,7 @@ kernel_params! {
                 max: 100.0,
                 default: 80.0,
                 step: 1.0,
+                flags: ParamFlags::AUTOMATABLE,
                 ..ParamDescriptor::mix()
             }
             .with_id(ParamId(2703), "plate_bandwidth"),
@@ -275,6 +283,7 @@ kernel_params! {
                 max: 100.0,
                 default: 70.0,
                 step: 1.0,
+                flags: ParamFlags::AUTOMATABLE,
                 ..ParamDescriptor::mix()
             }
             .with_id(ParamId(2704), "plate_diffusion"),
@@ -290,6 +299,7 @@ kernel_params! {
                 max: 100.0,
                 default: 50.0,
                 step: 1.0,
+                flags: ParamFlags::AUTOMATABLE,
                 ..ParamDescriptor::mix()
             }
             .with_id(ParamId(2705), "plate_size"),
@@ -456,61 +466,64 @@ impl PlateReverbKernel {
         size_pct: f32,
     ) {
         let eps = 0.001;
-        if (decay_s - self.cached_decay).abs() > eps {
-            self.cached_decay = decay_s;
-            self.feedback = decay_to_feedback(decay_s, self.sample_rate);
-        }
-        if (damp_pct - self.cached_damp).abs() > eps {
-            self.cached_damp = damp_pct;
-            let hz = damping_to_coeff(damp_pct);
-            for f in &mut self.tank_damp {
-                f.set_frequency(hz);
-            }
-        }
-        if (bw_pct - self.cached_bw).abs() > eps {
-            self.cached_bw = bw_pct;
-            let hz = bandwidth_to_hz(bw_pct);
-            self.bw_filter.set_frequency(hz);
-        }
-        if (diff_pct - self.cached_diff).abs() > eps {
-            self.cached_diff = diff_pct;
-            self.diff_coeff = diff_pct * 0.01 * 0.75 + 0.1; // 0.1–0.85 range
-            for ap in &mut self.input_diff {
-                ap.set_feedback(self.diff_coeff);
-            }
-        }
-        if (size_pct - self.cached_size).abs() > eps {
+        // Size first: it sets the tank loop length the decay is computed for.
+        let resized = needs_update(self.cached_size, size_pct, eps);
+        if resized {
             self.cached_size = size_pct;
             let scale_factor = 0.5 + size_pct * 0.01 * 1.5; // 0.5–2.0
-            for (i, ap) in self.input_diff.iter_mut().enumerate() {
-                let base = scale(INPUT_DIFF_44K[i], self.sample_rate) as f32;
-                let _ = ap; // delay length in AllpassFilter is fixed at construction
-                let _ = base; // size-scaling for allpasses uses tank delays only
-            }
-            // Scale tank delay lengths
             for i in 0..2 {
                 let base = scale(TANK_DELAY_44K[i], self.sample_rate) as f32;
                 self.tank_delay_len[i] =
                     (base * scale_factor).min((self.tank_delay[i].capacity() - 2) as f32);
             }
         }
+        if resized || needs_update(self.cached_decay, decay_s, eps) {
+            self.cached_decay = decay_s;
+            // One pass through a tank side: its delay plus its allpass.
+            let loop_len = 0.5
+                * (self.tank_delay_len[0]
+                    + self.tank_delay_len[1]
+                    + self.tank_ap_base[0]
+                    + self.tank_ap_base[1]);
+            self.feedback = decay_to_feedback(decay_s, loop_len, self.sample_rate);
+        }
+        if needs_update(self.cached_damp, damp_pct, eps) {
+            self.cached_damp = damp_pct;
+            let hz = damping_to_coeff(damp_pct);
+            for f in &mut self.tank_damp {
+                f.set_frequency(hz);
+            }
+        }
+        if needs_update(self.cached_bw, bw_pct, eps) {
+            self.cached_bw = bw_pct;
+            let hz = bandwidth_to_hz(bw_pct);
+            self.bw_filter.set_frequency(hz);
+        }
+        if needs_update(self.cached_diff, diff_pct, eps) {
+            self.cached_diff = diff_pct;
+            self.diff_coeff = diff_pct * 0.01 * 0.75 + 0.1; // 0.1–0.85 range
+            for ap in &mut self.input_diff {
+                ap.set_feedback(self.diff_coeff);
+            }
+        }
     }
 
     /// Process one sample through a tank allpass with LFO modulation.
     ///
-    /// The allpass structure: output = delay_read - feedback * input
-    ///                        write  = input + feedback * delay_read
+    /// The allpass structure: write  = input + feedback * delay_read
+    ///                        output = delay_read - feedback * write
     #[inline]
     fn tank_allpass_process(&mut self, side: usize, input: f32) -> f32 {
         let phase = self.tank_ap_phase[side];
         let mod_val = fast_sin_turns(phase) * self.tank_ap_mod_depth;
         let delay_len = (self.tank_ap_base[side] + mod_val).max(1.0);
 
+        // True Schroeder allpass: v[n] = x[n] + g·v[n−D], y[n] = v[n−D] − g·v[n].
         let delayed = self.tank_ap[side].read(delay_len);
         let write_val = flush_denormal(input + TANK_ALLPASS_FEEDBACK * delayed);
         self.tank_ap[side].write(write_val);
 
-        let output = delayed - TANK_ALLPASS_FEEDBACK * input;
+        let output = delayed - TANK_ALLPASS_FEEDBACK * write_val;
 
         self.tank_ap_phase[side] += self.tank_ap_phase_inc[side];
         if self.tank_ap_phase[side] >= 1.0 {
@@ -523,9 +536,16 @@ impl PlateReverbKernel {
 
 impl DspKernel for PlateReverbKernel {
     type Params = PlateReverbParams;
+    const LEVEL: Level = crate::calibration::PLATE_REVERB;
 
     fn is_true_stereo(&self) -> bool {
         true
+    }
+
+    /// Same ring-out as the [`TailReporting`](sonido_core::TailReporting) impl
+    /// below; the adapter (and so every plugin host) asks through this trait.
+    fn tail_samples(&self) -> usize {
+        <Self as sonido_core::TailReporting>::tail_samples(self)
     }
 
     fn process_stereo(&mut self, left: f32, right: f32, params: &Self::Params) -> (f32, f32) {
@@ -557,20 +577,28 @@ impl DspKernel for PlateReverbKernel {
         //
         // Each tank half: modulated allpass → delay line → one-pole damp → feedback.
         // Cross-coupling: output of delay[0] feeds into input of path[1] and vice versa.
-        // Wet taps: short-position reads from each delay line (well before the feedback
-        // recirculation point) so output appears quickly, independent of tail length.
-
-        // Tap wet output at fixed short positions (in samples) scaled to sample rate.
-        // These are early taps within the delay lines — they appear quickly (well before
-        // the full recirculation cycle) and differ between L/R for stereo decorrelation.
-        // At 44.1 kHz: tap_l ≈ 12 ms, tap_r ≈ 20 ms.
+        // Wet taps: fixed early positions in the tank delays (Dattorro's,
+        // given in samples at 44.1 kHz and scaled to the sample rate), so the
+        // output appears quickly, independent of the tail length.
         let max_tap_l = (self.tank_delay[0].capacity() - 2) as f32;
         let max_tap_r = (self.tank_delay[1].capacity() - 2) as f32;
-        let tap_l = (533.0 * self.sample_rate / REF_RATE).clamp(1.0, max_tap_l);
-        let tap_r = (889.0 * self.sample_rate / REF_RATE).clamp(1.0, max_tap_r);
-        const WET_SCALE: f32 = 0.35;
-        let wet_l = flush_denormal(self.tank_delay[0].read(tap_l)) * WET_SCALE;
-        let wet_r = flush_denormal(self.tank_delay[1].read(tap_r)) * WET_SCALE;
+        // Dattorro-style output: each channel sums a tap from its own tank
+        // side and subtracts one from the other, so the two outputs share the
+        // tail's energy but not its waveform (one tap per side came out 99.7%
+        // correlated once the tank recirculated). Taps stay inside the
+        // shortest tank (size 0%).
+        let tap = |samples_44k: f32, max: f32| {
+            (samples_44k * self.sample_rate / REF_RATE).clamp(1.0, max)
+        };
+        const WET_SCALE: f32 = 0.25;
+        let wet_l = flush_denormal(
+            self.tank_delay[0].read(tap(533.0, max_tap_l))
+                - self.tank_delay[1].read(tap(1257.0, max_tap_r)),
+        ) * WET_SCALE;
+        let wet_r = flush_denormal(
+            self.tank_delay[1].read(tap(889.0, max_tap_r))
+                - self.tank_delay[0].read(tap(1711.0, max_tap_l)),
+        ) * WET_SCALE;
 
         // Read full-length delay for cross-recirculation feedback
         let fb_from_r = self.tank_delay[1].read(self.tank_delay_len[1]);
@@ -593,7 +621,7 @@ impl DspKernel for PlateReverbKernel {
 
         // 6. Wet/dry mix
         let gain = sonido_core::db_to_linear(params.output_db);
-        let (out_l, out_r) = wet_dry_mix_stereo(left, right, wet_l, wet_r, params.mix_pct * 0.01);
+        let (out_l, out_r) = Self::blend_stereo(left, right, wet_l, wet_r, params.mix_pct * 0.01);
 
         (out_l * gain, out_r * gain)
     }

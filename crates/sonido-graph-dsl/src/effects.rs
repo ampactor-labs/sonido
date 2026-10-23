@@ -204,10 +204,11 @@ fn normalize_enum_value(param_name: &str, value: &str) -> String {
         "auto" => "Auto".to_string(),
         "manual" => "Manual".to_string(),
 
-        // ── Filter types ──────────────────────────────────────────────────
-        "lp" | "lowpass" | "low_pass" => "Lowpass".to_string(),
-        "hp" | "highpass" | "high_pass" => "Highpass".to_string(),
-        "bp" | "bandpass" | "band_pass" => "Bandpass".to_string(),
+        // ── Filter types (FilterKernel step labels) ───────────────────────
+        "lp" | "lowpass" | "low_pass" => "LPF".to_string(),
+        "hp" | "highpass" | "high_pass" => "HPF".to_string(),
+        "bp" | "bandpass" | "band_pass" => "BPF".to_string(),
+        "br" | "bandreject" | "band_reject" => "Notch".to_string(),
 
         // ── Boolean on/off (ping-pong, dc_block, etc.) ────────────────────
         "true" | "on" | "yes" => "On".to_string(),
@@ -409,6 +410,29 @@ mod tests {
         params.insert("bogus".to_string(), "1.0".to_string());
         let result = create_effect_with_params("distortion", 48000.0, &params);
         assert!(matches!(result, Err(EffectError::UnknownParameter { .. })));
+    }
+
+    #[test]
+    fn create_effect_filter_type_aliases() {
+        // Every shorthand must land on FilterKernel's own step label / index.
+        let cases = [
+            ("lp", 0.0),
+            ("lowpass", 0.0),
+            ("LPF", 0.0),
+            ("hp", 1.0),
+            ("highpass", 1.0),
+            ("bp", 2.0),
+            ("bandpass", 2.0),
+            ("notch", 3.0),
+            ("br", 3.0),
+        ];
+        for (value, expected) in cases {
+            let mut params = HashMap::new();
+            params.insert("type".to_string(), value.to_string());
+            let (effect, _) = create_effect_with_params("filter", 48000.0, &params)
+                .unwrap_or_else(|e| panic!("type={value} rejected: {e:?}"));
+            assert_eq!(effect.effect_get_param(3), expected, "type={value}");
+        }
     }
 
     #[test]

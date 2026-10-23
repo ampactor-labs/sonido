@@ -4,7 +4,8 @@
 //! *signature* parameter — the first continuous, musical control it exposes.
 //! The heuristic skips STEPPED selectors, read-only meters, hidden params, and
 //! anything marked [`ParamFlags::MACRO_EXCLUDE`](sonido_core::ParamFlags::MACRO_EXCLUDE)
-//! (output/makeup gain, dry/wet mix). Because an effect lists its primary knob
+//! (meant for output/makeup gain and dry/wet mix, though no built-in descriptor
+//! sets that flag yet). Because an effect lists its primary knob
 //! first (Drive, Time, Cutoff, Rate…), "first candidate" lands on the right
 //! control without a per-effect table.
 //!
@@ -202,6 +203,10 @@ mod tests {
     fn drive() -> ParamDescriptor {
         ParamDescriptor::gain_db("Drive", "Drive", 0.0, 40.0, 8.0)
     }
+    fn decay() -> ParamDescriptor {
+        ParamDescriptor::custom("Decay", "Decay", 0.1, 10.0, 2.0)
+    }
+
     fn mix() -> ParamDescriptor {
         ParamDescriptor::mix()
     }
@@ -210,7 +215,7 @@ mod tests {
     fn binds_first_musical_param_per_effect() {
         let bridge = MockBridge::new(&[
             ("distortion", &[8.0, 50.0], &[Some(drive()), Some(mix())]),
-            ("reverb", &[30.0, 50.0], &[Some(mix()), Some(mix())]),
+            ("reverb", &[2.0, 50.0], &[Some(decay()), Some(mix())]),
         ]);
         let a = auto_assign_macros(&bridge);
 
@@ -227,6 +232,15 @@ mod tests {
                 .any(|m| m.macro_index == 1 && m.target == MacroTarget::Slot { slot: 1, param: 0 })
         );
         assert_eq!(a.names[0], "Drive");
+        // Mix carries MACRO_EXCLUDE: never auto-mapped.
+        assert!(
+            m.iter()
+                .all(|m| m.target != MacroTarget::Slot { slot: 0, param: 1 })
+        );
+        assert!(
+            m.iter()
+                .all(|m| m.target != MacroTarget::Slot { slot: 1, param: 1 })
+        );
     }
 
     #[test]

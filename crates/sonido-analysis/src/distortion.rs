@@ -508,7 +508,7 @@ mod tests {
 
         // Should have up to 5 harmonics (fundamental + 4)
         assert!(result.harmonics.len() <= 5);
-        assert!(!result.harmonics.is_empty());
+        assert_ne!(result.harmonics, [] as [f32; 0]);
     }
 
     #[test]

@@ -1,8 +1,7 @@
 //! CLAP plugin adapter for sonido audio effects.
 //!
 //! This crate bridges sonido's `Effect` + `ParameterInfo` traits to the CLAP
-//! plugin format via the `clack-plugin` safe wrapper. Each effect becomes an
-//! independent `.clap` plugin binary.
+//! plugin format via the `clack-plugin` safe wrapper.
 //!
 //! # Architecture
 //!
@@ -16,10 +15,15 @@
 //! | `ParamFlags::AUTOMATABLE` | `CLAP_PARAM_IS_AUTOMATABLE` |
 //! | `ParamBridge::begin_set/end_set` | `request_begin_adjust` |
 //!
-//! # Plugin binary generation
+//! # Plugin binaries
 //!
-//! Each effect is a separate `cdylib` example target. Use the
-//! [`sonido_effect_entry!`] macro to generate the CLAP entry point:
+//! All 36 effects and the graph player ship in ONE binary: the
+//! [`bundle`] module's CLAP factory exports every plugin, and the `sonido`
+//! example is that bundle's `cdylib` (`scripts/bundle-clap.sh` packages it as
+//! `sonido.clap`; `scripts/bundle-vst3.sh` adds the matching `sonido.vst3`).
+//!
+//! [`sonido_effect_entry!`] still builds a standalone single-effect `.clap`
+//! for anyone who wants one effect in its own file:
 //!
 //! ```rust,ignore
 //! use sonido_plugin::sonido_effect_entry;
@@ -33,10 +37,14 @@
 //! ```
 
 pub mod audio;
+pub mod bundle;
 mod egui_bridge;
+pub mod graph_editor;
 pub mod graph_player;
 pub mod gui;
 pub mod main_thread;
+#[doc(hidden)]
+pub mod preview;
 pub mod shared;
 
 pub use audio::SonidoAudioProcessor;

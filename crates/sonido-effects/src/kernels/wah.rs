@@ -2,8 +2,8 @@
 //!
 //! `WahKernel` owns DSP state (SVF filters, envelope follower, sample rate).
 //! Parameters are received via `&WahParams` each sample. Deployed via
-//! [`Adapter`](sonido_core::kernel::Adapter) for desktop/plugin, or called
-//! directly on embedded targets.
+//! [`Adapter`](sonido_core::kernel::Adapter) for desktop/plugin, or via `Adapter::new_direct`
+//! (no smoothing) on embedded targets.
 //!
 //! # Signal Flow
 //!
@@ -24,7 +24,10 @@
 //! let adapter = Adapter::new(WahKernel::new(48000.0), 48000.0);
 //! let mut effect: Box<dyn Effect> = Box::new(adapter);
 //!
-//! // Embedded / Daisy Seed (direct — no smoothing, ADCs are hardware-filtered)
+//! // Embedded / Daisy Seed — zero-smoothing adapter, as the pedal firmware uses
+//! let effect = Adapter::new_direct(WahKernel::new(48000.0), 48000.0);
+//!
+//! // Or drive the kernel directly with a typed params struct (no adapter)
 //! let mut kernel = WahKernel::new(48000.0);
 //! let params = WahParams::from_knobs(adc_freq, adc_reso, adc_sens, adc_mode, adc_output);
 //! let (left, right) = kernel.process_stereo(input_l, input_r, &params);
@@ -33,6 +36,7 @@
 use sonido_core::Effect;
 use sonido_core::kernel::{DspKernel, KernelParams, SmoothingStyle};
 use sonido_core::kernel_params;
+use sonido_core::level::Level;
 use sonido_core::math::soft_limit;
 use sonido_core::{
     EnvelopeFollower, ParamDescriptor, ParamFlags, ParamId, ParamUnit, StateVariableFilter,
@@ -105,9 +109,9 @@ impl WahMode {
 /// | 1 | `resonance` | (Q factor) | 1–10 | 5.0 |
 /// | 2 | `sensitivity_pct` | % | 0–100 | 50.0 |
 /// | 3 | `mode` | index | 0–1 (Auto/Manual) | 0.0 |
-/// | 4 | `output_db` | dB | −20–+6 | 0.0 |
+/// | 4 | `output_db` | dB | −6–+6 | 0.0 |
 ///
-/// `ParamId` values match the classic `Wah` effect exactly (base 600) so
+/// `ParamId` values match the original pre-kernel `Wah` effect exactly (base 600) so
 /// saved automation and presets remain compatible.
 #[derive(Debug, Clone, Copy)]
 pub struct WahParams {
@@ -137,7 +141,7 @@ pub struct WahParams {
 
     /// Output level in decibels.
     ///
-    /// Range: −20.0–+6.0 dB.
+    /// Range: −6.0–+6.0 dB.
     pub output_db: f32,
 }
 
@@ -165,7 +169,7 @@ impl WahParams {
     /// | `reso` | 1 | `resonance` | 1–10 |
     /// | `sens` | 2 | `sensitivity_pct` | 0–100 % |
     /// | `mode` | 3 | `mode` | 0 or 1 (Auto/Manual) |
-    /// | `output` | 4 | `output_db` | −20–+6 dB |
+    /// | `output` | 4 | `output_db` | −6–+6 dB |
     pub fn from_knobs(freq: f32, reso: f32, sens: f32, mode: f32, output: f32) -> Self {
         Self::from_normalized(&[freq, reso, sens, mode, output])
     }
@@ -181,6 +185,7 @@ kernel_params! {
                 max: 2000.0,
                 default: 800.0,
                 step: 10.0,
+                flags: ParamFlags::AUTOMATABLE,
                 ..ParamDescriptor::mix()
             }
             .with_id(ParamId(600), "wah_freq")
@@ -197,6 +202,7 @@ kernel_params! {
                 max: 10.0,
                 default: 5.0,
                 step: 0.1,
+                flags: ParamFlags::AUTOMATABLE,
                 ..ParamDescriptor::mix()
             }
             .with_id(ParamId(601), "wah_reso"),
@@ -212,6 +218,7 @@ kernel_params! {
                 max: 100.0,
                 default: 50.0,
                 step: 1.0,
+                flags: ParamFlags::AUTOMATABLE,
                 ..ParamDescriptor::mix()
             }
             .with_id(ParamId(602), "wah_sens"),
@@ -330,6 +337,7 @@ impl WahKernel {
 
 impl DspKernel for WahKernel {
     type Params = WahParams;
+    const LEVEL: Level = crate::calibration::WAH;
 
     fn process_stereo(&mut self, left: f32, right: f32, params: &WahParams) -> (f32, f32) {
         // ── Unit conversion (user-facing → internal) ──
@@ -367,8 +375,8 @@ impl DspKernel for WahKernel {
 
         // ── Soft limit → output level ──
         (
-            soft_limit(out_l, 1.0) * output,
-            soft_limit(out_r, 1.0) * output,
+            soft_limit(Self::level(out_l), 1.0) * output,
+            soft_limit(Self::level(out_r), 1.0) * output,
         )
     }
 

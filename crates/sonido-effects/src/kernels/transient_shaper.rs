@@ -2,8 +2,8 @@
 //!
 //! `TransientShaperKernel` owns DSP state (two parallel envelope followers).
 //! Parameters are received via `&TransientShaperParams` each sample. Deployed via
-//! [`Adapter`](sonido_core::kernel::Adapter) for desktop/plugin, or called
-//! directly on embedded targets.
+//! [`Adapter`](sonido_core::kernel::Adapter) for desktop/plugin, or via `Adapter::new_direct`
+//! (no smoothing) on embedded targets.
 //!
 //! # Algorithm
 //!
@@ -39,7 +39,10 @@
 //! let adapter = Adapter::new(TransientShaperKernel::new(48000.0), 48000.0);
 //! let mut effect: Box<dyn Effect> = Box::new(adapter);
 //!
-//! // Embedded / Daisy Seed (direct — no smoothing, ADCs are hardware-filtered)
+//! // Embedded / Daisy Seed — zero-smoothing adapter, as the pedal firmware uses
+//! let effect = Adapter::new_direct(TransientShaperKernel::new(48000.0), 48000.0);
+//!
+//! // Or drive the kernel directly with a typed params struct (no adapter)
 //! let mut kernel = TransientShaperKernel::new(48000.0);
 //! let params = TransientShaperParams::from_knobs(attack, sustain, sensitivity, mix, output);
 //! let (left, right) = kernel.process_stereo(input_l, input_r, &params);
@@ -47,10 +50,11 @@
 
 use sonido_core::kernel::{DspKernel, KernelParams, SmoothingStyle};
 use sonido_core::kernel_params;
+use sonido_core::level::Level;
 use sonido_core::{
     EnvelopeFollower, ParamDescriptor, ParamId, ParamUnit,
     gain::output_param_descriptor,
-    math::{db_to_linear, flush_denormal, wet_dry_mix},
+    math::{db_to_linear, flush_denormal},
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -83,8 +87,8 @@ const SLOW_RELEASE_MS: f32 = 200.0;
 /// | 0 | `attack_pct` | % | −100–+100 | 0.0 |
 /// | 1 | `sustain_pct` | % | −100–+100 | 0.0 |
 /// | 2 | `sensitivity_pct` | % | 0–100 | 50.0 |
-/// | 3 | `mix_pct` | % | 0–100 | 100.0 |
-/// | 4 | `output_db` | dB | −60–+6 | 0.0 |
+/// | 3 | `mix_pct` | % | 0–100 | 50.0 |
+/// | 4 | `output_db` | dB | −6–+6 | 0.0 |
 ///
 /// ## Smoothing Notes
 ///
@@ -114,14 +118,14 @@ pub struct TransientShaperParams {
 
     /// Wet/dry blend in percent.
     ///
-    /// Range: 0.0–100.0 % (default 100.0).
+    /// Range: 0.0–100.0 % (default 50.0).
     /// At 0% the dry signal passes unchanged; at 100% only the shaped signal
     /// is output.
     pub mix_pct: f32,
 
     /// Output level in decibels.
     ///
-    /// Range: −60.0–+6.0 dB (default 0.0). Final output trim.
+    /// Range: −6.0–+6.0 dB (default 0.0). Final output trim.
     pub output_db: f32,
 }
 
@@ -131,7 +135,7 @@ impl Default for TransientShaperParams {
             attack_pct: 0.0,
             sustain_pct: 0.0,
             sensitivity_pct: 50.0,
-            mix_pct: 100.0,
+            mix_pct: 50.0,
             output_db: 0.0,
         }
     }
@@ -146,7 +150,7 @@ impl TransientShaperParams {
     /// | `sustain` | 1 | `sustain_pct` | −100–+100 % |
     /// | `sensitivity` | 2 | `sensitivity_pct` | 0–100 % |
     /// | `mix` | 3 | `mix_pct` | 0–100 % |
-    /// | `output` | 4 | `output_db` | −60–+6 dB |
+    /// | `output` | 4 | `output_db` | −6–+6 dB |
     pub fn from_knobs(attack: f32, sustain: f32, sensitivity: f32, mix: f32, output: f32) -> Self {
         Self::from_normalized(&[attack, sustain, sensitivity, mix, output])
     }
@@ -277,6 +281,7 @@ impl TransientShaperKernel {
 
 impl DspKernel for TransientShaperKernel {
     type Params = TransientShaperParams;
+    const LEVEL: Level = crate::calibration::TRANSIENT_SHAPER;
 
     /// Process a stereo sample pair with linked-mono transient detection.
     ///
@@ -307,8 +312,7 @@ impl DspKernel for TransientShaperKernel {
         let wet_r = flush_denormal(right * gain);
 
         let mix = params.mix_pct / 100.0;
-        let out_l = wet_dry_mix(left, wet_l, mix);
-        let out_r = wet_dry_mix(right, wet_r, mix);
+        let (out_l, out_r) = Self::blend_stereo(left, right, wet_l, wet_r, mix);
 
         let output_linear = db_to_linear(params.output_db);
         (

@@ -1,21 +1,20 @@
-//! Canonical patch (`sonido-patch`) export and inspection.
+//! Rig files: `sonido patch export` turns a preset TOML or a DSL chain into a
+//! rig (`.json` for the editor, or a 4 KB `.bin` sector), and `sonido patch
+//! inspect` prints one. [`RigSource`] and [`check_for_pedal`] are shared with
+//! `sonido pedal push`.
 //!
-//! `sonido patch export` packs a preset TOML or a DSL string into a single
-//! 4 KB `.bin` sector in the canonical format the firmware and GUI both speak.
-//! Unlike the legacy `sonido daisy export`, effects are stored by **stable UID**
-//! (not list position) and the format carries macros, morph, and globals.
-//!
-//! Arbitrary topologies (splits/merges) are authored in the GUI; this command
-//! supports the well-defined `linear` and `parallel` shapes for any effect count.
+//! Arbitrary topologies (splits/merges) are authored in the editor; presets and
+//! DSL chains take the well-defined `linear` and `parallel` shapes.
 
 use std::path::{Path, PathBuf};
 
 use clap::{Args, Subcommand};
 use sonido_config::Preset;
-use sonido_patch::{MAX_NODES, Patch, PatchEdge, PatchEndpoint, PatchNode, SECTOR_SIZE, binary};
-use sonido_registry::{EffectRegistry, PEDAL_EFFECT_IDS, effect_by_uid, effect_uid};
+use sonido_patch::validate::{Severity, has_errors, validate_for_daisy};
+use sonido_patch::{Patch, SECTOR_SIZE, binary};
+use sonido_registry::{EffectRegistry, effect_by_uid};
 
-/// Canonical patch management.
+/// Rig file management.
 #[derive(Args)]
 pub struct PatchArgs {
     #[command(subcommand)]
@@ -25,50 +24,113 @@ pub struct PatchArgs {
 /// Subcommands for `sonido patch`.
 #[derive(Subcommand)]
 pub enum PatchCommand {
-    /// Export a preset TOML or DSL string to a `.bin` patch sector.
+    /// Convert a rig (`.json`, `.bin`), preset TOML or DSL chain to a `.json`
+    /// rig or a `.bin` pedal sector.
     Export {
-        /// Path to a preset TOML file.
-        #[arg(conflicts_with = "from_dsl")]
-        preset: Option<PathBuf>,
-        /// DSL string to export directly (e.g. "distortion:drive=20 | reverb:mix=30").
-        #[arg(long, conflicts_with = "preset")]
-        from_dsl: Option<String>,
-        /// Output `.bin` file.
+        #[command(flatten)]
+        rig: RigSource,
+        /// Output file: `.json` (editor) or `.bin` (pedal sector).
         #[arg(short, long)]
         output: PathBuf,
-        /// Topology: `linear` (chain) or `parallel` (all effects between a split/merge).
-        #[arg(short, long, default_value = "linear")]
-        topology: String,
-        /// Override the patch name (defaults to the preset name / "dsl").
-        #[arg(long)]
-        name: Option<String>,
-        /// Restrict effects to the pedal set and fail if any are unavailable.
+        /// Fail unless the rig runs on the pedal (its effects and CPU rule).
         #[arg(long)]
         pedal: bool,
     },
-    /// Decode a `.bin` patch and print a human-readable summary.
+    /// Decode a `.bin` or `.json` rig and print a human-readable summary.
     Inspect {
-        /// Path to the `.bin` patch file.
+        /// Path to the rig.
         file: PathBuf,
     },
+}
+
+/// Where a rig comes from: a file, or a DSL chain.
+#[derive(Args)]
+pub struct RigSource {
+    /// A rig (`.json` from the editor, a `.bin` sector) or a preset `.toml`.
+    #[arg(conflicts_with = "from_dsl")]
+    pub file: Option<PathBuf>,
+    /// A DSL chain instead of a file (e.g. "distortion:drive=20 | reverb:mix=30").
+    #[arg(long, conflicts_with = "file")]
+    pub from_dsl: Option<String>,
+    /// Topology for a preset or DSL chain: `linear` or `parallel` (default:
+    /// the preset's own, else linear).
+    #[arg(short, long)]
+    pub topology: Option<String>,
+    /// Name the rig (defaults to the file's or preset's name).
+    #[arg(long)]
+    pub name: Option<String>,
+}
+
+impl RigSource {
+    /// Load the rig.
+    pub fn load(&self) -> anyhow::Result<Patch> {
+        let ext = self
+            .file
+            .as_deref()
+            .and_then(Path::extension)
+            .and_then(|e| e.to_str())
+            .map(str::to_ascii_lowercase);
+        let mut patch = match (&self.file, ext.as_deref()) {
+            (Some(path), Some("json")) => serde_json::from_slice(&read(path)?)
+                .map_err(|e| anyhow::anyhow!("'{}' is not a rig: {e}", path.display()))?,
+            (Some(path), Some("bin")) => binary::decode(&read(path)?)
+                .map_err(|e| anyhow::anyhow!("'{}' is not a rig: {e}", path.display()))?,
+            _ => {
+                let registry = EffectRegistry::new();
+                let preset =
+                    load_preset(self.file.as_deref(), self.from_dsl.as_deref(), &registry)?;
+                let name = self.name.clone().unwrap_or_else(|| preset.name.clone());
+                // The shared conversion (sonido_config::patch): same parameter
+                // resolution as preset loading.
+                let converted = sonido_config::preset_to_patch(
+                    &preset,
+                    &name,
+                    self.topology.as_deref(),
+                    &registry,
+                )?;
+                for warning in &converted.warnings {
+                    eprintln!("Warning: {warning}");
+                }
+                converted.patch
+            }
+        };
+        if let Some(name) = &self.name {
+            patch.name.clone_from(name);
+        }
+        Ok(patch)
+    }
+}
+
+fn read(path: &Path) -> anyhow::Result<Vec<u8>> {
+    std::fs::read(path).map_err(|e| anyhow::anyhow!("Failed to read '{}': {e}", path.display()))
+}
+
+/// Check `patch` with the rule the pedal itself enforces
+/// (`validate_for_daisy`): print warnings, fail on errors.
+pub fn check_for_pedal(patch: &Patch) -> anyhow::Result<()> {
+    let findings = validate_for_daisy(patch);
+    for f in &findings {
+        let level = match f.severity {
+            Severity::Error => "error",
+            Severity::Warning => "warning",
+        };
+        eprintln!("{level}: {f}");
+    }
+    if has_errors(&findings) {
+        anyhow::bail!("'{}' won't run on the pedal", patch.name);
+    }
+    Ok(())
 }
 
 /// Run the `sonido patch` command.
 pub fn run(args: PatchArgs) -> anyhow::Result<()> {
     match args.command {
-        PatchCommand::Export {
-            preset,
-            from_dsl,
-            output,
-            topology,
-            name,
-            pedal,
-        } => {
-            let registry = EffectRegistry::new();
-            let preset = load_preset(preset.as_deref(), from_dsl.as_deref(), &registry)?;
-            let patch_name = name.unwrap_or_else(|| preset.name.clone());
-            let patch = preset_to_patch(&preset, &patch_name, &topology, &registry)?;
-            export_patch(&patch, &output, pedal)
+        PatchCommand::Export { rig, output, pedal } => {
+            let patch = rig.load()?;
+            if pedal {
+                check_for_pedal(&patch)?;
+            }
+            export_patch(&patch, &output)
         }
         PatchCommand::Inspect { file } => inspect(&file),
     }
@@ -97,165 +159,50 @@ fn load_preset(
     }
 }
 
-/// Convert a [`Preset`] into a [`Patch`], resolving stable UIDs and overlaying
-/// the preset's parameter values onto each effect's defaults.
-fn preset_to_patch(
-    preset: &Preset,
-    name: &str,
-    topology: &str,
-    registry: &EffectRegistry,
-) -> anyhow::Result<Patch> {
-    if preset.effects.len() > MAX_NODES {
-        anyhow::bail!(
-            "Patch supports at most {MAX_NODES} effects, '{}' has {}",
-            preset.name,
-            preset.effects.len()
-        );
-    }
-
-    let mut nodes = Vec::with_capacity(preset.effects.len());
-    for effect_cfg in &preset.effects {
-        let id = effect_cfg.effect_type.as_str();
-        let uid = effect_uid(id)
-            .ok_or_else(|| anyhow::anyhow!("Effect '{}' has no stable UID (unknown effect)", id))?;
-
-        let effect = registry
-            .create(id, 48_000.0)
-            .ok_or_else(|| anyhow::anyhow!("Effect '{}' not found in registry", id))?;
-
-        let param_count = effect.effect_param_count();
-        let mut params = Vec::with_capacity(param_count);
-        // Start from defaults.
-        for idx in 0..param_count {
-            params.push(
-                effect
-                    .effect_param_info(idx)
-                    .map(|d| d.default)
-                    .unwrap_or(0.0),
-            );
-        }
-        // Overlay preset values, matched by name / short name / string id.
-        for (key, val) in &effect_cfg.params {
-            let lower = key.to_lowercase();
-            let mut matched = false;
-            for idx in 0..param_count {
-                if let Some(desc) = effect.effect_param_info(idx) {
-                    let hit = desc.name.to_lowercase() == lower
-                        || desc.short_name.to_lowercase() == lower
-                        || desc.string_id == lower;
-                    if hit {
-                        match val.parse::<f32>() {
-                            Ok(v) => params[idx] = v.clamp(desc.min, desc.max),
-                            Err(_) => eprintln!(
-                                "Warning: could not parse '{key}={val}' as f32, leaving default"
-                            ),
-                        }
-                        matched = true;
-                        break;
-                    }
-                }
-            }
-            if !matched {
-                eprintln!("Warning: effect '{id}' has no parameter '{key}', ignoring");
-            }
-        }
-
-        nodes.push(PatchNode::new(uid, params));
-    }
-
-    let mut patch = Patch::new(name);
-    patch.edges = build_edges(topology, nodes.len())?;
-    patch.nodes = nodes;
-    Ok(patch)
-}
-
-/// Build the edge set for a named topology over `n` effect nodes.
-fn build_edges(topology: &str, n: usize) -> anyhow::Result<Vec<PatchEdge>> {
-    let mut edges = Vec::new();
-    match topology {
-        "linear" => {
-            // Reuse the chain builder's edge layout.
-            return Ok(Patch::linear_chain(
-                "",
-                (0..n)
-                    .map(|i| PatchNode::new((i + 1) as u16, Vec::new()))
-                    .collect(),
-            )
-            .edges);
-        }
-        "parallel" => {
-            if n == 0 {
-                edges.push(PatchEdge::new(PatchEndpoint::Input, PatchEndpoint::Output));
-            } else {
-                edges.push(PatchEdge::new(
-                    PatchEndpoint::Input,
-                    PatchEndpoint::Split(0),
-                ));
-                for i in 0..n {
-                    edges.push(PatchEdge::new(
-                        PatchEndpoint::Split(0),
-                        PatchEndpoint::Node(i as u8),
-                    ));
-                    edges.push(PatchEdge::new(
-                        PatchEndpoint::Node(i as u8),
-                        PatchEndpoint::Merge(0),
-                    ));
-                }
-                edges.push(PatchEdge::new(
-                    PatchEndpoint::Merge(0),
-                    PatchEndpoint::Output,
-                ));
-            }
-        }
-        other => anyhow::bail!(
-            "Unknown topology '{other}'. Use 'linear' or 'parallel' \
-             (arbitrary graphs are authored in the GUI)."
-        ),
-    }
-    Ok(edges)
-}
-
 // ---------------------------------------------------------------------------
 // Export / Inspect
 // ---------------------------------------------------------------------------
 
-fn export_patch(patch: &Patch, output: &Path, pedal: bool) -> anyhow::Result<()> {
-    if pedal {
-        for node in &patch.nodes {
-            let id = effect_by_uid(node.effect_uid).unwrap_or("<unknown>");
-            if !PEDAL_EFFECT_IDS.contains(&id) {
-                anyhow::bail!(
-                    "Effect '{}' is not available on the pedal. Available: {}",
-                    id,
-                    PEDAL_EFFECT_IDS.join(", ")
-                );
-            }
-        }
-    }
-
-    let mut buf = [0u8; SECTOR_SIZE];
-    let len = binary::encode(patch, &mut buf)
-        .map_err(|e| anyhow::anyhow!("Failed to encode patch: {e}"))?;
-    std::fs::write(output, &buf[..len])
+fn export_patch(patch: &Patch, output: &Path) -> anyhow::Result<()> {
+    let json = output
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("json"));
+    let bytes = if json {
+        serde_json::to_vec_pretty(patch)?
+    } else {
+        // A whole sector, as the pedal's bank stores it (and the editor saves).
+        let mut buf = vec![0u8; SECTOR_SIZE];
+        binary::encode(patch, &mut buf)
+            .map_err(|e| anyhow::anyhow!("Failed to encode patch: {e}"))?;
+        buf
+    };
+    std::fs::write(output, &bytes)
         .map_err(|e| anyhow::anyhow!("Failed to write '{}': {}", output.display(), e))?;
-
     println!(
-        "Exported patch '{}' to '{}' ({} effect(s), {} byte(s), {} macro(s))",
+        "Exported rig '{}' to '{}' ({} effect(s), {} byte(s), {} macro(s))",
         patch.name,
         output.display(),
         patch.nodes.len(),
-        len,
+        bytes.len(),
         patch.active_macro_count(),
     );
     Ok(())
 }
 
 fn inspect(file: &Path) -> anyhow::Result<()> {
-    let data = std::fs::read(file)
-        .map_err(|e| anyhow::anyhow!("Failed to read '{}': {}", file.display(), e))?;
-    let patch =
-        binary::decode(&data).map_err(|e| anyhow::anyhow!("Failed to decode patch: {e}"))?;
+    let patch = RigSource {
+        file: Some(file.to_owned()),
+        from_dsl: None,
+        topology: None,
+        name: None,
+    }
+    .load()?;
+    print_rig(&patch);
+    Ok(())
+}
 
+/// Print a rig: globals, morph, nodes with their A/B values, edges, macros.
+pub fn print_rig(patch: &Patch) {
     let registry = EffectRegistry::new();
 
     println!("Name:      {}", patch.name);
@@ -320,13 +267,36 @@ fn inspect(file: &Path) -> anyhow::Result<()> {
         }
     }
 
-    Ok(())
+    let toggles: Vec<_> = sonido_patch::controls::RIG_TOGGLES
+        .iter()
+        .zip(&patch.toggles)
+        .filter(|(_, t)| t.is_active())
+        .collect();
+    if !toggles.is_empty() {
+        println!("Toggles:");
+        for (switch, t) in toggles {
+            println!(
+                "  {}: \"{}\"  {}",
+                switch.label(),
+                t.name,
+                t.positions.join(" · ")
+            );
+            for map in &t.mappings {
+                println!(
+                    "      {:?}  [{:.3} · {:.3} · {:.3}]",
+                    map.target, map.values[0], map.values[1], map.values[2]
+                );
+            }
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use sonido_config::{EffectConfig, Preset};
+    use sonido_patch::{MAX_NODES, PatchEndpoint};
+    use sonido_registry::effect_uid;
 
     fn pedal_uid(id: &str) -> u16 {
         effect_uid(id).unwrap()
@@ -338,7 +308,9 @@ mod tests {
             .with_effect(EffectConfig::new("distortion").with_param("drive", "20.0"))
             .with_effect(EffectConfig::new("reverb").with_param("mix", "30"));
         let registry = EffectRegistry::new();
-        let patch = preset_to_patch(&preset, "CLI Test", "linear", &registry).unwrap();
+        let patch = sonido_config::preset_to_patch(&preset, "CLI Test", Some("linear"), &registry)
+            .unwrap()
+            .patch;
 
         assert_eq!(patch.nodes.len(), 2);
         assert_eq!(patch.nodes[0].effect_uid, pedal_uid("distortion"));
@@ -352,7 +324,7 @@ mod tests {
 
     #[test]
     fn parallel_topology_has_split_and_merge() {
-        let edges = build_edges("parallel", 3).unwrap();
+        let edges = sonido_config::patch::build_edges("parallel", 3).unwrap();
         assert!(
             edges.iter().any(|e| matches!(e.from, PatchEndpoint::Input)
                 && matches!(e.to, PatchEndpoint::Split(0)))
@@ -365,7 +337,7 @@ mod tests {
 
     #[test]
     fn unknown_topology_rejected() {
-        assert!(build_edges("fan", 3).is_err());
+        assert!(sonido_config::patch::build_edges("fan", 3).is_err());
     }
 
     #[test]
@@ -375,6 +347,6 @@ mod tests {
             preset = preset.with_effect(EffectConfig::new("distortion"));
         }
         let registry = EffectRegistry::new();
-        assert!(preset_to_patch(&preset, "big", "linear", &registry).is_err());
+        assert!(sonido_config::preset_to_patch(&preset, "big", Some("linear"), &registry).is_err());
     }
 }

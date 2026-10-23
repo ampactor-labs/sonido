@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# smoke_test.sh -- Exhaustive CLI smoke test for all effects and graph topologies.
+# smoke_test.sh -- CLI smoke test across 19 effects and graph topologies.
 #
-# Processes demos/piano.wav through every effect at mild + heavy settings,
+# Processes demos/piano.wav through 19 of the 36 effects at mild + heavy settings,
 # all waveshape/waveform variants, complex chains, and graph topologies.
 # Validates: exit code, file existence, non-silence, no clipping.
 #
@@ -146,7 +146,7 @@ run_test() {
     record_pass "$name"
 }
 
-# ── Tier 1: Every effect at mild + heavy settings (38 tests) ─────────
+# ── Tier 1: 19 effects at mild + heavy settings (38 tests) ───────────
 
 tier_1() {
     echo -e "\n${BOLD}=== Tier 1: Effects at mild + heavy settings ===${RESET}"

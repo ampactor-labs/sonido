@@ -289,7 +289,8 @@ impl<const N: usize> ControlMapper<N> {
     ///
     /// Like [`apply()`](Self::apply), but instead of linear denormalization,
     /// calls `map_fn` with the parameter descriptor and normalized value.
-    /// Use for biased mapping (e.g., noon presets on embedded hardware).
+    /// Use for biased mapping (e.g., noon at the parameter's default on the
+    /// pedal's knobs).
     ///
     /// Returns `true` if the parameter was set, `false` if the mapping
     /// or parameter info was not found.
@@ -298,7 +299,7 @@ impl<const N: usize> ControlMapper<N> {
     ///
     /// ```rust,ignore
     /// mapper.apply_with_fn(ctrl_id, state.value, &mut effect, |desc, norm| {
-    ///     adc_to_param_biased(desc, noon_value, norm)
+    ///     adc_to_param_biased(desc, desc.default, norm)
     /// });
     /// ```
     pub fn apply_with_fn<E, F>(
@@ -394,7 +395,7 @@ mod tests {
     fn test_mapper_new() {
         let mapper = ControlMapper::<8>::new();
         assert_eq!(mapper.len(), 0);
-        assert!(mapper.is_empty());
+        assert_eq!(mapper.len(), 0);
         assert_eq!(mapper.capacity(), 8);
     }
 
@@ -406,7 +407,7 @@ mod tests {
         assert!(mapper.map(ControlId::hardware(1), 1));
 
         assert_eq!(mapper.len(), 2);
-        assert!(!mapper.is_empty());
+        assert_ne!(mapper.len(), 0);
 
         assert_eq!(mapper.get_param_index(ControlId::hardware(0)), Some(0));
         assert_eq!(mapper.get_param_index(ControlId::hardware(1)), Some(1));
@@ -478,7 +479,7 @@ mod tests {
 
         mapper.clear();
         assert_eq!(mapper.len(), 0);
-        assert!(mapper.is_empty());
+        assert_eq!(mapper.len(), 0);
         assert_eq!(mapper.get_param_index(ControlId::hardware(0)), None);
     }
 
@@ -560,7 +561,7 @@ mod tests {
     #[test]
     fn test_mapper_default() {
         let mapper = ControlMapper::<8>::default();
-        assert!(mapper.is_empty());
+        assert_eq!(mapper.len(), 0);
     }
 
     #[test]

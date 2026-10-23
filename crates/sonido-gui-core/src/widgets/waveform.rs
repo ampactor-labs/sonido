@@ -266,7 +266,7 @@ mod tests {
         let w = WaveformState::new(1024);
         assert_eq!(w.capacity(), 1024);
         assert_eq!(w.len(), 0);
-        assert!(w.is_empty());
+        assert_eq!(w.len(), 0);
     }
 
     #[test]
@@ -274,7 +274,7 @@ mod tests {
         let mut w = WaveformState::new(1024);
         w.push(&[1.0, 2.0, 3.0]);
         assert_eq!(w.len(), 3);
-        assert!(!w.is_empty());
+        assert_ne!(w.len(), 0);
     }
 
     #[test]
@@ -306,7 +306,7 @@ mod tests {
         w.push(&[0.5, 0.6]);
         w.reset();
         assert_eq!(w.len(), 0);
-        assert!(w.is_empty());
+        assert_eq!(w.len(), 0);
     }
 
     #[test]

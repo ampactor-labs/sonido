@@ -5,7 +5,8 @@
 //! thread (processing). Parameter values are stored as atomic `u32`
 //! (f32 bit-cast) for lock-free access.
 
-use sonido_core::ParamDescriptor;
+use sonido_core::{ParamDescriptor, ParamFlags};
+use sonido_gui_core::telemetry::SignalTap;
 use sonido_registry::EffectRegistry;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, Ordering};
@@ -31,6 +32,10 @@ struct SonidoSharedData {
     ///
     /// Read by the main thread to implement `PluginLatencyImpl::get()`.
     latency_samples: AtomicU32,
+    /// Host sample rate in Hz (`f32` bits), written on `activate()`; 0 until then.
+    sample_rate: AtomicU32,
+    /// Audio → GUI meters and scope.
+    tap: SignalTap,
     /// Host notification callback, called from GUI thread to request
     /// the host to schedule a `process()`/`flush()` call.
     ///
@@ -95,6 +100,8 @@ impl SonidoShared {
                 bypassed: AtomicBool::new(false),
                 gesture_flags,
                 latency_samples: AtomicU32::new(0),
+                sample_rate: AtomicU32::new(0),
+                tap: SignalTap::new(),
                 host_notify,
             }),
         }
@@ -144,6 +151,30 @@ impl SonidoShared {
             let clamped = value.clamp(desc.min, desc.max);
             atomic.store(clamped.to_bits(), Ordering::Release);
         }
+    }
+
+    /// Whether parameter `index` is a read-only diagnostic the kernel writes
+    /// (gain reduction, gate state, detected pitch, LFO phase).
+    pub fn is_read_only(&self, index: usize) -> bool {
+        self.descriptor(index)
+            .is_some_and(|d| d.flags.contains(ParamFlags::READ_ONLY))
+    }
+
+    /// Audio → GUI meters and scope.
+    pub fn tap(&self) -> &SignalTap {
+        &self.inner.tap
+    }
+
+    /// Host sample rate in Hz, or 0.0 before the first `activate()`.
+    pub fn sample_rate(&self) -> f32 {
+        f32::from_bits(self.inner.sample_rate.load(Ordering::Acquire))
+    }
+
+    /// Record the host sample rate (audio processor, on `activate()`).
+    pub fn set_sample_rate(&self, sample_rate: f32) {
+        self.inner
+            .sample_rate
+            .store(sample_rate.to_bits(), Ordering::Release);
     }
 
     /// Whether the effect is bypassed (GUI toggle).
@@ -216,8 +247,12 @@ impl SonidoShared {
     /// Sync all current parameter values into an effect instance.
     ///
     /// Called when the audio processor is activated or after loading state.
+    /// Read-only diagnostics are skipped: the kernel owns those values.
     pub fn apply_to_effect(&self, effect: &mut dyn sonido_registry::EffectWithParams) {
         for (i, atomic) in self.inner.values.iter().enumerate() {
+            if self.is_read_only(i) {
+                continue;
+            }
             let val = f32::from_bits(atomic.load(Ordering::Acquire));
             effect.effect_set_param(i, val);
         }

@@ -3,33 +3,49 @@
 The patch platform lets you build an effect rig in the standalone editor, map
 effect/global controls to **six macros** (the pedal's six knobs), dial in an
 **A/B morph**, and export the result as a **CLAP graph-player patch** or a
-**flashable pedal sector** — all from one canonical model.
+**pedal sector**, or send it straight to the pedal over USB — all from one canonical
+model. The same model is the pedal's own: every sound the pedal makes is a rig,
+including the jam built with its knobs, and the factory rigs it ships are the graph
+player's.
 
 ## One model, three projections
 
 ```
                  sonido_patch::Patch
    nodes (stable effect UID) · edges (Input/Output/Split/Merge) ·
-   per-node A/B param snapshots · bypass · 6 macros · morph config · globals
+   per-node A/B param snapshots · bypass · 6 macros · 2 toggles · morph · globals
       │                      │                         │
       ▼ JSON (serde)         ▼ JSON                     ▼ binary codec (4 KB sector)
- GUI session v2         CLAP plugin state          QSPI patch bank
- (+ node positions)     (graph-player)             firmware decodes; GUI writes via DFU
+ GUI session (v4)       CLAP plugin state          QSPI rig bank (15 slots)
+ (+ node positions)     (graph-player)             pedal plays it; written over
+                                                   the USB rig link
 ```
 
 Effects are referenced by **stable UID** (`sonido_registry::EFFECT_UIDS`), never
-by list position — positional indices rotted once already (the daisy-export
-test drift fixed in Phase 0). The same Rust binary codec compiles into the host
-tools (encode+decode) and the firmware (decode only): no second hand-mirrored
-struct to drift.
+by list position — positional indices rotted once already (the test drift of the
+legacy, since-removed `sonido daisy` sector export, fixed in Phase 0). The same Rust binary codec compiles into the host
+tools (encode+decode) and the firmware (encode+decode: the pedal also writes its
+jam and state sector): no second hand-mirrored struct to drift.
 
-Runtime layering, shared by GUI / plugin / pedal:
+Runtime layering:
 - `MacroMap<6>` (`sonido-core`) — knob → `MacroTarget` (slot param or global),
-  per-mapping range + curve, engine-decoupled sink apply.
-- `ChainMorph` (`sonido-core`) — per-slot `MorphSpace` + locks; one engine for
-  all three consumers, so they interpolate identically (incl. logarithmic
-  frequency morph and stepped snap).
-- Per-control-tick order: **morph first, then macros** (macros win on overlap).
+  per-mapping range + `MorphCurve`, engine-decoupled sink apply. Used by the
+  standalone GUI (`app.rs`, writing through the param bridge) and by
+  `PatchPlayer`.
+- `ChainMorph` (`sonido-core`) — per-slot `MorphSpace` + locks. Used by
+  `PatchPlayer`. The GUI's `MorphState` (`morph_state.rs`) is its own A/B
+  implementation built on the same `curve_lerp` / `MorphCurve` primitives, so
+  both interpolate per-parameter the same way (incl. logarithmic frequency
+  morph and stepped snap).
+- `PatchPlayer` (`sonido-patch/runtime.rs`) runs a patch live: the graph-player
+  plugin and the pedal firmware (`examples/sonido_pedal.rs`) both play every rig
+  through it, with effects built by the same `EffectRegistry::create`. Per
+  control tick the order is **morph first, then toggles, then macros** (a
+  toggle overrides the morph on what it sets; a macro wins over both). A freshly built player starts at its values
+  (`apply_controls_now`, which snaps every parameter) rather than sweeping
+  there from the effects' defaults.
+- The GUI editor projects its session into a `Patch` for export; it does not run
+  patches.
 
 ## What's built (committed, verified)
 
@@ -38,69 +54,67 @@ Runtime layering, shared by GUI / plugin / pedal:
 | Phase 0 clean state | effects/cli/daisy | ✅ restored green gate (was red 3 ways) |
 | Patch format + codec + validate | `crates/sonido-patch` | ✅ proptest roundtrips; no_std thumbv7em |
 | Stable effect UIDs | `sonido-registry::EFFECT_UIDS` | ✅ totality/uniqueness test |
-| CLI `sonido patch export\|inspect` | `sonido-cli/commands/patch.rs` | ✅ end-to-end verified |
-| GUI session v2 + v1 migration + `to_patch()` | `sonido-gui/session.rs` | ✅ migration test |
-| Macro system | `sonido-core/macro_map.rs` | ✅ 8 tests |
+| CLI `sonido patch export\|inspect` (reads `.json`/`.bin` rigs or a preset/DSL chain, writes `.json` or `.bin`) | `sonido-cli/commands/patch.rs` | ✅ end-to-end verified |
+| CLI `sonido pedal info\|list\|push\|pull\|erase\|play\|update` | `sonido-cli/commands/pedal.rs` | ✅ |
+| GUI session (v3; older files load via `serde(default)`) + `to_patch()` | `sonido-gui/session.rs` | ✅ 6 tests |
+| Macro system | `sonido-core/macro_map.rs` | ✅ 10 tests |
 | A/B morph unification + GUI log-fidelity fix | `sonido-core/kernel/chain_morph.rs`, `sonido-gui/morph_state.rs` | ✅ |
 | `build_graph_from_patch` (arbitrary DAG) | `sonido-patch/build.rs` | ✅ host-tested with real effects |
-| Firmware QSPI read + patch loader + factory | `sonido-daisy/{qspi_flash,patch_loader}.rs` | ✅ compiles thumbv7em |
-| `qspi_read_test` hardware probe | `sonido-daisy/examples/` | ✅ compiles; **awaiting hardware** |
-| Export logic (dfu / cost table / validate) | `sonido-gui/{dfu,export}.rs`, `sonido-platform/cycle_table.rs` | ✅ 11 tests |
-| Macro panel + morph crossfader widgets | `sonido-gui-core/widgets/{macro_panel,morph_bar}.rs` | ✅ lib-checked |
-| **PatchPlayer** runtime (macros+morph+gains over a graph) | `sonido-patch/runtime.rs` | ✅ 5 tests; no_std thumbv7em |
-| **Graph-player CLAP plugin** (headless: params/state/audio) | `sonido-plugin/graph_player.rs` + example | ✅ cdylib builds; 4 tests; in `make verify` |
+| One CPU/memory rule for export and pedal (`chain_fits`, `CHAIN_FRACTION` 0.80, `NODE_OVERHEAD_CYCLES`), cycle table measured on a Daisy Seed and regenerated by `scripts/update_cycle_table.py` | `sonido-platform/cycle_table.rs`, `sonido-patch/validate.rs` | ✅ |
+| Export logic (cost table / validate; `validate_for_daisy`, the one pedal check for the editor, the CLI and the rigs tests) | `sonido-gui/export.rs`, `sonido-patch/validate.rs`, `sonido-platform/cycle_table.rs` | ✅ |
+| **Host link client**: `LinkClient` over any `Read + Write`, `send_rig` (replaces the bank rig with the same name, else the first empty slot), `enter_bootloader`; `open_pedal`/`pedal_ports` (feature `serial`, USB `1209:0001`) | `sonido-patch/client.rs` | ✅ 4 tests against an in-memory pedal |
+| **Firmware update over DFU** (`dfu-util`; Daisy bootloader only, QSPI region `0x90000000`; firmware only, never rigs) | `sonido-patch/dfu.rs` (moved from `sonido-gui`) | ✅ 3 tests |
+| GUI macros: macro strip, right-click param → macro menu, auto-assign, macro editor | `sonido-gui/{app,macro_autoassign}.rs`, `sonido-gui-core/widgets/param_menu.rs` | ✅ wired |
+| GUI A/B morph: `morph_bar` crossfader, per-node locks, `GlobalParam::MorphPosition` as macro target | `sonido-gui/{app,morph_state}.rs`, `sonido-gui-core/widgets/morph_bar.rs` | ✅ wired |
+| GUI export menu: rig **Name** (saved in the session), `.bin` / `.json` / CLAP preset, **Send to pedal** over USB (`send_rig`) | `sonido-gui/app.rs` (`render_export_menu`), `sonido-gui/session.rs` (`Session::name`) | ✅ wired |
+| **PatchPlayer** runtime (macros+morph+gains over a graph; `apply_controls_now`) | `sonido-patch/runtime.rs` | ✅ 6 tests; no_std thumbv7em |
+| **Graph-player CLAP plugin** (params/state/audio) | `sonido-plugin/graph_player.rs`, exported by the `sonido.clap` bundle as `com.sonido.graph-player` | ✅ 4 tests; in `make verify` |
+| **Graph-player editor** (RIG cabinet: rig browser over the factory rigs + the rig library, macros, morph, gains) | `sonido-plugin/graph_editor.rs` | ✅ tests; `sonido-preview graph-player` |
+| **Factory rigs**: six rigs, one set for the pedal and the graph player; master trims level-matched to the dry guitar, generated by `cargo run -p sonido-rigs --example calibrate --release` | `crates/sonido-rigs` | ✅ `tests/factory.rs`: loudness, fits the pedal, binary round trip |
+| **Pedal rig player**: jam + rig bank + factory rigs through `PatchPlayer` | `sonido-daisy/examples/sonido_pedal.rs`, `src/{patch_loader,rigs}.rs`, `build.rs` | ✅ runs on a Hothouse (2026-10-22) |
+| QSPI rig bank (15 × 4 KB) + state sector; page-chunked async reads, bank-only writes | `sonido-daisy/src/qspi_flash.rs`; `examples/qspi_test.rs` hardware check | ✅ on hardware |
+| Pedal state (active rig, jam, topology, `JamSettings`, tempo) | `sonido-patch/pedal.rs` (`PedalState`, `jam_patch`) | ✅ 5 tests |
+| USB rig link protocol (frames, requests/replies incl. `Bootloader`, CRC32) and its firmware side | `sonido-patch/link.rs`, `sonido_pedal.rs` (`link_task`) | ✅ 5 tests |
 | Full `make verify` (fmt+clippy+tests+no_std+wasm+doc) | whole workspace | ✅ exits 0, zero warnings |
 
-`PatchPlayer` is the single runtime the plugin and firmware both wrap, so a rig
-sounds identical in the DAW and on the pedal.
+The plugin and the firmware share the effect kernels, the registry, the `Patch`
+format and the `PatchPlayer` runtime, so a rig morphs, responds to its macros and
+sounds the same in a DAW and on the pedal. Each kernel is level-calibrated
+(`sonido_core::level`), and each factory rig is level-matched as a whole. The
+pedal checks every rig with `patch_loader::check_rig`, the rule
+`validate_for_daisy` applies in the editor and the CLI, before it plays or stores
+it: a rig the editor exports runs on the pedal. See [EMBEDDED.md](EMBEDDED.md#the-pedal-rig-player) for the
+firmware.
 
-## Remaining integration (needs a live GUI / hardware)
+## Remaining integration
 
-GL is now installed (plugin builds, full `make verify` green). What's left needs
-either a visible GUI session (you, present) or the pedal:
-
-1. **No Seed/pedal access yet** → the QSPI-on-H7 read path is unvalidated (run
-   `qspi_read_test` first).
-2. **Standalone GUI panels** can be lib-checked but want a visible window to dial
-   in the UX (you've said morph must feel right) — best done with you present.
-
-Precise remaining wiring points, by workstream:
-
-- **B-GUI (macros):** place `macro_panel` in `app.rs`; add a "Map to Macro 1–6"
-  context menu on parameter knobs (`sonido-gui-core/widgets/bridged_knob.rs`);
-  add `GraphCommand::SetMacroMap(MacroMap<6>)` to `chain_manager.rs` + apply on
-  the audio thread in `audio_processor.rs` (Box-swap like `ReplaceTopology`);
-  6 atomic macro positions in `atomic_param_bridge.rs`.
-- **C-GUI (morph):** the `morph_bar` widget exists; wire it to `MorphState`
-  (`morph_state.rs`) in `app.rs`, add per-slot lock toggles on the chain strip,
-  and expose `GlobalParam::MorphPosition` as a macro target.
-- **E (export panel):** an `export_panel.rs` calling the host-tested `export.rs`
-  + `dfu.rs` (logic done); bootloader-entry modal; slot picker; full-firmware
-  flash button.
-- **D (firmware integration):** after `qspi_read_test` confirms QSPI, evolve
-  `examples/sonido_pedal.rs` into `sonido_patch_player.rs` — load via
-  `patch_loader::load_and_build`, drive `MacroMap<6>` from the knobs (pickup-lock),
-  `ChainMorph` from the footswitch (Ramp/Momentary/Latch), wire `tap_tempo.rs`,
-  keep the `GRAPH_UPDATING` rebuild + bypass crossfade, LED error codes
-  (`patch_loader::error_blink_code`). Introduce `CallbackCell<T>` to retire the
+- **E (export panel, remainder):** the editor sends a rig by its name only (same
+  name replaces, else the first empty slot) to the first pedal it finds. Choosing a
+  slot or a port, erasing, and firmware updates are CLI-only (`sonido pedal push
+  --slot`, `--port`, `erase`, `update`); the editor has no firmware-update button.
+- Introduce `CallbackCell<T>` to retire the firmware's
   `#![allow(static_mut_refs)]`.
-- **F (graph-player CLAP):** new `sonido-plugin/src/graph_player/*` +
-  `examples/sonido_graph_player.rs`; owns a `GraphEngine` (via
-  `build_graph_from_patch`), `MacroMap<6>`, `ChainMorph`; state = patch JSON;
-  reuses `macro_panel`/`morph_bar` + gui-core effect panels. Blocked until GL.
 
-## Validate it (when you're back)
+## Validate it
 
 ```sh
-# 1) Cost table + budget logic is estimates until measured on-device — regenerate
-#    real cycle counts with a bench_kernels DWT probe and update
-#    crates/sonido-platform/src/cycle_table.rs.
-
-# 2) QSPI read path (first hardware step):
-sonido patch export --from-dsl "distortion:drive=25 | reverb:mix=40" -o p0.bin
-dfu-util -a 0 -s 0x907F0000:leave -D p0.bin           # flash patch to slot 0
+# 1) Cost table: measured on a Daisy Seed (2026-10-22, rig-path worst block per
+#    effect). After changing a kernel, regenerate it from a bench log
+#    (docs/BENCHMARKS.md, "Updating the cycle table"):
 cd crates/sonido-daisy
-cargo objcopy --example qspi_read_test --release --features alloc -- -O binary q.bin
-dfu-util -a 0 -s 0x90040000:leave -D q.bin            # flash the probe
-# watch RTT: expect JEDEC EF 40 17 and a slot-0 decode summary
+cargo build --release --example bench_kernels
+probe-rs run --chip STM32H750IBKx --protocol swd \
+    target/thumbv7em-none-eabihf/release/examples/bench_kernels | tee bench.log
+cd ../..
+python3 scripts/update_cycle_table.py crates/sonido-daisy/bench.log
+
+# 2) QSPI flash path (with a probe; writes and erases only the state sector):
+cd crates/sonido-daisy
+cargo run --release --example qspi_test --features alloc
+cd ../..
+
+# 3) A rig to the playing pedal over USB (checked, then played at once), and
+#    the bank read back:
+sonido pedal push --from-dsl "distortion:drive=25 | reverb:mix=40" --name "Test Rig"
+sonido pedal list
 ```

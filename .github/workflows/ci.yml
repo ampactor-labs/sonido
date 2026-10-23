@@ -9,11 +9,12 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  # The wasm job adds --cfg=web_sys_unstable_apis (Web Serial) to its own copy.
   RUSTFLAGS: -D warnings
   # Build deps for the desktop GUI (eframe/winit/cpal) on Linux runners.
   # macOS and Windows link system frameworks (CoreAudio/WASAPI) — nothing to install.
   SYSTEM_DEPS: >-
-    libasound2-dev libudev-dev libgl-dev libx11-dev libx11-xcb-dev
+    libasound2-dev libgl-dev libx11-dev libx11-xcb-dev
     libxcursor-dev libxrandr-dev libxi-dev libxkbcommon-dev libxext-dev
     libxfixes-dev libwayland-dev
 
@@ -67,6 +68,10 @@ jobs:
   wasm:
     name: wasm build (web demo)
     runs-on: ubuntu-latest
+    env:
+      # Web Serial lives behind web-sys's unstable APIs; a RUSTFLAGS variable
+      # replaces the root .cargo/config.toml flag, so it is repeated here.
+      RUSTFLAGS: -D warnings --cfg=web_sys_unstable_apis
     steps:
       - uses: actions/checkout@v5
 
@@ -76,8 +81,60 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
+          components: clippy
 
       - uses: Swatinem/rust-cache@v2
 
       - name: Build GUI for wasm32
         run: cargo build --target wasm32-unknown-unknown -p sonido-gui
+
+      # Native clippy never compiles the editor's wasm-only code.
+      - name: Clippy (wasm32)
+        run: cargo clippy --target wasm32-unknown-unknown -p sonido-gui
+
+  firmware:
+    name: firmware (Daisy pedal)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: crates/sonido-daisy
+    env:
+      # A RUSTFLAGS variable replaces the crate's .cargo/config.toml rustflags,
+      # so its target-cpu is repeated here; the linker scripts come from build.rs.
+      RUSTFLAGS: -D warnings -C target-cpu=cortex-m7
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0 # `git describe` names the firmware build
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: thumbv7em-none-eabihf
+          components: clippy, llvm-tools
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: crates/sonido-daisy -> target
+
+      - name: Clippy
+        run: cargo clippy --release --features alloc,platform --lib --example sonido_pedal
+
+      - name: Build sonido_pedal.bin
+        run: |
+          cargo build --release --example sonido_pedal --features alloc,platform
+          objcopy=$(find "$(rustc --print sysroot)" -name llvm-objcopy -type f | head -1)
+          "$objcopy" -O binary -R .sram1_bss -R .sdram_bss \
+            target/thumbv7em-none-eabihf/release/examples/sonido_pedal sonido_pedal.bin
+
+      - name: Fits BOOT_SRAM (480 KB)
+        run: |
+          size=$(stat -c %s sonido_pedal.bin)
+          limit=491520
+          echo "sonido_pedal.bin: $size of $limit bytes ($((limit - size)) free)"
+          test "$size" -le "$limit"
+
+      # Flashable from a PR: `sonido pedal update sonido_pedal.bin`.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sonido_pedal
+          path: crates/sonido-daisy/sonido_pedal.bin

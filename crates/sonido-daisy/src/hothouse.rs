@@ -4,7 +4,7 @@
 //! on the Electrosmith Daisy Seed. Includes:
 //!
 //! - [`HothouseControls`] — peripheral bundle for the control task
-//! - [`hothouse_control_task`] — Embassy task that reads ADC + GPIO at 50 Hz
+//! - [`hothouse_control_task`] — Embassy task that reads ADC + GPIO at 100 Hz
 //! - [`decode_toggle`] — standardized 3-position toggle decoder
 //! - `hothouse_pins!` — macro to extract control pins from Embassy peripherals
 //! - `HothousePlatform` — `PlatformController` implementation (feature `platform`)
@@ -33,13 +33,13 @@
 //! # Architecture
 //!
 //! All 6 knobs use uniform `blocking_read()` polling — one ADC conversion per
-//! knob per 50 Hz cycle. At ~8 µs per channel (CYCLES387_5 sample time),
-//! 6 reads cost ~48 µs per 20 ms cycle (0.24% CPU). This matches libDaisy's
+//! knob per 100 Hz cycle. At ~8 µs per channel (CYCLES387_5 sample time),
+//! 6 reads cost ~48 µs per 10 ms cycle (0.48% CPU). This matches libDaisy's
 //! own `AnalogControl` polling approach. No DMA channel, DMA buffer, or D2
 //! SRAM allocation is needed for the control path.
 //!
 //! GPIO reads (toggles, footswitches) and LED writes are instantaneous register
-//! accesses. All control I/O runs at 50 Hz in its own Embassy task, **never**
+//! accesses. All control I/O runs at 100 Hz in its own Embassy task, **never**
 //! inside the audio DMA callback.
 
 use embassy_stm32::adc::{Adc, AnyAdcChannel, SampleTime};
@@ -168,10 +168,10 @@ macro_rules! hothouse_pins {
 
 // ── Embassy control task ──────────────────────────────────────────────────
 
-/// Reads ADC knobs and GPIO at 50 Hz, writes smoothed values to a [`HothouseBuffer`].
+/// Reads ADC knobs and GPIO at 100 Hz, writes smoothed values to a [`HothouseBuffer`].
 ///
 /// All 6 knobs are read via uniform `blocking_read()` polling — ~48 µs total
-/// per 20 ms cycle (0.24% CPU). This matches libDaisy's `AnalogControl` approach.
+/// per 10 ms cycle (0.48% CPU). This matches libDaisy's `AnalogControl` approach.
 ///
 /// Drives LEDs from the buffer's LED values (written by the audio callback).
 ///

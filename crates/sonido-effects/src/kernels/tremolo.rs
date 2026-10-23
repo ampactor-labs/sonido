@@ -2,8 +2,8 @@
 //!
 //! `TremoloKernel` owns DSP state (two `Lfo` instances and a `TempoManager`).
 //! Parameters are received via `&TremoloParams` each sample. Deployed via
-//! [`Adapter`](sonido_core::kernel::Adapter) for desktop/plugin, or called
-//! directly on embedded targets.
+//! [`Adapter`](sonido_core::kernel::Adapter) for desktop/plugin, or via `Adapter::new_direct`
+//! (no smoothing) on embedded targets.
 //!
 //! # Signal Flow
 //!
@@ -42,13 +42,17 @@
 //! let adapter = Adapter::new(TremoloKernel::new(48000.0), 48000.0);
 //! let mut effect: Box<dyn Effect> = Box::new(adapter);
 //!
-//! // Embedded / Daisy Seed (direct — no smoothing, ADCs are hardware-filtered)
+//! // Embedded / Daisy Seed — zero-smoothing adapter, as the pedal firmware uses
+//! let effect = Adapter::new_direct(TremoloKernel::new(48000.0), 48000.0);
+//!
+//! // Or drive the kernel directly with a typed params struct (no adapter)
 //! let mut kernel = TremoloKernel::new(48000.0);
 //! let params = TremoloParams::from_knobs(0.3, 0.7, 0.0, 0.0, 0.0, 0.0, 0.5);
 //! let (left, right) = kernel.process_stereo(input_l, input_r, &params);
 //! ```
 
 use sonido_core::kernel_params;
+use sonido_core::level::Level;
 use sonido_core::{
     DIVISION_LABELS, Lfo, LfoWaveform, ParamDescriptor, ParamFlags, ParamId, ParamUnit,
     TempoManager, fast_db_to_linear, index_to_division,
@@ -72,7 +76,7 @@ use sonido_core::{
 /// | 3 | `stereo_spread_pct` | % | 0–100 | 0.0 |
 /// | 4 | `sync` | index | 0–1 | 0 (Off) |
 /// | 5 | `division` | index | 0–11 | 3 (Eighth) |
-/// | 6 | `output_db` | dB | −20–+6 | 0.0 |
+/// | 6 | `output_db` | dB | −6–+6 | 0.0 |
 /// | 7 | `lfo_phase` | 0–1 | READ_ONLY diagnostic | 0.0 |
 #[derive(Debug, Clone, Copy)]
 pub struct TremoloParams {
@@ -88,7 +92,7 @@ pub struct TremoloParams {
     pub sync: f32,
     /// Note division index for tempo sync (0–11, see `DIVISION_LABELS`).
     pub division: f32,
-    /// Output level in decibels (−20–+6 dB).
+    /// Output level in decibels (−6–+6 dB).
     pub output_db: f32,
 
     /// Current LFO phase (0.0–1.0). READ_ONLY diagnostic — written by the
@@ -97,7 +101,7 @@ pub struct TremoloParams {
 }
 
 impl Default for TremoloParams {
-    /// Defaults match the classic Tremolo effect's descriptor defaults exactly.
+    /// Defaults match the original pre-kernel Tremolo effect's descriptor defaults exactly.
     fn default() -> Self {
         Self {
             rate: 5.0,
@@ -127,7 +131,7 @@ impl TremoloParams {
     /// | `stereo_spread` | 3 | `stereo_spread_pct` | 0–100 % |
     /// | `sync` | 4 | `sync` | 0 or 1 |
     /// | `division` | 5 | `division` | 0–11 |
-    /// | `output` | 6 | `output_db` | −20–+6 dB |
+    /// | `output` | 6 | `output_db` | −6–+6 dB |
     pub fn from_knobs(
         rate: f32,
         depth: f32,
@@ -292,6 +296,7 @@ impl TremoloKernel {
 
 impl DspKernel for TremoloKernel {
     type Params = TremoloParams;
+    const LEVEL: Level = crate::calibration::TREMOLO;
 
     fn process_stereo(&mut self, left: f32, right: f32, params: &TremoloParams) -> (f32, f32) {
         // ── Unit conversion (user-facing → internal) ──
@@ -331,7 +336,7 @@ impl DspKernel for TremoloKernel {
         let gain_l = 1.0 - (depth * (1.0 - lfo_l_uni));
         let gain_r = 1.0 - (depth * (1.0 - lfo_r_uni));
 
-        (left * gain_l * output, right * gain_r * output)
+        Self::level_stereo(left * gain_l * output, right * gain_r * output)
     }
 
     fn is_true_stereo(&self) -> bool {
@@ -445,9 +450,12 @@ mod tests {
             ..Default::default()
         };
 
-        // With zero depth and 0 dB output, all samples should pass unchanged.
+        // With zero depth and 0 dB output, all samples should pass unchanged
+        // (the measured level trim divided out).
+        let trim = TremoloKernel::LEVEL.trim;
         for _ in 0..500 {
             let (l, r) = kernel.process_stereo(0.5, 0.75, &params);
+            let (l, r) = (l / trim, r / trim);
             assert!(
                 (l - 0.5).abs() < 1e-5,
                 "Zero depth should be passthrough: expected 0.5, got {l}"
@@ -504,7 +512,8 @@ mod tests {
         let n = 9600_usize;
         for _ in 0..n {
             let (l, r) = kernel.process_stereo(1.0, 1.0, &params);
-            sum_product += l * r;
+            let trim = TremoloKernel::LEVEL.trim;
+            sum_product += (l / trim) * (r / trim);
         }
 
         let avg = sum_product / n as f32;
@@ -535,7 +544,7 @@ mod tests {
 
         assert_eq!(adapter.param_count(), 8, "Must expose exactly 8 parameters");
 
-        // Verify ParamIds match the classic effect exactly (plugin API contract)
+        // Verify ParamIds match the original pre-kernel effect exactly (plugin API contract)
         assert_eq!(
             adapter.param_info(0).unwrap().id,
             ParamId(1000),

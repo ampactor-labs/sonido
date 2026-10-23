@@ -133,12 +133,8 @@ impl LoopBuffer {
     ///
     /// After `clear()`, `loop_end` is also reset to 0 (no loop).
     pub fn clear(&mut self) {
-        for s in &mut self.buf_l {
-            *s = 0.0;
-        }
-        for s in &mut self.buf_r {
-            *s = 0.0;
-        }
+        self.buf_l.fill(0.0);
+        self.buf_r.fill(0.0);
         self.write_pos = 0;
         self.read_pos = 0;
         self.loop_end = 0;

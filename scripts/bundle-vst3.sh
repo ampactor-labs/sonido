@@ -121,7 +121,9 @@ rename_bundle() {  # $1 plugin name
   # the macOS module ("Contents/MacOS/sonido") has no extension of its own.
   base="$(basename "$module")"
   [[ "$base" == *.* ]] && ext=".${base##*.}"
-  mv "$module" "$(dirname "$module")/$name$ext"
+  local renamed
+  renamed="$(dirname "$module")/$name$ext"
+  [[ "$module" == "$renamed" ]] || mv "$module" "$renamed"
   if [[ "$HOST_OS" == mac && -f "$dst/Contents/Info.plist" ]]; then
     sed_file "$dst/Contents/Info.plist" \
       -e "s|<string>$GENERIC</string>|<string>$name</string>|g" \

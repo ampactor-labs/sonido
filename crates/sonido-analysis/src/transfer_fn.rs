@@ -417,7 +417,7 @@ mod tests {
     fn test_unwrap_phase_empty() {
         let empty: Vec<f32> = vec![];
         let unwrapped = unwrap_phase(&empty);
-        assert!(unwrapped.is_empty());
+        assert_eq!(unwrapped, [] as [f32; 0]);
     }
 
     #[test]

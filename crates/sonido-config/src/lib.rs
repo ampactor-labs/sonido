@@ -19,15 +19,17 @@
 //! // Load a preset from file
 //! let preset = Preset::load("my_preset.toml").unwrap();
 //!
-//! // Create a preset programmatically
+//! // Create a preset programmatically. Parameter names match a descriptor's
+//! // name or short name (case-insensitive); values are in the parameter's
+//! // own units (dB, %, Hz, ...), not normalized.
 //! let mut preset = Preset::new("My Preset");
 //! preset.effects = vec![
 //!     EffectConfig::new("distortion")
-//!         .with_param("drive", "0.6")
-//!         .with_param("tone", "0.5"),
+//!         .with_param("drive", "18")   // dB
+//!         .with_param("tone", "-3"),   // dB
 //!     EffectConfig::new("reverb")
-//!         .with_param("room_size", "0.8")
-//!         .with_param("damping", "0.3"),
+//!         .with_param("room", "80")    // %
+//!         .with_param("damping", "30"), // %
 //! ];
 //!
 //! // Save to user presets directory
@@ -41,6 +43,7 @@ mod error;
 mod preset;
 
 /// Platform-specific paths for presets and configuration.
+pub mod patch;
 pub mod paths;
 
 /// Effect and preset validation.
@@ -56,6 +59,7 @@ pub use factory_presets::{
     FACTORY_PRESET_NAMES, factory_preset_names, factory_presets, get_factory_preset,
     is_factory_preset,
 };
+pub use patch::{PatchConversion, PresetPatchError, preset_to_patch};
 pub use paths::{
     ensure_user_config_dir, ensure_user_presets_dir, find_preset, list_all_presets,
     list_system_presets, list_user_presets, preset_name_from_path, system_presets_dir,

@@ -22,6 +22,10 @@
 //! - **Freeze**: stops the write pointer; all grains read from frozen buffer content.
 //! - **Randomize**: adds random scatter to grain start positions for diffuse texture.
 //! - **Density**: controls grain overlap (higher = more overlapping Hann windows).
+//! - **Sync**: snaps the grain length to the power-of-two beat subdivision
+//!   (1/2, 1/4, 1/8, … of a beat) nearest to `grain_size`, using the host tempo
+//!   from [`set_tempo_context`](DspKernel::set_tempo_context) (120 BPM until one
+//!   arrives), so the grain-rate texture lands on the tempo grid.
 //!
 //! # References
 //!
@@ -35,7 +39,10 @@
 //! let adapter = Adapter::new(TimeStretchKernel::new(48000.0), 48000.0);
 //! let mut effect: Box<dyn Effect> = Box::new(adapter);
 //!
-//! // Embedded / Daisy Seed (direct — no smoothing)
+//! // Embedded / Daisy Seed — zero-smoothing adapter, as the pedal firmware uses
+//! let effect = Adapter::new_direct(TimeStretchKernel::new(48000.0), 48000.0);
+//!
+//! // Or drive the kernel directly with a typed params struct (no adapter)
 //! let mut kernel = TimeStretchKernel::new(48000.0);
 //! let params = TimeStretchParams::default();
 //! let (left, right) = kernel.process_stereo(input_l, input_r, &params);
@@ -48,7 +55,10 @@ use alloc::vec::Vec;
 use sonido_core::kernel::KernelParams;
 use sonido_core::kernel::{DspKernel, SmoothingStyle};
 use sonido_core::kernel_params;
-use sonido_core::{ParamDescriptor, ParamFlags, ParamId, ParamUnit, fast_db_to_linear};
+use sonido_core::level::Level;
+use sonido_core::{
+    ParamDescriptor, ParamFlags, ParamId, ParamUnit, TempoContext, fast_db_to_linear,
+};
 
 // ═══════════════════════════════════════════════════════════════════════════
 //  Constants
@@ -106,7 +116,11 @@ pub struct TimeStretchParams {
     /// When enabled, the write pointer stops. Grains continue reading from
     /// the frozen buffer content indefinitely.
     pub freeze: f32,
-    /// Sync toggle: 0 = off, 1 = on (STEPPED). Reserved for tempo sync.
+    /// Tempo sync toggle: 0 = off, 1 = on (STEPPED).
+    ///
+    /// When on, the grain length snaps to the power-of-two beat subdivision
+    /// nearest to [`grain_size`](Self::grain_size) at the host tempo, kept
+    /// within the 10–100 ms grain range (by octave steps).
     pub sync: f32,
     /// Output level in decibels. Range: −60.0 to +6.0 dB.
     pub output_db: f32,
@@ -131,20 +145,20 @@ kernel_params! {
     TimeStretchParams, this {
         [0] ParamDescriptor::custom("Time Ratio", "Time", 0.25, 4.0, 1.0)
                 .with_unit(ParamUnit::None)
-                .with_id(ParamId(3600), "ts_time_ratio"),
+                .with_id(ParamId(3700), "ts_time_ratio"),
             smoothing: SmoothingStyle::Interpolated, // 50 ms (avoids artifacts)
             get: this.time_ratio,
             set: |v| this.time_ratio = v;
 
         [1] ParamDescriptor::custom("Pitch Ratio", "Pitch", 0.25, 4.0, 1.0)
                 .with_unit(ParamUnit::None)
-                .with_id(ParamId(3601), "ts_pitch_ratio"),
+                .with_id(ParamId(3701), "ts_pitch_ratio"),
             smoothing: SmoothingStyle::Interpolated, // 50 ms
             get: this.pitch_ratio,
             set: |v| this.pitch_ratio = v;
 
         [2] ParamDescriptor::time_ms("Grain Size", "Grain", 10.0, 100.0, 50.0)
-                .with_id(ParamId(3602), "ts_grain_size"),
+                .with_id(ParamId(3702), "ts_grain_size"),
             smoothing: SmoothingStyle::Slow, // 20 ms
             get: this.grain_size,
             set: |v| this.grain_size = v;
@@ -152,9 +166,10 @@ kernel_params! {
         [3] ParamDescriptor {
                 name: "Density",
                 short_name: "Density",
+                flags: ParamFlags::AUTOMATABLE,
                 ..ParamDescriptor::mix()
             }
-            .with_id(ParamId(3603), "ts_density"),
+            .with_id(ParamId(3703), "ts_density"),
             smoothing: SmoothingStyle::Standard, // 10 ms
             get: this.density,
             set: |v| this.density = v;
@@ -163,9 +178,10 @@ kernel_params! {
                 name: "Randomize",
                 short_name: "Random",
                 default: 20.0,
+                flags: ParamFlags::AUTOMATABLE,
                 ..ParamDescriptor::mix()
             }
-            .with_id(ParamId(3604), "ts_randomize"),
+            .with_id(ParamId(3704), "ts_randomize"),
             smoothing: SmoothingStyle::Standard, // 10 ms
             get: this.randomize,
             set: |v| this.randomize = v;
@@ -173,7 +189,7 @@ kernel_params! {
         [5] ParamDescriptor::custom("Freeze", "Freeze", 0.0, 1.0, 0.0)
                 .with_unit(ParamUnit::None)
                 .with_step(1.0)
-                .with_id(ParamId(3605), "ts_freeze")
+                .with_id(ParamId(3705), "ts_freeze")
                 .with_flags(ParamFlags::AUTOMATABLE.union(ParamFlags::STEPPED))
                 .with_step_labels(&["Off", "On"]),
             smoothing: SmoothingStyle::None, // stepped
@@ -183,7 +199,7 @@ kernel_params! {
         [6] ParamDescriptor::custom("Sync", "Sync", 0.0, 1.0, 0.0)
                 .with_unit(ParamUnit::None)
                 .with_step(1.0)
-                .with_id(ParamId(3606), "ts_sync")
+                .with_id(ParamId(3706), "ts_sync")
                 .with_flags(ParamFlags::AUTOMATABLE.union(ParamFlags::STEPPED))
                 .with_step_labels(&["Off", "On"]),
             smoothing: SmoothingStyle::None, // stepped
@@ -191,7 +207,8 @@ kernel_params! {
             set: |v| this.sync = v;
 
         [7] ParamDescriptor::gain_db("Output", "Out", -60.0, 6.0, 0.0)
-                .with_id(ParamId(3607), "ts_output"),
+                .with_id(ParamId(3707), "ts_output")
+                .with_flags(ParamFlags::AUTOMATABLE.union(ParamFlags::MACRO_EXCLUDE)),
             smoothing: SmoothingStyle::Fast, // 5 ms
             get: this.output_db,
             set: |v| this.output_db = v;
@@ -251,6 +268,8 @@ pub struct TimeStretchKernel {
     rng: u64,
     /// Audio sample rate in Hz.
     sample_rate: f32,
+    /// Host tempo in BPM for [`TimeStretchParams::sync`] (120 until the host reports one).
+    bpm: f32,
 }
 
 impl TimeStretchKernel {
@@ -274,6 +293,7 @@ impl TimeStretchKernel {
             spawn_accum: 0.0,
             rng: 0x1234_5678_9ABC_DEF0,
             sample_rate,
+            bpm: 120.0,
         }
     }
 
@@ -313,6 +333,24 @@ impl TimeStretchKernel {
         s.clamp(GRAIN_MIN_SAMPLES, GRAIN_MAX_SAMPLES)
     }
 
+    /// Grain size in samples snapped to the power-of-two beat subdivision
+    /// nearest (in log terms) to `grain_ms`, then moved by octaves into the
+    /// valid grain range so it stays on the tempo grid.
+    #[inline]
+    fn synced_grain_size_samples(grain_ms: f32, bpm: f32, sample_rate: f32) -> f32 {
+        let beat = 60.0 / bpm.max(1.0) * sample_rate;
+        let target = grain_ms.max(1.0) / 1000.0 * sample_rate;
+        let k = libm::roundf(libm::log2f(beat / target));
+        let mut s = beat / libm::exp2f(k);
+        while s > GRAIN_MAX_SAMPLES {
+            s *= 0.5;
+        }
+        while s < GRAIN_MIN_SAMPLES {
+            s *= 2.0;
+        }
+        s
+    }
+
     /// Number of simultaneous grains based on density (1–MAX_GRAINS).
     #[inline]
     fn active_grains(density: f32) -> usize {
@@ -323,6 +361,7 @@ impl TimeStretchKernel {
 
 impl DspKernel for TimeStretchKernel {
     type Params = TimeStretchParams;
+    const LEVEL: Level = crate::calibration::TIME_STRETCH;
 
     fn process_stereo(&mut self, left: f32, right: f32, params: &TimeStretchParams) -> (f32, f32) {
         let sr = self.sample_rate;
@@ -343,7 +382,11 @@ impl DspKernel for TimeStretchKernel {
             }
         }
 
-        let grain_size = Self::grain_size_samples(params.grain_size, sr);
+        let grain_size = if params.sync >= 0.5 {
+            Self::synced_grain_size_samples(params.grain_size, self.bpm, sr)
+        } else {
+            Self::grain_size_samples(params.grain_size, sr)
+        };
         let phase_inc = 1.0 / grain_size;
         let n_grains = Self::active_grains(params.density);
         let write_pos_f = self.write_pos as f32;
@@ -403,7 +446,7 @@ impl DspKernel for TimeStretchKernel {
 
         // ── Output gain ───────────────────────────────────────────────────
         let output_gain = fast_db_to_linear(params.output_db);
-        (wet_l * output_gain, wet_r * output_gain)
+        Self::level_stereo(wet_l * output_gain, wet_r * output_gain)
     }
 
     fn reset(&mut self) {
@@ -427,6 +470,13 @@ impl DspKernel for TimeStretchKernel {
     fn set_sample_rate(&mut self, sample_rate: f32) {
         self.sample_rate = sample_rate;
         self.reset();
+    }
+
+    fn set_tempo_context(&mut self, ctx: &TempoContext) {
+        // Read by process_stereo() when sync = On.
+        if ctx.bpm > 0.0 {
+            self.bpm = ctx.bpm;
+        }
     }
 }
 
@@ -478,6 +528,67 @@ mod tests {
             energy > 0.001,
             "Frozen time-stretch should produce non-zero output, energy={energy}"
         );
+    }
+
+    #[test]
+    fn synced_grain_size_snaps_to_beat_subdivisions() {
+        let sr = 48000.0;
+        // 120 BPM: beat = 24000 samples. 50 ms (2400) → nearest is 1/8 beat (3000).
+        let s = TimeStretchKernel::synced_grain_size_samples(50.0, 120.0, sr);
+        assert!((s - 3000.0).abs() < 1e-3, "got {s}");
+        // 20 ms (960) → 1/32 beat (750).
+        let s = TimeStretchKernel::synced_grain_size_samples(20.0, 120.0, sr);
+        assert!((s - 750.0).abs() < 1e-3, "got {s}");
+        // Very slow tempo still lands inside the grain range, on the grid.
+        let s = TimeStretchKernel::synced_grain_size_samples(100.0, 20.0, sr);
+        let beat = 60.0 / 20.0 * sr;
+        let ratio = libm::log2f(beat / s);
+        assert!(
+            (GRAIN_MIN_SAMPLES..=GRAIN_MAX_SAMPLES).contains(&s),
+            "got {s}"
+        );
+        assert!((ratio - libm::roundf(ratio)).abs() < 1e-4, "off-grid: {s}");
+    }
+
+    /// Run 4800 samples of a sine through a kernel, returning the left output.
+    fn render(kernel: &mut TimeStretchKernel, params: &TimeStretchParams) -> Vec<f32> {
+        (0..4800_u32)
+            .map(|i| {
+                let t = i as f32 / 48000.0;
+                let s = libm::sinf(2.0 * core::f32::consts::PI * 220.0 * t) * 0.5;
+                kernel.process_stereo(s, s, params).0
+            })
+            .collect()
+    }
+
+    #[test]
+    fn sync_follows_host_tempo() {
+        let ctx = |bpm| TempoContext {
+            bpm,
+            ..TempoContext::default()
+        };
+        let synced = TimeStretchParams {
+            sync: 1.0,
+            ..TimeStretchParams::default()
+        };
+        let free = TimeStretchParams::default();
+
+        // Sync off: tempo has no effect.
+        let mut a = TimeStretchKernel::new(48000.0);
+        let mut b = TimeStretchKernel::new(48000.0);
+        b.set_tempo_context(&ctx(90.0));
+        assert_eq!(render(&mut a, &free), render(&mut b, &free));
+
+        // Sync on: tempo changes the grain length, so the output differs.
+        let mut a = TimeStretchKernel::new(48000.0);
+        let mut b = TimeStretchKernel::new(48000.0);
+        a.set_tempo_context(&ctx(120.0));
+        b.set_tempo_context(&ctx(90.0));
+        let at_120 = render(&mut a, &synced);
+        assert_ne!(at_120, render(&mut b, &synced));
+        // …and differs from the unsynced grain size.
+        let mut c = TimeStretchKernel::new(48000.0);
+        assert_ne!(at_120, render(&mut c, &free));
     }
 
     #[test]

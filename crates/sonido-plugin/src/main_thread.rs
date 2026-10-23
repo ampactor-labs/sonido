@@ -10,10 +10,6 @@ use std::sync::Arc;
 use clack_extensions::audio_ports::{
     AudioPortFlags, AudioPortInfo, AudioPortInfoWriter, AudioPortType, PluginAudioPortsImpl,
 };
-use clack_extensions::gui::{
-    AspectRatioStrategy, GuiApiType, GuiConfiguration, GuiResizeHints, GuiSize, PluginGuiImpl,
-    Window,
-};
 use clack_extensions::latency::PluginLatencyImpl;
 use clack_extensions::params::{
     ParamDisplayWriter, ParamInfo, ParamInfoFlags, ParamInfoWriter, PluginMainThreadParams,
@@ -23,12 +19,8 @@ use clack_extensions::track_info::PluginTrackInfoImpl;
 use clack_plugin::prelude::*;
 use clack_plugin::stream::{InputStream, OutputStream};
 use clack_plugin::utils::Cookie;
-use raw_window_handle::HasRawWindowHandle;
 
-use crate::gui::{
-    MAX_HEIGHT, MAX_WIDTH, MIN_HEIGHT, MIN_WIDTH, PLUGIN_HEIGHT, PLUGIN_WIDTH, PendingResize,
-    SonidoEditor,
-};
+use crate::gui::{EditorHost, EditorModel, EffectModel, preferred_window_size};
 use crate::shared::SonidoShared;
 
 /// Main-thread state for a sonido CLAP plugin.
@@ -37,28 +29,20 @@ use crate::shared::SonidoShared;
 /// handles state save/restore, and declares audio port configuration.
 pub struct SonidoMainThread<'a> {
     shared: &'a SonidoShared,
-    /// Raw window handle from the host, stored between `set_parent` and `show`.
-    parent_rwh: Option<raw_window_handle::RawWindowHandle>,
-    /// DPI scale factor from the host (default 1.0).
-    scale: f64,
-    /// Active editor window (dropped to close).
-    editor: Option<SonidoEditor>,
-    /// Atomic resize channel shared with the baseview window handler.
-    ///
-    /// The host writes sizes here; the handler applies them in `on_frame()`.
-    pending_resize: Arc<PendingResize>,
+    /// The editor window and its host-facing size/scale state.
+    editor: EditorHost,
 }
 
 impl<'a> SonidoMainThread<'a> {
     /// Create a new main-thread handler referencing the shared state.
     pub fn new(shared: &'a SonidoShared) -> Self {
-        Self {
-            shared,
-            parent_rwh: None,
-            scale: 1.0,
-            editor: None,
-            pending_resize: Arc::new(PendingResize::new(PLUGIN_WIDTH, PLUGIN_HEIGHT)),
-        }
+        let owned = shared.clone();
+        let editor = EditorHost::new(
+            shared.effect_id(),
+            preferred_window_size(shared.descriptors()),
+            move || Arc::new(EffectModel::new(owned.clone())) as Arc<dyn EditorModel>,
+        );
+        Self { shared, editor }
     }
 }
 
@@ -152,7 +136,9 @@ impl PluginMainThreadParams for SonidoMainThread<'_> {
                 && let Some(param_id) = ev.param_id()
             {
                 let id = param_id.get();
-                if let Some(index) = self.shared.index_by_id(id) {
+                if let Some(index) = self.shared.index_by_id(id)
+                    && !self.shared.is_read_only(index)
+                {
                     self.shared.set_value(index, ev.value() as f32);
                 }
             }
@@ -175,6 +161,10 @@ impl PluginStateImpl for SonidoMainThread<'_> {
         let mut state = serde_json::Map::new();
 
         for (i, desc) in self.shared.descriptors().iter().enumerate() {
+            // Diagnostics (gain reduction, detected pitch) are not settings.
+            if self.shared.is_read_only(i) {
+                continue;
+            }
             if let Some(val) = self.shared.get_value(i) {
                 state.insert(
                     desc.id.0.to_string(),
@@ -211,7 +201,9 @@ impl PluginStateImpl for SonidoMainThread<'_> {
                 continue;
             };
             let Some(v) = val.as_f64() else { continue };
-            if let Some(index) = self.shared.index_by_id(id) {
+            if let Some(index) = self.shared.index_by_id(id)
+                && !self.shared.is_read_only(index)
+            {
                 self.shared.set_value(index, v as f32);
             }
         }
@@ -222,98 +214,7 @@ impl PluginStateImpl for SonidoMainThread<'_> {
 
 // ── GUI Extension ──────────────────────────────────────────────────────────
 
-impl PluginGuiImpl for SonidoMainThread<'_> {
-    fn is_api_supported(&mut self, config: GuiConfiguration) -> bool {
-        let platform_api = GuiApiType::default_for_current_platform();
-        !config.is_floating && platform_api == Some(config.api_type)
-    }
-
-    fn get_preferred_api(&mut self) -> Option<GuiConfiguration<'_>> {
-        let api = GuiApiType::default_for_current_platform();
-        Some(GuiConfiguration {
-            api_type: api?,
-            is_floating: false,
-        })
-    }
-
-    fn create(&mut self, _config: GuiConfiguration) -> Result<(), PluginError> {
-        Ok(()) // resources allocated lazily in set_parent()
-    }
-
-    fn destroy(&mut self) {
-        self.editor = None;
-        self.parent_rwh = None;
-    }
-
-    fn set_scale(&mut self, scale: f64) -> Result<(), PluginError> {
-        self.scale = scale;
-        Ok(())
-    }
-
-    fn get_size(&mut self) -> Option<GuiSize> {
-        let (width, height) = self.pending_resize.get();
-        Some(GuiSize { width, height })
-    }
-
-    fn can_resize(&mut self) -> bool {
-        true
-    }
-
-    fn get_resize_hints(&mut self) -> Option<GuiResizeHints> {
-        Some(GuiResizeHints {
-            can_resize_horizontally: true,
-            can_resize_vertically: true,
-            strategy: AspectRatioStrategy::Disregard,
-        })
-    }
-
-    fn adjust_size(&mut self, size: GuiSize) -> Option<GuiSize> {
-        Some(GuiSize {
-            width: size.width.clamp(MIN_WIDTH, MAX_WIDTH),
-            height: size.height.clamp(MIN_HEIGHT, MAX_HEIGHT),
-        })
-    }
-
-    fn set_size(&mut self, size: GuiSize) -> Result<(), PluginError> {
-        let width = size.width.clamp(MIN_WIDTH, MAX_WIDTH);
-        let height = size.height.clamp(MIN_HEIGHT, MAX_HEIGHT);
-        self.pending_resize.set(width, height);
-        Ok(())
-    }
-
-    fn set_parent(&mut self, window: Window) -> Result<(), PluginError> {
-        let rwh = window.raw_window_handle();
-        self.parent_rwh = Some(rwh);
-
-        // Bitwig expects the child window to exist after set_parent.
-        // Create the editor immediately rather than deferring to show().
-        self.editor = SonidoEditor::open(
-            rwh,
-            self.shared.clone(),
-            self.scale,
-            Arc::clone(&self.pending_resize),
-        );
-
-        if self.editor.is_none() {
-            return Err(PluginError::Message("Failed to open editor window"));
-        }
-        Ok(())
-    }
-
-    fn show(&mut self) -> Result<(), PluginError> {
-        // Window already created in set_parent; baseview shows it immediately.
-        Ok(())
-    }
-
-    fn hide(&mut self) -> Result<(), PluginError> {
-        self.editor = None;
-        Ok(())
-    }
-
-    fn set_transient(&mut self, _window: Window) -> Result<(), PluginError> {
-        Ok(()) // embedded only, no floating window support
-    }
-}
+crate::impl_plugin_gui!(SonidoMainThread<'_>, editor);
 
 // ── Latency Extension ───────────────────────────────────────────────────────
 

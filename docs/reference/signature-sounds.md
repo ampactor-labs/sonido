@@ -7,7 +7,7 @@ textbook DSP implementations. The goal: effects that make players ask "what IS t
 
 ## The Problem
 
-Sonido has 19 production effects, all well-implemented with proper anti-aliasing,
+Sonido has 36 production effects, all well-implemented with proper anti-aliasing,
 parameter smoothing, golden regression tests, and embedded deployment paths. They
 sound correct. They don't sound *distinctive*.
 
@@ -26,7 +26,7 @@ exploited it for sounds that can't be made any other way.
 
 ## Design Principles
 
-These principles also inform the [Roadmap — Design Philosophy](ROADMAP.md#design-philosophy) section.
+These principles also inform the [Roadmap — Design Philosophy](../ROADMAP.md#design-philosophy) section.
 
 ### Musicality Over Correctness (The Tom Cram Principle)
 
@@ -94,6 +94,7 @@ and the best transistor circuits (DOD 250, Klon Centaur, TS808).
 
 **Existing infrastructure:**
 - `DistortionKernel` with 4 waveshaper modes (soft clip, hard clip, foldback, asymmetric)
+- `DistortionKernel`'s `dynamics` parameter (0-100%, default 0): an `EnvelopeFollower` (5 ms / 50 ms) reduces drive by up to 80% on quiet input, a first step toward cleanup
 - `EnvelopeFollower` for input level tracking
 - `KernelParams` for per-sample parameter access
 - ADAA anti-aliasing already in the distortion hot path
@@ -107,7 +108,7 @@ get tube-like cleanup; at zero, you get the traditional fixed waveshaper.
 **Implementation sketch:**
 - `DynamicWaveshaper` utility: takes envelope value + blend curve → waveshaper mix coefficient
 - Modify `DistortionKernel` to blend between soft-clip and current mode based on envelope
-- New params: `dynamics` (sensitivity 0-100%), `response` (envelope attack/release)
+- Extend the existing `dynamics` param (today it scales drive only, not the transfer-function blend); new `response` param (envelope attack/release)
 - Envelope follower per-sample, not per-block (responsive to individual pick attacks)
 - Optional: asymmetric response (fast attack for pick transient, slow release for sustain)
 
@@ -131,8 +132,9 @@ curves, waypoints, and hold zones.
 
 **Existing infrastructure:**
 - `KernelParams::lerp()` already interpolates between any two parameter snapshots
+- `MorphSpace` (1D/2D snapshot interpolation with per-param `MorphCurve`), `ChainMorph`, and `curve_lerp` in `sonido_core::kernel`
 - `from_normalized()` / `to_normalized()` for range mapping
-- Expression pedal input planned for `sonido-platform`
+- Expression pedal input: `ExpressionInput` in `crates/sonido-daisy/src/expression.rs` (smoothing, deadzone, slew limiting)
 
 **What's novel:** Most morphing is linear A-to-B. Scene morphing with *waypoints*
 creates curved paths through parameter space. A single expression pedal sweep could
@@ -161,7 +163,7 @@ and close, signal splits and recombines at different points.
 **Existing infrastructure:**
 - `ProcessingGraph` supports atomic schedule swap with ~5ms crossfade (click-free)
 - `GraphEngine::new_dag()` for arbitrary topologies
-- `GraphCommand::ReplaceTopology` for atomic swap
+- `GraphCommand::ReplaceTopology` (in `sonido-gui`'s `chain_manager.rs`) for atomic swap
 - `sonido-graph-dsl` for topology description
 
 **What's novel:** No analog pedal can rewire its circuit in real time. Digital can.
@@ -241,6 +243,7 @@ adds formant synthesis, chord detection, and harmonizer modes.
 
 **Existing infrastructure:**
 - `sonido-synth`: PolyBLEP oscillators, ADSR envelopes, voice manager, mod matrix
+- Real-time pitch detection in the `tuner` kernel; `pitch_shift` kernel
 - DAG routing for parallel dry/synth paths
 - Full effect chain available for synth signal
 
@@ -270,6 +273,7 @@ operations as *performance instruments*, not studio tools.
 
 **Existing infrastructure:**
 - FFT, STFT, spectral analysis in `sonido-analysis`
+- `SpectralNode` / `SpectralEffect` (`crates/sonido-core/src/graph/spectral_node.rs`, `spectral` feature): FFT/overlap-add graph primitive for real-time frequency-domain processing; no effect uses it yet
 - DAG routing for parallel spectral/temporal paths
 
 **Signature twists:**
@@ -332,8 +336,7 @@ Playing rubato? The effects follow.
 
 ## audioDNA Inspirations
 
-The existing audioDNA table in README.md maps Sonido's algorithms to commercial
-products analyzed via clean-room reverse engineering. The products studied so far
+The products analyzed so far via clean-room reverse engineering
 (Ventura Vibe, Obscura Delay, Dirty Robot, Polara Reverb) represent *conservative*
 design -- well-executed traditional effects.
 
@@ -401,11 +404,11 @@ that would require 6 simultaneous knob turns.
 | Idea | Novelty | Existing infra | Implementation effort | Priority |
 |------|---------|----------------|----------------------|----------|
 | Dynamic Waveshaper | High | High (distortion kernel, envelope) | Low | **0th** |
-| Scene Morphing | Medium | High (`lerp()`, expression planned) | Low-Medium | **1st** |
+| Scene Morphing | Medium | High (`lerp()`, `MorphSpace`, `ExpressionInput`) | Low-Medium | **1st** |
 | Living Topology | High | High (DAG, crossfade, DSL) | Medium | **2nd** |
 | Cross-Domain DSP | Very High | High (analysis crate) | Medium-High | **3rd** |
-| Spectral Effects | Medium | Medium (FFT exists, needs RT path) | High | 4th |
-| Space Station 2.0 | Medium | High (synth, DAG) | High (pitch detect) | 5th |
+| Spectral Effects | Medium | Medium (FFT + `SpectralNode` RT path exist, no effects yet) | High | 4th |
+| Space Station 2.0 | Medium | High (synth, DAG, tuner pitch detector) | High (polyphonic detect) | 5th |
 | Adaptive Effects | Very High | Medium (LMS exists, needs RT bridge) | High | 6th |
 
 Dynamic waveshaper response is the highest-leverage single change: low effort
@@ -424,8 +427,8 @@ but requires bridging the offline analysis path to real-time processing.
 
 ## See Also
 
-- [Roadmap](ROADMAP.md) -- Planned capabilities and milestones
-- [Effects Reference](EFFECTS_REFERENCE.md) -- Current 36 effects with parameters
-- [Kernel Architecture](KERNEL_ARCHITECTURE.md) -- DspKernel/KernelParams patterns
-- [Embedded Guide](EMBEDDED.md) -- Hardware targets and constraints
-- [Architecture](ARCHITECTURE.md) -- Crate dependency graph
+- [Roadmap](../ROADMAP.md) -- Planned capabilities and milestones
+- [Effects Reference](../EFFECTS_REFERENCE.md) -- Current 36 effects with parameters
+- [Kernel Architecture](../KERNEL_ARCHITECTURE.md) -- DspKernel/KernelParams patterns
+- [Embedded Guide](../EMBEDDED.md) -- Hardware targets and constraints
+- [Architecture](../ARCHITECTURE.md) -- Crate dependency graph

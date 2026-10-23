@@ -3,7 +3,7 @@
 //! `StereoWidenerKernel` owns DSP state (LR4 biquads, Haas delay line,
 //! coefficient cache). Parameters are received via `&StereoWidenerParams` each
 //! sample. Deployed via [`Adapter`](sonido_core::kernel::Adapter) for
-//! desktop/plugin, or called directly on embedded targets.
+//! desktop/plugin, or via `Adapter::new_direct` (no smoothing) on embedded targets.
 //!
 //! # Signal Flow
 //!
@@ -55,7 +55,10 @@
 //! let adapter = Adapter::new(StereoWidenerKernel::new(48000.0), 48000.0);
 //! let mut effect: Box<dyn Effect> = Box::new(adapter);
 //!
-//! // Embedded / Daisy Seed (direct — no smoothing, ADCs are hardware-filtered)
+//! // Embedded / Daisy Seed — zero-smoothing adapter, as the pedal firmware uses
+//! let effect = Adapter::new_direct(StereoWidenerKernel::new(48000.0), 48000.0);
+//!
+//! // Or drive the kernel directly with a typed params struct (no adapter)
 //! let mut kernel = StereoWidenerKernel::new(48000.0);
 //! let params = StereoWidenerParams::from_knobs(
 //!     adc_width, adc_haas, adc_bass_mono, adc_output,
@@ -66,9 +69,11 @@
 use sonido_core::biquad::{highpass_coefficients, lowpass_coefficients};
 use sonido_core::kernel::{DspKernel, KernelParams, SmoothingStyle};
 use sonido_core::kernel_params;
+use sonido_core::level::Level;
 use sonido_core::math::ms_to_samples;
 use sonido_core::{
-    Biquad, Cached, InterpolatedDelay, ParamDescriptor, ParamId, ParamUnit, fast_db_to_linear,
+    Biquad, Cached, InterpolatedDelay, ParamDescriptor, ParamFlags, ParamId, ParamUnit,
+    fast_db_to_linear,
 };
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -95,7 +100,7 @@ const MAX_HAAS_SECONDS: f32 = 0.03;
 /// | 0 | `width_pct` | % | 0–200 | 100.0 |
 /// | 1 | `haas_delay_ms` | ms | 0–30 | 0.0 |
 /// | 2 | `bass_mono_hz` | Hz | 0–500 | 0.0 |
-/// | 3 | `output_db` | dB | −60–6 | 0.0 |
+/// | 3 | `output_db` | dB | −6–+6 | 0.0 |
 #[derive(Debug, Clone, Copy)]
 pub struct StereoWidenerParams {
     /// Stereo width as a percentage.
@@ -118,7 +123,7 @@ pub struct StereoWidenerParams {
 
     /// Output level in decibels.
     ///
-    /// Range: −60.0 to +6.0 dB, default 0.0.
+    /// Range: −6.0 to +6.0 dB, default 0.0.
     pub output_db: f32,
 }
 
@@ -140,8 +145,8 @@ impl StereoWidenerParams {
     /// |----------|-------|-----------|-------|
     /// | `width` | 0 | `width_pct` | 0–200 % |
     /// | `haas` | 1 | `haas_delay_ms` | 0–30 ms |
-    /// | `bass_mono` | 2 | `bass_mono_hz` | 0–500 Hz (log) |
-    /// | `output` | 3 | `output_db` | −60–+6 dB |
+    /// | `bass_mono` | 2 | `bass_mono_hz` | 0–500 Hz |
+    /// | `output` | 3 | `output_db` | −6–+6 dB |
     pub fn from_knobs(width: f32, haas: f32, bass_mono: f32, output: f32) -> Self {
         Self::from_normalized(&[width, haas, bass_mono, output])
     }
@@ -173,6 +178,7 @@ kernel_params! {
                 max: 500.0,
                 default: 0.0,
                 step: 1.0,
+                flags: ParamFlags::AUTOMATABLE,
                 ..ParamDescriptor::mix()
             }
             .with_id(ParamId(3102), "sw_bass_mono"),
@@ -291,6 +297,7 @@ impl StereoWidenerKernel {
 
 impl DspKernel for StereoWidenerKernel {
     type Params = StereoWidenerParams;
+    const LEVEL: Level = crate::calibration::STEREO_WIDENER;
 
     fn process_stereo(
         &mut self,
@@ -346,7 +353,7 @@ impl DspKernel for StereoWidenerKernel {
 
         // ── 4. Output level ───────────────────────────────────────────────────
         let output_gain = fast_db_to_linear(params.output_db);
-        (l * output_gain, r * output_gain)
+        Self::level_stereo(l * output_gain, r * output_gain)
     }
 
     fn reset(&mut self) {

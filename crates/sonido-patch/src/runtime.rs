@@ -1,29 +1,37 @@
 //! `PatchPlayer` — run a [`Patch`] live.
 //!
-//! Owns the compiled [`GraphEngine`], a [`MacroMap`] over the six knobs, a
-//! [`ChainMorph`] for A/B, the morph position/speed, the graph-level gains, and
-//! a whole-rig bypass. This is the single runtime the graph-player plugin and
-//! the firmware patch player both wrap — so a patch sounds identical in the
-//! DAW and on the pedal.
+//! Owns the compiled [`GraphEngine`], a [`MacroMap`] over the six knobs, the
+//! rig's two toggles, a [`ChainMorph`] for A/B, the morph position/speed, the
+//! graph-level gains, and a whole-rig bypass. The graph-player plugin (`sonido-plugin`) and the pedal
+//! firmware (`sonido-daisy`'s `sonido_pedal`) both run rigs through it, so a
+//! rig morphs and responds to its macros the same way in a DAW and on the
+//! pedal.
 //!
-//! Per control tick the order is **morph, then macros** (macros win on overlap),
-//! exactly as the design specifies; a macro that targets the morph position
-//! takes effect on the next tick.
+//! Per control tick the order is **morph, then toggles, then macros**: a
+//! toggle overrides the morph on what it sets, and a knob overrides both. A
+//! macro that targets the morph position takes effect on the next tick.
 
 #[cfg(not(feature = "std"))]
 use alloc::{boxed::Box, vec::Vec};
 
 use sonido_core::{
-    ChainMorph, EffectWithParams, GlobalParam, GraphEngine, MacroMap, MacroMapping, db_to_linear,
+    ChainMorph, EffectWithParams, GlobalParam, GraphEngine, MacroMap, MacroMapping, MacroTarget,
+    db_to_linear,
 };
 
 use crate::build::{PatchBuildError, build_graph_from_patch};
-use crate::{NUM_MACROS, Patch};
+use crate::{NUM_MACROS, NUM_TOGGLES, Patch};
+
+/// A toggle's position when nothing has set it: the middle.
+pub const TOGGLE_DEFAULT_POSITION: u8 = 1;
 
 /// A live, controllable instance of a [`Patch`].
 pub struct PatchPlayer {
     engine: GraphEngine,
     macros: MacroMap<NUM_MACROS>,
+    /// Every toggle mapping: (toggle, target, value up / middle / down).
+    toggles: Vec<(usize, MacroTarget, [f32; 3])>,
+    toggle_positions: [u8; NUM_TOGGLES],
     morph: ChainMorph,
     morph_t: f32,
     morph_speed: f32,
@@ -61,6 +69,13 @@ impl PatchPlayer {
             }
         }
 
+        let toggles = patch
+            .toggles
+            .iter()
+            .enumerate()
+            .flat_map(|(t, def)| def.mappings.iter().map(move |m| (t, m.target, m.values)))
+            .collect();
+
         // ChainMorph from the per-node A/B snapshots, curves auto-detected from
         // the engine's descriptors (frequency → log, stepped → snap).
         let counts: Vec<usize> = patch.nodes.iter().map(|n| n.params_a.len()).collect();
@@ -80,6 +95,8 @@ impl PatchPlayer {
         Ok(Self {
             engine,
             macros,
+            toggles,
+            toggle_positions: [TOGGLE_DEFAULT_POSITION; NUM_TOGGLES],
             morph,
             morph_t: 0.0,
             morph_speed: patch.morph.speed,
@@ -94,6 +111,24 @@ impl PatchPlayer {
     /// [`apply_controls`]: Self::apply_controls
     pub fn set_macro(&mut self, index: usize, position: f32) {
         self.macros.set_position(index, position);
+    }
+
+    /// Set toggle `index`'s position (0 up, 1 middle, 2 down) without
+    /// re-applying (call [`apply_controls`]). Toggles start in the middle.
+    ///
+    /// [`apply_controls`]: Self::apply_controls
+    pub fn set_toggle(&mut self, index: usize, position: u8) {
+        if let Some(p) = self.toggle_positions.get_mut(index) {
+            *p = position.min(2);
+        }
+    }
+
+    /// Toggle `index`'s position.
+    pub fn toggle_position(&self, index: usize) -> u8 {
+        self.toggle_positions
+            .get(index)
+            .copied()
+            .unwrap_or(TOGGLE_DEFAULT_POSITION)
     }
 
     /// Set the A/B morph position (0 = A, 1 = B).
@@ -126,37 +161,91 @@ impl PatchPlayer {
         self.engine.slot_count()
     }
 
+    /// Pass the host's tempo and transport to every effect in the rig, so
+    /// tempo-synced LFOs and delays follow it.
+    pub fn set_tempo_context(&mut self, ctx: &sonido_core::TempoContext) {
+        self.engine.set_tempo_context(ctx);
+    }
+
+    /// Morph ramp speed from the patch (or the last macro that set it).
+    pub fn morph_speed(&self) -> f32 {
+        self.morph_speed
+    }
+
+    /// One parameter of node `slot`'s A (`corner` 0) or B (1) state.
+    pub fn corner_param(&self, slot: usize, corner: usize, param: usize) -> Option<f32> {
+        self.morph.corner_param(slot, corner, param)
+    }
+
+    /// Set one parameter of node `slot`'s A (`corner` 0) or B (1) state; the
+    /// next [`apply_controls`](Self::apply_controls) hears it.
+    pub fn set_corner_param(&mut self, slot: usize, corner: usize, param: usize, value: f32) {
+        self.morph.set_corner_param(slot, corner, param, value);
+    }
+
+    /// Consume the player and return its effects in node order, state intact,
+    /// so a rebuilt rig can keep an unchanged node's reverb tail or delay
+    /// buffer (pass them back through `make_effect`).
+    pub fn into_effects(self) -> Vec<Box<dyn EffectWithParams + Send>> {
+        self.engine.into_effects()
+    }
+
     /// Borrow the underlying engine (e.g. for latency reporting).
     pub fn engine(&self) -> &GraphEngine {
         &self.engine
     }
 
-    /// Re-apply morph then macros to the engine and globals.
+    /// Re-apply morph, toggles, then macros to the engine and globals.
     ///
-    /// Call once per control tick after changing macro/morph positions. Morph is
-    /// applied first; macros overwrite any parameter they also target.
+    /// Call once per control tick after changing macro/toggle/morph positions.
+    /// Morph is applied first, toggles overwrite what they set, and macros
+    /// overwrite any parameter they also target. Toggles are re-applied every
+    /// tick because the morph rewrites its parameters every tick.
     pub fn apply_controls(&mut self) {
         self.morph.apply_to_engine(self.morph_t, &mut self.engine);
 
-        // Macros: slot targets go to the engine; global targets update our fields.
+        // Slot targets go to the engine; global targets update our fields.
         let mut in_gain = self.input_gain_db;
         let mut master = self.master_volume_db;
         let mut morph_t = self.morph_t;
         let mut morph_speed = self.morph_speed;
+        let mut set_global = |g, v| match g {
+            GlobalParam::InputGain => in_gain = v,
+            GlobalParam::MasterVolume => master = v,
+            GlobalParam::MorphPosition => morph_t = v,
+            GlobalParam::MorphSpeed => morph_speed = v,
+            _ => {}
+        };
+        for &(t, target, values) in &self.toggles {
+            let v = values[usize::from(self.toggle_positions[t])];
+            match target {
+                MacroTarget::Slot { slot, param } => {
+                    self.engine
+                        .set_param_at(usize::from(slot), usize::from(param), v);
+                }
+                MacroTarget::Global(g) => set_global(g, v),
+            }
+        }
         self.macros
-            .apply_to_engine(&mut self.engine, |g, v| match g {
-                GlobalParam::InputGain => in_gain = v,
-                GlobalParam::MasterVolume => master = v,
-                GlobalParam::MorphPosition => morph_t = v,
-                GlobalParam::MorphSpeed => morph_speed = v,
-                _ => {}
-            });
+            .apply_to_engine(&mut self.engine, &mut set_global);
         self.input_gain_db = in_gain;
         self.master_volume_db = master;
         // A macro-driven morph position takes effect next tick (read before the
         // next morph apply), per the documented ordering.
         self.morph_t = morph_t.clamp(0.0, 1.0);
         self.morph_speed = morph_speed;
+    }
+
+    /// [`apply_controls`](Self::apply_controls), then jump every parameter
+    /// straight to its new value instead of smoothing there.
+    ///
+    /// For a rig that has just been built: it starts at its values rather than
+    /// sweeping from the effects' defaults (an audible swoosh and, on the
+    /// pedal, a CPU spike from every coefficient being redesigned per sample
+    /// at once). Effects keep their state, so a reused effect keeps its tail.
+    pub fn apply_controls_now(&mut self) {
+        self.apply_controls();
+        self.engine.snap_params();
     }
 
     /// Process one stereo block in place, applying input gain, the graph, master
@@ -225,6 +314,46 @@ mod tests {
     }
 
     #[test]
+    fn apply_controls_now_starts_at_the_values() {
+        // Distortion output (param 2) at -20 dB, not its 0 dB default.
+        let registry = EffectRegistry::new();
+        let mut reference = registry.create("distortion", 48_000.0).unwrap();
+        let params: Vec<f32> = (0..reference.effect_param_count())
+            .map(|i| {
+                if i == 2 {
+                    -20.0
+                } else {
+                    reference.effect_get_param(i)
+                }
+            })
+            .collect();
+        for (i, &v) in params.iter().enumerate() {
+            reference.effect_set_param(i, v);
+        }
+        reference.reset();
+        let patch = Patch::linear_chain(
+            "s",
+            vec![PatchNode::new(effect_uid("distortion").unwrap(), params)],
+        );
+        let first_block = |p: &mut dyn FnMut(&mut [f32], &mut [f32])| {
+            let (mut l, mut r) = ([0.1f32; 32], [0.1f32; 32]);
+            p(&mut l, &mut r);
+            l
+        };
+        let want = first_block(&mut |l, r| reference.process_block_stereo_inplace(l, r));
+
+        let mut now = player(&patch);
+        now.apply_controls_now();
+        let got = first_block(&mut |l, r| now.process_block_stereo(l, r));
+        assert_eq!(got, want, "a loaded rig starts at its values");
+
+        let mut smoothed = player(&patch);
+        smoothed.apply_controls();
+        let swept = first_block(&mut |l, r| smoothed.process_block_stereo(l, r));
+        assert_ne!(swept, want, "without it, the output sweeps from 0 dB");
+    }
+
+    #[test]
     fn macro_drives_a_parameter() {
         // Macro 0 maps distortion drive (param 0) 0..40.
         let mut patch = Patch::linear_chain(
@@ -278,6 +407,58 @@ mod tests {
         // (read back is not directly exposed; just assert processing stays finite)
         assert!(finite(&mut p));
         assert!((p.morph_position() - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn toggles_set_their_values_and_knobs_win() {
+        use crate::{ToggleDef, ToggleMappingSpec};
+        // T1 sets distortion drive (param 0) and the input gain; T3 the tone.
+        let mut patch = Patch::linear_chain(
+            "t",
+            vec![PatchNode::new(
+                effect_uid("distortion").unwrap(),
+                vec![10.0, 0.0],
+            )],
+        );
+        patch.toggles[0] = ToggleDef {
+            name: "Drive".into(),
+            positions: ["lo".into(), "mid".into(), "hi".into()],
+            mappings: vec![
+                ToggleMappingSpec {
+                    target: MacroTarget::Slot { slot: 0, param: 0 },
+                    values: [5.0, 10.0, 30.0],
+                },
+                ToggleMappingSpec {
+                    target: MacroTarget::Global(GlobalParam::InputGain),
+                    values: [-3.0, 0.0, 3.0],
+                },
+            ],
+        };
+        let drive = |p: &PatchPlayer| p.engine.get_param_at(0, 0).unwrap();
+        let mut p = player(&patch);
+        p.apply_controls();
+        assert_eq!(p.toggle_position(0), TOGGLE_DEFAULT_POSITION);
+        assert!((drive(&p) - 10.0).abs() < 1e-4, "the middle by default");
+        for (position, want, gain) in [(0, 5.0, -3.0), (2, 30.0, 3.0)] {
+            p.set_toggle(0, position);
+            p.apply_controls();
+            assert!((drive(&p) - want).abs() < 1e-4);
+            assert!((p.input_gain_db - gain).abs() < 1e-6);
+        }
+
+        // A knob on the same parameter wins.
+        patch.macros[3].mappings.push(MacroMappingSpec {
+            target: MacroTarget::Slot { slot: 0, param: 0 },
+            min: 0.0,
+            max: 40.0,
+            curve: MorphCurve::Linear,
+        });
+        let mut p = player(&patch);
+        p.set_toggle(0, 2);
+        p.set_macro(3, 0.5);
+        p.apply_controls();
+        assert!((drive(&p) - 20.0).abs() < 1e-3);
+        assert!(finite(&mut p));
     }
 
     #[test]

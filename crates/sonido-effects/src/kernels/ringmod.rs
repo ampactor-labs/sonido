@@ -2,8 +2,8 @@
 //!
 //! `RingModKernel` owns DSP state (carrier oscillator phase, sample rate).
 //! Parameters are received via `&RingModParams` each sample. Deployed via
-//! [`Adapter`](sonido_core::kernel::Adapter) for desktop/plugin, or called
-//! directly on embedded targets.
+//! [`Adapter`](sonido_core::kernel::Adapter) for desktop/plugin, or via `Adapter::new_direct`
+//! (no smoothing) on embedded targets.
 //!
 //! # Signal Flow
 //!
@@ -36,7 +36,10 @@
 //! let adapter = Adapter::new(RingModKernel::new(48000.0), 48000.0);
 //! let mut effect: Box<dyn Effect> = Box::new(adapter);
 //!
-//! // Embedded / Daisy Seed (direct — no smoothing, ADCs are hardware-filtered)
+//! // Embedded / Daisy Seed — zero-smoothing adapter, as the pedal firmware uses
+//! let effect = Adapter::new_direct(RingModKernel::new(48000.0), 48000.0);
+//!
+//! // Or drive the kernel directly with a typed params struct (no adapter)
 //! let mut kernel = RingModKernel::new(48000.0);
 //! let params = RingModParams::from_knobs(adc_freq, adc_depth, adc_wave, adc_mix, adc_out);
 //! let (left, right) = kernel.process_stereo(input_l, input_r, &params);
@@ -46,10 +49,8 @@ use libm::fabsf;
 use sonido_core::fast_math::fast_sin_turns;
 use sonido_core::kernel::{DspKernel, KernelParams, SmoothingStyle};
 use sonido_core::kernel_params;
-use sonido_core::{
-    ParamDescriptor, ParamFlags, ParamId, ParamScale, ParamUnit, fast_db_to_linear,
-    wet_dry_mix_stereo,
-};
+use sonido_core::level::Level;
+use sonido_core::{ParamDescriptor, ParamFlags, ParamId, ParamScale, ParamUnit, fast_db_to_linear};
 
 // ═══════════════════════════════════════════════════════════════════════════
 //  Parameters
@@ -62,11 +63,11 @@ use sonido_core::{
 ///
 /// | Index | Field | Unit | Range | Default |
 /// |-------|-------|------|-------|---------|
-/// | 0 | `freq_hz` | Hz | 20–2000 | 220.0 |
+/// | 0 | `freq_hz` | Hz | 20–2000 | 300.0 |
 /// | 1 | `depth_pct` | % | 0–100 | 100.0 |
 /// | 2 | `waveform` | index | 0–2 (Sine/Triangle/Square) | 0.0 |
 /// | 3 | `mix_pct` | % | 0–100 | 50.0 |
-/// | 4 | `output_db` | dB | −20–20 | 0.0 |
+/// | 4 | `output_db` | dB | −6–+6 | 0.0 |
 #[derive(Debug, Clone, Copy)]
 pub struct RingModParams {
     /// Carrier oscillator frequency in Hz.
@@ -84,7 +85,7 @@ pub struct RingModParams {
 impl Default for RingModParams {
     fn default() -> Self {
         Self {
-            freq_hz: 220.0,
+            freq_hz: 300.0,
             depth_pct: 100.0,
             waveform: 0.0,
             mix_pct: 50.0,
@@ -105,7 +106,7 @@ impl RingModParams {
     /// - `depth`: ADC reading → 0–100 %
     /// - `waveform`: ADC reading → 0, 1, or 2 (Sine / Triangle / Square)
     /// - `mix`: ADC reading → 0–100 %
-    /// - `output`: ADC reading → −20–20 dB
+    /// - `output`: ADC reading → −6–+6 dB
     ///
     /// All inputs are expected in [0.0, 1.0].
     /// Creates parameters from normalized 0–1 knob readings.
@@ -119,7 +120,7 @@ impl RingModParams {
     /// - `depth`: ADC reading → 0–100 %
     /// - `waveform`: ADC reading → 0, 1, or 2 (Sine / Triangle / Square, stepped)
     /// - `mix`: ADC reading → 0–100 %
-    /// - `output`: ADC reading → −20–+6 dB
+    /// - `output`: ADC reading → −6–+6 dB
     ///
     /// All inputs are expected in [0.0, 1.0].
     pub fn from_knobs(freq: f32, depth: f32, waveform: f32, mix: f32, output: f32) -> Self {
@@ -129,7 +130,7 @@ impl RingModParams {
 
 kernel_params! {
     RingModParams, this {
-        [0] ParamDescriptor::custom("Frequency", "Freq", 20.0, 2000.0, 220.0)
+        [0] ParamDescriptor::custom("Frequency", "Freq", 20.0, 2000.0, 300.0)
                 .with_unit(ParamUnit::Hertz)
                 .with_scale(ParamScale::Logarithmic)
                 .with_id(ParamId(1800), "ring_freq"),
@@ -137,9 +138,10 @@ kernel_params! {
             get: this.freq_hz,
             set: |v| this.freq_hz = v;
 
-        // Matches classic: ParamDescriptor::depth() with id 1801.
-        // depth() factory: custom "Depth"/"Depth", 0–100 %, default 100.0
-        [1] ParamDescriptor::depth().with_id(ParamId(1801), "ring_depth"),
+        // Matches the original pre-kernel effect: ParamDescriptor::depth() with id 1801.
+        // depth() factory: "Depth"/"Depth", 0–100 %, default 50.0
+        [1] ParamDescriptor::depth().with_id(ParamId(1801), "ring_depth")
+            .with_default(100.0),
             smoothing: SmoothingStyle::Standard, // depth — standard AM depth transitions
             get: this.depth_pct,
             set: |v| this.depth_pct = v;
@@ -248,6 +250,7 @@ impl RingModKernel {
 
 impl DspKernel for RingModKernel {
     type Params = RingModParams;
+    const LEVEL: Level = crate::calibration::RINGMOD;
 
     fn process_stereo(&mut self, left: f32, right: f32, params: &RingModParams) -> (f32, f32) {
         // ── Unit conversion (user-facing → internal) ──
@@ -269,7 +272,7 @@ impl DspKernel for RingModKernel {
         let mod_r = right * coeff;
 
         // ── Wet/dry mix → output level ──
-        let (mixed_l, mixed_r) = wet_dry_mix_stereo(left, right, mod_l, mod_r, mix);
+        let (mixed_l, mixed_r) = Self::blend_stereo(left, right, mod_l, mod_r, mix);
         (mixed_l * output, mixed_r * output)
     }
 
@@ -440,7 +443,7 @@ mod tests {
 
     /// At 0% mix, output should equal the dry input (scaled only by output level).
     ///
-    /// When mix = 0, wet_dry_mix returns only the dry signal unchanged.
+    /// When mix = 0, the blend returns only the dry signal unchanged.
     #[test]
     fn dry_mix_passes_input() {
         let mut kernel = RingModKernel::new(48000.0);
@@ -494,7 +497,7 @@ mod tests {
         assert_eq!(freq_desc.name, "Frequency");
         assert_eq!(freq_desc.min, 20.0);
         assert_eq!(freq_desc.max, 2000.0);
-        assert_eq!(freq_desc.default, 220.0);
+        assert_eq!(freq_desc.default, 300.0);
         assert_eq!(freq_desc.id, ParamId(1800));
 
         // Depth (index 1)

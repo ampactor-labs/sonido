@@ -142,7 +142,7 @@ mod tests {
     #[test]
     fn empty_state_uses_general_shortcuts() {
         let p = InfoPayload::empty_state();
-        assert!(p.params.is_empty());
+        assert_eq!(p.params.len(), 0);
         assert_eq!(p.shortcuts, GENERAL_SHORTCUTS);
         assert!(p.description.is_some());
     }

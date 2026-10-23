@@ -5,6 +5,8 @@
 and desktop chrome-summon drawer are the documented fast-follows)
 **Branch:** `feat/gui-ableton-parity`
 
+> **Note (2026-10-22):** As built, the Info View lives in `crates/sonido-gui/src/info_view.rs` (not `sonido-gui-core`), and `InfoPayload` is `{ title, description, params, shortcuts }`: the title and prose come from the registry, the live `(name, value)` pairs from `ParamDescriptor` / `ParamBridge`, not from the `Accessible` trait. It is selection-driven only (no per-widget hover target). Focus mode is `chrome_collapsed` in `app.rs`, toggled by a header button or `F`. The I/O strips this spec edits (`render_io_strip`, `render_phone_levels`) were later replaced by wall bars, see `2026-06-30-io-wall-bars-design.md`. The meter work (`MeterState`, `db_to_norm`, `smooth`, `DB_MARKS`) matches `crates/sonido-gui-core/src/widgets/meter.rs`.
+
 Three GUI features that bring the hosted WASM GUI closer to Ableton Live's
 metering, layout flexibility, and contextual help — plus one bug already fixed
 along the way. Built in order: **Meters → Info View → Layout**, because each

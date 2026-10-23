@@ -37,7 +37,10 @@
 //! let adapter = Adapter::new(SpringReverbKernel::new(48000.0), 48000.0);
 //! let mut effect: Box<dyn Effect> = Box::new(adapter);
 //!
-//! // Embedded / Daisy Seed (direct)
+//! // Embedded / Daisy Seed — zero-smoothing adapter, as the pedal firmware uses
+//! let effect = Adapter::new_direct(SpringReverbKernel::new(48000.0), 48000.0);
+//!
+//! // Or drive the kernel directly with a typed params struct (no adapter)
 //! let mut kernel = SpringReverbKernel::new(48000.0);
 //! let params = SpringReverbParams::from_knobs(adc_decay, adc_tension, adc_drip,
 //!                                             adc_damp, adc_mix, adc_out);
@@ -47,10 +50,11 @@
 use libm::{expf, powf};
 use sonido_core::kernel::{DspKernel, KernelParams, SmoothingStyle};
 use sonido_core::kernel_params;
+use sonido_core::level::Level;
 use sonido_core::math::soft_limit;
 use sonido_core::{
-    AllpassFilter, InterpolatedDelay, OnePole, ParamDescriptor, ParamId, ParamUnit, db_to_linear,
-    flush_denormal, wet_dry_mix,
+    AllpassFilter, InterpolatedDelay, OnePole, ParamDescriptor, ParamFlags, ParamId, ParamUnit,
+    db_to_linear, flush_denormal, needs_update,
 };
 
 // ── Constants ───────────────────────────────────────────────────────────────
@@ -147,13 +151,15 @@ fn decay_to_delay_len(decay_s: f32, sr: f32) -> f32 {
     (base * (decay_s / 2.0).clamp(0.25, 5.0)).clamp(min_len, max_len)
 }
 
-/// Compute feedback gain from decay time in seconds.
+/// Feedback gain for an RT60 of `decay_s`, applied once per trip around a
+/// loop `loop_len` samples long: `g = 10^(-3 * loop_len / (decay_s * sr))`.
 ///
-/// `g = exp(-3 * ln(10) / (decay_s * sr))` — same formula as plate reverb.
+/// (A per-sample gain applied per trip, as this once was, is ~0.99999 for any
+/// decay: the clamp made it a fixed 0.97 and the Decay control did nothing.)
 #[inline]
-fn decay_to_gain(decay_s: f32, sr: f32) -> f32 {
-    let g = expf(-3.0 * core::f32::consts::LN_10 / (decay_s * sr));
-    g.clamp(0.0, 0.97)
+fn decay_to_gain(decay_s: f32, loop_len: f32, sr: f32) -> f32 {
+    let g = expf(-3.0 * core::f32::consts::LN_10 * loop_len / (decay_s.max(0.01) * sr));
+    g.clamp(0.0, 0.99)
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -168,8 +174,8 @@ fn decay_to_gain(decay_s: f32, sr: f32) -> f32 {
 /// | 1 | `tension_pct` | % | 0–100 | 50.0 |
 /// | 2 | `drip_pct` | % | 0–100 | 40.0 |
 /// | 3 | `damping_pct` | % | 0–100 | 50.0 |
-/// | 4 | `mix_pct` | % | 0–100 | 30.0 |
-/// | 5 | `output_db` | dB | −60–+6 | 0.0 |
+/// | 4 | `mix_pct` | % | 0–100 | 50.0 |
+/// | 5 | `output_db` | dB | −6–+6 | 0.0 |
 #[derive(Debug, Clone, Copy)]
 pub struct SpringReverbParams {
     /// Decay time in seconds (0.5–5 s).
@@ -199,7 +205,7 @@ pub struct SpringReverbParams {
     /// Wet/dry mix as a percentage (0% = dry, 100% = wet).
     pub mix_pct: f32,
 
-    /// Output level in decibels (−60 to +6 dB).
+    /// Output level in decibels (−6 to +6 dB).
     pub output_db: f32,
 }
 
@@ -210,7 +216,7 @@ impl Default for SpringReverbParams {
             tension_pct: 50.0,
             drip_pct: 40.0,
             damping_pct: 50.0,
-            mix_pct: 30.0,
+            mix_pct: 50.0,
             output_db: 0.0,
         }
     }
@@ -247,6 +253,7 @@ kernel_params! {
                 max: 100.0,
                 default: 50.0,
                 step: 1.0,
+                flags: ParamFlags::AUTOMATABLE,
                 ..ParamDescriptor::mix()
             }
             .with_id(ParamId(2801), "spring_tension"),
@@ -262,6 +269,7 @@ kernel_params! {
                 max: 100.0,
                 default: 40.0,
                 step: 1.0,
+                flags: ParamFlags::AUTOMATABLE,
                 ..ParamDescriptor::mix()
             }
             .with_id(ParamId(2802), "spring_drip"),
@@ -277,6 +285,7 @@ kernel_params! {
                 max: 100.0,
                 default: 50.0,
                 step: 1.0,
+                flags: ParamFlags::AUTOMATABLE,
                 ..ParamDescriptor::mix()
             }
             .with_id(ParamId(2803), "spring_damping"),
@@ -340,33 +349,20 @@ pub struct SpringReverbKernel {
     feedback_gain: f32,
     /// Current feedback delay length in samples.
     feedback_delay_len: f32,
-    /// Current allpass delay lengths in samples.
-    allpass_lens: [usize; NUM_ALLPASSES],
+    /// Total delay of the dispersion allpasses (set by tension), which sit
+    /// inside the feedback loop.
+    chain_len: f32,
 }
 
 impl SpringReverbKernel {
     /// Create a new spring reverb kernel at the given sample rate.
     pub fn new(sample_rate: f32) -> Self {
-        // Allpass delay lengths at default tension (50%)
-        let allpass_lens: [usize; NUM_ALLPASSES] =
-            core::array::from_fn(|i| tension_scaled_len(ALLPASS_LENS_44K[i], 50.0, sample_rate));
-
-        // Allocate allpasses at maximum size (tension=0% → 2× base)
-        let allpasses: [AllpassFilter; NUM_ALLPASSES] = core::array::from_fn(|i| {
-            let max_len = scale(ALLPASS_LENS_44K[i], sample_rate) * 3 + 4;
-            let mut ap = AllpassFilter::new(max_len);
-            ap.set_feedback(ALLPASS_FB);
-            ap
-        });
-
         let fb_delay = InterpolatedDelay::new(MAX_FB_DELAY_SAMPLES);
         let fb_damp = OnePole::new(sample_rate, damp_to_hz(50.0));
-
-        let feedback_gain = decay_to_gain(2.0, sample_rate);
-        let feedback_delay_len = decay_to_delay_len(2.0, sample_rate);
-
+        // The caches start empty (NaN): the first block sets every length and
+        // coefficient from its parameters.
         Self {
-            allpasses,
+            allpasses: Self::dispersion_chain(sample_rate),
             fb_delay,
             fb_damp,
             fb_state: 0.0,
@@ -374,36 +370,50 @@ impl SpringReverbKernel {
             cached_decay: f32::NAN,
             cached_tension: f32::NAN,
             cached_damp: f32::NAN,
-            feedback_gain,
-            feedback_delay_len,
-            allpass_lens,
+            feedback_gain: 0.0,
+            feedback_delay_len: decay_to_delay_len(2.0, sample_rate),
+            chain_len: 0.0,
         }
+    }
+
+    /// The six dispersion allpasses, each with room for its loosest length
+    /// (tension 0%: twice the base).
+    fn dispersion_chain(sample_rate: f32) -> [AllpassFilter; NUM_ALLPASSES] {
+        core::array::from_fn(|i| {
+            let mut ap =
+                AllpassFilter::new(tension_scaled_len(ALLPASS_LENS_44K[i], 0.0, sample_rate));
+            ap.set_feedback(ALLPASS_FB);
+            ap
+        })
     }
 
     /// Recompute cached coefficients when parameters change by more than epsilon.
     #[inline]
     fn update_derived(&mut self, decay_s: f32, tension_pct: f32, damp_pct: f32) {
         let eps = 0.001;
-        if (decay_s - self.cached_decay).abs() > eps {
-            self.cached_decay = decay_s;
-            self.feedback_gain = decay_to_gain(decay_s, self.sample_rate);
-            self.feedback_delay_len = decay_to_delay_len(decay_s, self.sample_rate);
-        }
-        if (tension_pct - self.cached_tension).abs() > eps {
+        let tension_changed = needs_update(self.cached_tension, tension_pct, eps);
+        if tension_changed {
+            // Tension sets the dispersion lengths: tight springs chirp short
+            // and bright, loose ones long and boingy.
             self.cached_tension = tension_pct;
-            for i in 0..NUM_ALLPASSES {
-                self.allpass_lens[i] =
-                    tension_scaled_len(ALLPASS_LENS_44K[i], tension_pct, self.sample_rate);
-                // AllpassFilter uses fixed delay — we update feedback coeff here
-                // (length changes require reconstruction — we use max capacity
-                //  and update the read pointer indirectly via feedback)
-                // For now: tension only adjusts allpass feedback to simulate tightness
-                let tightness = tension_pct * 0.01;
-                let adjusted_fb = ALLPASS_FB * (1.0 - tightness * 0.3); // 0.7 → 0.49
-                self.allpasses[i].set_feedback(adjusted_fb);
+            self.chain_len = 0.0;
+            for (i, ap) in self.allpasses.iter_mut().enumerate() {
+                ap.set_length(tension_scaled_len(
+                    ALLPASS_LENS_44K[i],
+                    tension_pct,
+                    self.sample_rate,
+                ));
+                self.chain_len += ap.length() as f32;
             }
         }
-        if (damp_pct - self.cached_damp).abs() > eps {
+        if tension_changed || needs_update(self.cached_decay, decay_s, eps) {
+            self.cached_decay = decay_s;
+            self.feedback_delay_len = decay_to_delay_len(decay_s, self.sample_rate);
+            // One trip: the allpass chain, the feedback delay, one sample of state.
+            let loop_len = self.chain_len + self.feedback_delay_len + 1.0;
+            self.feedback_gain = decay_to_gain(decay_s, loop_len, self.sample_rate);
+        }
+        if needs_update(self.cached_damp, damp_pct, eps) {
             self.cached_damp = damp_pct;
             self.fb_damp.set_frequency(damp_to_hz(damp_pct));
         }
@@ -412,6 +422,7 @@ impl SpringReverbKernel {
 
 impl DspKernel for SpringReverbKernel {
     type Params = SpringReverbParams;
+    const LEVEL: Level = crate::calibration::SPRING_REVERB;
 
     fn process_stereo(&mut self, left: f32, right: f32, params: &Self::Params) -> (f32, f32) {
         self.update_derived(params.decay_s, params.tension_pct, params.damping_pct);
@@ -448,7 +459,7 @@ impl DspKernel for SpringReverbKernel {
 
         // 8. Wet/dry mix → gain
         let gain = db_to_linear(params.output_db);
-        let mixed = wet_dry_mix(mono, wet, params.mix_pct * 0.01) * gain;
+        let mixed = Self::blend(mono, wet, params.mix_pct * 0.01) * gain;
 
         // Mono (dual-mono output)
         (mixed, mixed)
@@ -463,8 +474,15 @@ impl DspKernel for SpringReverbKernel {
         self.fb_state = 0.0;
     }
 
+    /// Same ring-out as the [`TailReporting`](sonido_core::TailReporting) impl
+    /// below; the adapter (and so every plugin host) asks through this trait.
+    fn tail_samples(&self) -> usize {
+        <Self as sonido_core::TailReporting>::tail_samples(self)
+    }
+
     fn set_sample_rate(&mut self, sample_rate: f32) {
         self.sample_rate = sample_rate;
+        self.allpasses = Self::dispersion_chain(sample_rate);
         // Reset caches to force recomputation
         self.cached_decay = f32::NAN;
         self.cached_tension = f32::NAN;
@@ -502,6 +520,34 @@ mod tests {
             assert!(l.is_finite(), "left output is not finite on silence");
             assert!(r.is_finite(), "right output is not finite on silence");
         }
+    }
+
+    /// Tension sets the dispersion lengths: a tight spring's echo energy
+    /// gathers sooner than a loose one's (the first arrival is the feedback
+    /// delay either way, through the allpasses' direct path).
+    #[test]
+    fn tension_sets_the_dispersion_lengths() {
+        let centroid = |tension_pct: f32| {
+            let mut kernel = SpringReverbKernel::new(48_000.0);
+            let params = SpringReverbParams {
+                tension_pct,
+                mix_pct: 100.0,
+                ..Default::default()
+            };
+            let (mut weighted, mut total) = (0.0f64, 0.0f64);
+            for n in 0..24_000 {
+                let x = if n == 0 { 1.0 } else { 0.0 };
+                let e = f64::from(kernel.process_stereo(x, x, &params).0).powi(2);
+                weighted += e * n as f64;
+                total += e;
+            }
+            weighted / total
+        };
+        let (tight, loose) = (centroid(100.0), centroid(0.0));
+        assert!(
+            tight < loose,
+            "tight {tight:.0} should gather before loose {loose:.0}"
+        );
     }
 
     #[test]

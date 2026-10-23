@@ -19,12 +19,17 @@ use egui::{
 use egui_snarl::NodeId;
 use sonido_core::{GlobalParam, MacroMap, MacroMapping, MacroTarget, MorphCurve, MorphMode};
 use sonido_gui_core::effects_ui;
-use sonido_gui_core::theme::SonidoTheme;
-use sonido_gui_core::widgets::glow;
+use sonido_gui_core::theme::{Family, SonidoTheme};
 use sonido_gui_core::widgets::{MacroAction, morph_bar, take_macro_action};
+use sonido_gui_core::widgets::{VectorText, glow};
 use sonido_gui_core::{ParamBridge, ParamIndex, SlotIndex};
 
 use crate::info_view::{self, InfoPayload};
+use sonido_patch::controls::RIG_TOGGLES;
+use sonido_patch::{NUM_TOGGLES, ToggleDef, ToggleMappingSpec};
+
+/// A toggle's positions, top to bottom.
+const PLACES: [&str; 3] = ["Up", "Mid", "Down"];
 use sonido_registry::EffectRegistry;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -78,6 +83,13 @@ pub struct SonidoApp {
     macro_names: [String; 6],
     /// Index of the macro whose mapping-editor popup is open, if any.
     macro_editor: Option<usize>,
+    /// The rig's T1 and T3 (`sonido_patch::controls::RIG_TOGGLES`): each
+    /// position sets its own value for every parameter mapped to it.
+    toggle_defs: [ToggleDef; NUM_TOGGLES],
+    /// Their positions (0 up, 1 middle, 2 down), as on the pedal.
+    toggle_positions: [u8; NUM_TOGGLES],
+    /// Index of the toggle whose editor popup is open, if any.
+    toggle_editor: Option<usize>,
 
     /// Cached effect panel: (slot, effect_id, panel).
     /// Avoids reconstructing the panel widget every frame.
@@ -90,6 +102,8 @@ pub struct SonidoApp {
     // Status
     sample_rate: f32,
     buffer_size: usize,
+    /// `--output`: the device to play through (`None` = system default).
+    output_device: Option<String>,
     cpu_usage: f32,
     audio_error: Option<String>,
 
@@ -108,6 +122,10 @@ pub struct SonidoApp {
     /// `Err` = failure (red). Cleared/replaced on the next export.
     #[cfg(not(target_arch = "wasm32"))]
     export_msg: Option<Result<String, String>>,
+    /// The rig's name, as the pedal and the graph player show it.
+    rig_name: String,
+    /// The PEDAL window: the controls guide and the pedal over USB.
+    pedal_panel: crate::pedal_panel::PedalPanel,
 
     /// Web-only: channel delivering loaded-session bytes from the async browser
     /// file picker back to the update loop (the native path reads files
@@ -200,11 +218,14 @@ impl SonidoApp {
     ///
     /// `requested_sample_rate` and `requested_buffer_size` are initial hints;
     /// the actual device rate is detected in `start_audio()` and takes priority.
+    /// `output_device` picks the output by index, exact name or unique
+    /// partial name (`None` = the system default).
     pub fn new(
         cc: &eframe::CreationContext<'_>,
         effect: Option<&str>,
         requested_sample_rate: Option<f32>,
         requested_buffer_size: Option<usize>,
+        output_device: Option<String>,
     ) -> Self {
         let registry = Arc::new(EffectRegistry::new());
 
@@ -265,9 +286,13 @@ impl SonidoApp {
             macro_map: MacroMap::new(),
             macro_names: std::array::from_fn(|_| String::new()),
             macro_editor: None,
+            toggle_defs: Default::default(),
+            toggle_positions: crate::session::default_toggle_positions(),
+            toggle_editor: None,
             cached_panel: None,
             sample_rate: initial_rate,
             buffer_size: initial_buffer,
+            output_device,
             cpu_usage: 0.0,
             audio_error: None,
             cpu_history: Vec::with_capacity(60),
@@ -276,6 +301,8 @@ impl SonidoApp {
             compile_success_frames: 0,
             #[cfg(not(target_arch = "wasm32"))]
             export_msg: None,
+            pedal_panel: crate::pedal_panel::PedalPanel::default(),
+            rig_name: crate::session::default_rig_name(),
             #[cfg(target_arch = "wasm32")]
             load_tx,
             #[cfg(target_arch = "wasm32")]
@@ -400,6 +427,7 @@ impl SonidoApp {
             error_count,
             self.sample_rate,
             self.buffer_size,
+            self.output_device.as_deref(),
         )?;
 
         // Update to actual device-negotiated values
@@ -710,13 +738,12 @@ impl SonidoApp {
         // of running off-screen; on a desktop window everything fits one row, so
         // the layout is unchanged.
         ui.horizontal_wrapped(|ui| {
-            // SONIDO brand
-            ui.heading(
-                egui::RichText::new("SONIDO")
-                    .font(FontId::monospace(18.0))
-                    .color(theme.colors.amber)
-                    .strong(),
-            );
+            // SONIDO wordmark in the design system's vector face, as on
+            // every plugin's marquee.
+            let wordmark = VectorText::new(15.0, theme.colors.text_primary).stroke(1.8);
+            let size = wordmark.size("SONIDO") + vec2(4.0, 6.0);
+            let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
+            wordmark.paint(ui.painter(), rect.min + vec2(2.0, 3.0), "SONIDO", &theme);
             ui.add_space(12.0);
 
             // Transport: ONE prominent Play/Pause for both GEN and FILE sources.
@@ -751,7 +778,7 @@ impl SonidoApp {
                 let rig_color = if rig_open {
                     theme.colors.cyan
                 } else {
-                    theme.colors.dim
+                    theme.colors.text_dim
                 };
                 if ui
                     .button(
@@ -774,7 +801,7 @@ impl SonidoApp {
                 let focus_color = if self.chrome_collapsed {
                     theme.colors.cyan
                 } else {
-                    theme.colors.dim
+                    theme.colors.text_dim
                 };
                 if ui
                     .button(
@@ -797,7 +824,7 @@ impl SonidoApp {
             let undo_color = if can_undo {
                 theme.colors.text_primary
             } else {
-                theme.colors.dim
+                theme.colors.text_dim
             };
             if ui
                 .button(
@@ -813,7 +840,7 @@ impl SonidoApp {
             let redo_color = if can_redo {
                 theme.colors.text_primary
             } else {
-                theme.colors.dim
+                theme.colors.text_dim
             };
             if ui
                 .button(
@@ -856,7 +883,7 @@ impl SonidoApp {
             let bypass_color = if chain_bypassed {
                 theme.colors.red
             } else {
-                theme.colors.dim
+                theme.colors.text_dim
             };
             let bypass_btn = ui.button(
                 egui::RichText::new("BYPASS")
@@ -900,6 +927,17 @@ impl SonidoApp {
                 self.load_session();
             }
             self.render_export_menu(ui);
+            if ui
+                .button(
+                    egui::RichText::new("Pedal")
+                        .font(FontId::monospace(12.0))
+                        .color(theme.colors.text_primary),
+                )
+                .on_hover_text("How to play the pedal, and the pedal over USB")
+                .clicked()
+            {
+                self.pedal_panel.show_window();
+            }
 
             ui.separator();
 
@@ -1104,9 +1142,10 @@ impl SonidoApp {
             .as_ref()
             .map(|(slot, _, _)| self.bridge.param_count(*slot))
             .unwrap_or(6);
-        // Rough estimate: title row + ~40px per row of 4-5 knobs
-        let rows = param_count.div_ceil(5).max(1);
-        80.0 + rows as f32 * 60.0
+        // Rough estimate: title and selector rows, then ~100 px per row of
+        // knobs (80 px cells, value and label under each ring).
+        let rows = param_count.div_ceil(8).max(1);
+        110.0 + rows as f32 * 100.0
     }
 
     /// Render the effect panel for the selected slot.
@@ -1136,10 +1175,12 @@ impl SonidoApp {
 
         // Tint the panel border to the morph pose being sculpted, so it is
         // obvious you are editing A (cyan) or B (amber) as you turn knobs.
+        // Otherwise it glows in the effect's family color, as its plugin does.
+        let accent = Family::of_effect(effect_id).accent();
         let (border_color, border_w) = match self.morph_state.edit() {
             Some(MorphEnd::A) => (theme.colors.cyan, 2.5_f32),
             Some(MorphEnd::B) => (theme.colors.amber, 2.5_f32),
-            None => (theme.colors.amber, 2.0_f32),
+            None => (accent, 1.5_f32),
         };
         let panel_frame = Frame::new()
             .fill(theme.colors.void)
@@ -1151,9 +1192,9 @@ impl SonidoApp {
             // Title row: effect name + morph bar + bypass
             ui.horizontal(|ui| {
                 ui.label(
-                    egui::RichText::new(panel_name)
+                    egui::RichText::new(panel_name.to_uppercase())
                         .font(FontId::monospace(12.0))
-                        .color(theme.colors.amber)
+                        .color(accent)
                         .strong(),
                 );
 
@@ -1193,7 +1234,7 @@ impl SonidoApp {
                         let (label, col) = if locked {
                             ("LOCKED", theme.colors.amber)
                         } else {
-                            ("LOCK", theme.colors.dim)
+                            ("LOCK", theme.colors.text_dim)
                         };
                         let lock_btn = egui::Button::new(
                             egui::RichText::new(label)
@@ -1375,6 +1416,9 @@ impl SonidoApp {
                 self.morph_state.perform(t, &order, &*self.bridge);
                 self.morph_target = None;
             }
+            if resp.focus_a || resp.focus_b || resp.t_changed {
+                self.apply_toggles();
+            }
         });
     }
 
@@ -1444,6 +1488,8 @@ impl SonidoApp {
                     glow::glow_circle(ui.painter(), tick, 1.5, theme.colors.cyan, &theme);
                 }
             }
+            ui.separator();
+            self.render_toggle_strip(ui);
         });
 
         if do_auto {
@@ -1488,6 +1534,7 @@ impl SonidoApp {
                 let order = self.graph_view.effect_node_ids();
                 self.morph_state
                     .perform(value.clamp(0.0, 1.0), &order, &*self.bridge);
+                self.apply_toggles();
             }
             // MorphSpeed (and any future global) — no GUI control yet; the morph
             // band grows a speed knob in Workstream C.
@@ -1514,6 +1561,7 @@ impl SonidoApp {
                     param: param as u8,
                 };
                 self.macro_map.clear_target(target);
+                self.clear_toggle_target(target);
                 let (min, max, curve) = self
                     .bridge
                     .param_descriptor(SlotIndex(slot), ParamIndex(param))
@@ -1528,12 +1576,255 @@ impl SonidoApp {
                     curve,
                 });
             }
-            MacroAction::Clear { slot, param } => {
-                self.macro_map.clear_target(MacroTarget::Slot {
+            MacroAction::MapToggle {
+                slot,
+                param,
+                toggle,
+            } => {
+                let target = MacroTarget::Slot {
                     slot: slot as u8,
                     param: param as u8,
-                });
+                };
+                self.macro_map.clear_target(target);
+                self.clear_toggle_target(target);
+                // Every position starts at the parameter's current value; flip
+                // the toggle and turn the knob to give a position its own.
+                let value = self.bridge.get(SlotIndex(slot), ParamIndex(param));
+                let def = &mut self.toggle_defs[toggle];
+                if def.name.is_empty() {
+                    def.name = self
+                        .bridge
+                        .param_descriptor(SlotIndex(slot), ParamIndex(param))
+                        .map_or_else(String::new, |d| d.short_name.to_owned());
+                    def.positions = PLACES.map(String::from);
+                }
+                if def.mappings.len() < sonido_patch::MAX_TOGGLE_MAPPINGS {
+                    def.mappings.push(ToggleMappingSpec {
+                        target,
+                        values: [value; 3],
+                    });
+                }
+                self.toggle_editor = Some(toggle);
             }
+            MacroAction::Clear { slot, param } => {
+                let target = MacroTarget::Slot {
+                    slot: slot as u8,
+                    param: param as u8,
+                };
+                self.macro_map.clear_target(target);
+                self.clear_toggle_target(target);
+            }
+        }
+    }
+
+    /// Unbind `target` from both toggles (a parameter has one control).
+    fn clear_toggle_target(&mut self, target: MacroTarget) {
+        for def in &mut self.toggle_defs {
+            def.mappings.retain(|m| m.target != target);
+        }
+    }
+
+    /// Write every toggled parameter's value at its toggle's position. Called
+    /// after each morph write, since the morph rewrites every parameter, and
+    /// when a toggle moves: on the pedal too, the morph applies first, then
+    /// the toggles, then the knobs.
+    fn apply_toggles(&mut self) {
+        for (def, &position) in self.toggle_defs.iter().zip(&self.toggle_positions) {
+            for m in &def.mappings {
+                let value = m.values[usize::from(position)];
+                match m.target {
+                    MacroTarget::Slot { slot, param } => {
+                        let (s, p) = (SlotIndex(usize::from(slot)), ParamIndex(usize::from(param)));
+                        if (self.bridge.get(s, p) - value).abs() > f32::EPSILON {
+                            self.bridge.set(s, p, value);
+                        }
+                    }
+                    MacroTarget::Global(GlobalParam::InputGain) => {
+                        self.audio_bridge.input_gain().set(value);
+                    }
+                    MacroTarget::Global(GlobalParam::MasterVolume) => {
+                        self.audio_bridge.master_volume().set(value);
+                    }
+                    MacroTarget::Global(_) => {}
+                }
+            }
+        }
+    }
+
+    /// Fold this frame's edits to toggled parameters into the position each
+    /// toggle is in. Every morph write is followed by [`apply_toggles`], so a
+    /// difference here is the user's turn of the knob.
+    ///
+    /// [`apply_toggles`]: Self::apply_toggles
+    fn record_toggles(&mut self) {
+        for (def, &position) in self.toggle_defs.iter_mut().zip(&self.toggle_positions) {
+            for m in &mut def.mappings {
+                let live = match m.target {
+                    MacroTarget::Slot { slot, param } => self
+                        .bridge
+                        .get(SlotIndex(usize::from(slot)), ParamIndex(usize::from(param))),
+                    MacroTarget::Global(GlobalParam::InputGain) => {
+                        self.audio_bridge.input_gain().get()
+                    }
+                    MacroTarget::Global(GlobalParam::MasterVolume) => {
+                        self.audio_bridge.master_volume().get()
+                    }
+                    MacroTarget::Global(_) => continue,
+                };
+                m.values[usize::from(position)] = live;
+            }
+        }
+    }
+
+    /// T1 and T3 beside the macros: a three-way switch each, like the pedal's.
+    /// Click a position to flip it; click the name (or right-click) to edit
+    /// what it sets.
+    fn render_toggle_strip(&mut self, ui: &mut egui::Ui) {
+        let theme = SonidoTheme::get(ui.ctx());
+        let mut flipped = false;
+        for (t, toggle) in RIG_TOGGLES.iter().enumerate() {
+            let def = &self.toggle_defs[t];
+            let name = if def.name.is_empty() {
+                toggle.label().to_owned()
+            } else {
+                format!("{} {}", toggle.label(), def.name)
+            };
+            let tip = if def.is_active() {
+                format!(
+                    "{name}: {} · {} · {} ({} target(s); click to edit)",
+                    def.positions[0],
+                    def.positions[1],
+                    def.positions[2],
+                    def.mappings.len()
+                )
+            } else {
+                format!(
+                    "{}: unmapped (map a param from its right-click menu)",
+                    toggle.label()
+                )
+            };
+            let color = if def.is_active() {
+                theme.colors.cyan
+            } else {
+                theme.colors.text_secondary
+            };
+            let resp = ui
+                .add(
+                    egui::Label::new(
+                        egui::RichText::new(&name)
+                            .font(FontId::monospace(10.0))
+                            .color(color),
+                    )
+                    .sense(egui::Sense::click()),
+                )
+                .on_hover_text(&tip);
+            if resp.clicked() || resp.secondary_clicked() {
+                self.toggle_editor = Some(t);
+            }
+            // Each position by its label ("+19", "Mid"), the way the plugin's
+            // deck shows it.
+            for (p, place) in PLACES.into_iter().enumerate() {
+                let selected = usize::from(self.toggle_positions[t]) == p;
+                let label = &self.toggle_defs[t].positions[p];
+                let text = if label.is_empty() {
+                    place
+                } else {
+                    label.as_str()
+                };
+                let resp = ui
+                    .add(
+                        egui::Button::new(egui::RichText::new(text).font(FontId::monospace(9.0)))
+                            .small()
+                            .selected(selected),
+                    )
+                    .on_hover_text(format!("{} {place}", toggle.label()));
+                if resp.clicked() && !selected {
+                    self.toggle_positions[t] = p as u8;
+                    flipped = true;
+                }
+            }
+            ui.add_space(4.0);
+        }
+        if flipped {
+            self.apply_toggles();
+        }
+    }
+
+    /// The floating editor for the open toggle: its name, a label per
+    /// position, and what it sets, with each position's value.
+    fn render_toggle_editor(&mut self, ctx: &Context) {
+        let Some(t) = self.toggle_editor else {
+            return;
+        };
+        let labels: Vec<String> = self.toggle_defs[t]
+            .mappings
+            .iter()
+            .map(|m| self.describe_target(m.target))
+            .collect();
+        let mut to_remove: Option<usize> = None;
+        let mut changed = false;
+        let mut open = true;
+        egui::Window::new(format!("Toggle {}", RIG_TOGGLES[t].label()))
+            .collapsible(false)
+            .resizable(false)
+            .open(&mut open)
+            .show(ctx, |ui| {
+                let def = &mut self.toggle_defs[t];
+                ui.horizontal(|ui| {
+                    ui.label("Name:");
+                    ui.text_edit_singleline(&mut def.name);
+                });
+                ui.horizontal(|ui| {
+                    for (label, place) in def.positions.iter_mut().zip(PLACES) {
+                        ui.label(place);
+                        ui.add(egui::TextEdit::singleline(label).desired_width(56.0));
+                    }
+                });
+                ui.label(
+                    egui::RichText::new(
+                        "Flip the toggle, then turn a mapped knob: it records into that position.",
+                    )
+                    .font(FontId::monospace(9.0))
+                    .weak(),
+                );
+                ui.separator();
+                if def.mappings.is_empty() {
+                    ui.label(
+                        egui::RichText::new(
+                            "No parameters mapped.\nRight-click a knob → Map to toggle.",
+                        )
+                        .font(FontId::monospace(10.0)),
+                    );
+                }
+                for (i, (m, label)) in def.mappings.iter_mut().zip(&labels).enumerate() {
+                    ui.horizontal(|ui| {
+                        if ui.small_button("✕").clicked() {
+                            to_remove = Some(i);
+                        }
+                        ui.label(label.as_str());
+                    });
+                    ui.horizontal(|ui| {
+                        ui.add_space(24.0);
+                        for (v, place) in m.values.iter_mut().zip(PLACES) {
+                            ui.label(
+                                egui::RichText::new(place)
+                                    .font(FontId::monospace(9.0))
+                                    .weak(),
+                            );
+                            let speed = (v.abs() * 0.005).max(0.001);
+                            changed |= ui.add(egui::DragValue::new(v).speed(speed)).changed();
+                        }
+                    });
+                }
+            });
+        if let Some(i) = to_remove {
+            self.toggle_defs[t].mappings.remove(i);
+        }
+        if changed {
+            self.apply_toggles();
+        }
+        if !open {
+            self.toggle_editor = None;
         }
     }
 
@@ -1726,19 +2017,43 @@ impl SonidoApp {
                 },
             );
 
-            // Daisy eligibility badge — green if ≤3 effects, red if >3
+            // The pedal's rule, the one Export > Pedal checks: its effect
+            // count and estimated CPU, coloured by the verdict.
             ui.separator();
-            let effect_count = self.graph_view.effect_node_count();
-            let daisy_color = if effect_count <= 3 {
-                theme.colors.green
-            } else {
-                theme.colors.red
-            };
-            ui.label(
-                egui::RichText::new(format!("Daisy: {effect_count}/3"))
-                    .font(FontId::monospace(11.0))
-                    .color(daisy_color),
+            let load = sonido_patch::validate::daisy_load(
+                self.graph_view
+                    .effect_ids()
+                    .map(|id| sonido_registry::effect_uid(id).unwrap_or(0)),
             );
+            let pedal_color = match load.severity() {
+                None => theme.colors.green,
+                Some(sonido_patch::validate::Severity::Warning) => theme.colors.yellow,
+                Some(sonido_patch::validate::Severity::Error) => theme.colors.red,
+            };
+            let mut why = vec![format!(
+                "The pedal's rule, the same one Export > Pedal checks: up to {} \
+                 effects and {:.0}% of its CPU.",
+                sonido_patch::MAX_NODES,
+                100.0 * sonido_platform::cycle_table::CHAIN_FRACTION
+            )];
+            if load.nodes > sonido_patch::MAX_NODES {
+                why.push(format!("{} effects is too many.", load.nodes));
+            }
+            if load.unavailable > 0 {
+                why.push("An effect here isn't on the pedal.".to_owned());
+            }
+            why.extend(load.findings.iter().map(ToString::to_string));
+            ui.label(
+                egui::RichText::new(format!(
+                    "Pedal: {}/{} · CPU {:.0}%",
+                    load.nodes,
+                    sonido_patch::MAX_NODES,
+                    100.0 * load.cpu
+                ))
+                .font(FontId::monospace(11.0))
+                .color(pedal_color),
+            )
+            .on_hover_text(why.join("\n"));
 
             // File player / generator transport (inline)
             ui.separator();
@@ -1783,11 +2098,20 @@ impl SonidoApp {
         crate::session::PerformanceCapture {
             macros: crate::session::macro_map_to_defs(&self.macro_map, &self.macro_names),
             macro_positions: std::array::from_fn(|i| self.macro_map.position(i)),
+            toggles: self.toggle_defs.clone(),
+            toggle_positions: self.toggle_positions,
             morph,
             morph_position: self.morph_state.t,
             morph_a,
             morph_b,
+            name: self.rig_name.clone(),
         }
+    }
+
+    /// The PEDAL window (for the screenshot harness).
+    #[doc(hidden)]
+    pub fn pedal_panel_mut(&mut self) -> &mut crate::pedal_panel::PedalPanel {
+        &mut self.pedal_panel
     }
 
     /// Capture the complete editor state (graph + params + performance layer)
@@ -1854,9 +2178,17 @@ impl SonidoApp {
 
     /// Build the canonical [`Patch`](sonido_patch::Patch) from the current rig,
     /// for export to a CLAP plugin, a `.bin` sector, or the pedal.
-    #[cfg(not(target_arch = "wasm32"))]
-    fn current_patch(&self, name: &str) -> sonido_patch::Patch {
-        self.snapshot().to_patch(name)
+    fn current_patch(&self) -> sonido_patch::Patch {
+        self.snapshot().to_patch(self.rig_name.clone())
+    }
+
+    /// The rig-name field at the top of the Export menu.
+    fn rig_name_field(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new("Name").font(FontId::monospace(10.0)));
+            ui.add(egui::TextEdit::singleline(&mut self.rig_name).desired_width(140.0));
+        });
+        ui.separator();
     }
 
     /// Record an export/flash result for the header status line.
@@ -1871,8 +2203,8 @@ impl SonidoApp {
     }
 
     /// Render the Export menu: project the rig to a [`Patch`] and offer the four
-    /// destinations — CLAP sidecar, portable JSON, pedal `.bin` sector, and DFU
-    /// flash. Pedal targets validate against the device's effect/CPU/SDRAM
+    /// destinations — CLAP sidecar, portable JSON, pedal `.bin` sector, and the
+    /// pedal itself over USB. Pedal targets validate against the device's effect/CPU/SDRAM
     /// budget first and are disabled (with the failing findings shown) when the
     /// rig won't fit.
     #[cfg(not(target_arch = "wasm32"))]
@@ -1885,7 +2217,8 @@ impl SonidoApp {
                 .font(FontId::monospace(12.0))
                 .color(theme.colors.text_primary),
             |ui| {
-                let patch = self.current_patch("Sonido Rig");
+                self.rig_name_field(ui);
+                let patch = self.current_patch();
                 let findings = crate::export::validate_patch_for_pedal(&patch);
                 let pedal_ok = crate::export::can_export_to_pedal(&patch);
 
@@ -1912,9 +2245,13 @@ impl SonidoApp {
                             .map_err(|e| e.to_string())
                             .and_then(|j| std::fs::write(&path, j).map_err(|e| e.to_string()));
                         match result {
-                            Ok(()) => self
-                                .set_export_msg(format!("Saved patch JSON → {}", path.display()), true),
-                            Err(e) => self.set_export_msg(format!("JSON export failed: {e}"), false),
+                            Ok(()) => self.set_export_msg(
+                                format!("Saved patch JSON → {}", path.display()),
+                                true,
+                            ),
+                            Err(e) => {
+                                self.set_export_msg(format!("JSON export failed: {e}"), false)
+                            }
                         }
                     }
                     ui.close_menu();
@@ -1946,7 +2283,7 @@ impl SonidoApp {
                         Severity::Warning => theme.colors.yellow,
                     };
                     ui.label(
-                        egui::RichText::new(format!("· {}", f.message))
+                        egui::RichText::new(format!("· {f}"))
                             .font(FontId::monospace(9.0))
                             .color(col),
                     );
@@ -1969,26 +2306,42 @@ impl SonidoApp {
                                 format!("Saved pedal binary → {}", path.display()),
                                 true,
                             ),
-                            Err(e) => self.set_export_msg(format!("Binary export failed: {e}"), false),
+                            Err(e) => {
+                                self.set_export_msg(format!("Binary export failed: {e}"), false)
+                            }
                         }
                     }
                     ui.close_menu();
                 }
                 if ui
-                    .add_enabled(pedal_ok, egui::Button::new("Flash to pedal (DFU)"))
+                    .add_enabled(pedal_ok, egui::Button::new("Send to pedal"))
                     .on_hover_text(
-                        "Put the pedal in bootloader (hold both footswitches ~1.5 s), then flash slot 0",
+                        "Over the pedal's USB port: replaces its rig with this name, or takes \
+                         its first empty bank slot, and plays it",
                     )
                     .clicked()
                 {
-                    let result = crate::export::encode_patch_sector(&patch)
-                        .map_err(|e| e.to_string())
-                        .and_then(|buf| crate::dfu::flash_patch(0, &buf).map_err(|e| e.to_string()));
+                    let result = sonido_patch::client::open_pedal(None).and_then(|mut link| {
+                        let slot = link.send_rig(&patch)?;
+                        Ok((slot, link.info()?.protocol))
+                    });
                     match result {
-                        Ok(()) => {
-                            self.set_export_msg("Flashed patch to pedal slot 0".to_owned(), true)
-                        }
-                        Err(e) => self.set_export_msg(format!("Flash failed: {e}"), false),
+                        Ok((slot, protocol)) => self.set_export_msg(
+                            match sonido_patch::link::unplayed(&patch, protocol) {
+                                None => format!(
+                                    "Sent '{}' to pedal bank slot {}: playing",
+                                    patch.name,
+                                    slot + 1
+                                ),
+                                Some(what) => format!(
+                                    "Sent '{}' to pedal bank slot {}: playing, without {what}",
+                                    patch.name,
+                                    slot + 1
+                                ),
+                            },
+                            true,
+                        ),
+                        Err(e) => self.set_export_msg(format!("Send to pedal failed: {e}"), false),
                     }
                     ui.close_menu();
                 }
@@ -2082,8 +2435,9 @@ impl SonidoApp {
         });
     }
 
-    /// Web export menu: the portable subset — patch JSON and pedal `.bin`, both
-    /// downloaded. USB DFU flash and the CLAP-folder write need the native app.
+    /// Web export menu: patch JSON and the pedal `.bin`, both downloaded, and
+    /// Send to pedal over Web Serial (the PEDAL window shows the result).
+    /// Firmware updates and the CLAP-folder write need the native tools.
     #[cfg(target_arch = "wasm32")]
     fn render_export_menu(&mut self, ui: &mut egui::Ui) {
         let theme = SonidoTheme::get(ui.ctx());
@@ -2092,7 +2446,8 @@ impl SonidoApp {
                 .font(FontId::monospace(12.0))
                 .color(theme.colors.text_primary),
             |ui| {
-                let patch = self.snapshot().to_patch("Sonido Rig");
+                self.rig_name_field(ui);
+                let patch = self.current_patch();
                 if ui.button("Save patch JSON…").clicked() {
                     if let Ok(json) = crate::export::patch_to_json(&patch) {
                         let task = rfd::AsyncFileDialog::new()
@@ -2123,9 +2478,22 @@ impl SonidoApp {
                     }
                     ui.close_menu();
                 }
+                let fits = crate::export::can_export_to_pedal(&patch);
+                if ui
+                    .add_enabled(fits, egui::Button::new("Send to pedal"))
+                    .on_hover_text(
+                        "Over the pedal's USB port (Chrome or Edge): replaces its rig with this \
+                         name, or takes its first empty bank slot, and plays it",
+                    )
+                    .clicked()
+                {
+                    self.pedal_panel.show_window();
+                    self.pedal_panel.send(patch, ui.ctx());
+                    ui.close_menu();
+                }
                 ui.separator();
                 ui.label(
-                    egui::RichText::new("Flashing to the pedal (USB) needs the native app.")
+                    egui::RichText::new("Firmware updates: `sonido pedal update` (CLI).")
                         .font(FontId::monospace(9.0))
                         .color(theme.colors.text_secondary),
                 );
@@ -2142,6 +2510,8 @@ impl SonidoApp {
     fn restore_performance(&mut self, session: &crate::session::Session) {
         use crate::morph_state::{MorphSnapshot, SlotSnapshot};
         use crate::session::SessionNode;
+
+        self.rig_name.clone_from(&session.name);
 
         // Macros: defs → runtime map + names, then live knob positions.
         let (map, names) = crate::session::defs_to_macro_map(&session.macros);
@@ -2189,6 +2559,13 @@ impl SonidoApp {
         self.morph_target = None;
         let t = session.morph_position.clamp(0.0, 1.0);
         self.morph_state.perform(t, &order, &*self.bridge);
+
+        // Toggles: their mappings and positions, then their values over the
+        // morph's (as on the pedal: morph, then toggles, then knobs).
+        self.toggle_defs.clone_from(&session.toggles);
+        self.toggle_positions = session.toggle_positions.map(|p| p.min(2));
+        self.toggle_editor = None;
+        self.apply_toggles();
     }
 }
 
@@ -2261,6 +2638,7 @@ impl eframe::App for SonidoApp {
             } else if (self.morph_state.t - target).abs() <= 1e-3 {
                 self.morph_state
                     .perform(target, &morph_order, &*self.bridge);
+                self.apply_toggles();
                 self.morph_target = None;
             } else {
                 let dt = ctx.input(|i| i.stable_dt).clamp(0.0, 0.1);
@@ -2272,6 +2650,7 @@ impl eframe::App for SonidoApp {
                     (cur - step).max(target)
                 };
                 self.morph_state.perform(next, &morph_order, &*self.bridge);
+                self.apply_toggles();
                 ctx.request_repaint();
             }
         }
@@ -2347,7 +2726,8 @@ impl eframe::App for SonidoApp {
         // or a macro-name rename). NOT `wants_keyboard_input()`, which is also
         // true for a focused knob — that made Space/shortcuts dead after you
         // touched a parameter until you clicked back into the canvas.
-        let typing = self.palette_open || self.macro_editor.is_some();
+        let typing =
+            self.palette_open || self.macro_editor.is_some() || self.toggle_editor.is_some();
         if !typing && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Space)) {
             let can_play = match self.file_player.source_mode() {
                 crate::signal_generator::SourceMode::Generator => true,
@@ -2605,6 +2985,15 @@ impl eframe::App for SonidoApp {
                 self.handle_macro_action(action);
             }
             self.render_macro_editor(ctx);
+            self.render_toggle_editor(ctx);
+            let fits = self.pedal_panel.open
+                && !sonido_patch::validate::has_errors(
+                    &sonido_patch::validate::validate_for_daisy(&self.current_patch()),
+                );
+            if self.pedal_panel.ui(ctx, fits) {
+                let rig = self.current_patch();
+                self.pedal_panel.send(rig, ctx);
+            }
         }
 
         // While a morph pose is focused, fold this frame's knob edits into it so
@@ -2612,6 +3001,9 @@ impl eframe::App for SonidoApp {
         // been rebuilt during this frame's panel render. A no-op while performing.
         let morph_order = self.graph_view.effect_node_ids();
         self.morph_state.record(&morph_order, &*self.bridge);
+        // Likewise, turning a toggled parameter records into the position the
+        // toggle is in.
+        self.record_toggles();
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {

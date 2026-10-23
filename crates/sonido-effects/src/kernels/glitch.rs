@@ -26,7 +26,10 @@
 //! let adapter = Adapter::new(GlitchKernel::new(48000.0), 48000.0);
 //! let mut effect: Box<dyn Effect> = Box::new(adapter);
 //!
-//! // Embedded / Daisy Seed (direct — no smoothing)
+//! // Embedded / Daisy Seed — zero-smoothing adapter, as the pedal firmware uses
+//! let effect = Adapter::new_direct(GlitchKernel::new(48000.0), 48000.0);
+//!
+//! // Or drive the kernel directly with a typed params struct (no adapter)
 //! let mut kernel = GlitchKernel::new(48000.0);
 //! let params = GlitchParams::default();
 //! let (left, right) = kernel.process_stereo(input_l, input_r, &params);
@@ -39,9 +42,8 @@ use alloc::vec::Vec;
 use sonido_core::kernel::KernelParams;
 use sonido_core::kernel::{DspKernel, SmoothingStyle};
 use sonido_core::kernel_params;
-use sonido_core::{
-    ParamDescriptor, ParamFlags, ParamId, ParamScale, ParamUnit, fast_db_to_linear, wet_dry_mix,
-};
+use sonido_core::level::Level;
+use sonido_core::{ParamDescriptor, ParamFlags, ParamId, ParamScale, ParamUnit, fast_db_to_linear};
 
 // ═══════════════════════════════════════════════════════════════════════════
 //  Constants
@@ -73,7 +75,7 @@ const MODE_LABELS: &[&str] = &["Stutter", "TapeStop", "Reverse", "Shuffle"];
 /// | 1 | `rate` | Hz | 1–32 | 4.0 |
 /// | 2 | `depth` | % | 0–100 | 50.0 |
 /// | 3 | `probability` | % | 0–100 | 50.0 |
-/// | 4 | `mix_pct` | % | 0–100 | 100.0 |
+/// | 4 | `mix_pct` | % | 0–100 | 50.0 |
 /// | 5 | `output_db` | dB | −60–+6 | 0.0 |
 #[derive(Debug, Clone, Copy)]
 pub struct GlitchParams {
@@ -103,7 +105,7 @@ impl Default for GlitchParams {
             rate: 4.0,
             depth: 50.0,
             probability: 50.0,
-            mix_pct: 100.0,
+            mix_pct: 50.0,
             output_db: 0.0,
         }
     }
@@ -132,6 +134,7 @@ kernel_params! {
         [2] ParamDescriptor {
                 name: "Depth",
                 short_name: "Depth",
+                flags: ParamFlags::AUTOMATABLE,
                 ..ParamDescriptor::mix()
             }
             .with_id(ParamId(3502), "gl_depth"),
@@ -142,6 +145,7 @@ kernel_params! {
         [3] ParamDescriptor {
                 name: "Probability",
                 short_name: "Prob",
+                flags: ParamFlags::AUTOMATABLE,
                 ..ParamDescriptor::mix()
             }
             .with_id(ParamId(3503), "gl_probability"),
@@ -155,7 +159,8 @@ kernel_params! {
             set: |v| this.mix_pct = v;
 
         [5] ParamDescriptor::gain_db("Output", "Out", -60.0, 6.0, 0.0)
-                .with_id(ParamId(3505), "gl_output"),
+                .with_id(ParamId(3505), "gl_output")
+                .with_flags(ParamFlags::AUTOMATABLE.union(ParamFlags::MACRO_EXCLUDE)),
             smoothing: SmoothingStyle::Fast,     // output_db — 5 ms
             get: this.output_db,
             set: |v| this.output_db = v;
@@ -255,6 +260,7 @@ impl GlitchKernel {
 
 impl DspKernel for GlitchKernel {
     type Params = GlitchParams;
+    const LEVEL: Level = crate::calibration::GLITCH;
 
     fn process_stereo(&mut self, left: f32, right: f32, params: &GlitchParams) -> (f32, f32) {
         let sr = self.sample_rate;
@@ -364,8 +370,8 @@ impl DspKernel for GlitchKernel {
         let mix = params.mix_pct / 100.0;
         let output_gain = fast_db_to_linear(params.output_db);
 
-        let out_l = wet_dry_mix(left, wet_l, mix) * output_gain;
-        let out_r = wet_dry_mix(right, wet_r, mix) * output_gain;
+        let (out_l, out_r) = Self::blend_stereo(left, right, wet_l, wet_r, mix);
+        let (out_l, out_r) = (out_l * output_gain, out_r * output_gain);
 
         (out_l, out_r)
     }

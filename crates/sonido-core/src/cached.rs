@@ -1,9 +1,10 @@
 //! Cached coefficient wrapper with epsilon-threshold change detection.
 //!
 //! [`Cached<T>`] recomputes a value only when its inputs change beyond an
-//! epsilon threshold. This replaces the `NaN`-sentinel coefficient caching
-//! pattern used across filter kernels (preamp, distortion, EQ, gate, filter,
-//! compressor, tape, stage).
+//! epsilon threshold. It replaced the `NaN`-sentinel coefficient caching
+//! pattern in the filter-bearing kernels; 13 kernels use it today (amp,
+//! compressor, deesser, distortion, EQ, filter, gate, multiband compressor,
+//! preamp, shelving EQ, stage, stereo widener, tape).
 //!
 //! # Why not just compare `last_freq != freq`?
 //!
@@ -151,6 +152,19 @@ impl<T> Cached<T> {
     }
 }
 
+/// Whether a cached value must be recomputed: `new` moved more than `epsilon`
+/// from `cached`, or `cached` is `NaN` (never computed, or invalidated).
+///
+/// Write coefficient caches with this rather than `(new - cached).abs() > eps`:
+/// every comparison with `NaN` is false, so that form never fires for a cache
+/// initialized to `NaN`, and the coefficient is never computed at all. That
+/// left the plate reverb with no tank feedback (no tail), the spring reverb's
+/// decay fixed, and the cabinet's low cut unset.
+#[inline]
+pub fn needs_update(cached: f32, new: f32, epsilon: f32) -> bool {
+    cached.is_nan() || (new - cached).abs() > epsilon
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -177,6 +191,13 @@ mod tests {
             panic!("should not recompute");
         });
         assert!((result - 42.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn needs_update_fires_for_nan_and_real_changes() {
+        assert!(needs_update(f32::NAN, 1.0, 1e-3));
+        assert!(needs_update(1.0, 1.1, 1e-3));
+        assert!(!needs_update(1.0, 1.0005, 1e-3));
     }
 
     #[test]

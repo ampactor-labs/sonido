@@ -873,7 +873,7 @@ fn arcade_led_button(
         }
 
         // Label text below LED
-        let text_color = if lit { color } else { theme.colors.dim };
+        let text_color = if lit { color } else { theme.colors.text_dim };
         painter.text(
             pos2(rect.center().x, rect.center().y + 2.0),
             egui::Align2::CENTER_CENTER,

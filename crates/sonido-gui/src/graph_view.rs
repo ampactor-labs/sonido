@@ -14,6 +14,7 @@ use egui_snarl::{InPin, InPinId, NodeId, OutPin, OutPinId, Snarl};
 
 use sonido_core::graph::{GraphEngine, MAX_SPLIT_TARGETS, ProcessingGraph};
 use sonido_core::{ParamDescriptor, ParamFlags, SmoothingStyle};
+use sonido_gui_core::theme::Family;
 use sonido_gui_core::theme::SonidoTheme;
 use sonido_gui_core::widgets::glow;
 use sonido_registry::{EffectCategory, EffectRegistry};
@@ -497,15 +498,14 @@ impl GraphView {
         None
     }
 
-    /// Count of [`SonidoNode::Effect`] nodes currently in the graph.
-    ///
-    /// Used by the Daisy eligibility badge in the status bar: the Hothouse
-    /// pedal supports up to 3 effects in a single-chain topology.
-    pub fn effect_node_count(&self) -> usize {
-        self.snarl
-            .node_ids()
-            .filter(|(_, node)| matches!(node, SonidoNode::Effect { .. }))
-            .count()
+    /// Each [`SonidoNode::Effect`] node's registry id, in chain-slot order:
+    /// the rig's nodes on export, which the status bar judges by the pedal's
+    /// rule as you build.
+    pub fn effect_ids(&self) -> impl Iterator<Item = &'static str> + '_ {
+        self.snarl.node_ids().filter_map(|(_, node)| match node {
+            SonidoNode::Effect { effect_id, .. } => Some(*effect_id),
+            _ => None,
+        })
     }
 
     /// The graph's effect nodes in chain-slot order.
@@ -837,8 +837,11 @@ impl GraphView {
             master_volume,
             macros: perf.macros,
             macro_positions: perf.macro_positions,
+            toggles: perf.toggles,
+            toggle_positions: perf.toggle_positions,
             morph: perf.morph,
             morph_position: perf.morph_position,
+            name: perf.name,
         }
     }
 
@@ -918,24 +921,10 @@ impl Default for GraphView {
     }
 }
 
-/// Returns a category-based color from the arcade CRT theme palette.
-///
-/// Mapping:
-/// - Dynamics  -> cyan (info / signal labels)
-/// - Distortion -> red (danger / clip)
-/// - Modulation -> magenta (modulation category)
-/// - Filter    -> yellow (caution / filter)
-/// - TimeBased -> purple (delay / reverb)
-/// - Utility   -> amber (brand primary / default)
-fn category_color(cat: EffectCategory, theme: &SonidoTheme) -> Color32 {
-    match cat {
-        EffectCategory::Dynamics => theme.colors.cyan,
-        EffectCategory::Distortion => theme.colors.red,
-        EffectCategory::Modulation => theme.colors.magenta,
-        EffectCategory::Filter => theme.colors.yellow,
-        EffectCategory::TimeBased => theme.colors.purple,
-        EffectCategory::Utility => theme.colors.amber,
-    }
+/// A node's color: its effect family's accent, the same light the effect's
+/// plugin cabinet uses (see `docs/DESIGN_SYSTEM.md`).
+fn category_color(cat: EffectCategory) -> Color32 {
+    Family::from_category(cat).accent()
 }
 
 /// Color for structural nodes (Input, Output, Split, Merge) — uses theme dim.
@@ -993,7 +982,7 @@ impl SonidoViewer<'_> {
     /// structural color for Input/Output/Split/Merge).
     fn node_accent(&self, node: &SonidoNode) -> Color32 {
         match node {
-            SonidoNode::Effect { category, .. } => category_color(*category, &self.theme),
+            SonidoNode::Effect { category, .. } => category_color(*category),
             _ => structural_color(&self.theme),
         }
     }
@@ -1216,7 +1205,7 @@ impl SnarlViewer<SonidoNode> for SonidoViewer<'_> {
         {
             let dim = self.theme.colors.text_secondary;
             let is_selected = *self.selected_node == Some(node);
-            let accent = category_color(*category, &self.theme);
+            let accent = category_color(*category);
 
             // Resolve slot index for this effect node.
             let mut slot_idx = 0usize;
@@ -1372,7 +1361,7 @@ impl SnarlViewer<SonidoNode> for SonidoViewer<'_> {
                 if desc.name.to_lowercase().contains(&filter_lower)
                     || desc.id.contains(&filter_lower)
                 {
-                    let cat_color = category_color(desc.category, &self.theme);
+                    let cat_color = category_color(desc.category);
                     if ui
                         .button(RichText::new(desc.name).color(cat_color))
                         .clicked()
@@ -1796,8 +1785,11 @@ mod tests {
             master_volume: 0.0,
             macros: std::array::from_fn(|_| sonido_patch::MacroDef::default()),
             macro_positions: [0.0; sonido_patch::NUM_MACROS],
+            toggles: Default::default(),
+            toggle_positions: crate::session::default_toggle_positions(),
             morph: sonido_patch::MorphConfig::default(),
             morph_position: 0.0,
+            name: crate::session::default_rig_name(),
         };
 
         let mut gv = GraphView::new();
@@ -1913,7 +1905,7 @@ mod tests {
     fn removing_last_node_keeps_output_connected() {
         let mut gv = GraphView::new(); // Input → Output
         gv.add_effect_node("distortion"); // Input → Distortion → Output
-        assert_eq!(gv.effect_node_count(), 1);
+        assert_eq!(gv.effect_ids().count(), 1);
         assert!(output_has_input(&gv));
 
         // Remove the only effect: the Output must auto-reconnect (to Input),
@@ -1921,7 +1913,7 @@ mod tests {
         let effect = first_effect(&gv).expect("effect node present");
         gv.remove_node(effect);
 
-        assert_eq!(gv.effect_node_count(), 0);
+        assert_eq!(gv.effect_ids().count(), 0);
         assert!(
             output_has_input(&gv),
             "Output was orphaned after removing the last node"

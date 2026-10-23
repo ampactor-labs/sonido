@@ -74,7 +74,8 @@ pub fn adc_to_param(desc: &ParamDescriptor, normalized: f32) -> f32 {
 ///
 /// Both halves use the descriptor's scale (Linear, Logarithmic, Power) so
 /// the response curve is musically consistent across the entire range.
-/// STEPPED parameters are rounded to the nearest integer after scaling.
+/// STEPPED parameters use the same split, rounded to whole steps, so the
+/// noon option is what noon selects.
 ///
 /// # Parameters
 ///
@@ -96,19 +97,30 @@ pub fn adc_to_param(desc: &ParamDescriptor, normalized: f32) -> f32 {
 /// ```
 #[inline]
 pub fn adc_to_param_biased(desc: &ParamDescriptor, noon: f32, normalized: f32) -> f32 {
-    // STEPPED params: equal knob travel per option, biasing is meaningless.
+    // STEPPED params: noon selects the noon option; the options below it share
+    // the left half of the travel and those above it the right half. A noon
+    // on the first option keeps the whole left half there: a mode knob that
+    // turns right for the alternatives. (Mapping steps linearly instead put
+    // the *middle* option at noon whatever the voicing asked for.)
     if desc.flags.contains(ParamFlags::STEPPED) {
-        return adc_to_param(desc, normalized);
+        let noon = libm::roundf(noon.clamp(desc.min, desc.max));
+        let value = if normalized <= 0.5 {
+            desc.min + normalized * 2.0 * (noon - desc.min)
+        } else {
+            noon + (normalized - 0.5) * 2.0 * (desc.max - noon)
+        };
+        return libm::roundf(value);
     }
 
     let noon = noon.clamp(desc.min, desc.max);
     let range = desc.max - desc.min;
 
-    // Noon at or near an extreme: biased mapping creates a dead zone.
-    // Fall back to linear (full range, no wasted travel).
-    // Threshold: 5% of range from either end.
-    if range < 1e-6 || (noon - desc.min) / range < 0.05 || (desc.max - noon) / range < 0.05 {
-        return adc_to_param(desc, normalized);
+    // Noon always selects `noon`, even at an end of the range: a parameter
+    // voiced at its maximum (a distortion's 100% mix) sweeps its whole range
+    // in the left half and holds there in the right. Mapping such a knob
+    // linearly instead put noon mid-range, off the voicing.
+    if range < 1e-6 {
+        return noon;
     }
 
     if normalized <= 0.5 {
@@ -135,57 +147,35 @@ mod tests {
     }
 
     #[test]
-    fn biased_stepped_uses_linear() {
-        // 4-option selector [0, 3]: biased noon=1 should NOT compress range.
+    fn biased_stepped_puts_the_noon_option_at_noon() {
+        // 4-option selector [0, 3] voiced on option 1.
         let desc = stepped(0.0, 3.0, 1.0);
-        // With linear mapping, 0→0, 0.5→1.5→rounds to 2, 1→3
-        let at_zero = adc_to_param_biased(&desc, 1.0, 0.0);
-        let at_half = adc_to_param_biased(&desc, 1.0, 0.5);
-        let at_one = adc_to_param_biased(&desc, 1.0, 1.0);
-        assert_eq!(at_zero, 0.0);
-        assert_eq!(at_half, 2.0); // rounded from 1.5
-        assert_eq!(at_one, 3.0);
+        assert_eq!(adc_to_param_biased(&desc, 1.0, 0.0), 0.0);
+        assert_eq!(adc_to_param_biased(&desc, 1.0, 0.5), 1.0);
+        assert_eq!(adc_to_param_biased(&desc, 1.0, 0.75), 2.0);
+        assert_eq!(adc_to_param_biased(&desc, 1.0, 1.0), 3.0);
+        // Voiced on the first option: the left half stays on it.
+        assert_eq!(adc_to_param_biased(&desc, 0.0, 0.2), 0.0);
+        assert_eq!(adc_to_param_biased(&desc, 0.0, 0.5), 0.0);
+        assert_eq!(adc_to_param_biased(&desc, 0.0, 1.0), 3.0);
     }
 
     #[test]
-    fn biased_noon_at_min_uses_linear() {
-        // Preamp gain [0, 20] with noon=0: without fallback, bottom half is dead.
-        let desc = linear(0.0, 20.0, 0.0);
-        let at_quarter = adc_to_param_biased(&desc, 0.0, 0.25);
-        let at_half = adc_to_param_biased(&desc, 0.0, 0.5);
-        let at_one = adc_to_param_biased(&desc, 0.0, 1.0);
-        // Should fall back to linear: full range, no dead zone.
-        assert!((at_quarter - 5.0).abs() < 0.01);
-        assert!((at_half - 10.0).abs() < 0.01);
-        assert!((at_one - 20.0).abs() < 0.01);
-    }
-
-    #[test]
-    fn biased_noon_at_max_uses_linear() {
-        // Width [0, 100] with noon=100: without fallback, top half is dead.
+    fn noon_at_an_end_still_selects_noon() {
+        // Mix [0, 100] voiced at 100: noon is 100, the left half blends.
         let desc = linear(0.0, 100.0, 100.0);
-        let at_zero = adc_to_param_biased(&desc, 100.0, 0.0);
-        let at_half = adc_to_param_biased(&desc, 100.0, 0.5);
-        // Should fall back to linear.
-        assert!((at_zero).abs() < 0.01);
-        assert!((at_half - 50.0).abs() < 0.01);
-    }
-
-    #[test]
-    fn biased_near_extreme_uses_linear() {
-        // Filter resonance [0.1, 20.0] with noon=0.707.
-        // (0.707 - 0.1) / (20.0 - 0.1) ≈ 3% — below 5% threshold.
-        let desc = linear(0.1, 20.0, 0.707);
-        let at_zero = adc_to_param_biased(&desc, 0.707, 0.0);
-        let at_one = adc_to_param_biased(&desc, 0.707, 1.0);
-        // Should fall back to linear — full range.
-        assert!((at_zero - 0.1).abs() < 0.01);
-        assert!((at_one - 20.0).abs() < 0.01);
+        assert!((adc_to_param_biased(&desc, 100.0, 0.5) - 100.0).abs() < 0.01);
+        assert!((adc_to_param_biased(&desc, 100.0, 0.25) - 50.0).abs() < 0.01);
+        assert!(adc_to_param_biased(&desc, 100.0, 0.0).abs() < 0.01);
+        // Gain [0, 20] voiced at 0: noon is 0, the right half adds gain.
+        let desc = linear(0.0, 20.0, 0.0);
+        assert!(adc_to_param_biased(&desc, 0.0, 0.5).abs() < 0.01);
+        assert!((adc_to_param_biased(&desc, 0.0, 1.0) - 20.0).abs() < 0.01);
     }
 
     #[test]
     fn biased_full_range() {
-        // Drive [0, 40] with noon=8: noon is 20% from min, well above 5%.
+        // Drive [0, 40] with noon=8: both halves reach their ends.
         let desc = linear(0.0, 40.0, 8.0);
         let at_zero = adc_to_param_biased(&desc, 8.0, 0.0);
         let at_one = adc_to_param_biased(&desc, 8.0, 1.0);

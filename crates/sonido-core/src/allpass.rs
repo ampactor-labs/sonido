@@ -2,6 +2,14 @@
 //!
 //! A Schroeder allpass filter that adds diffusion without coloring the
 //! frequency response. Essential for creating dense, smooth reverb tails.
+//!
+//! Both filters here are true allpasses, `H(z) = (−g + z⁻ᴰ) / (1 − g·z⁻ᴰ)`,
+//! unity gain at every frequency. They used to use Freeverb's shortcut,
+//! `y = −x + v[n−D]`, whose response is `(−1 + (1+g)·z⁻ᴰ) / (1 − g·z⁻ᴰ)`: up to
+//! ~2× gain at the frequencies where `z⁻ᴰ = −1`, even at `g = 0`. Freeverb
+//! only puts its allpasses after the reverb, where that is a coloration; the
+//! delay's diffusion and the plate's tank put them inside a feedback loop,
+//! where it made the loop gain exceed 1 and the effect run away.
 
 use crate::InterpolatedDelay;
 use crate::Interpolation;
@@ -28,19 +36,38 @@ use crate::flush_denormal;
 pub struct AllpassFilter {
     delay: InterpolatedDelay,
     feedback: f32,
+    /// Delay in samples, at most the capacity.
+    length: usize,
 }
 
 impl AllpassFilter {
-    /// Create a new allpass filter with the given delay size in samples.
+    /// Create a new allpass filter with the given delay size in samples (also
+    /// its capacity: [`set_length`](Self::set_length) can shorten it).
     ///
     /// # Arguments
     ///
     /// * `delay_samples` - The delay length in samples
     pub fn new(delay_samples: usize) -> Self {
+        let delay = InterpolatedDelay::new(delay_samples.max(1));
         Self {
-            delay: InterpolatedDelay::new(delay_samples),
+            length: delay.capacity(),
+            delay,
             feedback: 0.5,
         }
+    }
+
+    /// Set the delay length in samples, from 1 up to the capacity it was made
+    /// with. A length change takes effect at once (no interpolation): tune it
+    /// in small steps while it runs.
+    #[inline]
+    pub fn set_length(&mut self, samples: usize) {
+        self.length = samples.clamp(1, self.delay.capacity());
+    }
+
+    /// The delay length in samples.
+    #[inline]
+    pub fn length(&self) -> usize {
+        self.length
     }
 
     /// Set the feedback coefficient.
@@ -61,21 +88,17 @@ impl AllpassFilter {
     /// Process a single sample through the allpass filter.
     ///
     /// Uses the Schroeder allpass structure:
-    /// output = -input + delayed
-    /// delay_input = input + delayed * feedback
+    /// v[n] = input + g·v[n−D] (written to the delay)
+    /// output = v[n−D] − g·v[n]
     #[inline]
     pub fn process(&mut self, input: f32) -> f32 {
-        // Integer read — no interpolation needed for fixed delay
-        let delayed = self.delay.read_integer(self.delay.capacity() - 1);
+        // Integer read: the sample written `length` samples ago.
+        let delayed = self.delay.read_integer(self.length - 1);
 
-        // Schroeder allpass: output = -input + delayed
-        let output = -input + delayed;
-
-        // Feed forward: input + delayed * feedback
-        self.delay
-            .write(flush_denormal(input + delayed * self.feedback));
-
-        output
+        // Schroeder allpass: v[n] = x[n] + g·v[n−D], y[n] = v[n−D] − g·v[n].
+        let v = flush_denormal(input + delayed * self.feedback);
+        self.delay.write(v);
+        delayed - self.feedback * v
     }
 
     /// Clear the allpass filter state.
@@ -125,13 +148,51 @@ mod tests {
             })
             .sum();
 
-        // Should be within 20% (not exact due to transient behavior)
+        // A true allpass passes all the energy once its tail has died out
+        // (0.5^8 per pass through 50 samples leaves < 0.4% after 500).
         let ratio = output_energy / input_energy;
         assert!(
-            ratio > 0.5 && ratio < 2.0,
-            "Energy ratio {} should be close to 1.0",
+            (ratio - 1.0).abs() < 0.01,
+            "Energy ratio {} should be 1.0",
             ratio
         );
+    }
+
+    #[test]
+    fn test_allpass_response_is_flat() {
+        // Regression: the Freeverb shortcut had up to ~2x gain where
+        // z^-D = -1. A true allpass has unity gain at every frequency.
+        for g in [0.0, 0.06, 0.5, 0.9] {
+            for freq in [100.0f32, 1_234.0, 2_400.0, 9_000.0] {
+                let mut ap = AllpassFilter::new(13);
+                ap.set_feedback(g);
+                let (mut e_in, mut e_out) = (0.0f32, 0.0f32);
+                for n in 0..48_000 {
+                    let x = (2.0 * core::f32::consts::PI * freq * n as f32 / 48_000.0).sin();
+                    let y = ap.process(x);
+                    if n > 4_800 {
+                        e_in += x * x;
+                        e_out += y * y;
+                    }
+                }
+                let gain = (e_out / e_in).sqrt();
+                assert!((gain - 1.0).abs() < 0.01, "g={g} f={freq}: gain {gain}");
+            }
+        }
+    }
+
+    #[test]
+    fn set_length_moves_the_echo() {
+        // With feedback 0 the allpass is a pure delay of `length` samples.
+        let mut ap = AllpassFilter::new(64);
+        ap.set_feedback(0.0);
+        ap.set_length(10);
+        let out: Vec<f32> = (0..20)
+            .map(|n| ap.process(if n == 0 { 1.0 } else { 0.0 }))
+            .collect();
+        assert_eq!(out.iter().position(|&v| v == 1.0), Some(10));
+        ap.set_length(1000);
+        assert_eq!(ap.length(), 64, "clamped to the capacity");
     }
 
     #[test]
@@ -156,11 +217,11 @@ mod tests {
         let mut allpass = AllpassFilter::new(10);
         allpass.set_feedback(0.5);
 
-        // Impulse
+        // Impulse: the first output is −g·x.
         let first = allpass.process(1.0);
         assert!(
-            (first - (-1.0)).abs() < 0.01,
-            "First output should be -input"
+            (first - (-0.5)).abs() < 1e-6,
+            "First output should be -g * input, got {first}"
         );
 
         // Wait for delay
@@ -287,12 +348,10 @@ impl ModulatedAllpass {
             self.mod_phase -= 1.0;
         }
 
-        // Schroeder allpass: output = -input + delayed
-        let output = -input + delayed;
-        self.delay
-            .write(flush_denormal(input + delayed * self.feedback));
-
-        output
+        // Schroeder allpass: v[n] = x[n] + g·v[n−D], y[n] = v[n−D] − g·v[n].
+        let v = flush_denormal(input + delayed * self.feedback);
+        self.delay.write(v);
+        delayed - self.feedback * v
     }
 
     /// Set the feedback coefficient.
@@ -337,11 +396,12 @@ mod modulated_allpass_tests {
     fn test_modulated_allpass_impulse_response() {
         let mut ap = ModulatedAllpass::new(50.0, 0.5, 0.7, 0.2, 48000.0);
 
-        // First sample: output = -input + delayed(0) = -1.0
+        // First sample: output = delayed(0) − g·input = −g.
         let first = ap.process(1.0);
+        let g = ap.feedback();
         assert!(
-            (first - (-1.0)).abs() < 0.01,
-            "First output should be ~-1.0, got {first}"
+            (first + g).abs() < 1e-6,
+            "First output should be -{g}, got {first}"
         );
 
         // Collect enough samples to see the delayed impulse (modulation shifts timing)
@@ -379,12 +439,12 @@ mod modulated_allpass_tests {
                 .sum()
         };
 
-        // Modulated allpass approximately conserves energy; wider tolerance
-        // than static allpass due to delay-time modulation causing pitch shift
+        // Modulated allpass conserves energy up to the interpolation and the
+        // slight time-variance of its modulated delay.
         let ratio = output_energy / input_energy;
         assert!(
-            ratio > 0.3 && ratio < 3.0,
-            "Energy ratio {ratio} should be roughly near 1.0"
+            (ratio - 1.0).abs() < 0.05,
+            "Energy ratio {ratio} should be 1.0"
         );
     }
 

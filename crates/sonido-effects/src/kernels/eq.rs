@@ -3,7 +3,7 @@
 //! `EqKernel` owns DSP state (six biquad filters, sample rate, coefficient
 //! caches, decimation counter). Parameters are received via `&EqParams` each
 //! sample. Deployed via [`Adapter`](sonido_core::kernel::Adapter) for
-//! desktop/plugin, or called directly on embedded targets.
+//! desktop/plugin, or via `Adapter::new_direct` (no smoothing) on embedded targets.
 //!
 //! # Signal Flow
 //!
@@ -36,7 +36,7 @@
 //!
 //! Coefficients are recomputed at most every `COEFF_UPDATE_INTERVAL` samples
 //! (32 samples = 0.67 ms at 48 kHz) when parameter values have changed, matching
-//! the coefficient decimation strategy of the classic effect.
+//! the coefficient decimation strategy of the original pre-kernel effect.
 //!
 //! The three bands cascade in series: Low → Mid → High. A soft limiter at
 //! threshold 1.0 prevents clipping from accumulated band boosts before the
@@ -52,7 +52,10 @@
 //! let adapter = Adapter::new(EqKernel::new(48000.0), 48000.0);
 //! let mut effect: Box<dyn Effect> = Box::new(adapter);
 //!
-//! // Embedded / Daisy Seed (direct — no smoothing, ADCs are hardware-filtered)
+//! // Embedded / Daisy Seed — zero-smoothing adapter, as the pedal firmware uses
+//! let effect = Adapter::new_direct(EqKernel::new(48000.0), 48000.0);
+//!
+//! // Or drive the kernel directly with a typed params struct (no adapter)
 //! let mut kernel = EqKernel::new(48000.0);
 //! let params = EqParams::from_knobs(
 //!     adc_low_f, adc_low_g, adc_low_q,
@@ -65,9 +68,10 @@
 
 use sonido_core::kernel::{DspKernel, KernelParams, SmoothingStyle};
 use sonido_core::kernel_params;
+use sonido_core::level::Level;
 use sonido_core::math::soft_limit;
 use sonido_core::{
-    Biquad, Cached, ParamDescriptor, ParamId, ParamScale, ParamUnit, fast_db_to_linear,
+    Biquad, Cached, ParamDescriptor, ParamFlags, ParamId, ParamScale, ParamUnit, fast_db_to_linear,
     peaking_eq_coefficients,
 };
 
@@ -108,7 +112,7 @@ const CHANGE_EPSILON: f32 = 0.001;
 /// | 6 | `high_freq_hz` | Hz | 1000–15000 | 5000.0 |
 /// | 7 | `high_gain_db` | dB | −12–12 | 0.0 |
 /// | 8 | `high_q` | ratio | 0.5–5.0 | 1.0 |
-/// | 9 | `output_db` | dB | −20–+6 | 0.0 |
+/// | 9 | `output_db` | dB | −6–+6 | 0.0 |
 #[derive(Debug, Clone, Copy)]
 pub struct EqParams {
     /// Low band center frequency in Hz.
@@ -158,7 +162,7 @@ pub struct EqParams {
 
     /// Output level in decibels.
     ///
-    /// Range: −20.0 to +6.0 dB, default 0.0.
+    /// Range: −6.0 to +6.0 dB, default 0.0.
     pub output_db: f32,
 }
 
@@ -196,7 +200,7 @@ impl EqParams {
     /// | `high_f` | 6 | `high_freq_hz` | 1000–15000 Hz (log) |
     /// | `high_g` | 7 | `high_gain_db` | −12–12 dB |
     /// | `high_q` | 8 | `high_q` | 0.5–5.0 |
-    /// | `output` | 9 | `output_db` | −20–+6 dB |
+    /// | `output` | 9 | `output_db` | −6–+6 dB |
     #[allow(clippy::too_many_arguments)]
     pub fn from_knobs(
         low_f: f32,
@@ -227,6 +231,7 @@ kernel_params! {
                 max: 500.0,
                 default: 100.0,
                 step: 1.0,
+                flags: ParamFlags::AUTOMATABLE,
                 ..ParamDescriptor::mix()
             }
             .with_id(ParamId(500), "eq_low_freq")
@@ -249,6 +254,7 @@ kernel_params! {
                 max: 5.0,
                 default: 1.0,
                 step: 0.1,
+                flags: ParamFlags::AUTOMATABLE,
                 ..ParamDescriptor::mix()
             }
             .with_id(ParamId(502), "eq_low_q"),
@@ -265,6 +271,7 @@ kernel_params! {
                 max: 5000.0,
                 default: 1000.0,
                 step: 10.0,
+                flags: ParamFlags::AUTOMATABLE,
                 ..ParamDescriptor::mix()
             }
             .with_id(ParamId(503), "eq_mid_freq")
@@ -287,6 +294,7 @@ kernel_params! {
                 max: 5.0,
                 default: 1.0,
                 step: 0.1,
+                flags: ParamFlags::AUTOMATABLE,
                 ..ParamDescriptor::mix()
             }
             .with_id(ParamId(505), "eq_mid_q"),
@@ -303,6 +311,7 @@ kernel_params! {
                 max: 15000.0,
                 default: 5000.0,
                 step: 100.0,
+                flags: ParamFlags::AUTOMATABLE,
                 ..ParamDescriptor::mix()
             }
             .with_id(ParamId(506), "eq_high_freq")
@@ -325,6 +334,7 @@ kernel_params! {
                 max: 5.0,
                 default: 1.0,
                 step: 0.1,
+                flags: ParamFlags::AUTOMATABLE,
                 ..ParamDescriptor::mix()
             }
             .with_id(ParamId(508), "eq_high_q"),
@@ -538,6 +548,7 @@ impl EqKernel {
 
 impl DspKernel for EqKernel {
     type Params = EqParams;
+    const LEVEL: Level = crate::calibration::EQ;
 
     fn process_stereo(&mut self, left: f32, right: f32, params: &EqParams) -> (f32, f32) {
         // ── Coefficient decimation ────────────────────────────────────────────
@@ -593,12 +604,12 @@ impl DspKernel for EqKernel {
         // Left channel through L filters
         let left_low = self.low_l.process(left);
         let left_mid = self.mid_l.process(left_low);
-        let left_out = soft_limit(self.high_l.process(left_mid), 1.0) * output_gain;
+        let left_out = soft_limit(Self::level(self.high_l.process(left_mid)), 1.0) * output_gain;
 
         // Right channel through R filters
         let right_low = self.low_r.process(right);
         let right_mid = self.mid_r.process(right_low);
-        let right_out = soft_limit(self.high_r.process(right_mid), 1.0) * output_gain;
+        let right_out = soft_limit(Self::level(self.high_r.process(right_mid)), 1.0) * output_gain;
 
         (left_out, right_out)
     }

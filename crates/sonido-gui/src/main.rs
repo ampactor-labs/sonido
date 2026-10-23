@@ -21,7 +21,8 @@ mod screenshot;
 #[command(about = "Professional DSP effect processor GUI")]
 #[command(version)]
 struct Args {
-    /// Output audio device name (optional, uses default if not specified)
+    /// Output device: index, exact name, or unique part of a name (default:
+    /// the system default output)
     #[arg(long)]
     output: Option<String>,
 
@@ -95,6 +96,7 @@ fn main() -> eframe::Result<()> {
     };
 
     let effect = args.effect.clone();
+    let output = args.output.clone();
     let sample_rate = args.sample_rate as f32;
     let buffer_size = args.buffer_size as usize;
     eframe::run_native(
@@ -106,6 +108,7 @@ fn main() -> eframe::Result<()> {
                 effect.as_deref(),
                 Some(sample_rate),
                 Some(buffer_size),
+                output,
             )))
         }),
     )
@@ -135,7 +138,7 @@ fn main() {
             .start(
                 canvas,
                 eframe::WebOptions::default(),
-                Box::new(|cc| Ok(Box::new(SonidoApp::new(cc, None, None, None)))),
+                Box::new(|cc| Ok(Box::new(SonidoApp::new(cc, None, None, None, None)))),
             )
             .await
             .expect("failed to start eframe");

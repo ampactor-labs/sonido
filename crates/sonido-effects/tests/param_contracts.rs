@@ -1,14 +1,16 @@
-//! Parameter contract tests: range access, unity gain, curve conventions.
+//! Parameter contract tests: range access, curve conventions.
 //!
 //! These tests enforce the hardware tuning contracts:
 //! 1. **Full Range Accessible** — knob 0→1 covers descriptor min→max
-//! 2. **Unity Gain at Defaults** — processing with defaults produces near-unity output
-//! 3. **Scale Conventions** — Hz params use Logarithmic, STEPPED has valid steps, etc.
-//! 4. **Monotonic Curves** — sweeping 0→1 produces monotonically increasing values
+//! 2. **Scale Conventions** — Hz params use Logarithmic, STEPPED has valid steps, etc.
+//! 3. **Monotonic Curves** — sweeping 0→1 produces monotonically increasing values
+//! 4. **Macro exclusion**
+//!
+//! Levels at the defaults are the level contract's job (`level_contract.rs`).
 
 mod helpers;
 
-use helpers::{all_ids, assert_no_violations, rms_db, sine_440};
+use helpers::{all_ids, assert_no_violations};
 use sonido_core::{ParamFlags, ParamScale, ParamUnit};
 use sonido_registry::EffectRegistry;
 
@@ -68,88 +70,7 @@ fn full_range_accessible() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Test 2: Unity Gain at Defaults
-// ─────────────────────────────────────────────────────────────────────────────
-
-/// With all params at defaults, processing a signal must produce output
-/// within ±3 dB of input level (±6 dB for dynamics processors).
-#[test]
-fn defaults_produce_near_unity_gain() {
-    let registry = EffectRegistry::new();
-    let block_size = 4800; // 100ms
-    let input = sine_440(block_size);
-    let input_db = rms_db(&input);
-
-    let mut violations = Vec::new();
-
-    // ±6 dB: dynamics processors, mix-dependent effects, resonant filters.
-    // These inherently modify level at defaults (mix=50% loses ~6 dB,
-    // saturation adds gain, bandpass filters attenuate out-of-band).
-    let wide_tolerance_effects = [
-        "compressor",
-        "limiter",
-        "gate",
-        "looper",         // dynamics
-        "multiband_comp", // dynamics
-        "flanger",
-        "phaser",
-        "delay",
-        "reverb",
-        "harmonic_habitat",
-        "plate_reverb",
-        "spring_reverb", // reverbs — mix at defaults → partial cancellation
-        "distortion",
-        "tape",
-        "amp",
-        "cabinet", // nonlinear gain / IR convolution
-        "wah",     // resonant bandpass filter
-    ];
-
-    // Inherently non-unity effects: skip entirely.
-    // These produce very low or very high output at defaults by design.
-    let skip_unity = [
-        "wah",          // resonant bandpass — attenuates most frequencies
-        "texture",      // granular — sparse grains at defaults
-        "time_stretch", // grain-based — low density at defaults
-        "amp",          // guitar amp model — gain character varies with model
-        "plate_reverb", // dense diffusion + tank gain at default mix
-    ];
-
-    for id in all_ids() {
-        if skip_unity.contains(&id.as_str()) {
-            continue;
-        }
-        let mut effect = registry.create(&id, SAMPLE_RATE).unwrap();
-        let mut output = vec![0.0_f32; block_size];
-
-        effect.process_block(&input, &mut output);
-
-        let output_db = rms_db(&output);
-        let gain_db = output_db - input_db;
-
-        let tolerance_db = if wide_tolerance_effects.contains(&id.as_str()) {
-            8.0
-        } else {
-            3.0
-        };
-
-        if gain_db.abs() > tolerance_db {
-            violations.push(format!(
-                "  {id}: input={input_db:.1} dB, output={output_db:.1} dB, \
-                 gain={gain_db:+.1} dB (tolerance=±{tolerance_db:.0} dB)"
-            ));
-        }
-    }
-
-    assert_no_violations(
-        "defaults_produce_near_unity_gain",
-        "adjust output level or mix defaults",
-        violations,
-    );
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Test 3: Scale Conventions
+// Test 2: Scale Conventions
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Verify parameter descriptor conventions:
@@ -219,7 +140,7 @@ fn param_scale_conventions() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Test 4: Monotonic Curves
+// Test 3: Monotonic Curves
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Sweeping any parameter from 0.0 → 1.0 via `denormalize` must produce
@@ -293,6 +214,38 @@ fn adc_to_param_curve_monotonic() {
     assert_no_violations(
         "adc_to_param_curve_monotonic",
         "non-monotonic parameter curve detected",
+        violations,
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Test 4: Macro exclusion
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// `MACRO_EXCLUDE` is set exactly on the non-musical controls: the wet/dry
+/// "Mix" and the output level. Musical params that reuse
+/// `ParamDescriptor::mix()` as a percent template must not inherit it.
+#[test]
+fn macro_exclude_only_on_mix_and_output() {
+    let registry = EffectRegistry::new();
+    let mut violations = Vec::new();
+    for id in all_ids() {
+        let effect = registry.create(&id, SAMPLE_RATE).unwrap();
+        for i in 0..effect.effect_param_count() {
+            let d = effect.effect_param_info(i).unwrap();
+            let is_utility = d.name == "Mix" || d.name == "Output";
+            let excluded = d.flags.contains(ParamFlags::MACRO_EXCLUDE);
+            if is_utility != excluded {
+                violations.push(format!(
+                    "{id}[{i}] {:?}: MACRO_EXCLUDE = {excluded}",
+                    d.name
+                ));
+            }
+        }
+    }
+    assert_no_violations(
+        "macro_exclude_only_on_mix_and_output",
+        "mix/output must be MACRO_EXCLUDE; musical params must not",
         violations,
     );
 }

@@ -2,8 +2,8 @@
 //!
 //! `StageKernel` owns DSP state (DC blockers, LR4 biquads, Haas delay line).
 //! Parameters are received via `&StageParams` each sample. Deployed via
-//! [`Adapter`](sonido_core::kernel::Adapter) for desktop/plugin, or called
-//! directly on embedded targets.
+//! [`Adapter`](sonido_core::kernel::Adapter) for desktop/plugin, or via `Adapter::new_direct`
+//! (no smoothing) on embedded targets.
 //!
 //! # Signal Flow
 //!
@@ -61,7 +61,10 @@
 //! let adapter = Adapter::new(StageKernel::new(48000.0), 48000.0);
 //! let mut effect: Box<dyn Effect> = Box::new(adapter);
 //!
-//! // Embedded / Daisy Seed (direct — no smoothing, ADCs are hardware-filtered)
+//! // Embedded / Daisy Seed — zero-smoothing adapter, as the pedal firmware uses
+//! let effect = Adapter::new_direct(StageKernel::new(48000.0), 48000.0);
+//!
+//! // Or drive the kernel directly with a typed params struct (no adapter)
 //! let mut kernel = StageKernel::new(48000.0);
 //! let params = StageParams::from_knobs(
 //!     gain, width, balance, phase_l, phase_r, channel,
@@ -73,6 +76,7 @@
 use sonido_core::biquad::{highpass_coefficients, lowpass_coefficients};
 use sonido_core::kernel::{DspKernel, KernelParams, SmoothingStyle};
 use sonido_core::kernel_params;
+use sonido_core::level::Level;
 use sonido_core::math::ms_to_samples;
 use sonido_core::{
     Biquad, Cached, DcBlocker, InterpolatedDelay, ParamDescriptor, ParamFlags, ParamId, ParamScale,
@@ -116,8 +120,8 @@ const MAX_HAAS_SECONDS: f32 = 0.03;
 /// | 7 | `bass_mono` | index | 0–1 | 0 (Off) |
 /// | 8 | `bass_freq_hz` | Hz | 20–500 | 120.0 |
 /// | 9 | `haas_ms` | ms | 0–30 | 0.0 |
-/// | 10 | `haas_side` | index | 0–1 | 1 (Right) |
-/// | 11 | `output_db` | dB | −20–20 | 0.0 |
+/// | 10 | `haas_side` | index | 0–1 | 0.0 |
+/// | 11 | `output_db` | dB | −6–+6 | 0.0 |
 #[derive(Clone, Copy)]
 pub struct StageParams {
     /// Input trim in decibels.
@@ -183,7 +187,7 @@ pub struct StageParams {
 
     /// Output level in decibels.
     ///
-    /// Range: −20.0 to +20.0 dB. Default 0.0 (unity gain).
+    /// Range: −6.0 to +6.0 dB. Default 0.0 (unity gain).
     pub output_db: f32,
 }
 
@@ -200,7 +204,7 @@ impl Default for StageParams {
             bass_mono: 0.0,
             bass_freq_hz: 120.0,
             haas_ms: 0.0,
-            haas_side: 1.0,
+            haas_side: 0.0,
             output_db: 0.0,
         }
     }
@@ -225,7 +229,7 @@ impl StageParams {
     /// - `bass_freq`: Bass frequency → 20–500 Hz (logarithmic)
     /// - `haas`:      Haas delay → 0–30 ms
     /// - `haas_side`: Haas side toggle → 0 or 1 (stepped)
-    /// - `output`:    Output level → −20 to +6 dB
+    /// - `output`:    Output level → −6 to +6 dB
     #[allow(clippy::too_many_arguments)]
     pub fn from_knobs(
         gain: f32,
@@ -334,7 +338,7 @@ kernel_params! {
             get: this.haas_ms,
             set: |v| this.haas_ms = v;
 
-        [10] ParamDescriptor::custom("Haas Side", "HSde", 0.0, 1.0, 1.0)
+        [10] ParamDescriptor::custom("Haas Side", "HSde", 0.0, 1.0, 0.0)
                 .with_step(1.0)
                 .with_id(ParamId(1910), "stage_haas_side")
                 .with_flags(ParamFlags::AUTOMATABLE.union(ParamFlags::STEPPED))
@@ -479,10 +483,11 @@ impl StageKernel {
 
 impl DspKernel for StageKernel {
     type Params = StageParams;
+    const LEVEL: Level = crate::calibration::STAGE;
 
     /// Process a stereo sample pair through the Stage signal chain.
     ///
-    /// Processing order (matches the classic `Stage` effect exactly):
+    /// Processing order (matches the original pre-kernel `Stage` effect exactly):
     ///
     /// 1. **Phase invert** — negate left if `phase_l ≥ 0.5`, right if `phase_r ≥ 0.5`.
     /// 2. **Channel mode** — Normal (0), Swap (1), Mono-L (2), Mono-R (3).
@@ -585,7 +590,7 @@ impl DspKernel for StageKernel {
 
         // ── 9. Output level ──
         let output_gain = fast_db_to_linear(params.output_db);
-        (l * output_gain, r * output_gain)
+        Self::level_stereo(l * output_gain, r * output_gain)
     }
 
     fn reset(&mut self) {

@@ -28,11 +28,21 @@ pub fn run(
         "Sonido",
         options,
         Box::new(move |cc| {
-            let mut inner =
-                SonidoApp::new(cc, effect.as_deref(), Some(sample_rate), Some(buffer_size));
+            let mut inner = SonidoApp::new(
+                cc,
+                effect.as_deref(),
+                Some(sample_rate),
+                Some(buffer_size),
+                None,
+            );
             // Populate a demo chain so the capture shows the node editor in use.
             if effect.is_none() {
                 inner.populate_demo();
+            }
+            // `SONIDO_SCREENSHOT_PANEL=pedal` captures the PEDAL window too,
+            // once it has read the pedal.
+            if std::env::var("SONIDO_SCREENSHOT_PANEL").as_deref() == Ok("pedal") {
+                inner.pedal_panel_mut().show_window();
             }
             Ok(Box::new(ScreenshotApp {
                 inner,
@@ -70,8 +80,11 @@ impl eframe::App for ScreenshotApp {
             return;
         }
 
-        // Let layout, fonts, and the node graph settle, then request one capture.
-        if self.frame >= 12 && !self.requested {
+        // Let layout, fonts, and the node graph settle (and an open pedal
+        // window read the pedal, for up to ~10 s), then request one capture.
+        let settled =
+            self.frame >= 12 && (!self.inner.pedal_panel_mut().busy() || self.frame > 600);
+        if settled && !self.requested {
             self.requested = true;
             ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::default()));
         }

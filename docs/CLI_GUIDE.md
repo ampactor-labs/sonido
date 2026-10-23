@@ -28,6 +28,8 @@ cargo install --path crates/sonido-cli
 | `devices` | List audio devices |
 | `effects` | List available effects |
 | `presets` | Manage effect presets |
+| `patch` | Rig files: export a preset or DSL chain as a rig, inspect a rig |
+| `pedal` | The pedal over USB: list, send, read and play rigs; update its firmware |
 
 ---
 
@@ -42,8 +44,12 @@ sonido process <INPUT> [OUTPUT] [OPTIONS]
 ```
 
 When OUTPUT is omitted, the output filename is auto-generated from the input stem and
-the effect specification. For example, `sonido process input.wav --effect reverb` produces
-`input_reverb.wav`.
+the effect specification, written next to the input file. For example,
+`sonido process input.wav --effect reverb` produces `input_reverb.wav`. User-supplied
+parameters are part of the name (`--effect distortion --param drive=15` gives
+`input_distortion_drive=15.wav`), chain effects are joined with `+`, graph splits are
+written `S[path1+path2]`, and a preset contributes its name. Names longer than 200
+characters are truncated.
 
 ### Options
 
@@ -52,11 +58,25 @@ the effect specification. For example, `sonido process input.wav --effect reverb
 | `-e, --effect <NAME>` | Single effect to apply |
 | `-c, --chain <SPEC>` | Effect chain specification |
 | `-g, --graph <SPEC>` | Graph topology specification with split/merge |
-| `-p, --preset <FILE>` | Preset file (TOML) |
+| `-p, --preset <NAME>` | Preset name or path (factory, user, or TOML file) |
 | `--param <KEY=VALUE>` | Effect parameter (can repeat, used with `--effect`) |
 | `--block-size <N>` | Processing block size (default: 512) |
 | `--bit-depth <N>` | Output bit depth: 16, 24, or 32 (default: 32) |
 | `--mono` | Force mono output (default is always stereo, even for mono input) |
+
+If several of `--preset`, `--chain` and `--effect` are given, the first in that order
+wins. `--chain` and `--graph` conflict, and `--graph` conflicts with `--effect`,
+`--chain` and `--preset`.
+
+### Parameter Values
+
+Parameter keys match a parameter's full name or short name, case-insensitively, with
+`_` standing for a space (`room_size` → "Room Size"); a few aliases such as
+`time` (delay) and `bits` (bitcrusher) are also accepted. Values are in the parameter's
+display unit: dB, Hz, ms, and **percent as 0–100** (so `mix=50`, not `mix=0.5`).
+Enum parameters take their label (`waveshape=foldback`, `mode=manual`) and switches
+take `on`/`off`. Out-of-range values are clamped. `sonido effects <name>` lists every
+parameter with its range and default.
 
 ### Examples
 
@@ -66,18 +86,18 @@ sonido process input.wav --effect distortion
 # -> produces input_distortion.wav
 
 # Single effect with explicit output and custom parameters
-sonido process input.wav output.wav --effect distortion --param drive=15 --param tone=4000
+sonido process input.wav output.wav --effect distortion --param drive=15 --param tone=4
 
 # Effect chain with auto-naming
 sonido process input.wav \
-    --chain "preamp:gain=6|distortion:drive=12|delay:time=300,feedback=0.4"
-# -> produces input_preamp_distortion_delay.wav
+    --chain "preamp:gain=6|distortion:drive=12|delay:time=300,feedback=40"
+# -> produces input_preamp_gain=6+distortion_drive=12+delay_time=300_feedback=40.wav
 
 # Graph topology with parallel compression
 sonido process input.wav --graph "split(compressor:ratio=4; -) | limiter"
 
 # Nested splits
-sonido process input.wav --graph "split(split(distortion; chorus); reverb:mix=1.0) | limiter"
+sonido process input.wav --graph "split(split(distortion; chorus); reverb:mix=100) | limiter"
 
 # Using a preset file
 sonido process input.wav output.wav --preset presets/guitar_crunch.toml
@@ -141,7 +161,7 @@ effect_spec ::= name ( ':' key '=' value ( ',' key '=' value )* )?
 **Split semantics:** All split paths are summed at the merge point. This doubles amplitude
 for a wet/dry split — use a limiter after the merge or reduce effect output levels.
 
-**Constraints:** `split()` requires 2–16 paths. Empty paths are rejected. `-` is only valid
+**Constraints:** `split()` requires 2–8 paths (`MAX_SPLIT_TARGETS`). Empty paths are rejected. `-` is only valid
 inside a split path. Splits can be nested.
 
 ```bash
@@ -149,22 +169,22 @@ inside a split path. Splits can be nested.
 sonido process input.wav --graph "split(compressor:ratio=4,attack=5; -)"
 
 # Wet/dry reverb blend with post-limiter
-sonido process input.wav --graph "split(reverb:decay=0.9,mix=1.0; -) | limiter"
+sonido process input.wav --graph "split(reverb:decay=90,mix=100; -) | limiter"
 
 # Diamond delay (two different delay times merged)
-sonido process input.wav --graph "split(delay:time=250; delay:time=500) | reverb:mix=0.3"
+sonido process input.wav --graph "split(delay:time=250; delay:time=500) | reverb:mix=30"
 
 # Chains inside split paths
 sonido process input.wav --graph "preamp | split(distortion:drive=20 | chorus; phaser | flanger) | reverb"
 
 # Three-way split
-sonido process input.wav --graph "split(distortion:drive=30; chorus:depth=6; reverb:mix=1.0) | limiter"
+sonido process input.wav --graph "split(distortion:drive=30; chorus:depth=60; reverb:mix=100) | limiter"
 
 # Nested splits
-sonido process input.wav --graph "split(split(distortion; chorus); reverb:mix=1.0) | limiter"
+sonido process input.wav --graph "split(split(distortion; chorus); reverb:mix=100) | limiter"
 
 # Linear chains work too (backward compatible with --chain)
-sonido process input.wav --graph "preamp:gain=8 | distortion:drive=25 | reverb:decay=0.8"
+sonido process input.wav --graph "preamp:gain=8 | distortion:drive=25 | reverb:decay=80"
 ```
 
 ---
@@ -186,9 +206,9 @@ sonido realtime [OPTIONS]
 | `-e, --effect <NAME>` | Single effect to apply |
 | `-c, --chain <SPEC>` | Effect chain specification |
 | `-p, --preset <NAME>` | Preset name or path (factory, user, or file) |
-| `--param <KEY=VALUE>` | Effect parameter |
-| `-i, --input <DEVICE>` | Input device (index, name, or partial name) |
-| `-o, --output <DEVICE>` | Output device (index, name, or partial name) |
+| `--param <KEY=VALUE>` | Effect parameter (can repeat, used with `--effect`) |
+| `-i, --input <DEVICE>` | Input device (index, name, or partial name); alias `--input-device` |
+| `-o, --output <DEVICE>` | Output device (index, name, or partial name); alias `--output-device` |
 | `--sample-rate <N>` | Sample rate (default: 48000) |
 | `--buffer-size <N>` | Buffer size in samples (default: 256) |
 | `--mono` | Force mono processing |
@@ -204,7 +224,7 @@ Devices can be selected by:
 
 ```bash
 # Simple chorus effect
-sonido realtime --effect chorus --param rate=2 --param depth=0.6
+sonido realtime --effect chorus --param rate=2 --param depth=60
 
 # Select devices by index
 sonido realtime --input 0 --output 0 --effect reverb
@@ -248,8 +268,9 @@ sonido play <FILE> [OPTIONS]
 | `-p, --preset <NAME>` | Preset name or path (factory, user, or file) |
 | `--param <KEY=VALUE>` | Effect parameter (used with `--effect`) |
 | `-o, --output <DEVICE>` | Output device (index, name, or partial name) |
-| `-l, --loop` | Loop playback continuously |
+| `-l, --loop` | Loop playback continuously (alias `--repeat`) |
 | `--mono` | Force mono output |
+| `--buffer-size <N>` | Buffer size in frames (default: 1024) |
 
 ### Examples
 
@@ -258,7 +279,7 @@ sonido play <FILE> [OPTIONS]
 sonido play test.wav
 
 # Play through a reverb effect
-sonido play vocals.wav --effect reverb --param mix=0.4
+sonido play vocals.wav --effect reverb --param mix=40
 
 # Play through a chain of effects, looping
 sonido play drums.wav --chain "compressor:ratio=4|delay:time=300" --loop
@@ -282,7 +303,7 @@ Generate test signals for analysis and testing.
 
 #### sweep
 
-Generate a logarithmic sine sweep (chirp).
+Generate an exponential (logarithmic) sine sweep (chirp).
 
 ```bash
 sonido generate sweep <OUTPUT> [OPTIONS]
@@ -389,7 +410,7 @@ sonido generate osc <OUTPUT> [OPTIONS]
 | `--duration <SEC>` | Duration in seconds (default: 1.0) |
 | `--sample-rate <N>` | Sample rate (default: 48000) |
 | `--amplitude <N>` | Amplitude 0-1 (default: 0.8) |
-| `--pulse-width <N>` | Pulse width 0-1 for pulse wave (default: 0.5) |
+| `--pulse-width <N>` | Pulse width 0-1; with `--waveform square`, a value other than 0.5 gives a pulse wave (default: 0.5) |
 
 ```bash
 # Generate a saw wave
@@ -409,11 +430,11 @@ sonido generate chord <OUTPUT> [OPTIONS]
 
 | Option | Description |
 |--------|-------------|
-| `--notes <MIDI>` | Comma-separated MIDI notes (e.g., "60,64,67" for C major) |
+| `--notes <MIDI>` | Comma-separated MIDI notes, required (e.g., "60,64,67" for C major) |
 | `--duration <SEC>` | Duration in seconds (default: 2.0) |
 | `--sample-rate <N>` | Sample rate (default: 48000) |
 | `--amplitude <N>` | Amplitude 0-1 (default: 0.5) |
-| `--waveform <TYPE>` | Waveform: sine, triangle, saw, square (default: saw) |
+| `--waveform <TYPE>` | Waveform: sine, triangle, saw, square, noise (default: saw) |
 | `--filter-cutoff <HZ>` | Filter cutoff frequency (default: 2000) |
 | `--attack <MS>` | Envelope attack time (default: 10) |
 | `--release <MS>` | Envelope release time (default: 500) |
@@ -482,10 +503,10 @@ sonido analyze spectrum <INPUT> [OPTIONS]
 | Option | Description |
 |--------|-------------|
 | `--fft-size <N>` | FFT size (default: 4096) |
-| `--window <TYPE>` | Window function: hamming, blackman, hann, rectangular (default: blackman) |
+| `--window <TYPE>` | Window function: hamming, blackman, hann, rectangular (`rect`/`none`) (default: blackman; unknown names fall back to blackman) |
 | `-o, --output <FILE>` | Output CSV file |
 | `--peaks <N>` | Show top N peaks (default: 10) |
-| `--welch` | Use Welch's method for noise reduction |
+| `--method <METHOD>` | `fft` (single frame) or `welch` (averaged periodogram) (default: fft); `--welch` is a hidden legacy alias for `--method welch` |
 | `--overlap <N>` | Overlap ratio for Welch's method, 0.0-1.0 (default: 0.5) |
 
 ```bash
@@ -532,8 +553,10 @@ sonido analyze ir <SWEEP> <RESPONSE> -o <OUTPUT>
 
 | Option | Description |
 |--------|-------------|
-| `-o, --output <FILE>` | Output IR WAV file (required) |
-| `--rt60` | Estimate and display RT60 reverberation time |
+| `-o, --output <FILE>` | Output IR file (required) |
+| `--rt60` | Estimate and display RT60 (T30), T20 and EDT |
+| `--format <FMT>` | `wav` (default) or `csv` (`sample_index,amplitude`, written to the `-o` path) |
+| `--window-size <N>` | Override the deconvolution FFT size (default: next power of two) |
 
 ```bash
 # 1. Generate sweep
@@ -562,6 +585,7 @@ sonido analyze distortion <INPUT> [OPTIONS]
 | `--fundamental <HZ>` | Fundamental frequency (auto-detected if omitted) |
 | `--fft-size <N>` | FFT size (default: 8192) |
 | `-o, --output <FILE>` | Output JSON file |
+| `--harmonics <N>` | Number of harmonics to display, including the fundamental (default: 6) |
 
 ```bash
 # Analyze distortion of a test tone
@@ -583,6 +607,8 @@ sonido analyze spectrogram <INPUT> -o <OUTPUT.csv> [OPTIONS]
 |--------|-------------|
 | `--fft-size <N>` | FFT size (default: 2048) |
 | `--hop <N>` | Hop size (default: fft_size / 4) |
+
+Frames use a Hann window.
 | `-o, --output <FILE>` | Output CSV file (required) |
 
 ```bash
@@ -690,7 +716,7 @@ sonido analyze bandpass <INPUT> -o <OUTPUT.wav> [OPTIONS]
 |--------|-------------|
 | `--low <HZ>` | Lower cutoff frequency (required) |
 | `--high <HZ>` | Upper cutoff frequency (required) |
-| `--order <N>` | Filter order: 2, 4, or 6 (default: 4) |
+| `--order <N>` | Filter order: 2, 4, or 6 (default: 4); the band filter is applied `order / 2` times |
 | `-o, --output <FILE>` | Output WAV file (required) |
 
 ```bash
@@ -711,8 +737,8 @@ sonido analyze hilbert <INPUT> [OPTIONS]
 
 | Option | Description |
 |--------|-------------|
-| `--phase-output <FILE>` | Output WAV file for phase |
-| `--amp-output <FILE>` | Output WAV file for amplitude envelope |
+| `--phase-output <FILE>` | Output WAV file for phase (alias `--phase`) |
+| `--amp-output <FILE>` | Output WAV file for amplitude envelope (alias `--envelope`) |
 | `--bandpass <LOW-HIGH>` | Optional bandpass filter before transform |
 
 ```bash
@@ -727,7 +753,8 @@ sonido analyze hilbert eeg.wav \
 ```
 
 The phase output is normalized to [-1, 1] (representing [-pi, pi] radians).
-The amplitude output is normalized to [0, 1].
+The amplitude output is normalized to [0, 1]. Without either output flag, only the
+envelope statistics (mean/min/max) are printed.
 
 #### imd
 
@@ -739,15 +766,15 @@ sonido analyze imd <INPUT> [OPTIONS]
 
 | Option | Description |
 |--------|-------------|
-| `--freq1 <HZ>` | First tone frequency (required) |
-| `--freq2 <HZ>` | Second tone frequency (required) |
+| `--freq1 <HZ>` | First tone frequency (auto-detected if omitted) |
+| `--freq2 <HZ>` | Second tone frequency (auto-detected if omitted) |
 | `--fft-size <N>` | FFT size (default: 8192) |
 | `-o, --output <FILE>` | Output JSON file |
 
 IMD analysis measures distortion products created when two tones interact in a nonlinear system:
 
 - **Second-order products**: f1+f2, f2-f1
-- **Third-order products**: 2f1-f2, 2f2-f1, 2f1+f2, 2f2+f1
+- **Third-order products**: 2f1-f2, 2f2-f1
 
 ```bash
 # Generate two-tone test signal first
@@ -760,10 +787,10 @@ sonido analyze imd two_tone_output.wav --freq1 1000 --freq2 1200 --output imd.js
 ```
 
 Output includes:
-- Fundamental amplitudes
-- Second-order IMD products and ratios
-- Third-order IMD products and ratios
-- Total IMD percentage
+- Fundamental frequencies and levels (dB)
+- Second-order product levels (dB)
+- Third-order product levels (dB)
+- Overall IMD ratio (percent and dB)
 
 #### cqt
 
@@ -776,7 +803,7 @@ sonido analyze cqt <INPUT> [OPTIONS]
 | Option | Description |
 |--------|-------------|
 | `--min-freq <HZ>` | Minimum frequency (default: 32.7, C1) |
-| `--max-freq <HZ>` | Maximum frequency (default: Nyquist/2) |
+| `--max-freq <HZ>` | Maximum frequency (default: the lower of Nyquist and 8000 Hz) |
 | `--bins-per-octave <N>` | Bins per octave (default: 12 for semitone resolution) |
 | `--peaks <N>` | Show top N peaks (default: 10) |
 | `--chromagram` | Also compute pitch class profile |
@@ -817,12 +844,14 @@ sonido compare <REFERENCE> <IMPLEMENTATION> [OPTIONS]
 | `-o, --output <FILE>` | Output detailed JSON report |
 | `--detailed` | Show per-band frequency analysis |
 
-Calculates:
-- RMS difference
-- Peak difference
-- Correlation coefficient
-- Spectral differences
-- Per-band breakdown (with `--detailed`)
+Both files are trimmed to the shorter length. Calculates:
+- MSE, RMSE and SNR (time domain)
+- RMS and peak level of each file, and their difference
+- Spectral correlation and average magnitude difference (dB)
+- Per-band breakdown, sub bass through brilliance (with `--detailed`)
+- A match-quality summary (Excellent / Good / Fair / Poor)
+
+`sonido analyze compare` takes the same arguments.
 
 ```bash
 # Basic comparison
@@ -857,12 +886,12 @@ Shows:
 
 ```bash
 sonido info recording.wav
-# File: recording.wav
-# Format: PCM 24-bit
-# Channels: 2
+# File:        recording.wav
+# Format:      PCM 24-bit
+# Channels:    2
 # Sample Rate: 48000 Hz
-# Duration: 3.50s (168000 frames)
-# File Size: 1.01 MB
+# Duration:    3.500s (168000 frames)
+# File Size:   984.4 KB
 ```
 
 This replaces the need for external tools like `soxi` for basic WAV inspection.
@@ -871,7 +900,7 @@ This replaces the need for external tools like `soxi` for basic WAV inspection.
 
 ## devices
 
-List and manage audio devices.
+List and manage audio devices. `sonido devices` with no subcommand runs `list`.
 
 ### Subcommands
 
@@ -890,13 +919,18 @@ sonido devices list [OPTIONS]
 Output shows numbered devices that can be used with `--input` and `--output`:
 
 ```
+Available Audio Devices
+=======================
+
 Input Devices:
   [0] Built-in Microphone (48000 Hz)
-  [1] USB Audio Interface (44100 Hz)
+  [1] USB Audio Interface (44100 Hz) (also output)
 
 Output Devices:
   [0] Built-in Speaker (48000 Hz)
-  [1] USB Audio Interface (44100 Hz)
+  [1] USB Audio Interface (44100 Hz) (also input)
+
+Total: 2 input(s), 2 output(s)
 ```
 
 #### info
@@ -918,7 +952,7 @@ sonido devices list --include-virtual
 If no loopback devices are detected, platform-specific installation instructions are shown:
 - **Windows**: VB-Audio Virtual Cable
 - **macOS**: BlackHole
-- **Linux**: PulseAudio/PipeWire module-loopback
+- **Linux**: PulseAudio/PipeWire `module-loopback` or `module-null-sink`
 
 ---
 
@@ -930,22 +964,22 @@ List available effects and their parameters.
 # List all effects
 sonido effects
 
-# Show details for a specific effect (parameters, ranges, defaults, examples)
+# Show details for a specific effect by registry ID (parameters, ranges, defaults, examples)
 sonido effects <EFFECT>
 
 # Show example CLI commands
 sonido effects --examples
 ```
 
-Shows all effects with:
-- Description
-- Parameter names
-- Default values
-- Valid ranges
+The list shows all 36 registered effects (registry ID and description). The detail
+view shows each parameter's short name (usable as a `--param` key), full name, default
+and range.
 
 ### Effect Aliases
 
-Several effects have shorter alias names that can be used interchangeably:
+`--effect`, `--chain` and `--graph` accept these aliases (case-insensitive; the
+underscore spellings such as `noise_gate` work too). Every other effect is named by its
+registry ID, as listed by `sonido effects`.
 
 | Effect | Alias(es) |
 |--------|-----------|
@@ -956,6 +990,9 @@ Several effects have shorter alias names that can be used interchangeably:
 | `gate` | `noisegate` |
 | `wah` | `autowah` |
 | `eq` | `parametriceq`, `peq` |
+| `bitcrusher` | `crusher` |
+| `ringmod` | `ring` |
+| `harmonic_habitat` | `habitat`, `harmonic`, `harmonichabitat` |
 
 Examples:
 ```bash
@@ -964,8 +1001,8 @@ sonido process input.wav --effect filter --param cutoff=2000
 sonido process input.wav --effect lowpass --param cutoff=2000
 
 # These are equivalent
-sonido process input.wav --effect vibrato --param depth=0.6
-sonido process input.wav --effect vibrato --param depth=0.6
+sonido process input.wav --effect vibrato --param depth=60
+sonido process input.wav --effect multivibrato --param depth=60
 
 # These are equivalent
 sonido process input.wav --effect gate --param threshold=-40
@@ -976,7 +1013,10 @@ sonido process input.wav --effect noisegate --param threshold=-40
 
 ## presets
 
-Manage effect presets (list, show, save, delete, export).
+Manage effect presets (list, show, save, delete, copy, export-factory, paths).
+Factory presets are built in: `init`, `crunch`, `high_gain`, `ambient`, `tape_warmth`,
+`clean_studio`, `80s_chorus`, `slapback`. Names match case-insensitively, by ID or by
+display name.
 
 ### Subcommands
 
@@ -995,7 +1035,7 @@ sonido presets list [OPTIONS]
 
 #### show
 
-Show details of a preset.
+Show details of a preset (name, description, sample rate, effects and parameters).
 
 ```bash
 sonido presets show <NAME>
@@ -1044,13 +1084,17 @@ sonido presets copy <SOURCE> [OPTIONS]
 |--------|-------------|
 | `-n, --name <NAME>` | New preset name (default: source name) |
 
+The source must be a factory preset; copying fails if a user preset with the target
+name already exists.
+
 ```bash
 sonido presets copy crunch --name my_crunch
 ```
 
 #### export-factory
 
-Export all factory presets to a directory as individual TOML files.
+Export all factory presets to a directory as individual TOML files. Existing files are
+skipped unless `--force` is given.
 
 ```bash
 sonido presets export-factory <OUTPUT_DIR> [OPTIONS]
@@ -1071,7 +1115,7 @@ This is useful for:
 
 #### paths
 
-Show preset directory locations.
+Show the user preset, system preset and config directories.
 
 ```bash
 sonido presets paths
@@ -1079,9 +1123,68 @@ sonido presets paths
 
 ---
 
+## pedal
+
+Talk to a Sonido pedal over USB (`crates/sonido-cli/src/commands/pedal.rs`). While it
+plays, the pedal is a USB serial device (`1209:0001`) speaking the rig link
+(`sonido_patch::link`; see `docs/EMBEDDED.md`, USB Rig Link). These commands list and
+play its rigs, send rigs to its bank, read rigs and the jam back as editor JSON, and
+update its firmware.
+
+```bash
+sonido pedal controls                     # how to play it: an illustrated guide, opened in your browser (no pedal needed)
+sonido pedal controls delay               # the guide, opened at one effect's knobs
+sonido pedal controls --text              # the same as an 80-column terminal card
+sonido pedal controls --text delay        # one effect's knobs, with their travel and noon
+sonido pedal controls --html guide.html   # write the guide to a file (to print or share)
+sonido pedal info                         # firmware, CPU load, what it plays
+sonido pedal list                         # the rig list, in footswitch order
+sonido pedal push my_rig.json             # replaces the bank rig with its name, or takes the first empty slot
+sonido pedal push --from-dsl "distortion:drive=20 | reverb:mix=30" --name "Dirty Verb"
+sonido pedal push my_rig.json --slot 3    # into bank slot 3
+sonido pedal pull 3 -o slot3.json         # bank slot 3 as editor JSON
+sonido pedal pull jam                     # print the jam
+sonido pedal erase 3
+sonido pedal play "Space Echo"            # jam, a bank slot 1–15, or a factory rig
+sonido pedal update sonido_pedal.bin      # firmware update over USB DFU
+```
+
+### Subcommands
+
+| Subcommand | Description |
+|------------|-------------|
+| `controls [EFFECT] [--text] [--html FILE]` | Open an illustrated guide to playing the pedal in the default browser: a drawing of the pedal with every knob, toggle, LED and footswitch called out (each footswitch press per T2 position, each toggle position), the knobs' three pages colour-coded by mode (jam sound, jam setup, rig), the jam's effect-pick dial, the rig list, every jam effect's and factory rig's K1–K6 and the power-on gestures. With an effect, the guide opens at that effect. `--text` prints the same facts as an 80-column card instead (ANSI-styled on a terminal unless `NO_COLOR` is set); with an effect, that effect's knobs with each one's travel (fully left … fully right, including the pedal's knob floors) and noon. `--html FILE` writes the page without opening it; the page is self-contained and prints. Needs no pedal: it is drawn from this build's `sonido_patch::controls`, knob maps, effect parameters and factory rigs (`sonido_rigs::guide`), so it matches firmware built from the same source |
+| `info` | Firmware and link protocol, what the pedal plays (and whether it is off), its morph position and CPU load (last second's mean and peak), and its bank slots, factory rigs and effect count |
+| `list` | The rig list, in the order the footswitches step through it: the jam with its effects, each bank slot, the factory rigs; marks the one playing |
+| `push [FILE]` | Send a rig to the bank: it replaces the bank rig with the same name, or takes the first empty slot (`-s, --slot <N>`: bank slot 1–15 instead). Checked here with `validate_for_daisy`, then again by the pedal, which plays it at once |
+| `pull <WHAT>` | Save a bank rig (`1`–`15`) or the jam (`jam`) as editor JSON (`-o, --output <FILE>`); prints the rig without `-o` |
+| `erase <SLOT>` | Empty bank slot 1–15 (if it was playing, the pedal returns to the jam) |
+| `play <RIG>` | Play `jam`, a bank slot `1`–`15`, or a factory rig by name (case-insensitive) |
+| `update [FIRMWARE]` | Restart the pedal into its bootloader; with a firmware `.bin`, flash it with `dfu-util` (the pedal then restarts into it); without one, print the `dfu-util` command |
+
+`push` reads its rig like [`patch export`](#rig-export): a `.json` rig from the
+editor, a `.bin` sector, a preset `.toml`, or `--from-dsl`, with `-t, --topology` and
+`--name`. The global `--port <PORT>` names the serial port; without it the first
+Sonido pedal found is used. Bank slots are numbered 1–15 here (the link counts from 0).
+
+`update` asks the running pedal for its bootloader over USB, waits up to 10 s for the
+Daisy bootloader to appear, and flashes the image to `0x90040000`; it needs
+`dfu-util` installed, and it refuses the STM32 ROM bootloader (BOOT held through
+RESET), which cannot reach the pedal's QSPI flash. Download `sonido_pedal.bin` from a
+GitHub release (or a CI run's `sonido_pedal` artifact), or build the image as in
+`crates/sonido-daisy/examples/sonido_pedal.rs`:
+
+```bash
+cd crates/sonido-daisy
+cargo objcopy --example sonido_pedal --release --features alloc,platform -- -O binary sonido_pedal.bin
+```
+
+---
+
 ## Preset Files
 
-Presets are TOML files defining effect chains with optional topology:
+Presets are TOML files defining effect chains with an optional topology
+(`presets/` in the repository has examples):
 
 ```toml
 name = "Guitar Crunch"
@@ -1101,8 +1204,14 @@ tone = "5"
 output = "-6"
 ```
 
+Parameter values follow the same rules as `--param`. An effect entry with
+`bypassed = true` is skipped.
+
 The `topology` field is optional — omitting it defaults to linear chaining.
-Valid values: `"linear"`, `"parallel"`, `"fan"`.
+Valid values: `"linear"`, `"parallel"`, `"fan"`. `process`, `realtime` and `play` always
+run a preset as a linear chain, and `sonido patch export` and `sonido pedal push` take
+the topology from their `--topology` option (default `linear`, or `parallel`), not
+from this field.
 
 Use with:
 
@@ -1111,28 +1220,43 @@ sonido process input.wav output.wav --preset my_preset.toml
 sonido realtime --preset my_preset.toml
 ```
 
-### Daisy Export
+### Rig Export
 
-Export a preset to Daisy Seed binary format for flashing to hardware:
+`sonido patch` (`crates/sonido-cli/src/commands/patch.rs`) works on rig files: the
+canonical `sonido-patch` model, which stores effects by stable UID and carries macros,
+morph and globals. `export` reads a rig (a `.json` from the editor or a `.bin`
+sector) or builds one from a preset `.toml` or a DSL chain, and writes it as `.json`
+(the editor and the graph player) or as a `.bin` pedal sector, chosen by the output
+file's extension:
 
 ```bash
-sonido daisy export my_preset.toml --output preset.bin --slot 0
-sonido daisy inspect preset.bin  # verify round-trip
+sonido patch export my_preset.toml -o rig.json
+sonido patch export --from-dsl "distortion:drive=20 | reverb:mix=30" --name "Dirty Verb" -o rig.bin --pedal
+sonido patch export rig.json -o rig.bin     # editor JSON → pedal sector
+sonido patch inspect rig.bin                # or a .json rig
 ```
 
-Constraints: max 3 effects, must be from the pedal-supported set (filter,
-tremolo, vibrato, chorus, phaser, flanger, delay, reverb, tape, compressor,
-wah, distortion, bitcrusher, ringmod, looper). Topology is encoded as a
-single byte in the binary sector.
+| Option | Description |
+|--------|-------------|
+| `[FILE]` | A rig (`.json` from the editor, a `.bin` sector) or a preset `.toml` (conflicts with `--from-dsl`) |
+| `--from-dsl <SPEC>` | A DSL chain instead of a file |
+| `-o, --output <FILE>` | Output file (required): `.json` writes JSON, any other extension the binary sector |
+| `-t, --topology <NAME>` | For a preset or DSL chain: `linear` (default) or `parallel` (all effects between one split/merge) |
+| `--name <NAME>` | Name the rig (default: the rig's own name, the preset's name, or `dsl`) |
+| `--pedal` | Fail unless the rig runs on the pedal: `sonido_patch::validate::validate_for_daisy`, the effect set and the CPU and memory rule the pedal itself enforces (warnings are printed; errors fail) |
 
-### DSL Round-Trip
+Up to 8 effects (`MAX_NODES`). Arbitrary split/merge graphs are authored in the GUI.
+The `.bin` is the sector the pedal's rig bank holds. To put a rig on the pedal, send
+it with [`sonido pedal push`](#pedal), which checks it the same way; the pedal plays
+it at once. `inspect` reads a `.bin` or `.json` rig and prints the name, format version,
+globals, morph settings, each node's parameters (A/B where they differ), edges and
+active macros.
 
-Graph snapshots (including topology) can be serialized to and from DSL strings:
+### DSL Strings
+
+`--from-dsl` takes the [Graph Syntax](#graph-syntax) grammar:
 
 ```
-distortion:drive=20|reverb:decay=0.8
-split(chorus:depth=6; -)|reverb:mix=0.5
+distortion:drive=20|reverb:decay=80
+split(chorus:depth=60; -)|reverb:mix=50
 ```
-
-This enables preset save/load via human-readable DSL strings in addition to
-TOML files. See the [Graph Syntax](#graph-syntax) section for the full grammar.

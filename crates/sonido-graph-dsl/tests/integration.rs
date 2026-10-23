@@ -538,5 +538,5 @@ fn snapshot_to_preset_round_trip() {
     assert_eq!(preset.effects[1].effect_type, "reverb");
     assert!(!preset.effects[0].bypassed);
     // Verify params are populated
-    assert!(!preset.effects[0].params.is_empty());
+    assert_ne!(preset.effects[0].params.len(), 0);
 }

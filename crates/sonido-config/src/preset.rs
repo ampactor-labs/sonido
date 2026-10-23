@@ -291,7 +291,7 @@ mod tests {
         assert_eq!(preset.name, "Test Preset");
         assert!(preset.description.is_none());
         assert_eq!(preset.sample_rate, 48000);
-        assert!(preset.effects.is_empty());
+        assert_eq!(preset.effects.len(), 0);
     }
 
     #[test]
@@ -400,7 +400,7 @@ room_size = "0.8"
     fn test_preset_default() {
         let preset = Preset::default();
         assert_eq!(preset.name, "Untitled");
-        assert!(preset.is_empty());
+        assert_eq!(preset.len(), 0);
     }
 
     #[test]

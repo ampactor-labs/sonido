@@ -566,7 +566,7 @@ mod tests {
         let spec = CqtSpectrogram::from_signal(&signal, &cqt, 2048);
 
         assert!(spec.num_frames() > 0);
-        assert!(!spec.data.is_empty());
+        assert_ne!(spec.data.len(), 0);
 
         // Check time conversion
         let time_0 = spec.frame_to_time(0);

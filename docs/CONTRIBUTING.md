@@ -11,43 +11,73 @@ cargo build
 cargo test
 ```
 
+On Linux the GUI, CLI and plugin crates link system libraries (Fedora package
+names; Debian/Ubuntu equivalents in parentheses):
+
+| Package | Needed by |
+|---------|-----------|
+| `alsa-lib-devel` (`libasound2-dev`) | sonido-gui, sonido-cli, sonido-io (cpal's ALSA backend; on PipeWire systems `pipewire-alsa` serves it) |
+| `mesa-libGL-devel`, `libX11-devel` (`libgl-dev`, `libx11-dev`) | sonido-plugin (baseview's OpenGL + X11 editor window) |
+| `gcc-c++`, `cmake` | Only `scripts/bundle-vst3.sh` / `make plugins-vst3` (builds the clap-wrapper VST3 shim) |
+
+The DSP crates (`sonido-core`, `sonido-effects`, `sonido-synth`, `sonido-registry`,
+`sonido-analysis`, `sonido-config`, `sonido-platform`, `sonido-patch`) need none of these.
+
 ## Continuous Integration
 
-CI runs on GitHub Actions with ubuntu-latest runners under the ampactor-labs org (private repo).
+CI runs on GitHub Actions in the public `ampactor-labs/sonido` repo. Workflows live in
+`.github/workflows/`.
 
 ### Jobs
 
-| Job | Timeout | Trigger | Notes |
-|-----|---------|---------|-------|
-| Lint | 15 min | push + PR | fmt + clippy |
-| Test | 20 min | push + PR | Full workspace including plugin unit tests |
-| no_std | 15 min | push + PR | 5 no_std crates |
-| Wasm | 15 min | push + PR | sonido-gui wasm32 check |
-| Benchmarks | 45 min | manual dispatch | criterion + critcmp |
-| Coverage | (no limit) | manual dispatch | cargo-llvm-cov |
-| Plugin | 20 min | manual dispatch | Build + clap-validator for packaged CLAP plugins |
+`ci.yml` — runs on push and pull request to `main` (and manual dispatch), with
+`RUSTFLAGS=-D warnings`:
+
+| Job | Runner | Steps |
+|-----|--------|-------|
+| `lint` | ubuntu-latest | `cargo fmt --all --check`, `cargo clippy --workspace --all-targets` |
+| `test` | ubuntu-latest, macos-latest, windows-latest | `cargo test --workspace` |
+| `wasm` | ubuntu-latest | `cargo build` and `cargo clippy --target wasm32-unknown-unknown -p sonido-gui`, with `RUSTFLAGS` adding `--cfg=web_sys_unstable_apis` (Web Serial) |
+| `firmware` | ubuntu-latest | In `crates/sonido-daisy`: clippy (`--lib --example sonido_pedal`), build `sonido_pedal.bin` with `llvm-objcopy`, fail if it exceeds the 480 KB BOOT_SRAM, upload it as the `sonido_pedal` artifact |
+
+`ci-manual.yml` — manual dispatch only (`gh workflow run ci-manual.yml -f job=<check|bench|coverage|plugin|all>`):
+
+| Job | Timeout | Steps |
+|-----|---------|-------|
+| `check` | 30 min | fmt, clippy (`--lib --bins --tests --benches -D warnings`), workspace tests, `cargo doc` with `-D warnings`, no_std tests (core, effects, synth, registry, platform, patch), wasm check, cargo-deny |
+| `bench` | 45 min | criterion benches for core, effects, synth, analysis; critcmp against the cached previous run |
+| `coverage` | none set | cargo-llvm-cov → `lcov.info` artifact |
+| `plugin` | 20 min | `cargo test -p sonido-plugin`, `scripts/bundle-clap.sh`, clap-validator 0.3.2 on `dist-clap/sonido.clap` |
+
+`pages.yml` deploys the wasm web demo (push to `main` touching `crates/**`, or manual
+dispatch); `release.yml` (on `v*` tags, or manual dispatch as a dry run) builds the CLI,
+GUI, CLAP bundle, VST3 shim and factory presets per platform, plus the pedal firmware
+(`sonido_pedal.bin` and its SHA-256), and publishes a GitHub release.
 
 ### Infrastructure
 
-- **Composite action**: `.github/actions/setup-rust/action.yml` — DRY toolchain, sccache, system deps, and cargo registry cache
-- **Caching**: sccache via `mozilla-actions/sccache-action` + cargo registry/git cache via `actions/cache`
-- **System deps**: libasound2-dev, libudev-dev, mold linker, full x11-rs/GL stack (installed by composite action)
-- **Plugin validation**: clap-validator 0.3.2 validates packaged CLAP plugin binaries (manual dispatch)
-- **Coverage**: cargo-llvm-cov, artifact upload (no threshold gate, manual dispatch)
+- **Caching**: `ci.yml` uses `Swatinem/rust-cache`; `ci-manual.yml` uses the composite action below.
+- **Composite action**: `.github/actions/setup-rust/action.yml` — toolchain, sccache (`mozilla-actions/sccache-action`), Linux system deps, and cargo registry/git cache via `actions/cache`.
+- **System deps** (Ubuntu): `libasound2-dev` plus the GL/X11 dev stack (`libgl-dev`, `libx11-dev`, `libxkbcommon-dev`, `libwayland-dev`, …); the composite action also installs `mold`. The exact lists are in `ci.yml` (`SYSTEM_DEPS`) and the composite action.
+- **Plugin validation**: clap-validator 0.3.2 validates the single `sonido.clap` bundle (manual dispatch).
+- **Coverage**: cargo-llvm-cov, artifact upload (no threshold gate, manual dispatch).
 
 ### Running CI Checks Locally
 
 ```bash
-cargo test --workspace
-cargo test --no-default-features -p sonido-core -p sonido-effects -p sonido-synth -p sonido-registry -p sonido-platform
-cargo clippy --workspace --lib --bins --tests --benches -- -D warnings
-cargo fmt --all -- --check
-cargo doc --no-deps --all-features  # check for doc warnings
+make ci           # fmt, clippy (--lib --bins --tests --benches), workspace tests, docs with -D warnings
+make test-nostd   # no_std tests for core, effects, synth, registry, platform
+make verify       # fmt, clippy --all-targets, workspace + no_std tests, golden and
+                  # extreme-param tests, wasm check, docs with -D warnings
 ```
+
+`make install-hooks` installs `scripts/pre-push` (fmt check, `cargo check --workspace
+--all-targets`, wasm check). Alternatively `git config core.hooksPath .githooks` uses
+`.githooks/pre-push`, which runs only the fmt check.
 
 ## Git Workflow
 
-Push directly to main for typical DSP work. Use PRs for CI/infra changes or when CI-specific validation is needed (CLAP validator, wasm target, coverage). Solo dev, private repo — PRs add ceremony without review value for typical work.
+Push directly to main for typical DSP work. Use PRs for CI/infra changes or when CI-specific validation is needed (CLAP validator, wasm target, coverage).
 
 ## Documentation Protocol
 
@@ -57,27 +87,24 @@ in the same commit or PR. This section defines exactly what to update and when.
 
 ### Documentation-to-Code Mapping
 
-The following table maps every documentation file to the source code it describes.
+The following table maps each documentation file to the source code it describes.
 When you change code in the "Source Files" column, you **must** update the corresponding doc.
+The per-source-file version of this table is [DOC_CODE_MAPPING.md](DOC_CODE_MAPPING.md).
 
 | Documentation File | Source Files | What to Update |
 |---|---|---|
-| `CLAUDE.md` (Key Files table) | Any new module or crate | Add row to Key Files table |
-| `CLAUDE.md` (Crates table) | Workspace `Cargo.toml`, new crate | Add/update crate row |
-| `CLAUDE.md` (Key Patterns) | `effect.rs`, `param.rs`, `modulation.rs`, `tempo.rs` | Update code examples if API changes |
-| `README.md` (features list) | Any user-facing feature | Update bullet points |
-| `README.md` (Why Sonido table) | Test count, feature additions | Update comparison table |
+| `README.md` | Any user-facing feature, effect count, benchmark numbers | Update the affected section |
 | `docs/EFFECTS_REFERENCE.md` | `crates/sonido-effects/src/kernels/*.rs` | Add/update effect entry with parameters, ranges, DSP theory |
 | `docs/SYNTHESIS.md` | `crates/sonido-synth/src/*.rs` | Update oscillator, envelope, voice, mod matrix docs |
 | `docs/ARCHITECTURE.md` | Crate structure, dependency graph | Update crate diagram and dependency descriptions |
 | `docs/CLI_GUIDE.md` | `crates/sonido-cli/src/**/*.rs` | Update command examples, add new subcommands |
-| `docs/EMBEDDED.md` | `crates/sonido-platform/src/*.rs` | Update platform traits, control mapping |
+| `docs/EMBEDDED.md` | `crates/sonido-platform/src/*.rs`, `crates/sonido-daisy/` | Update platform traits, control mapping, firmware docs |
 | `docs/reference/biosignal.md` | `crates/sonido-analysis/src/cfc.rs`, `filterbank.rs`, `hilbert.rs` | Update analysis pipeline docs |
-| `docs/BENCHMARKS.md` | `benches/*.rs` | Update benchmark results after optimization |
+| `docs/BENCHMARKS.md` | `crates/*/benches/*.rs` | Update benchmark results after optimization |
 | `docs/CHANGELOG.md` | Any user-visible change | Add entry under current version |
 | `docs/TESTING.md` | Test infrastructure changes | Update test patterns, CI steps |
-| `docs/GUI.md` | `crates/sonido-gui/src/*.rs` | Update GUI feature docs |
-| `docs/DSP_FUNDAMENTALS.md` | Core DSP modules (`biquad.rs`, `svf.rs`, `oversample.rs`, `comb.rs`, `allpass.rs`) | Update theory sections when algorithms change |
+| `docs/GUI.md` | `crates/sonido-gui/src/**/*.rs`, `crates/sonido-gui-core/src/**/*.rs` | Update GUI feature docs |
+| `docs/DSP_FUNDAMENTALS.md` | Core DSP modules (`biquad.rs`, `svf.rs`, `oversample.rs`, `comb.rs`, `allpass.rs`, `level.rs`) | Update theory sections when algorithms change |
 | `docs/DESIGN_DECISIONS.md` | Any architectural decision | Add new ADR entry |
 | `docs/CONTRIBUTING.md` | CI config, dev workflow changes | Update setup/CI/checklist sections |
 
@@ -85,13 +112,13 @@ When you change code in the "Source Files" column, you **must** update the corre
 
 | Change Type | Required Documentation Updates |
 |---|---|
-| New effect | `EFFECTS_REFERENCE.md`, `README.md` features list, `CLAUDE.md` Key Files, registry entry |
+| New effect | `EFFECTS_REFERENCE.md`, `README.md` features list and effect count, registry entry |
 | New CLI command | `CLI_GUIDE.md`, clap help text |
-| New public trait/struct | Rustdoc with `///` comments, `CLAUDE.md` Key Patterns if it's a core abstraction |
+| New public trait/struct | Rustdoc with `///` comments; `ARCHITECTURE.md` if it's a core abstraction |
 | New DSP algorithm | `DSP_FUNDAMENTALS.md` theory section, inline `///` explaining the math |
-| Parameter range change | `EFFECTS_REFERENCE.md` parameter table, rustdoc on setter |
-| Breaking API change | `CHANGELOG.md` with migration notes, `CLAUDE.md` pattern update |
-| New crate | `CLAUDE.md` Crates table, `ARCHITECTURE.md` diagram, workspace `Cargo.toml` |
+| Parameter range change | `EFFECTS_REFERENCE.md` parameter table, rustdoc table on the params struct |
+| Breaking API change | `CHANGELOG.md` with migration notes, code examples in affected docs |
+| New crate | `ARCHITECTURE.md` diagram, workspace `Cargo.toml`, `README.md` |
 | Bug fix | `CHANGELOG.md` entry |
 | Performance improvement | `BENCHMARKS.md` with before/after numbers |
 | New analysis feature | `docs/reference/biosignal.md` or `docs/reference/cfc-analysis.md` |
@@ -105,7 +132,7 @@ When you change code in the "Source Files" column, you **must** update the corre
 - [ ] Rustdoc includes usage example if the API is non-obvious
 - [ ] DSP algorithm comments explain the math (what the formula does, not just variable names)
 - [ ] Safety invariants documented on any `unsafe` code
-- [ ] Parameter ranges documented on setter methods (e.g., `/// Sets drive in dB. Range: 0.0 to 40.0`)
+- [ ] Parameter ranges documented in the params struct's index/unit/range/default table
 
 #### Markdown Documentation (when applicable)
 
@@ -113,13 +140,12 @@ When you change code in the "Source Files" column, you **must** update the corre
 - [ ] `CLI_GUIDE.md` updated if CLI commands changed
 - [ ] `README.md` features list updated if user-facing feature was added
 - [ ] `CHANGELOG.md` entry added for any user-visible change
-- [ ] `CLAUDE.md` Key Files table updated if new modules were added
 - [ ] `DSP_FUNDAMENTALS.md` updated if a new DSP algorithm was introduced
 - [ ] `DESIGN_DECISIONS.md` updated if an architectural choice was made
 
 #### Verification
 
-- [ ] `cargo doc --no-deps --all-features` builds without warnings
+- [ ] `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps` builds
 - [ ] `cargo test --doc` passes (all rustdoc examples compile and run)
 - [ ] No stale references to renamed/removed items in any `.md` file
 - [ ] Code examples in docs use current API (not deprecated patterns)
@@ -134,8 +160,7 @@ Every module file should start with a `//!` doc comment explaining purpose and k
 //! # Biquad Filter
 //!
 //! Second-order IIR filter using the RBJ Audio EQ Cookbook coefficients.
-//! Supports lowpass, highpass, bandpass, notch, allpass, peaking, low shelf,
-//! and high shelf responses.
+//! Supports lowpass, highpass, bandpass, notch, and peaking responses.
 //!
 //! ## Theory
 //!
@@ -148,45 +173,49 @@ Every module file should start with a `//!` doc comment explaining purpose and k
 
 #### Struct-level docs
 
+Kernel parameter structs document every index with its unit, range and default
+(abridged from `crates/sonido-effects/src/kernels/distortion.rs`):
+
 ```rust
-/// Freeverb-style reverb with 8 parallel comb filters feeding 4 series allpass filters.
+/// Parameter values for [`DistortionKernel`].
 ///
-/// Based on Jezar's Freeverb algorithm. Each comb filter uses a different delay length
-/// (prime-adjacent values) to avoid metallic resonances. The allpass diffusers spread
-/// energy across the time domain for a dense, natural tail.
+/// All values in **user-facing units** — the same units shown in GUIs and
+/// stored in presets. The kernel converts internally as needed.
 ///
-/// ## Parameters
-/// - `room_size`: Controls comb filter feedback (0.0 to 1.0, default 0.5)
-/// - `damping`: Low-pass filtering in feedback path (0.0 to 1.0, default 0.5)
-/// - `wet`: Wet signal level (0.0 to 1.0, default 0.33)
-/// - `dry`: Dry signal level (0.0 to 1.0, default 1.0)
-/// - `width`: Stereo spread (0.0 to 1.0, default 1.0)
-pub struct Reverb { /* ... */ }
+/// | Index | Field | Unit | Range | Default |
+/// |-------|-------|------|-------|---------|
+/// | 0 | `drive_db` | dB | 0–40 | 26.0 |
+/// | 1 | `tone_db` | dB | −12–12 | 1.5 |
+/// | ... | | | | |
+pub struct DistortionParams { /* ... */ }
 ```
 
 #### Function-level docs for DSP
 
+Abridged from `crates/sonido-synth/src/oscillator.rs`:
+
 ```rust
-/// Compute the PolyBLEP (Polynomal Band-Limited Step) correction.
+/// 4th-order PolyBLEP correction (2-sample window on each side of the
+/// discontinuity, ~50 dB alias suppression).
 ///
-/// Reduces aliasing at waveform discontinuities by subtracting a polynomial
-/// approximation of the band-limited step function. The correction is applied
-/// within one sample of the discontinuity on each side.
+/// Reference: Välimäki et al., "Antialiasing Oscillators", IEEE Signal
+/// Processing Magazine, 2010.
 ///
 /// # Arguments
-/// * `t` - Phase position normalized to [0, 1) within the waveform period
+/// * `t` - Current phase position in [0.0, 1.0)
 /// * `dt` - Phase increment per sample (frequency / sample_rate)
 ///
 /// # Returns
-/// Correction value to subtract from the naive waveform sample.
+/// Correction value to subtract from (or add to) the naive waveform.
+/// Returns 0.0 when phase is far from a discontinuity.
 fn poly_blep(t: f32, dt: f32) -> f32 { /* ... */ }
 ```
 
 ### Running Doc Checks
 
 ```bash
-# Build all rustdocs and check for warnings
-cargo doc --no-deps --all-features 2>&1 | grep -i warning
+# Build all rustdocs, failing on warnings (as CI does)
+RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
 
 # Run doc tests
 cargo test --doc
@@ -265,7 +294,8 @@ chore: Update cpal to 0.15.3
 ### DSP Code
 
 - Use `f32` for audio samples (not `f64`)
-- Use `SmoothedParam` for all user-controllable parameters
+- Kernels hold no smoothers: declare a `SmoothingStyle` per parameter in `kernel_params!` and let `Adapter` do the smoothing
+- Kernels with a mix control mix with `Self::blend` / `Self::blend_stereo`; level matching is the generated calibration (`const LEVEL`), never a hand-picked gain or mix law (see `docs/DSP_QUALITY_STANDARD.md` Rule 8)
 - Avoid allocations in audio processing hot paths
 - Test for both `std` and `no_std` compatibility
 
@@ -276,8 +306,12 @@ chore: Update cpal to 0.15.3
 cargo test
 
 # Test no_std compatibility
-cargo test --no-default-features -p sonido-core
-cargo test --no-default-features -p sonido-effects
+make test-nostd
+
+# Regenerate the level calibration after changing an effect's sound or
+# defaults, then check the level contract
+cargo run -p sonido-effects --example calibrate --release
+cargo test -p sonido-effects --test level_contract
 
 # Run benchmarks
 cargo bench
@@ -285,23 +319,17 @@ cargo bench
 
 ### Benchmarks
 
-Effects should be benchmarked with multiple block sizes:
-
-```rust
-fn bench_effect(c: &mut Criterion) {
-    for block_size in [64, 128, 256, 512, 1024] {
-        // benchmark code
-    }
-}
-```
+Effect benchmarks run every block size in `BLOCK_SIZES` (`[64, 128, 256, 512, 1024]`)
+through the `bench_effect` helper in `crates/sonido-effects/benches/effects_bench.rs`;
+see [BENCHMARKS.md](BENCHMARKS.md#writing-new-benchmarks).
 
 ## Pull Request Process
 
 1. Fork and create a feature branch
 2. Make your changes
 3. Ensure tests pass: `cargo test`
-4. Ensure clippy passes: `cargo clippy --all-targets`
-5. Run `cargo doc --no-deps --all-features` and fix any doc warnings
+4. Ensure clippy passes: `cargo clippy --workspace --all-targets -- -D warnings`
+5. Run `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps` and fix any doc warnings
 6. Complete the documentation checklist above (inline docs + markdown updates)
 7. Run `cargo test --doc` to verify doc examples compile
 8. Submit PR with clear description
@@ -320,83 +348,82 @@ fix: Correct compressor attack time calculation
 ### Code Steps
 
 1. Create the kernel file in `crates/sonido-effects/src/kernels/`
-2. Implement `KernelParams` for the params struct (indexed access, descriptors, smoothing hints)
+2. Declare the params struct with `kernel_params!` (indexed access, descriptors with stable `ParamId`s, smoothing hints)
 3. Implement `DspKernel` for the kernel struct (pure DSP processing, receives `&Params`)
 4. Add `from_knobs()` on the params struct for embedded ADC mapping
 5. Implement `process_stereo()` if the effect has decorrelated L/R processing
 6. Add tests in a `#[cfg(test)] mod tests` block
 7. Export from `crates/sonido-effects/src/kernels/mod.rs` and `crates/sonido-effects/src/lib.rs`
-8. Register in `crates/sonido-registry/src/lib.rs` using `Adapter::new(XxxKernel::new(sr), sr)`
-9. Add to CLI in `crates/sonido-cli/src/commands/effects.rs`
+8. Register in `crates/sonido-registry/src/lib.rs`: an `EffectDescriptor` plus a factory `|sr| Box::new(Adapter::new(XxxKernel::new(sr), sr))`, and append the next free UID to `EFFECT_UIDS` (append-only)
+9. Add a `spec(...)` entry to `CATALOG` in `crates/sonido-plugin/src/bundle.rs` so the plugin bundle exports it as `com.sonido.<id-with-dashes>`
+10. Make the defaults the effect's voiced sweet spot (a fresh plugin starts there, and a pedal knob at noon selects it), with `Default` equal to the descriptor defaults; add the params struct to `crates/sonido-effects/tests/default_parity.rs`
+11. Calibrate its level: run `cargo run -p sonido-effects --example calibrate --release`, which regenerates `crates/sonido-effects/src/calibration.rs` with an entry for every registered effect, then declare `const LEVEL: Level = crate::calibration::<ID>;` (the registry ID, uppercased) in the `DspKernel` impl before running the example again (it scales the trim already in the table, assuming the kernel applies it). With a mix control, mix with `Self::blend` / `Self::blend_stereo`. `cargo test -p sonido-effects --test level_contract` checks it; rerun the example whenever you change the effect's sound or defaults
+
+The CLI, GUI and graph DSL discover effects through the registry, so they need no
+per-effect code (add aliases in `crates/sonido-graph-dsl/src/effects.rs` if useful).
 
 ### Documentation Steps (all required)
 
-10. Add `///` rustdoc on the struct explaining the DSP algorithm and parameters
-11. Add `///` rustdoc on each public method with parameter ranges
-12. Add entry to `docs/EFFECTS_REFERENCE.md` with: description, parameter table, DSP theory, usage example
-13. Add row to `CLAUDE.md` Key Files table
+12. Add `///` rustdoc on the params and kernel structs explaining the DSP algorithm and parameters
+13. Add entry to `docs/EFFECTS_REFERENCE.md` with: description, parameter table, DSP theory, usage example
 14. Update `README.md` features list and effect count
 15. Add `docs/CHANGELOG.md` entry
 16. If the effect introduces a new DSP concept, add a section to `docs/DSP_FUNDAMENTALS.md`
 
-### Effect Template
+### Kernel Template
+
+A minimal gain kernel. See [EFFECT_SDK.md](EFFECT_SDK.md) and
+[KERNEL_ARCHITECTURE.md](KERNEL_ARCHITECTURE.md) for the full contract.
 
 ```rust
-use sonido_core::{Effect, SmoothedParam};
+use sonido_core::kernel::{DspKernel, SmoothingStyle};
+use sonido_core::{ParamDescriptor, ParamId, fast_db_to_linear, kernel_params};
 
-pub struct MyEffect {
-    sample_rate: f32,
-    my_param: SmoothedParam,
-    // internal state...
+#[derive(Debug, Clone, Copy, Default)]
+pub struct MyGainParams {
+    /// Output gain in dB (−60–12, default 0).
+    pub gain_db: f32,
 }
 
-impl MyEffect {
-    pub fn new(sample_rate: f32) -> Self {
-        Self {
-            sample_rate,
-            my_param: SmoothedParam::with_config(1.0, sample_rate, 10.0),
-        }
-    }
-
-    pub fn set_my_param(&mut self, value: f32) {
-        self.my_param.set_target(value);
+kernel_params! {
+    MyGainParams, this {
+        [0] ParamDescriptor::gain_db("Gain", "Gain", -60.0, 12.0, 0.0)
+                .with_id(ParamId(9900), "my_gain"),
+            smoothing: SmoothingStyle::Standard,
+            get: this.gain_db,
+            set: |v| this.gain_db = v;
     }
 }
 
-impl Effect for MyEffect {
-    fn process(&mut self, input: f32) -> f32 {
-        let param = self.my_param.advance();  // Use advance() instead of next()
-        // process audio...
-        input * param
+pub struct MyGainKernel;
+
+impl MyGainKernel {
+    pub fn new(_sample_rate: f32) -> Self {
+        Self
+    }
+}
+
+impl DspKernel for MyGainKernel {
+    type Params = MyGainParams;
+
+    fn process(&mut self, input: f32, params: &MyGainParams) -> f32 {
+        input * fast_db_to_linear(params.gain_db)
     }
 
-    fn process_block(&mut self, input: &[f32], output: &mut [f32]) {
-        for (inp, out) in input.iter().zip(output.iter_mut()) {
-            *out = self.process(*inp);
-        }
-    }
+    fn reset(&mut self) {}
 
-    fn set_sample_rate(&mut self, sample_rate: f32) {
-        self.sample_rate = sample_rate;
-        self.my_param.set_sample_rate(sample_rate);
-    }
-
-    fn reset(&mut self) {
-        self.my_param.snap_to_target();
-    }
-
-    fn latency_samples(&self) -> usize {
-        0
-    }
+    fn set_sample_rate(&mut self, _sample_rate: f32) {}
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sonido_core::Effect;
+    use sonido_core::kernel::Adapter;
 
     #[test]
-    fn test_basic_processing() {
-        let mut effect = MyEffect::new(48000.0);
+    fn adapter_output_is_finite() {
+        let mut effect = Adapter::new(MyGainKernel::new(48000.0), 48000.0);
         let output = effect.process(0.5);
         assert!(output.is_finite());
     }

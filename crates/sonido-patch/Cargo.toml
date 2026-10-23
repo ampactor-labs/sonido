@@ -14,9 +14,13 @@ default = ["std"]
 std = ["serde", "sonido-core/std"]
 ## Serialize/Deserialize for `Patch` (JSON). no_std compatible (needs alloc).
 serde = ["dep:serde", "sonido-core/serde"]
+## Find and open the pedal's USB serial port (`client::open_pedal`).
+serial = ["std", "dep:serialport"]
 
 [dependencies]
 sonido-core = { path = "../sonido-core", default-features = false }
+sonido-platform = { path = "../sonido-platform", default-features = false }
+serialport = { version = "4.10.1", default-features = false, optional = true }
 serde = { version = "1.0", default-features = false, features = [
     "derive",
     "alloc",

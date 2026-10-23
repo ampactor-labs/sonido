@@ -57,25 +57,22 @@ use alloc::{boxed::Box, vec::Vec};
 // Pedal firmware constants
 // ---------------------------------------------------------------------------
 
-/// Ordered effect IDs for the Hothouse pedal firmware.
+/// The effects you can pick into the pedal's jam, in the order of the pick
+/// knobs' zones (fully left is an empty slot, then these): dirt, color,
+/// motion, space.
 ///
-/// Index in this slice = `effect_idx` in the binary preset format.
-/// Both CLI (`sonido daisy export`) and firmware (`sonido_pedal.rs`)
-/// MUST use this single source of truth.
-///
-/// # Invariant
-///
-/// This list is append-only. Reordering or removing entries would break
-/// existing binary presets stored in QSPI flash.
-pub const PEDAL_EFFECT_IDS: &[&str] = &[
-    "chorus",     // 0
-    "phaser",     // 1
-    "distortion", // 2
-    "bitcrusher", // 3
-    "delay",      // 4
-    "reverb",     // 5
-    "ringmod",    // 6
-    "filter",     // 7
+/// Rigs sent from the editor can use any registered effect that fits the
+/// pedal's CPU rule; this is only the jam's palette. Jams are stored by
+/// effect UID, so the order is free to change.
+pub const JAM_EFFECT_IDS: &[&str] = &[
+    "distortion",
+    "bitcrusher",
+    "filter",
+    "ringmod",
+    "chorus",
+    "phaser",
+    "delay",
+    "reverb",
 ];
 
 // ---------------------------------------------------------------------------
@@ -85,8 +82,8 @@ pub const PEDAL_EFFECT_IDS: &[&str] = &[
 /// Stable, append-only `(string-id, UID)` table.
 ///
 /// A UID is a permanent identity for an effect, unlike a *position* in
-/// [`PEDAL_EFFECT_IDS`] or the registration order (both of which proved
-/// fragile — see the index drift fixed in the daisy export tests). The
+/// [`JAM_EFFECT_IDS`] or the registration order (positions proved fragile:
+/// the old position-indexed pedal presets drifted). The
 /// canonical `sonido-patch` wire format stores effect **UIDs**, so a patch
 /// authored today still resolves after effects are added or reordered.
 ///
@@ -404,7 +401,7 @@ impl EffectRegistry {
                 id: "reverb",
                 name: "Reverb",
                 short_name: "VERB",
-                description: "Freeverb-style algorithmic reverb",
+                description: "8-line Hadamard FDN reverb on Freeverb delay tunings",
                 category: EffectCategory::TimeBased,
                 param_count: 0,
             },
@@ -716,7 +713,7 @@ impl EffectRegistry {
                 id: "tuner",
                 name: "Tuner",
                 short_name: "Tunr",
-                description: "Chromatic tuner with YIN pitch detection and READ_ONLY diagnostic params",
+                description: "Chromatic tuner by YIN pitch detection, guitar and bass range (23 Hz up)",
                 category: EffectCategory::Utility,
                 param_count: 0,
             },
@@ -800,17 +797,17 @@ impl EffectRegistry {
 
     /// Find a parameter index by name for a given effect type.
     ///
-    /// Scans cached parameter descriptors — no allocation required.
+    /// Matches the name, short name or string ID, ignoring case, spaces,
+    /// dashes and underscores ([`ParamDescriptor::matches_key`]), so
+    /// `"room_size"`, `"Room Size"` and `"Room"` all find the reverb's Room
+    /// Size. Scans cached parameter descriptors — no allocation required.
     /// Returns `None` if the effect type or parameter name is not found.
     pub fn param_index_by_name(&self, effect_id: &str, param_name: &str) -> Option<usize> {
         let entry = self.entries.iter().find(|e| e.descriptor.id == effect_id)?;
-        let lower = param_name.to_lowercase();
-        for (i, desc) in entry.param_descriptors.iter().enumerate() {
-            if desc.name.to_lowercase() == lower || desc.short_name.to_lowercase() == lower {
-                return Some(i);
-            }
-        }
-        None
+        entry
+            .param_descriptors
+            .iter()
+            .position(|desc| desc.matches_key(param_name))
     }
 
     /// Returns the number of registered effects.
@@ -825,10 +822,11 @@ impl EffectRegistry {
 
     /// Default effect chain in signal-flow order (gain stage → dynamics → EQ → modulation → time → reverb).
     ///
-    /// Used by the GUI to initialize the effect chain. The ordering reflects
-    /// standard guitar pedalboard convention.
+    /// A suggested 15-effect pedalboard; the ordering reflects standard guitar
+    /// pedalboard convention. No front end currently builds its starting chain
+    /// from this list (only the registry tests call it).
     ///
-    /// Excluded from the default chain (available via "Add Effect" in the GUI):
+    /// The other registered effects are left out, for example:
     /// - `limiter` — typically a mastering/bus effect, not a pedalboard staple
     /// - `bitcrusher` — niche lo-fi effect, not part of a standard signal chain
     /// - `ringmod` — experimental/sound-design effect
@@ -874,6 +872,23 @@ mod tests {
         assert_eq!(effects.len(), 36);
     }
 
+    /// Every parameter's `ParamId` is unique across all effects: it is a
+    /// parameter's identity to hosts (automation, saved state).
+    #[test]
+    fn param_ids_are_unique_across_effects() {
+        let registry = EffectRegistry::new();
+        let mut seen: std::collections::HashMap<u32, String> = std::collections::HashMap::new();
+        for (id, _) in EFFECT_UIDS {
+            let effect = registry.create(id, 48_000.0).unwrap();
+            for i in 0..effect.effect_param_count() {
+                let pid = effect.effect_param_info(i).unwrap().id.0;
+                if let Some(other) = seen.insert(pid, format!("{id}[{i}]")) {
+                    panic!("ParamId({pid}) is both {other} and {id}[{i}]");
+                }
+            }
+        }
+    }
+
     #[test]
     fn uid_table_is_total_and_unique() {
         let registry = EffectRegistry::new();
@@ -904,9 +919,9 @@ mod tests {
         uids.dedup();
         assert_eq!(uids.len(), unique, "duplicate UID in EFFECT_UIDS");
 
-        // Every pedal effect resolves to a UID (export relies on this).
-        for id in PEDAL_EFFECT_IDS {
-            assert!(effect_uid(id).is_some(), "pedal effect '{id}' has no UID");
+        // Every jam effect resolves to a UID (the jam is stored by UID).
+        for id in JAM_EFFECT_IDS {
+            assert!(effect_uid(id).is_some(), "jam effect '{id}' has no UID");
         }
     }
 

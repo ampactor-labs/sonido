@@ -544,7 +544,9 @@ fn find_input_device(host: &Host, name_or_index: &str) -> Result<Device> {
 /// - A numeric index (e.g., "0", "1")
 /// - An exact device name
 /// - A partial device name (case-insensitive fuzzy match)
-fn find_output_device(host: &Host, name_or_index: &str) -> Result<Device> {
+///
+/// The CLI's `--output` and the editor's `--output` both resolve through this.
+pub fn find_output_device(host: &Host, name_or_index: &str) -> Result<Device> {
     let devices: Vec<_> = host
         .output_devices()
         .map_err(|e| Error::Stream(e.to_string()))?
@@ -681,6 +683,10 @@ mod tests {
     use super::*;
 
     #[test]
+    #[cfg_attr(
+        windows,
+        ignore = "WASAPI enumeration crashes the windows-2025 CI runner (no audio endpoints)"
+    )]
     fn test_list_devices() {
         // This test just verifies the function doesn't panic
         // Actual device availability depends on the system
@@ -689,6 +695,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        windows,
+        ignore = "WASAPI enumeration crashes the windows-2025 CI runner (no audio endpoints)"
+    )]
     fn test_default_device() {
         let result = default_device();
         assert!(result.is_ok());

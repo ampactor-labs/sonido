@@ -2,14 +2,21 @@
 //!
 //! A [`Patch`] is the single source of truth for a complete effect rig:
 //! the graph topology, per-node A/B parameter snapshots, six macro
-//! definitions, the A/B morph configuration, and graph-level globals. One
-//! model has three projections that all round-trip back to the same `Patch`:
+//! definitions, two three-way toggles, the A/B morph configuration, and
+//! graph-level globals. One
+//! model has three projections; the two serialized ones round-trip back to
+//! the same `Patch`:
 //!
-//! | Projection      | Where                          | Module          |
-//! |-----------------|--------------------------------|-----------------|
-//! | JSON            | GUI session, CLAP plugin state | `serde` derives |
-//! | 4 KB binary     | QSPI flash sector on the pedal | [`binary`]      |
-//! | runtime engine  | GUI / plugin / firmware         | consumer crates |
+//! | Projection      | Where                                          | Module                    |
+//! |-----------------|------------------------------------------------|---------------------------|
+//! | JSON            | GUI `.json` export, graph-player state/presets | `serde` derives           |
+//! | 4 KB binary     | QSPI flash sector on the pedal                 | [`binary`]                |
+//! | runtime engine  | graph-player plugin and pedal ([`PatchPlayer`])| [`build`], [`runtime`]    |
+//!
+//! The GUI editor projects its own session into a `Patch` for export; it does
+//! not run patches. The pedal plays every rig through [`PatchPlayer`],
+//! including the jam built on its knobs ([`pedal`]), and the editor and
+//! CLI send it rigs over USB serial ([`link`]).
 //!
 //! # Identity, not position
 //!
@@ -21,8 +28,8 @@
 //!
 //! # no_std
 //!
-//! Builds `no_std + alloc`. The firmware enables only the binary [`decode`]
-//! path; it never needs `serde`. Host crates enable the default `std` feature
+//! Builds `no_std + alloc`. The firmware uses the binary codec, the runtime,
+//! [`pedal`] and [`link`]; it never needs `serde`. Host crates enable the default `std` feature
 //! for JSON and file helpers.
 
 #![cfg_attr(not(feature = "std"), no_std)]
@@ -33,6 +40,13 @@ use alloc::{string::String, vec::Vec};
 
 pub mod binary;
 pub mod build;
+#[cfg(feature = "std")]
+pub mod client;
+pub mod controls;
+#[cfg(all(feature = "std", not(target_arch = "wasm32")))]
+pub mod dfu;
+pub mod link;
+pub mod pedal;
 pub mod runtime;
 pub mod validate;
 
@@ -62,7 +76,7 @@ pub const SECTOR_SIZE: usize = 4096;
 /// pedal is the CPU budget, enforced at export time ([`validate`]).
 pub const MAX_NODES: usize = 8;
 
-/// Maximum parameters per effect node (current kernel max is 11).
+/// Maximum parameters per effect node (the largest kernels — compressor, multiband compressor, stage — have 12).
 pub const MAX_PARAMS: usize = 16;
 
 /// Number of macros, one per hardware knob (K1–K6).
@@ -73,6 +87,17 @@ pub const MACRO_NAME_LEN: usize = 16;
 
 /// Fixed patch-name length in the binary projection (UTF-8, NUL-padded).
 pub const PATCH_NAME_LEN: usize = 24;
+
+/// A rig's own toggles: T1 and T3 (T2 is always A / Morph / B; see
+/// [`controls::RIG_TOGGLES`]).
+pub const NUM_TOGGLES: usize = 2;
+
+/// Most targets one toggle sets.
+pub const MAX_TOGGLE_MAPPINGS: usize = 8;
+
+/// Fixed toggle-position label length in the binary projection (UTF-8,
+/// NUL-padded).
+pub const TOGGLE_LABEL_LEN: usize = 8;
 
 // ---------------------------------------------------------------------------
 // Patch model
@@ -94,6 +119,10 @@ pub struct Patch {
     /// Six macro definitions (one per hardware knob). Empty `mappings` ⇒ knob
     /// is unused for this patch.
     pub macros: [MacroDef; NUM_MACROS],
+    /// The rig's T1 and T3: three-way switches that set targets to a value
+    /// per position. Unused (the default) ⇒ the toggle does nothing here.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub toggles: [ToggleDef; NUM_TOGGLES],
     /// A/B morph configuration.
     pub morph: MorphConfig,
     /// Graph-level controls outside any effect slot.
@@ -201,11 +230,46 @@ impl MacroDef {
     }
 }
 
+/// One target a toggle sets, and its value in each position.
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct ToggleMappingSpec {
+    /// Where this mapping writes: an effect parameter, the input gain or the
+    /// master volume.
+    pub target: MacroTarget,
+    /// The target's value with the toggle up, middle and down.
+    pub values: [f32; 3],
+}
+
+/// A named three-way toggle (T1 or T3 in a rig): a label per position and
+/// the value each target takes there.
+#[derive(Clone, Debug, PartialEq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct ToggleDef {
+    /// Display name (truncated to [`MACRO_NAME_LEN`] in binary). Empty for an
+    /// unused toggle.
+    pub name: String,
+    /// Each position's label, up, middle and down (truncated to
+    /// [`TOGGLE_LABEL_LEN`] in binary), e.g. `["+7", "+12", "+19"]`.
+    pub positions: [String; 3],
+    /// Targets this toggle sets, at most [`MAX_TOGGLE_MAPPINGS`].
+    pub mappings: Vec<ToggleMappingSpec>,
+}
+
+impl ToggleDef {
+    /// Whether this toggle sets anything.
+    pub fn is_active(&self) -> bool {
+        !self.mappings.is_empty()
+    }
+}
+
 /// A/B morph behavior and per-slot lock state.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct MorphConfig {
-    /// Ramp speed (units per control tick scale; consumer-defined).
+    /// Ramp speed in A/B positions per second: at 2.0 a full A→B sweep takes
+    /// half a second. The editor's morph bar and the pedal's footswitch ramp
+    /// both move at this speed.
     pub speed: f32,
     /// How a footswitch/gesture drives the morph position.
     pub mode: MorphMode,
@@ -269,6 +333,7 @@ impl Patch {
             nodes: Vec::new(),
             edges: Vec::new(),
             macros: core::array::from_fn(|_| MacroDef::default()),
+            toggles: Default::default(),
             morph: MorphConfig::default(),
             globals: GlobalControls::default(),
         }

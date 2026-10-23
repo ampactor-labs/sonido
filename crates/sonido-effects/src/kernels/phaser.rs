@@ -3,8 +3,8 @@
 //! `PhaserKernel` owns DSP state (allpass arrays, LFOs, feedback samples,
 //! tempo manager, coefficient decimation counter). Parameters are received via
 //! `&PhaserParams` each sample. Deployed via
-//! [`Adapter`](sonido_core::kernel::Adapter) for desktop/plugin, or called
-//! directly on embedded targets.
+//! [`Adapter`](sonido_core::kernel::Adapter) for desktop/plugin, or via `Adapter::new_direct`
+//! (no smoothing) on embedded targets.
 //!
 //! # Signal Flow
 //!
@@ -42,19 +42,25 @@
 //! let adapter = Adapter::new(PhaserKernel::new(48000.0), 48000.0);
 //! let mut effect: Box<dyn Effect> = Box::new(adapter);
 //!
-//! // Embedded / Daisy Seed (direct — no smoothing, ADCs are hardware-filtered)
+//! // Embedded / Daisy Seed — zero-smoothing adapter, as the pedal firmware uses
+//! let effect = Adapter::new_direct(PhaserKernel::new(48000.0), 48000.0);
+//!
+//! // Or drive the kernel directly with a typed params struct (no adapter)
 //! let mut kernel = PhaserKernel::new(48000.0);
-//! let params = PhaserParams::from_knobs(adc_rate, adc_depth, adc_stg, adc_fb, adc_mix);
+//! let params = PhaserParams::from_knobs(
+//!     adc_rate, adc_depth, adc_stg, adc_fb, adc_mix, adc_min_freq, adc_max_freq,
+//! );
 //! let (left, right) = kernel.process_stereo(input_l, input_r, &params);
 //! ```
 
 use core::f32::consts::PI;
 use sonido_core::kernel::{DspKernel, KernelParams, SmoothingStyle};
 use sonido_core::kernel_params;
+use sonido_core::level::Level;
 use sonido_core::{
     DIVISION_LABELS, Lfo, ParamDescriptor, ParamFlags, ParamId, ParamScale, ParamUnit,
     TempoContext, TempoManager, fast_db_to_linear, fast_exp2, fast_log2, fast_tan, flush_denormal,
-    index_to_division, wet_dry_mix,
+    index_to_division,
 };
 
 // ─── Constants ───────────────────────────────────────────────────────────────
@@ -151,16 +157,16 @@ impl FirstOrderAllpass {
 ///
 /// | Index | Field | Unit | Range | Default |
 /// |-------|-------|------|-------|---------|
-/// | 0 | `rate` | Hz | 0.05–5.0 | 0.3 |
-/// | 1 | `depth_pct` | % | 0–100 | 50.0 |
-/// | 2 | `stages` | count | 2–12 (step 2) | 6.0 |
-/// | 3 | `feedback_pct` | % | 0–95 | 50.0 |
+/// | 0 | `rate` | Hz | 0.05–5.0 | 0.45 |
+/// | 1 | `depth_pct` | % | 0–100 | 70.0 |
+/// | 2 | `stages` | count | 2–12 (step 2) | 4.0 |
+/// | 3 | `feedback_pct` | % | 0–95 | 30.0 |
 /// | 4 | `mix_pct` | % | 0–100 | 50.0 |
-/// | 5 | `min_freq_hz` | Hz | 20–2000 | 200.0 |
-/// | 6 | `max_freq_hz` | Hz | 200–20000 | 4000.0 |
+/// | 5 | `min_freq_hz` | Hz | 20–2000 | 300.0 |
+/// | 6 | `max_freq_hz` | Hz | 200–20000 | 3000.0 |
 /// | 7 | `sync` | index | 0–1 (Off/On) | 0.0 |
 /// | 8 | `division` | index | 0–11 (note division) | 3.0 |
-/// | 9 | `output_db` | dB | −20–+6 | 0.0 |
+/// | 9 | `output_db` | dB | −6–+6 | 0.0 |
 /// | 10 | `lfo_phase` | 0–1 | READ_ONLY diagnostic | 0.0 |
 #[derive(Debug, Clone, Copy)]
 pub struct PhaserParams {
@@ -205,7 +211,7 @@ pub struct PhaserParams {
     pub division: f32,
     /// Output level in decibels.
     ///
-    /// Range: −20 to +6 dB. Applied after wet/dry mix.
+    /// Range: −6 to +6 dB. Applied after wet/dry mix.
     pub output_db: f32,
 
     /// Current LFO phase (0.0–1.0). READ_ONLY diagnostic — written by the
@@ -216,13 +222,13 @@ pub struct PhaserParams {
 impl Default for PhaserParams {
     fn default() -> Self {
         Self {
-            rate: 0.3,
-            depth_pct: 50.0,
-            stages: 6.0,
-            feedback_pct: 50.0,
+            rate: 0.45,
+            depth_pct: 70.0,
+            stages: 4.0,
+            feedback_pct: 30.0,
             mix_pct: 50.0,
-            min_freq_hz: 200.0,
-            max_freq_hz: 4000.0,
+            min_freq_hz: 300.0,
+            max_freq_hz: 3000.0,
             sync: 0.0,
             division: 3.0,
             output_db: 0.0,
@@ -264,14 +270,15 @@ impl PhaserParams {
 
 kernel_params! {
     PhaserParams, this {
-        // Index 0: Rate — must match classic Phaser impl_params! ParamId(900)
-        [0] ParamDescriptor::rate_hz(0.05, 5.0, 0.3).with_id(ParamId(900), "phsr_rate"),
+        // Index 0: Rate — must match original pre-kernel Phaser impl_params! ParamId(900)
+        [0] ParamDescriptor::rate_hz(0.05, 5.0, 0.45).with_id(ParamId(900), "phsr_rate"),
             smoothing: SmoothingStyle::Standard, // rate — LFO frequency, gradual feel
             get: this.rate,
             set: |v| this.rate = v;
 
         // Index 1: Depth — ParamId(901)
-        [1] ParamDescriptor::depth().with_id(ParamId(901), "phsr_depth"),
+        [1] ParamDescriptor::depth().with_id(ParamId(901), "phsr_depth")
+            .with_default(70.0),
             smoothing: SmoothingStyle::Standard, // depth
             get: this.depth_pct,
             set: |v| this.depth_pct = v;
@@ -288,13 +295,15 @@ kernel_params! {
                 ..ParamDescriptor::mix()
             }
             .with_id(ParamId(902), "phsr_stages")
-            .with_flags(ParamFlags::AUTOMATABLE.union(ParamFlags::STEPPED)),
+            .with_flags(ParamFlags::AUTOMATABLE.union(ParamFlags::STEPPED))
+            .with_default(4.0),
             smoothing: SmoothingStyle::None, // stages — discrete/stepped, snap
             get: this.stages,
             set: |v| this.stages = v;
 
         // Index 3: Feedback — ParamId(903)
-        [3] ParamDescriptor::feedback().with_id(ParamId(903), "phsr_feedback"),
+        [3] ParamDescriptor::feedback().with_id(ParamId(903), "phsr_feedback")
+            .with_default(30.0),
             smoothing: SmoothingStyle::Standard, // feedback
             get: this.feedback_pct,
             set: |v| this.feedback_pct = v;
@@ -306,7 +315,7 @@ kernel_params! {
             set: |v| this.mix_pct = v;
 
         // Index 5: Min Freq — ParamId(906) (note: output is 905, min/max come before it)
-        [5] ParamDescriptor::custom("Min Freq", "MinF", 20.0, 2000.0, 200.0)
+        [5] ParamDescriptor::custom("Min Freq", "MinF", 20.0, 2000.0, 300.0)
                 .with_id(ParamId(906), "phsr_min_freq")
                 .with_unit(ParamUnit::Hertz)
                 .with_scale(ParamScale::Logarithmic),
@@ -315,7 +324,7 @@ kernel_params! {
             set: |v| this.min_freq_hz = v;
 
         // Index 6: Max Freq — ParamId(907)
-        [6] ParamDescriptor::custom("Max Freq", "MaxF", 200.0, 20000.0, 4000.0)
+        [6] ParamDescriptor::custom("Max Freq", "MaxF", 200.0, 20000.0, 3000.0)
                 .with_id(ParamId(907), "phsr_max_freq")
                 .with_unit(ParamUnit::Hertz)
                 .with_scale(ParamScale::Logarithmic),
@@ -406,7 +415,7 @@ impl PhaserKernel {
     /// Create a new phaser kernel at the given sample rate.
     ///
     /// The right-channel LFO is initialised with a 0.25 phase offset
-    /// (90° — matching the classic `Phaser::new()` behaviour).
+    /// (90° — matching the original pre-kernel `Phaser::new()` behaviour).
     ///
     /// # Parameters
     ///
@@ -433,6 +442,7 @@ impl PhaserKernel {
 
 impl DspKernel for PhaserKernel {
     type Params = PhaserParams;
+    const LEVEL: Level = crate::calibration::PHASER;
 
     /// Process a stereo sample pair.
     ///
@@ -449,7 +459,8 @@ impl DspKernel for PhaserKernel {
     ///    Each stage is slightly offset by `1 + i·0.1` for a richer sound.
     /// 5. **Feedback + allpass cascade** — input mixed with `feedback_pct`% of the
     ///    previous cascade output, then processed through N active stages.
-    /// 6. **Mix + output** — `feedback_wet_compensation` + `wet_dry_mix` + output gain.
+    /// 6. **Mix + output** — `feedback_wet_compensation` + the level blend
+    ///    (`Self::blend_stereo`) + output gain.
     fn process_stereo(&mut self, left: f32, right: f32, params: &PhaserParams) -> (f32, f32) {
         // ── Unit conversion (user-facing → internal) ──
         let depth = params.depth_pct / 100.0;
@@ -512,8 +523,8 @@ impl DspKernel for PhaserKernel {
 
         // ── Feedback compensation + wet/dry mix + output level ──
         let comp = sonido_core::gain::feedback_wet_compensation(feedback);
-        let out_l = wet_dry_mix(left, wet_l * comp, mix) * output_gain;
-        let out_r = wet_dry_mix(right, wet_r * comp, mix) * output_gain;
+        let (out_l, out_r) = Self::blend_stereo(left, right, wet_l * comp, wet_r * comp, mix);
+        let (out_l, out_r) = (out_l * output_gain, out_r * output_gain);
 
         (out_l, out_r)
     }

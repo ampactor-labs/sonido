@@ -3,7 +3,7 @@
 //! `DelayKernel` owns DSP state (delay lines, feedback filters, diffusion
 //! allpasses, tempo manager). Parameters are received via `&DelayParams` each
 //! sample. Deployed via [`Adapter`](sonido_core::kernel::Adapter) for
-//! desktop/plugin, or called directly on embedded targets.
+//! desktop/plugin, or via `Adapter::new_direct` (no smoothing) on embedded targets.
 //!
 //! # Algorithm
 //!
@@ -41,7 +41,10 @@
 //! let adapter = Adapter::new(DelayKernel::new(48000.0), 48000.0);
 //! let mut effect: Box<dyn Effect> = Box::new(adapter);
 //!
-//! // Embedded / Daisy Seed (direct — no smoothing, ADCs are hardware-filtered)
+//! // Embedded / Daisy Seed — zero-smoothing adapter, as the pedal firmware uses
+//! let effect = Adapter::new_direct(DelayKernel::new(48000.0), 48000.0);
+//!
+//! // Or drive the kernel directly with a typed params struct (no adapter)
 //! let mut kernel = DelayKernel::new(48000.0);
 //! let params = DelayParams::from_knobs(0.5, 0.4, 0.5, 0.0, 1.0, 0.0, 0.0, 0.0, 2.0, 0.5);
 //! let (left, right) = kernel.process_stereo(input_l, input_r, &params);
@@ -50,11 +53,11 @@
 use libm::{ceilf, logf};
 use sonido_core::kernel::{DspKernel, KernelParams, SmoothingStyle};
 use sonido_core::kernel_params;
+use sonido_core::level::Level;
 use sonido_core::{
     AllpassFilter, Biquad, DIVISION_LABELS, InterpolatedDelay, NoteDivision, OnePole,
     ParamDescriptor, ParamFlags, ParamId, ParamScale, ParamUnit, TempoContext, TempoManager,
-    fast_db_to_linear, flush_denormal, highpass_coefficients, index_to_division, wet_dry_mix,
-    wet_dry_mix_stereo,
+    fast_db_to_linear, flush_denormal, highpass_coefficients, index_to_division,
 };
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -91,16 +94,16 @@ const DIFFUSION_AP2_S: f32 = 0.007;
 ///
 /// | Index | Field | Unit | Range | Default |
 /// |-------|-------|------|-------|---------|
-/// | 0 | `time_ms` | ms | 1–2000 | 300.0 |
-/// | 1 | `feedback_pct` | % | 0–95 | 40.0 |
-/// | 2 | `mix_pct` | % | 0–100 | 50.0 |
+/// | 0 | `time_ms` | ms | 1–2000 | 380.0 |
+/// | 1 | `feedback_pct` | % | 0–95 | 35.0 |
+/// | 2 | `mix_pct` | % | 0–100 | 35.0 |
 /// | 3 | `ping_pong` | index | 0–1 | 0 (Off) |
-/// | 4 | `fb_lp_hz` | Hz | 200–20000 | 20000.0 |
-/// | 5 | `fb_hp_hz` | Hz | 20–2000 | 20.0 |
+/// | 4 | `fb_lp_hz` | Hz | 200–20000 | 6000.0 |
+/// | 5 | `fb_hp_hz` | Hz | 20–2000 | 80.0 |
 /// | 6 | `diffusion_pct` | % | 0–100 | 0.0 |
 /// | 7 | `sync` | index | 0–1 | 0 (Off) |
 /// | 8 | `division` | index | 0–11 | 2 (Quarter) |
-/// | 9 | `output_db` | dB | −20–6 | 0.0 |
+/// | 9 | `output_db` | dB | −6–+6 | 0.0 |
 #[derive(Debug, Clone, Copy)]
 pub struct DelayParams {
     /// Delay time in milliseconds.
@@ -160,20 +163,21 @@ pub struct DelayParams {
 
     /// Output level in decibels.
     ///
-    /// Range: −20.0 to +20.0 dB. Applied after the wet/dry mix.
+    /// Range: −6.0 to +6.0 dB. Applied after the wet/dry mix.
     pub output_db: f32,
 }
 
 impl Default for DelayParams {
-    /// Defaults match the classic `Delay` effect's descriptor defaults exactly.
+    /// The voiced defaults (what a pedal knob gives at noon); `default_parity`
+    /// holds them equal to the descriptor defaults.
     fn default() -> Self {
         Self {
-            time_ms: 300.0,
-            feedback_pct: 40.0,
-            mix_pct: 50.0,
+            time_ms: 380.0,
+            feedback_pct: 35.0,
+            mix_pct: 35.0,
             ping_pong: 0.0,
-            fb_lp_hz: 20000.0,
-            fb_hp_hz: 20.0,
+            fb_lp_hz: 6000.0,
+            fb_hp_hz: 80.0,
             diffusion_pct: 0.0,
             sync: 0.0,
             division: 2.0,
@@ -199,7 +203,7 @@ impl DelayParams {
     /// - `diffusion`: Diffusion knob → 0–100 %
     /// - `sync`: Sync toggle → 0.0 = Off, 1.0 = On (stepped)
     /// - `division`: Division selector → index 0–11 (stepped)
-    /// - `output`: Output knob → −20–+6 dB
+    /// - `output`: Output knob → −6–+6 dB
     #[allow(clippy::too_many_arguments)]
     pub fn from_knobs(
         time: f32,
@@ -221,7 +225,7 @@ impl DelayParams {
 
 kernel_params! {
     DelayParams, this {
-        [0] ParamDescriptor::time_ms("Delay Time", "Time", 1.0, 2000.0, 300.0)
+        [0] ParamDescriptor::time_ms("Delay Time", "Time", 1.0, 2000.0, 380.0)
                 .with_id(ParamId(1100), "dly_time")
                 .with_scale(ParamScale::Logarithmic),
             smoothing: SmoothingStyle::Slow, // time_ms — 20 ms, prevents zipper/pitch clicks
@@ -236,14 +240,17 @@ kernel_params! {
                 max: 95.0,
                 default: 40.0,
                 step: 1.0,
+                flags: ParamFlags::AUTOMATABLE,
                 ..ParamDescriptor::mix()
             }
-            .with_id(ParamId(1101), "dly_feedback"),
+            .with_id(ParamId(1101), "dly_feedback")
+            .with_default(35.0),
             smoothing: SmoothingStyle::Standard, // feedback_pct — 10 ms
             get: this.feedback_pct,
             set: |v| this.feedback_pct = v;
 
-        [2] ParamDescriptor::mix().with_id(ParamId(1102), "dly_mix"),
+        [2] ParamDescriptor::mix().with_id(ParamId(1102), "dly_mix")
+            .with_default(35.0),
             smoothing: SmoothingStyle::Standard, // mix_pct — 10 ms
             get: this.mix_pct,
             set: |v| this.mix_pct = v;
@@ -265,7 +272,7 @@ kernel_params! {
             get: this.ping_pong,
             set: |v| this.ping_pong = v;
 
-        [4] ParamDescriptor::custom("Feedback LP", "Fb LP", 200.0, 20000.0, 20000.0)
+        [4] ParamDescriptor::custom("Feedback LP", "Fb LP", 200.0, 20000.0, 6000.0)
                 .with_id(ParamId(1105), "dly_fb_lp")
                 .with_unit(ParamUnit::Hertz)
                 .with_scale(ParamScale::Logarithmic),
@@ -273,7 +280,7 @@ kernel_params! {
             get: this.fb_lp_hz,
             set: |v| this.fb_lp_hz = v;
 
-        [5] ParamDescriptor::custom("Feedback HP", "Fb HP", 20.0, 2000.0, 20.0)
+        [5] ParamDescriptor::custom("Feedback HP", "Fb HP", 20.0, 2000.0, 80.0)
                 .with_id(ParamId(1106), "dly_fb_hp")
                 .with_unit(ParamUnit::Hertz)
                 .with_scale(ParamScale::Logarithmic),
@@ -289,6 +296,7 @@ kernel_params! {
                 max: 100.0,
                 default: 0.0,
                 step: 1.0,
+                flags: ParamFlags::AUTOMATABLE,
                 ..ParamDescriptor::mix()
             }
             .with_id(ParamId(1107), "dly_diffusion"),
@@ -453,8 +461,8 @@ impl DelayKernel {
             cached_hp_freq: 20.0,
             cached_diffusion: 0.0,
             cached_ping_pong: false,
-            cached_delay_samples: 300.0 / 1000.0 * sample_rate, // default 300 ms
-            cached_feedback: 0.4,                               // default 40 %
+            cached_delay_samples: DelayParams::default().time_ms / 1000.0 * sample_rate,
+            cached_feedback: DelayParams::default().feedback_pct / 100.0,
         }
     }
 
@@ -541,6 +549,7 @@ impl DelayKernel {
 
 impl DspKernel for DelayKernel {
     type Params = DelayParams;
+    const LEVEL: Level = crate::calibration::DELAY;
 
     /// Process one stereo sample pair through the delay effect.
     ///
@@ -595,7 +604,7 @@ impl DspKernel for DelayKernel {
         // is high, keeping perceived loudness consistent regardless of tail length.
         let comp = sonido_core::gain::feedback_wet_compensation(feedback);
         let (out_l, out_r) =
-            wet_dry_mix_stereo(left, right, delayed_l * comp, delayed_r * comp, mix);
+            Self::blend_stereo(left, right, delayed_l * comp, delayed_r * comp, mix);
 
         (out_l * output_gain, out_r * output_gain)
     }
@@ -618,7 +627,7 @@ impl DspKernel for DelayKernel {
         self.delay_line_l.write(flush_denormal(input + filtered));
 
         let comp = sonido_core::gain::feedback_wet_compensation(feedback);
-        wet_dry_mix(input, delayed * comp, mix) * output_gain
+        Self::blend(input, delayed * comp, mix) * output_gain
     }
 
     fn reset(&mut self) {
@@ -650,6 +659,17 @@ impl DspKernel for DelayKernel {
         self.diffusion_ap2_l = AllpassFilter::new(ap2.max(1));
         self.diffusion_ap1_r = AllpassFilter::new(ap1.max(1));
         self.diffusion_ap2_r = AllpassFilter::new(ap2.max(1));
+        // New allpasses start at their default feedback; keep the diffusion
+        // amount the cache says they have.
+        let ap_feedback = self.cached_diffusion * 0.6;
+        for ap in [
+            &mut self.diffusion_ap1_l,
+            &mut self.diffusion_ap2_l,
+            &mut self.diffusion_ap1_r,
+            &mut self.diffusion_ap2_r,
+        ] {
+            ap.set_feedback(ap_feedback);
+        }
 
         // Update one-pole filter sample rates and recalculate cached LP frequency.
         self.feedback_lp_l.set_sample_rate(sample_rate);
@@ -808,7 +828,7 @@ mod tests {
     }
 
     /// The adapter's `ParameterInfo` must expose the correct count and `ParamId`s,
-    /// matching the classic `Delay` effect's parameter contract exactly.
+    /// matching the original pre-kernel `Delay` effect's parameter contract exactly.
     ///
     /// Note the non-sequential output ID: index 9 carries `ParamId(1104)` while
     /// index 3 (ping_pong) carries `ParamId(1103)`. This matches the original
@@ -1016,6 +1036,35 @@ mod tests {
     /// Feeds alternating-polarity samples (high-frequency content) into both
     /// kernels. After priming, collects the tail energy. The aggressively
     /// LP-filtered version must accumulate less total energy.
+    #[test]
+    fn diffusion_in_the_feedback_loop_stays_stable() {
+        // Regression: the diffusion allpasses had up to ~2x gain each, so with
+        // feedback above ~40% any diffusion made the loop run away (a 0.18
+        // peak grew to 1,100 at 56% feedback and 10% diffusion).
+        let sr = 48000.0_f32;
+        for diffusion in [10.0, 50.0, 100.0] {
+            let mut kernel = DelayKernel::new(sr);
+            let params = DelayParams {
+                time_ms: 330.0,
+                feedback_pct: 95.0,
+                mix_pct: 100.0,
+                diffusion_pct: diffusion,
+                ..DelayParams::default()
+            };
+            let mut peak = 0.0f32;
+            for n in 0..(sr as usize * 4) {
+                let x = if n < 4800 {
+                    0.3 * (n as f32 * 0.05).sin()
+                } else {
+                    0.0
+                };
+                let (l, r) = kernel.process_stereo(x, x, &params);
+                peak = peak.max(l.abs()).max(r.abs());
+            }
+            assert!(peak < 1.0, "diffusion {diffusion}: peak {peak}");
+        }
+    }
+
     #[test]
     fn feedback_lp_darkens() {
         let sr = 48000.0_f32;

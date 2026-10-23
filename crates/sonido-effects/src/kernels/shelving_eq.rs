@@ -3,7 +3,7 @@
 //! `ShelvingEqKernel` owns DSP state (four biquad filters, sample rate,
 //! coefficient caches). Parameters are received via `&ShelvingEqParams` each
 //! sample. Deployed via [`Adapter`](sonido_core::kernel::Adapter) for
-//! desktop/plugin, or called directly on embedded targets.
+//! desktop/plugin, or via `Adapter::new_direct` (no smoothing) on embedded targets.
 //!
 //! # Signal Flow
 //!
@@ -49,7 +49,10 @@
 //! let adapter = Adapter::new(ShelvingEqKernel::new(48000.0), 48000.0);
 //! let mut effect: Box<dyn Effect> = Box::new(adapter);
 //!
-//! // Embedded / Daisy Seed (direct — no smoothing, ADCs are hardware-filtered)
+//! // Embedded / Daisy Seed — zero-smoothing adapter, as the pedal firmware uses
+//! let effect = Adapter::new_direct(ShelvingEqKernel::new(48000.0), 48000.0);
+//!
+//! // Or drive the kernel directly with a typed params struct (no adapter)
 //! let mut kernel = ShelvingEqKernel::new(48000.0);
 //! let params = ShelvingEqParams::from_knobs(
 //!     adc_low_freq, adc_low_gain, adc_high_freq, adc_high_gain, adc_output,
@@ -59,8 +62,9 @@
 
 use sonido_core::kernel::{DspKernel, KernelParams, SmoothingStyle};
 use sonido_core::kernel_params;
+use sonido_core::level::Level;
 use sonido_core::{
-    Biquad, Cached, ParamDescriptor, ParamId, ParamScale, ParamUnit, fast_db_to_linear,
+    Biquad, Cached, ParamDescriptor, ParamFlags, ParamId, ParamScale, ParamUnit, fast_db_to_linear,
 };
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -167,7 +171,7 @@ fn high_shelf_coefficients(
 /// | 1 | `low_gain_db` | dB | −15–15 | 0.0 |
 /// | 2 | `high_freq_hz` | Hz | 1000–20000 | 8000.0 |
 /// | 3 | `high_gain_db` | dB | −15–15 | 0.0 |
-/// | 4 | `output_db` | dB | −60–6 | 0.0 |
+/// | 4 | `output_db` | dB | −6–+6 | 0.0 |
 #[derive(Debug, Clone, Copy)]
 pub struct ShelvingEqParams {
     /// Low shelf corner frequency in Hz.
@@ -192,7 +196,7 @@ pub struct ShelvingEqParams {
 
     /// Output level in decibels.
     ///
-    /// Range: −60.0 to +6.0 dB, default 0.0.
+    /// Range: −6.0 to +6.0 dB, default 0.0.
     pub output_db: f32,
 }
 
@@ -217,7 +221,7 @@ impl ShelvingEqParams {
     /// | `low_g` | 1 | `low_gain_db` | −15–+15 dB |
     /// | `high_f` | 2 | `high_freq_hz` | 1000–20000 Hz (log) |
     /// | `high_g` | 3 | `high_gain_db` | −15–+15 dB |
-    /// | `output` | 4 | `output_db` | −60–+6 dB |
+    /// | `output` | 4 | `output_db` | −6–+6 dB |
     pub fn from_knobs(low_f: f32, low_g: f32, high_f: f32, high_g: f32, output: f32) -> Self {
         Self::from_normalized(&[low_f, low_g, high_f, high_g, output])
     }
@@ -233,6 +237,7 @@ kernel_params! {
                 max: 500.0,
                 default: 100.0,
                 step: 1.0,
+                flags: ParamFlags::AUTOMATABLE,
                 ..ParamDescriptor::mix()
             }
             .with_id(ParamId(2500), "shelf_low_freq")
@@ -255,6 +260,7 @@ kernel_params! {
                 max: 20000.0,
                 default: 8000.0,
                 step: 100.0,
+                flags: ParamFlags::AUTOMATABLE,
                 ..ParamDescriptor::mix()
             }
             .with_id(ParamId(2502), "shelf_high_freq")
@@ -417,6 +423,7 @@ impl ShelvingEqKernel {
 
 impl DspKernel for ShelvingEqKernel {
     type Params = ShelvingEqParams;
+    const LEVEL: Level = crate::calibration::SHELVING_EQ;
 
     fn process_stereo(&mut self, left: f32, right: f32, params: &ShelvingEqParams) -> (f32, f32) {
         // ── Coefficient decimation ──────────────────────────────────────────
@@ -455,7 +462,7 @@ impl DspKernel for ShelvingEqKernel {
         let left_out = self.high_l.process(self.low_l.process(left)) * output_gain;
         let right_out = self.high_r.process(self.low_r.process(right)) * output_gain;
 
-        (left_out, right_out)
+        Self::level_stereo(left_out, right_out)
     }
 
     fn reset(&mut self) {

@@ -68,7 +68,9 @@ impl MorphCurve {
     /// The morph curve appropriate for a parameter, from its descriptor.
     ///
     /// This is the single source of truth for curve selection, shared by
-    /// [`MorphSpace::auto_curves`], the GUI A/B morph, and the firmware:
+    /// [`MorphSpace::auto_curves`] and the GUI A/B morph. (The Daisy pedal
+    /// firmware does not use it: its morph is linear, with stepped params
+    /// snapping at the midpoint.)
     /// - [`ParamFlags::STEPPED`] → [`Snap`](MorphCurve::Snap)
     /// - [`ParamScale::Logarithmic`] → [`Logarithmic`](MorphCurve::Logarithmic)
     /// - otherwise → [`Linear`](MorphCurve::Linear)
@@ -85,8 +87,9 @@ impl MorphCurve {
 
 /// How a footswitch (or host gesture) drives the A/B morph position over time.
 ///
-/// Shared by the persisted `sonido-patch` format and the runtime morph engine
-/// so the pedal, GUI, and plugin agree on morph behavior.
+/// Persisted in the `sonido-patch` format and chosen in the GUI editor. The
+/// graph-player's `PatchPlayer` does not read it, and the Daisy pedal
+/// firmware has its own footswitch morph.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
@@ -241,9 +244,7 @@ impl MorphSpace {
 
     /// Sets the same interpolation curve for all parameters.
     pub fn set_all_curves(&mut self, curve: MorphCurve) {
-        for c in &mut self.curves {
-            *c = curve;
-        }
+        self.curves.fill(curve);
     }
 
     /// Auto-detects appropriate curves from parameter descriptors.
@@ -338,8 +339,8 @@ impl MorphSpace {
     /// Interpolates a single parameter at `position`, without a scratch buffer.
     ///
     /// Equivalent to one lane of [`interpolate`](Self::interpolate); lets
-    /// callers (e.g. [`ChainMorph`](crate::kernel::chain_morph::ChainMorph) on
-    /// the pedal) apply morphing without allocating a per-slot output buffer.
+    /// callers (e.g. [`ChainMorph`](crate::kernel::chain_morph::ChainMorph))
+    /// apply morphing without allocating a per-slot output buffer.
     ///
     /// # Panics
     ///
@@ -384,7 +385,8 @@ impl MorphSpace {
 ///
 /// `t = 0.0` → `a`, `t = 1.0` → `b`. The single interpolation primitive shared
 /// by [`MorphSpace`], [`ChainMorph`](crate::kernel::chain_morph::ChainMorph),
-/// the GUI A/B morph, and the firmware, so all four agree value-for-value.
+/// and the GUI A/B morph, so they agree value-for-value. The Daisy pedal
+/// firmware has its own linear morph and does not call it.
 pub fn curve_lerp(a: f32, b: f32, t: f32, curve: MorphCurve) -> f32 {
     match curve {
         MorphCurve::Linear => a + (b - a) * t,

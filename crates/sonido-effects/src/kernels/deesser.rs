@@ -38,7 +38,10 @@
 //! let adapter = Adapter::new(DeesserKernel::new(48000.0), 48000.0);
 //! let mut effect: Box<dyn Effect> = Box::new(adapter);
 //!
-//! // Embedded / Daisy Seed (direct — no smoothing)
+//! // Embedded / Daisy Seed — zero-smoothing adapter, as the pedal firmware uses
+//! let effect = Adapter::new_direct(DeesserKernel::new(48000.0), 48000.0);
+//!
+//! // Or drive the kernel directly with a typed params struct (no adapter)
 //! let mut kernel = DeesserKernel::new(48000.0);
 //! let params = DeesserParams::default();
 //! let (left, right) = kernel.process_stereo(input_l, input_r, &params);
@@ -46,6 +49,7 @@
 
 use sonido_core::kernel::{DspKernel, SmoothingStyle};
 use sonido_core::kernel_params;
+use sonido_core::level::Level;
 use sonido_core::{
     Biquad, Cached, EnvelopeFollower, ParamDescriptor, ParamId, ParamScale, ParamUnit,
     fast_db_to_linear, fast_linear_to_db, highpass_coefficients, math::flush_denormal,
@@ -76,7 +80,7 @@ const HPF_Q: f32 = core::f32::consts::SQRT_2 * 0.5;
 /// | 1 | `thresh_db` | dB | −60–0 | −20.0 |
 /// | 2 | `ratio` | ratio | 1–20 | 8.0 |
 /// | 3 | `range_db` | dB | 0–24 | 12.0 |
-/// | 4 | `output_db` | dB | −60–+6 | 0.0 |
+/// | 4 | `output_db` | dB | −6–+6 | 0.0 |
 #[derive(Debug, Clone, Copy)]
 pub struct DeesserParams {
     /// Sidechain HPF cutoff frequency in Hz.
@@ -106,7 +110,7 @@ pub struct DeesserParams {
 
     /// Output level in dB.
     ///
-    /// Range: −60.0–+6.0 dB (default 0.0). Final output trim.
+    /// Range: −6.0–+6.0 dB (default 0.0). Final output trim.
     pub output_db: f32,
 }
 
@@ -290,6 +294,7 @@ impl DeesserKernel {
 
 impl DspKernel for DeesserKernel {
     type Params = DeesserParams;
+    const LEVEL: Level = crate::calibration::DEESSER;
 
     /// Process a mono sample through the de-esser.
     ///
@@ -303,7 +308,7 @@ impl DspKernel for DeesserKernel {
         let gr =
             self.compute_gain_reduction(detection, params.thresh_db, params.ratio, params.range_db);
 
-        flush_denormal(input * gr) * fast_db_to_linear(params.output_db)
+        Self::level(flush_denormal(input * gr) * fast_db_to_linear(params.output_db))
     }
 
     /// Process a stereo sample pair through the de-esser.
@@ -322,7 +327,7 @@ impl DspKernel for DeesserKernel {
             self.compute_gain_reduction(detection, params.thresh_db, params.ratio, params.range_db);
         let output_gain = fast_db_to_linear(params.output_db);
 
-        (
+        Self::level_stereo(
             flush_denormal(left * gr) * output_gain,
             flush_denormal(right * gr) * output_gain,
         )
@@ -348,7 +353,7 @@ impl DspKernel for DeesserKernel {
             self.compute_gain_reduction(sc_mid, params.thresh_db, params.ratio, params.range_db);
         let output_gain = fast_db_to_linear(params.output_db);
 
-        (
+        Self::level_stereo(
             flush_denormal(left * gr) * output_gain,
             flush_denormal(right * gr) * output_gain,
         )

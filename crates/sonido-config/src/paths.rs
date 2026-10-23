@@ -48,6 +48,19 @@ pub fn user_presets_dir() -> PathBuf {
         .join(PRESETS_SUBDIR)
 }
 
+/// The rig library: where the editor's Export ▸ CLAP writes rigs (patch
+/// JSON) and where the graph-player plugin lists them.
+///
+/// # Platform Paths
+/// - Linux: `$XDG_DATA_HOME/sonido/patches/`, else `~/.local/share/sonido/patches/`
+/// - macOS: `~/Library/Application Support/sonido/patches/`
+/// - Windows: `%APPDATA%\sonido\patches\`
+///
+/// `None` if the platform has no data directory (e.g. the browser).
+pub fn rig_library_dir() -> Option<PathBuf> {
+    Some(dirs::data_dir()?.join(APP_NAME).join("patches"))
+}
+
 /// Returns the user-specific configuration directory.
 ///
 /// # Platform Paths
@@ -314,13 +327,13 @@ mod tests {
     fn test_list_presets_empty_dir() {
         let temp_dir = TempDir::new().unwrap();
         let presets = list_presets_in_dir(&temp_dir.path().to_path_buf());
-        assert!(presets.is_empty());
+        assert_eq!(presets.len(), 0);
     }
 
     #[test]
     fn test_list_presets_nonexistent_dir() {
         let presets = list_presets_in_dir(&PathBuf::from("/nonexistent/path/12345"));
-        assert!(presets.is_empty());
+        assert_eq!(presets.len(), 0);
     }
 
     #[test]

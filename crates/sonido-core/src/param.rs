@@ -55,6 +55,13 @@ pub struct SmoothedParam {
     settled: bool,
 }
 
+/// Whether a smoothed value is close enough to its target to stop: within one
+/// part in a million of the target's magnitude, and never tighter than 1e-6.
+#[inline]
+fn close_enough(current: f32, target: f32) -> bool {
+    (current - target).abs() <= 1e-6 * target.abs().max(1.0)
+}
+
 impl SmoothedParam {
     /// Create a new smoothed parameter with initial value.
     ///
@@ -128,7 +135,7 @@ impl SmoothedParam {
     #[inline]
     pub fn set_target(&mut self, target: f32) {
         self.target = target;
-        self.settled = (self.current - target).abs() < 1e-6;
+        self.settled = close_enough(self.current, target);
     }
 
     /// Set target and immediately snap to it (no smoothing).
@@ -169,10 +176,17 @@ impl SmoothedParam {
         }
         // One-pole lowpass: y[n] = y[n-1] + coeff * (target - y[n-1])
         // Equivalent to: y[n] = (1-coeff) * y[n-1] + coeff * target
-        self.current = self.current + self.coeff * (self.target - self.current);
-        if (self.current - self.target).abs() < 1e-6 {
+        let next = self.current + self.coeff * (self.target - self.current);
+        // Snap once close, or once a step no longer moves the value: in f32 a
+        // 10 ms smoother stalls ~240 representable values short of its target,
+        // and above ~8 even that is more than 1e-6 away, so without this a
+        // parameter could smooth forever (and keep its adapter re-writing
+        // every parameter, every sample).
+        if next == self.current || close_enough(next, self.target) {
             self.current = self.target;
             self.settled = true;
+        } else {
+            self.current = next;
         }
         self.current
     }
@@ -376,6 +390,31 @@ impl Default for LinearSmoothedParam {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn large_values_settle_exactly() {
+        // Regression: with an absolute 1e-6 threshold, a 4 kHz parameter
+        // stalled a few f32 steps short and never settled.
+        for (from, to) in [
+            (4000.0, 4100.0),
+            (20_000.0, 3_000.0),
+            (0.3, 0.7),
+            (-24.0, 6.0),
+        ] {
+            let mut p = SmoothedParam::standard(from, 48_000.0);
+            p.set_target(to);
+            let mut n = 0;
+            while !p.is_settled() {
+                p.advance();
+                n += 1;
+                assert!(n < 48_000, "{from} -> {to} still smoothing after 1 s");
+            }
+            assert_eq!(p.get(), to);
+            // Re-setting the same target keeps it settled.
+            p.set_target(to);
+            assert!(p.is_settled());
+        }
+    }
 
     #[test]
     fn smoothed_param_instant_when_no_smoothing() {

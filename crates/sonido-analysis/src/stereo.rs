@@ -246,9 +246,9 @@ mod tests {
         let mut meter = StereoCorrelation::new(1024);
         let sig = vec![0.3f32; 512];
         meter.push_samples(&sig, &sig);
-        assert!(!meter.is_empty());
+        assert_ne!(meter.len(), 0);
         meter.reset();
-        assert!(meter.is_empty());
+        assert_eq!(meter.len(), 0);
         assert_eq!(meter.correlation(), 0.0);
     }
 }

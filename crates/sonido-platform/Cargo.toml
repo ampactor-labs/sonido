@@ -20,3 +20,7 @@ libm = { workspace = true }
 workspace = true
 
 [dev-dependencies]
+# Test-only: builds real effects to calibrate the knob mapping
+# (`tests/knob_calibration.rs`). The registry does not depend on this crate.
+sonido-registry = { workspace = true, features = ["std"] }
+sonido-analysis = { workspace = true }

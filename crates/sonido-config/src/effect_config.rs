@@ -87,14 +87,9 @@ impl EffectConfig {
         self.params.insert(key.into(), value.into());
     }
 
-    /// Parse a parameter value as f32.
-    ///
-    /// Supports:
-    /// - Plain numbers: "0.5", "1.2"
-    /// - Percentages: "50%", "120%" (converted to 0-1 range)
-    /// - Decibels: "-6dB", "+3dB" (converted to linear gain)
-    /// - Time: "100ms", "1.5s" (converted to seconds)
-    /// - Frequency: "440Hz", "1.2kHz" (converted to Hz)
+    /// Parse a parameter value as f32, in Sonido's parameter units
+    /// (see [`parse_param_value`]): "-6dB" → -6.0, "50%" → 50.0,
+    /// "100ms" → 100.0, "1.5s" → 1500.0, "1.2kHz" → 1200.0.
     pub fn parse_param(&self, key: &str) -> Option<f32> {
         let value = self.params.get(key)?;
         parse_param_value(value)
@@ -115,66 +110,26 @@ impl EffectConfig {
     }
 }
 
-/// Parse a parameter value string into an f32.
+/// Parse a parameter value string into an f32, in Sonido's parameter units.
 ///
-/// Supports various formats:
-/// - Plain numbers: "0.5", "1.2", "-0.3"
-/// - Percentages: "50%", "120%" (divided by 100)
-/// - Decibels: "-6dB", "+3dB" (converted to linear gain)
-/// - Time in ms: "100ms" (converted to seconds)
-/// - Time in s: "1.5s" (kept as seconds)
-/// - Frequency in Hz: "440Hz"
-/// - Frequency in kHz: "1.2kHz" (converted to Hz)
+/// Every Sonido parameter takes real units (dB, Hz, ms, 0–100 %), so the
+/// suffix only says what the number already is; nothing is converted except
+/// the scaled spellings:
+/// - Plain numbers: "0.5", "20", "-6"
+/// - Decibels: "-6dB", "+3 dB" → -6.0, 3.0 (dB params take dB)
+/// - Percent: "50%" → 50.0 (percent params run 0–100)
+/// - Milliseconds: "100ms" → 100.0; seconds: "1.5s" → 1500.0 (time params take ms)
+/// - Frequency: "440Hz" → 440.0; "1.2kHz" → 1200.0
+///
+/// When the parameter is known, prefer [`ParamDescriptor::parse_value`]
+/// (`sonido_core`), which also accepts step labels like `"Hard Clip"`.
+///
+/// [`ParamDescriptor::parse_value`]: sonido_core::ParamDescriptor::parse_value
 pub fn parse_param_value(value: &str) -> Option<f32> {
-    let value = value.trim();
-
-    // Percentages
-    if let Some(pct) = value.strip_suffix('%') {
-        return pct.trim().parse::<f32>().ok().map(|v| v / 100.0);
-    }
-
-    // Decibels
-    if let Some(db) = value
-        .strip_suffix("dB")
-        .or_else(|| value.strip_suffix("db"))
-    {
-        return db.trim().parse::<f32>().ok().map(|v| {
-            // Convert dB to linear gain: 10^(dB/20)
-            libm::powf(10.0, v / 20.0)
-        });
-    }
-
-    // Milliseconds
-    if let Some(ms) = value.strip_suffix("ms") {
-        return ms.trim().parse::<f32>().ok().map(|v| v / 1000.0);
-    }
-
-    // Seconds
-    if let Some(s) = value.strip_suffix('s') {
-        // Make sure it's not "ms"
-        if !value.ends_with("ms") {
-            return s.trim().parse::<f32>().ok();
-        }
-    }
-
-    // Kilohertz
-    if let Some(khz) = value
-        .strip_suffix("kHz")
-        .or_else(|| value.strip_suffix("khz"))
-    {
-        return khz.trim().parse::<f32>().ok().map(|v| v * 1000.0);
-    }
-
-    // Hertz
-    if let Some(hz) = value
-        .strip_suffix("Hz")
-        .or_else(|| value.strip_suffix("hz"))
-    {
-        return hz.trim().parse::<f32>().ok();
-    }
-
-    // Plain number
-    value.parse::<f32>().ok()
+    // A millisecond-unit descriptor gives "s" its ×1000 meaning.
+    let as_ms = sonido_core::ParamDescriptor::custom("", "", f32::MIN, f32::MAX, 0.0)
+        .with_unit(sonido_core::ParamUnit::Milliseconds);
+    as_ms.parse_value(value)
 }
 
 #[cfg(test)]
@@ -186,7 +141,7 @@ mod tests {
         let config = EffectConfig::new("distortion");
         assert_eq!(config.effect_type, "distortion");
         assert!(!config.bypassed);
-        assert!(config.params.is_empty());
+        assert_eq!(config.params.len(), 0);
     }
 
     #[test]
@@ -226,37 +181,28 @@ mod tests {
 
     #[test]
     fn test_parse_percentages() {
-        assert_eq!(parse_param_value("50%"), Some(0.5));
-        assert_eq!(parse_param_value("100%"), Some(1.0));
-        assert_eq!(parse_param_value("120%"), Some(1.2));
+        // Percent params run 0–100: the suffix doesn't rescale.
+        assert_eq!(parse_param_value("50%"), Some(50.0));
+        assert_eq!(parse_param_value("100%"), Some(100.0));
         assert_eq!(parse_param_value("0%"), Some(0.0));
     }
 
     #[test]
     fn test_parse_decibels() {
-        // 0 dB = 1.0 linear
-        let val = parse_param_value("0dB").unwrap();
-        assert!((val - 1.0).abs() < 0.001);
-
-        // -6 dB ≈ 0.5 linear
-        let val = parse_param_value("-6dB").unwrap();
-        assert!((val - 0.5).abs() < 0.05);
-
-        // +6 dB ≈ 2.0 linear
-        let val = parse_param_value("+6dB").unwrap();
-        assert!((val - 2.0).abs() < 0.1);
-
-        // Case insensitive
-        let val = parse_param_value("-6db").unwrap();
-        assert!((val - 0.5).abs() < 0.05);
+        // dB params take dB: the suffix doesn't convert to linear gain.
+        assert_eq!(parse_param_value("0dB"), Some(0.0));
+        assert_eq!(parse_param_value("-6dB"), Some(-6.0));
+        assert_eq!(parse_param_value("+6 dB"), Some(6.0));
+        assert_eq!(parse_param_value("-6db"), Some(-6.0));
     }
 
     #[test]
     fn test_parse_time() {
-        assert_eq!(parse_param_value("100ms"), Some(0.1));
-        assert_eq!(parse_param_value("1000ms"), Some(1.0));
-        assert_eq!(parse_param_value("1.5s"), Some(1.5));
-        assert_eq!(parse_param_value("0.5s"), Some(0.5));
+        // Time params take ms: "ms" stays, "s" scales to ms.
+        assert_eq!(parse_param_value("100ms"), Some(100.0));
+        assert_eq!(parse_param_value("1000ms"), Some(1000.0));
+        assert_eq!(parse_param_value("1.5s"), Some(1500.0));
+        assert_eq!(parse_param_value("0.5s"), Some(500.0));
     }
 
     #[test]
@@ -280,11 +226,9 @@ mod tests {
             .with_param("gain", "-6dB")
             .with_param("time", "100ms");
 
-        let gain = config.parse_param("gain").unwrap();
-        assert!((gain - 0.5).abs() < 0.05);
-
-        let time = config.parse_param("time").unwrap();
-        assert!((time - 0.1).abs() < 0.001);
+        // Values come back in parameter units: dB and ms, not linear/seconds.
+        assert_eq!(config.parse_param("gain"), Some(-6.0));
+        assert_eq!(config.parse_param("time"), Some(100.0));
 
         assert!(config.parse_param("missing").is_none());
     }

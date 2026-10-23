@@ -4,8 +4,8 @@
 //! short (256-sample) direct time-domain convolution. Three programmatically
 //! generated IRs cover clean combo, British stack, and modern high-gain character.
 //! Parameters are received via `&CabinetParams` each sample. Deployed via
-//! [`Adapter`](sonido_core::kernel::Adapter) for desktop/plugin, or called
-//! directly on embedded targets.
+//! [`Adapter`](sonido_core::kernel::Adapter) for desktop/plugin, or via `Adapter::new_direct`
+//! (no smoothing) on embedded targets.
 //!
 //! # Signal Flow
 //!
@@ -28,7 +28,10 @@
 //! let adapter = Adapter::new(CabinetKernel::new(48000.0), 48000.0);
 //! let mut effect: Box<dyn Effect> = Box::new(adapter);
 //!
-//! // Embedded / Daisy Seed (direct — no smoothing, ADCs are hardware-filtered)
+//! // Embedded / Daisy Seed — zero-smoothing adapter, as the pedal firmware uses
+//! let effect = Adapter::new_direct(CabinetKernel::new(48000.0), 48000.0);
+//!
+//! // Or drive the kernel directly with a typed params struct (no adapter)
 //! let mut kernel = CabinetKernel::new(48000.0);
 //! let params = CabinetParams::default();
 //! let (left, right) = kernel.process_stereo(input_l, input_r, &params);
@@ -38,13 +41,43 @@
 use sonido_core::kernel::KernelParams;
 use sonido_core::kernel::{DspKernel, SmoothingStyle};
 use sonido_core::kernel_params;
+use sonido_core::level::Level;
 use sonido_core::{
     Biquad, ParamDescriptor, ParamFlags, ParamId, ParamScale, ParamUnit, fast_db_to_linear,
-    highpass_coefficients, wet_dry_mix,
+    highpass_coefficients,
 };
 
 /// Number of samples in each factory impulse response (≈5.3 ms at 48 kHz).
 const IR_LEN: usize = 256;
+
+/// RMS of the IR's magnitude response over 24 log-spaced frequencies from
+/// 100 Hz to 4 kHz: the IR's loudness on guitar-range material.
+///
+/// Each frequency's `e^(−iωn)` comes from rotating a phasor, not from a
+/// `sin`/`cos` per tap: 12,288 software trig calls took ~4 ms on the pedal's
+/// Cortex-M7, longer than an audio block.
+fn band_rms_gain(ir: &[f32], sample_rate: f32) -> f32 {
+    const POINTS: usize = 24;
+    let (lo, hi) = (100.0_f32, 4000.0_f32.min(sample_rate * 0.45));
+    let mut sum_sq = 0.0_f32;
+    for k in 0..POINTS {
+        let f = lo * libm::powf(hi / lo, k as f32 / (POINTS - 1) as f32);
+        let w = 2.0 * core::f32::consts::PI * f / sample_rate;
+        let (step_re, step_im) = (libm::cosf(w), -libm::sinf(w));
+        let (mut z_re, mut z_im) = (1.0_f32, 0.0_f32);
+        let (mut re, mut im) = (0.0_f32, 0.0_f32);
+        for &h in ir {
+            re += h * z_re;
+            im += h * z_im;
+            (z_re, z_im) = (
+                z_re * step_re - z_im * step_im,
+                z_re * step_im + z_im * step_re,
+            );
+        }
+        sum_sq += re * re + im * im;
+    }
+    libm::sqrtf(sum_sq / POINTS as f32)
+}
 
 // ═══════════════════════════════════════════════════════════════════════════
 //  Parameters
@@ -58,9 +91,9 @@ const IR_LEN: usize = 256;
 /// | Index | Field | Unit | Range | Default |
 /// |-------|-------|------|-------|---------|
 /// | 0 | `ir_select` | index | 0–2 | 0 (Clean Combo) |
-/// | 1 | `mix_pct` | % | 0–100 | 100.0 |
+/// | 1 | `mix_pct` | % | 0–100 | 50.0 |
 /// | 2 | `low_cut_hz` | Hz | 20–500 | 80.0 |
-/// | 3 | `output_db` | dB | −60–+6 | 0.0 |
+/// | 3 | `output_db` | dB | −6–+6 | 0.0 |
 #[derive(Debug, Clone, Copy)]
 pub struct CabinetParams {
     /// IR selection: 0 = Clean Combo, 1 = British Stack, 2 = Modern High-Gain.
@@ -75,7 +108,7 @@ pub struct CabinetParams {
     pub low_cut_hz: f32,
     /// Output level in decibels.
     ///
-    /// Range: −60.0 to +6.0 dB. Applied after wet/dry mix.
+    /// Range: −6.0 to +6.0 dB. Applied after wet/dry mix.
     pub output_db: f32,
 }
 
@@ -83,7 +116,7 @@ impl Default for CabinetParams {
     fn default() -> Self {
         Self {
             ir_select: 0.0,
-            mix_pct: 100.0,
+            mix_pct: 50.0,
             low_cut_hz: 80.0,
             output_db: 0.0,
         }
@@ -140,7 +173,8 @@ kernel_params! {
 /// The exponential decay `e^(-5t/IR_LEN)` reaches roughly e⁻⁵ ≈ 0.007 at the end,
 /// providing a natural cabinet tail.
 fn generate_ir(ir_type: u8, sample_rate: f32) -> [f32; IR_LEN] {
-    let _ = sample_rate; // IR character is sample-count-based, not Hz-based
+    // The IR's shape is sample-count-based; `sample_rate` only places the
+    // 100 Hz–4 kHz band its loudness is normalized over.
     let mut ir = [0.0f32; IR_LEN];
 
     // Decay exponent controls how quickly the IR dies out
@@ -156,6 +190,9 @@ fn generate_ir(ir_type: u8, sample_rate: f32) -> [f32; IR_LEN] {
     // A simple xorshift32 PRNG seeded per IR type for reproducible IRs
     let mut rng: u32 = 0x1234_5678u32 ^ (ir_type as u32).wrapping_mul(0x9E37_79B9);
     let mut lp_state = 0.0f32;
+    // e^(−decay_rate·i), stepped by multiplication rather than an expf per tap.
+    let decay_step = libm::expf(-decay_rate);
+    let mut decay = 1.0f32;
 
     for i in 0..IR_LEN {
         // xorshift32
@@ -169,25 +206,32 @@ fn generate_ir(ir_type: u8, sample_rate: f32) -> [f32; IR_LEN] {
         // One-pole lowpass to shape the spectral character
         lp_state = lp_state * lp_coeff + noise * (1.0 - lp_coeff);
 
-        // Exponential decay envelope
-        let decay = libm::expf(-decay_rate * i as f32);
-
         ir[i] = lp_state * decay;
+        decay *= decay_step;
     }
 
-    // Normalize so the first non-zero sample has magnitude ~0.5
-    // (avoids level jumps when switching IRs)
-    let peak: f32 = ir.iter().fold(0.0f32, |acc, &x| {
-        if libm::fabsf(x) > acc {
-            libm::fabsf(x)
-        } else {
-            acc
-        }
-    });
-    if peak > 1e-6 {
-        let scale = 0.5 / peak;
+    // Normalize for unity loudness across the guitar band: scale so the RMS
+    // of |H(f)| over 24 log-spaced points from 100 Hz to 4 kHz is 1 (0 dB).
+    // Peak-sample normalization (the old rule) left these strongly lowpassed
+    // bursts +5 to +14 dB hot in that band, because their correlated taps sum
+    // far above any single tap. Computed once at construction, not per sample.
+    let band_gain = band_rms_gain(&ir, sample_rate);
+    if band_gain > 1e-6 {
+        let scale = 1.0 / band_gain;
         for s in ir.iter_mut() {
             *s *= scale;
+        }
+    }
+
+    // Polarity: make the largest tap positive. The bursts come out with an
+    // arbitrary sign, and all three landed inverted against the dry signal,
+    // so the Mix control cancelled the guitar instead of blending into it.
+    let peak = ir
+        .iter()
+        .fold(0.0f32, |p, &s| if s.abs() > p.abs() { s } else { p });
+    if peak < 0.0 {
+        for s in ir.iter_mut() {
+            *s = -*s;
         }
     }
 
@@ -256,7 +300,9 @@ impl CabinetKernel {
             low_cut_l,
             low_cut_r,
             sample_rate,
-            last_ir_select: f32::NAN,
+            // The IR above is type 0; regenerating it in the first audio block
+            // would cost what constructing it did.
+            last_ir_select: 0.0,
             last_low_cut_hz: f32::NAN,
         }
     }
@@ -264,7 +310,7 @@ impl CabinetKernel {
     /// Update HPF coefficients when low_cut_hz changes.
     #[inline]
     fn update_low_cut(&mut self, low_cut_hz: f32) {
-        if (self.last_low_cut_hz - low_cut_hz).abs() > 0.01 {
+        if sonido_core::needs_update(self.last_low_cut_hz, low_cut_hz, 0.01) {
             let (b0, b1, b2, a0, a1, a2) =
                 highpass_coefficients(low_cut_hz, 0.707, self.sample_rate);
             self.low_cut_l.set_coefficients(b0, b1, b2, a0, a1, a2);
@@ -291,6 +337,7 @@ impl CabinetKernel {
 
 impl DspKernel for CabinetKernel {
     type Params = CabinetParams;
+    const LEVEL: Level = crate::calibration::CABINET;
 
     fn process_stereo(&mut self, left: f32, right: f32, params: &CabinetParams) -> (f32, f32) {
         // ── Coefficient / IR updates ──
@@ -322,8 +369,8 @@ impl DspKernel for CabinetKernel {
         let mix = params.mix_pct / 100.0;
         let output_gain = fast_db_to_linear(params.output_db);
 
-        let out_l = wet_dry_mix(left, filtered_l, mix) * output_gain;
-        let out_r = wet_dry_mix(right, filtered_r, mix) * output_gain;
+        let (out_l, out_r) = Self::blend_stereo(left, right, filtered_l, filtered_r, mix);
+        let (out_l, out_r) = (out_l * output_gain, out_r * output_gain);
 
         (out_l, out_r)
     }
@@ -334,15 +381,21 @@ impl DspKernel for CabinetKernel {
         self.write_pos = 0;
         self.low_cut_l.clear();
         self.low_cut_r.clear();
-        // Force IR and HPF reload on next process call
-        self.last_ir_select = f32::NAN;
+        // The IR depends only on its type and the sample rate, so it stays.
         self.last_low_cut_hz = f32::NAN;
     }
 
     fn set_sample_rate(&mut self, sample_rate: f32) {
         self.sample_rate = sample_rate;
-        // Force coefficient recomputation at new sample rate
-        self.last_ir_select = f32::NAN;
+        // Rebuild the IR here (a host calls this off the audio thread) for the
+        // band its loudness is normalized over; the HPF follows next block.
+        let ir_type = if self.last_ir_select.is_nan() {
+            0
+        } else {
+            (self.last_ir_select + 0.5) as u8
+        };
+        self.ir = generate_ir(ir_type, sample_rate);
+        self.last_ir_select = f32::from(ir_type);
         self.last_low_cut_hz = f32::NAN;
         self.low_cut_l.clear();
         self.low_cut_r.clear();
@@ -356,6 +409,49 @@ impl DspKernel for CabinetKernel {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Each IR, fully wet, plays guitar-band material at unity loudness:
+    /// tones from 100 Hz to 4 kHz average 0 dB of power gain (±1 dB). The
+    /// old peak normalization left these +5 to +14 dB hot. The measured
+    /// level trim (`CabinetKernel::LEVEL`) is divided out: this is the IR.
+    #[test]
+    fn every_ir_is_unity_loud_across_the_guitar_band() {
+        let sr = 48_000.0_f32;
+        for ir in 0..3 {
+            let params = CabinetParams {
+                ir_select: ir as f32,
+                mix_pct: 100.0,
+                low_cut_hz: 20.0,
+                output_db: 0.0,
+            };
+            let mut gains_db = [0.0_f64; 12];
+            for (k, gain_db) in gains_db.iter_mut().enumerate() {
+                let f = 100.0 * libm::powf(40.0, k as f32 / 11.0);
+                let mut kernel = CabinetKernel::new(sr);
+                let (mut e_in, mut e_out) = (0.0_f64, 0.0_f64);
+                for n in 0..9600 {
+                    let x = 0.25 * libm::sinf(2.0 * core::f32::consts::PI * f * n as f32 / sr);
+                    let (y, _) = kernel.process_stereo(x, x, &params);
+                    let y = y / CabinetKernel::LEVEL.trim;
+                    if n >= 2400 {
+                        e_in += f64::from(x * x);
+                        e_out += f64::from(y * y);
+                    }
+                }
+                *gain_db = 10.0 * libm::log10(e_out / e_in);
+            }
+            let mean_power: f64 = gains_db
+                .iter()
+                .map(|g| libm::pow(10.0, g / 10.0))
+                .sum::<f64>()
+                / 12.0;
+            let mean_power_db = 10.0 * libm::log10(mean_power);
+            assert!(
+                libm::fabs(mean_power_db) < 1.0,
+                "IR {ir}: mean band gain {mean_power_db:+.2} dB (per tone: {gains_db:.1?})"
+            );
+        }
+    }
     use sonido_core::kernel::Adapter;
     use sonido_core::{Effect, ParameterInfo};
 

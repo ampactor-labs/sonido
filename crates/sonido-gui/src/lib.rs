@@ -8,17 +8,18 @@ pub mod atomic_param_bridge;
 pub mod audio_bridge;
 mod audio_processor;
 pub mod chain_manager;
-#[cfg(not(target_arch = "wasm32"))]
-pub mod dfu;
 pub mod export;
 pub mod file_player;
 pub mod graph_view;
 pub mod info_view;
 pub mod macro_autoassign;
 pub mod morph_state;
+pub mod pedal_panel;
 pub mod session;
 pub mod signal_generator;
 pub mod theme;
+#[cfg(target_arch = "wasm32")]
+pub mod web_serial;
 pub mod widgets;
 
 pub use app::SonidoApp;

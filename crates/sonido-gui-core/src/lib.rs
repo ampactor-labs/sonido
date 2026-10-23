@@ -13,8 +13,11 @@
 //! - [`effects_ui`] — Per-effect UI panels (one per effect type)
 
 pub mod accessibility;
+pub mod cabinet;
+pub mod crt;
 pub mod effects_ui;
 pub mod param_bridge;
+pub mod telemetry;
 pub mod theme;
 pub mod widgets;
 

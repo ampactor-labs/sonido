@@ -6,7 +6,7 @@ This document contains everything needed to implement new Sonido effects derived
 
 - **Article**: ["Jimi Hendrix Was a Systems Engineer"](https://spectrum.ieee.org/jimi-hendrix-systems-engineer), Rohan S. Puranik, IEEE Spectrum, March 2026.
 - **Repo**: [github.com/nahorov/Hendrix-Systems-Lab](https://github.com/nahorov/Hendrix-Systems-Lab) — SPICE netlists, Python DSP models, WAV stems (48kHz/24-bit), SVG figures.
-- **Sonido reference doc**: `docs/HENDRIX_SIGNAL_CHAIN_REFERENCE.md` — full cross-reference between Hendrix's rig and Sonido's existing effects, including validation opportunities.
+- **Sonido reference doc**: `docs/reference/hendrix-signal-chain.md` — full cross-reference between Hendrix's rig and Sonido's existing effects, including validation opportunities.
 
 The Hendrix Systems Lab repo is open-source and contains physically-grounded SPICE simulations of every pedal in the chain. The Python layer re-implements the same effects as discrete-time DSP and produces audible output. Both tiers are useful: SPICE for validating transfer functions, Python for validating audio output.
 
@@ -49,7 +49,7 @@ The key insight: `|sin(2πft)|` has fundamental frequency `2f` because folding n
 
 **Architecture decision**: Implement as a **standalone effect** in `sonido-effects`, not as a new `Distortion` mode. Rationale: rectification is a fundamentally different signal transformation than waveshaping. Distortion adds harmonics to the existing fundamental; Octavia shifts the fundamental itself. They compose well in sequence (Fuzz → Octavia = Purple Haze tone) but shouldn't share a mode enum.
 
-**Suggested file**: `sonido-effects/src/octavia.rs`
+**Suggested file**: `crates/sonido-effects/src/kernels/octavia.rs`
 
 ### 2. Fuzz (Vintage Two-Transistor)
 
@@ -97,7 +97,7 @@ Model as different soft/hard mix ratios and pre-emphasis filter cutoffs, not as 
 - `ff_si_zin_mag.svg` — input impedance vs frequency (for validating the cleanup interaction)
 - `temp_bias_plot.py` — Ge thermal drift analysis
 
-**Suggested file**: `sonido-effects/src/fuzz.rs`
+**Suggested file**: `crates/sonido-effects/src/kernels/fuzz.rs`
 
 ### 3. Enhancement: Phaser AM Component (Uni-Vibe Character)
 
@@ -148,15 +148,15 @@ Example for Octavia:
 /// stage. Antiderivative of `|x|` is `x·|x|/2`.
 ///
 /// Based on the Octavia pedal designed by Roger Mayer for Jimi Hendrix (1967).
-/// See `docs/HENDRIX_SIGNAL_CHAIN_REFERENCE.md` for circuit analysis and
+/// See `docs/reference/hendrix-signal-chain.md` for circuit analysis and
 /// validation data from SPICE simulations.
-pub struct Octavia { ... }
+pub struct OctaviaKernel { ... }
 ```
 
 Rules:
 - Document the algorithm and the math — what the code computes and why
 - Cite the inspiration in one line: who, what, when
-- Link to `HENDRIX_SIGNAL_CHAIN_REFERENCE.md` for depth — don't inline circuit analysis into rustdoc
+- Link to `docs/reference/hendrix-signal-chain.md` for depth — don't inline circuit analysis into rustdoc
 - Every public method gets a `///` doc comment (existing Sonido convention)
 
 ### Layer 2: EFFECTS_REFERENCE.md
@@ -188,7 +188,7 @@ Rules:
 - Practical usage notes — what it sounds good on, what to chain it with
 - No DSP math, no circuit diagrams, no SPICE references
 
-### Layer 3: HENDRIX_SIGNAL_CHAIN_REFERENCE.md (already exists)
+### Layer 3: docs/reference/hendrix-signal-chain.md (already exists)
 
 The research source. SPICE comparisons, validation data, chain interaction notes, cross-references to the Hendrix Systems Lab repo. This is the deep context.
 
@@ -208,21 +208,30 @@ Rules:
 
 ### Effect Registration
 
-Both new effects must be registered in `sonido-registry`. Follow the existing pattern:
+Both new effects follow the kernel workflow in `docs/EFFECT_SDK.md`: a UID appended to `EFFECT_UIDS` and a `register_builtin_effects()` entry in `crates/sonido-registry/src/lib.rs`, plus a `CATALOG` entry in `crates/sonido-plugin/src/bundle.rs`:
 
 ```rust
-// In sonido-registry/src/lib.rs
-registry.register("octavia", "Distortion", |sr| Box::new(Octavia::new(sr)));
-registry.register("fuzz", "Distortion", |sr| Box::new(Fuzz::new(sr)));
+// In register_builtin_effects()
+self.register(
+    EffectDescriptor {
+        id: "octavia",
+        name: "Octavia",
+        short_name: "OCTV",
+        description: "Rectifier octave-up",
+        category: EffectCategory::Distortion,
+        param_count: 0,
+    },
+    |sr| Box::new(Adapter::new(OctaviaKernel::new(sr), sr)),
+);
 ```
 
-Category is "Distortion" for both (they appear in the same UI group), even though Octavia's mechanism is distinct.
+Category is `EffectCategory::Distortion` for both (they appear in the same UI group), even though Octavia's mechanism is distinct.
 
-### Effect Trait Implementation
+### Kernel Implementation
 
-Both effects implement `Effect` + `ParameterInfo` (existing pattern). Both are dual-mono (no cross-channel interaction), so `is_true_stereo()` returns `false`.
+Each effect is an `XxxParams` (`KernelParams`) + `XxxKernel` (`DspKernel`) pair, deployed through `Adapter`. Both are dual-mono (no cross-channel interaction), so `is_true_stereo()` keeps its `false` default.
 
-Use `impl_params!` macro for parameter boilerplate. Use `SmoothedParam` for all continuous parameters (drive, tone, mix). Mode (Si/Ge) is stepped — no smoothing needed.
+Use the `kernel_params!` macro for the parameter table. Give continuous parameters (drive, tone, mix) a `SmoothingStyle` (`Fast` for drive, `Slow` for the tone filter, `Standard` for mix); Mode (Si/Ge) is stepped, so `SmoothingStyle::None`.
 
 ### Preset Chain: "Hendrix Rig"
 
@@ -232,7 +241,7 @@ After implementing both effects, create a preset that demonstrates the historica
 Fuzz (Ge mode, Fuzz=25dB) → Octavia (Drive=6, Tone=3500) → Wah (freq=auto) → Phaser (am_depth=0.15)
 ```
 
-This can be a JSON preset in `sonido-config` or a CLI example in the docs.
+This can be a TOML factory preset in `crates/sonido-config/src/factory_presets.rs` or a CLI example in the docs.
 
 ### Testing
 
@@ -248,22 +257,22 @@ Follow existing Sonido testing conventions:
 **Golden file regression** (in `tests/`):
 - Process a known input signal (sine sweep or the `guitarish_note` from Hendrix Systems Lab)
 - Compare against saved reference WAV
-- Thresholds per DSP_QUALITY_STANDARD.md: SNR > 60 dB, spectral correlation > 0.9999
+- Thresholds per `crates/sonido-effects/tests/regression.rs`: MSE < 1e-6, SNR > 60 dB, spectral correlation > 0.9999
 
-**Validation against SPICE** (optional, documented in HENDRIX_SIGNAL_CHAIN_REFERENCE.md):
+**Validation against SPICE** (optional, documented in `docs/reference/hendrix-signal-chain.md`):
 - Compare Sonido's Octavia output against the Hendrix Systems Lab's `oct_time.dat` transient
 - Compare Fuzz output against `ff_si_time.dat` / `ff_ge_time.dat`
 - Report spectral differences — this quantifies how close the DSP approximation is to the analog circuit
 
 ### Doc-to-Code Mapping Updates
 
-When the effects are implemented, update the mapping table in `CLAUDE.md`:
+When the effects are implemented, update the mapping table in `docs/DOC_CODE_MAPPING.md`:
 
 | Source Module | Doc Target |
 |---|---|
-| `sonido-effects/src/octavia.rs` | `EFFECTS_REFERENCE.md` (Octavia section), `HENDRIX_SIGNAL_CHAIN_REFERENCE.md` |
-| `sonido-effects/src/fuzz.rs` | `EFFECTS_REFERENCE.md` (Fuzz section), `HENDRIX_SIGNAL_CHAIN_REFERENCE.md` |
-| `sonido-effects/src/phaser.rs` | `EFFECTS_REFERENCE.md` (Phaser section — update for AM Depth param) |
+| `crates/sonido-effects/src/kernels/octavia.rs` | `EFFECTS_REFERENCE.md` (Octavia section), `docs/reference/hendrix-signal-chain.md` |
+| `crates/sonido-effects/src/kernels/fuzz.rs` | `EFFECTS_REFERENCE.md` (Fuzz section), `docs/reference/hendrix-signal-chain.md` |
+| `crates/sonido-effects/src/kernels/phaser.rs` | `EFFECTS_REFERENCE.md` (Phaser section — update for AM Depth param) |
 
 ---
 
@@ -275,4 +284,4 @@ Three implementation items, in suggested order:
 2. **Phaser AM enhancement** — single parameter addition to existing effect, backward compatible
 3. **Fuzz** — new standalone effect, more complex (Si/Ge modes, envelope-follower cleanup)
 
-Document at three layers: rustdoc (algorithm + math), EFFECTS_REFERENCE.md (user-facing), HENDRIX_SIGNAL_CHAIN_REFERENCE.md (research + validation). Link between layers, don't duplicate.
+Document at three layers: rustdoc (algorithm + math), EFFECTS_REFERENCE.md (user-facing), `docs/reference/hendrix-signal-chain.md` (research + validation). Link between layers, don't duplicate.

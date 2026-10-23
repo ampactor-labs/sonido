@@ -1,8 +1,10 @@
 # I/O Wall-Bars + Graph-UX Pass — Design
 
 **Date:** 2026-06-30
-**Status:** Approved, in implementation
+**Status:** Implemented
 **Branch:** `feat/io-wall-bars`
+
+> **Note (2026-10-22):** Implemented as described. Status was "Approved, in implementation." In code: `GraphView::last_viewport`, `SonidoViewer::draw_background` capture, `pin_io_nodes()`, zoom bounds `min_scale = 0.5` / `max_scale = 1.5`, and `append_before_output` are in `crates/sonido-gui/src/graph_view.rs`; the bars are `render_io_bar` in `crates/sonido-gui/src/app.rs` (a vertical `LevelMeter` with the gain or master `Knob` at its foot, width `IO_BAR_WIDTH`). On Desktop/Tablet the macros have since moved to the header, so focus mode hides the bottom morph band and the Info View.
 
 Reworks the graph editor's input/output so they are full-height **wall bars**
 welded to the canvas edges — each bar is the in/out **meter**, the **wire

@@ -355,6 +355,15 @@ pub trait Effect {
     /// or when the effect is bypassed to prevent artifacts.
     fn reset(&mut self);
 
+    /// Jump every smoothed parameter to its target, leaving the DSP state
+    /// (delay lines, filter memory, tails) as it is.
+    ///
+    /// For an effect that has just been built or loaded with new values: it
+    /// should start at them, not sweep there from its defaults, which is an
+    /// audible swoosh and, across a whole rig, every coefficient redesigned
+    /// per sample at once. Default: no-op (nothing smoothed).
+    fn snap_params(&mut self) {}
+
     /// Report processing latency in samples.
     ///
     /// Returns the number of samples of latency introduced by this effect.
@@ -499,6 +508,11 @@ impl<A: Effect, B: Effect> Effect for Chain<A, B> {
     fn reset(&mut self) {
         self.first.reset();
         self.second.reset();
+    }
+
+    fn snap_params(&mut self) {
+        self.first.snap_params();
+        self.second.snap_params();
     }
 
     fn latency_samples(&self) -> usize {

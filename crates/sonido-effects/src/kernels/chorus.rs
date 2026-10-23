@@ -3,7 +3,7 @@
 //! `ChorusKernel` owns DSP state (delay lines, LFOs, feedback state).
 //! Parameters are received via `&ChorusParams` each sample. Deployed via
 //! [`Adapter`](sonido_core::kernel::Adapter) for desktop/plugin, or
-//! called directly on embedded targets.
+//! via `Adapter::new_direct` (no smoothing) on embedded targets.
 //!
 //! # Algorithm
 //!
@@ -46,7 +46,10 @@
 //! let adapter = Adapter::new(ChorusKernel::new(48000.0), 48000.0);
 //! let mut effect: Box<dyn Effect> = Box::new(adapter);
 //!
-//! // Embedded / Daisy Seed (direct — no smoothing, ADCs are hardware-filtered)
+//! // Embedded / Daisy Seed — zero-smoothing adapter, as the pedal firmware uses
+//! let effect = Adapter::new_direct(ChorusKernel::new(48000.0), 48000.0);
+//!
+//! // Or drive the kernel directly with a typed params struct (no adapter)
 //! let mut kernel = ChorusKernel::new(48000.0);
 //! let params = ChorusParams::from_knobs(adc_rate, adc_depth, adc_mix, adc_feedback, adc_output);
 //! let (left, right) = kernel.process_stereo(input_l, input_r, &params);
@@ -55,10 +58,11 @@
 use libm::ceilf;
 use sonido_core::kernel::{DspKernel, KernelParams, SmoothingStyle};
 use sonido_core::kernel_params;
+use sonido_core::level::Level;
 use sonido_core::math::soft_limit;
 use sonido_core::{
     DIVISION_LABELS, InterpolatedDelay, Lfo, LfoWaveform, ParamDescriptor, ParamFlags, ParamId,
-    ParamUnit, TempoManager, fast_db_to_linear, index_to_division, wet_dry_mix_stereo,
+    ParamUnit, TempoManager, fast_db_to_linear, index_to_division,
 };
 
 // ── Constants ────────────────────────────────────────────────────────────────
@@ -92,15 +96,15 @@ const VOICE4_RATE_RATIO: f32 = 1.17;
 ///
 /// | Index | Field | Unit | Range | Default |
 /// |-------|-------|------|-------|---------|
-/// | 0 | `rate` | Hz | 0.1–10.0 | 1.0 |
-/// | 1 | `depth_pct` | % | 0–100 | 50.0 |
+/// | 0 | `rate` | Hz | 0.1–10.0 | 0.8 |
+/// | 1 | `depth_pct` | % | 0–100 | 60.0 |
 /// | 2 | `mix_pct` | % | 0–100 | 50.0 |
 /// | 3 | `voices` | index (2–4) | 2–4 | 2 |
 /// | 4 | `feedback_pct` | % | 0–70 | 0.0 |
-/// | 5 | `base_delay_ms` | ms | 5–25 | 15.0 |
+/// | 5 | `base_delay_ms` | ms | 5–25 | 10.0 |
 /// | 6 | `sync` | index (0=Off, 1=On) | 0–1 | 0 |
 /// | 7 | `division` | index (0–11) | 0–11 | 3 |
-/// | 8 | `output_db` | dB | −20–+6 | 0.0 |
+/// | 8 | `output_db` | dB | −6–+6 | 0.0 |
 /// | 9 | `lfo_phase` | 0–1 | READ_ONLY diagnostic | 0.0 |
 #[derive(Debug, Clone, Copy)]
 pub struct ChorusParams {
@@ -150,7 +154,7 @@ pub struct ChorusParams {
     /// the current BPM).
     pub division: f32,
 
-    /// Output level in decibels (−20 to +6 dB).
+    /// Output level in decibels (−6 to +6 dB).
     pub output_db: f32,
 
     /// Current LFO phase (0.0–1.0). READ_ONLY diagnostic — written by the
@@ -161,12 +165,12 @@ pub struct ChorusParams {
 impl Default for ChorusParams {
     fn default() -> Self {
         Self {
-            rate: 1.0,
-            depth_pct: 50.0,
+            rate: 0.8,
+            depth_pct: 60.0,
             mix_pct: 50.0,
             voices: 2.0,
             feedback_pct: 0.0,
-            base_delay_ms: 15.0,
+            base_delay_ms: 10.0,
             sync: 0.0,
             division: 3.0,
             output_db: 0.0,
@@ -188,7 +192,7 @@ impl ChorusParams {
     /// | `depth` | 1 | `depth_pct` | 0–100 % |
     /// | `mix` | 2 | `mix_pct` | 0–100 % |
     /// | `feedback` | 4 | `feedback_pct` | 0–70 % |
-    /// | `output` | 8 | `output_db` | −20–+6 dB |
+    /// | `output` | 8 | `output_db` | −6–+6 dB |
     ///
     /// Fixed: voices=2, base_delay=15 ms, sync=Off, division=Quarter.
     pub fn from_knobs(rate: f32, depth: f32, mix: f32, feedback: f32, output: f32) -> Self {
@@ -213,12 +217,12 @@ impl ChorusParams {
 
 kernel_params! {
     ChorusParams, this {
-        [0] ParamDescriptor::rate_hz(0.1, 10.0, 1.0).with_id(ParamId(700), "chor_rate"),
+        [0] ParamDescriptor::rate_hz(0.1, 10.0, 0.8).with_id(ParamId(700), "chor_rate"),
             smoothing: SmoothingStyle::Standard, // rate — 10ms, avoid abrupt pitch jumps
             get: this.rate,
             set: |v| this.rate = v;
 
-        [1] ParamDescriptor::depth().with_id(ParamId(701), "chor_depth"),
+        [1] ParamDescriptor::depth().with_default(60.0).with_id(ParamId(701), "chor_depth"),
             smoothing: SmoothingStyle::Standard, // depth_pct — 10ms
             get: this.depth_pct,
             set: |v| this.depth_pct = v;
@@ -245,7 +249,7 @@ kernel_params! {
             get: this.feedback_pct,
             set: |v| this.feedback_pct = v;
 
-        [5] ParamDescriptor::custom("Base Delay", "BDly", 5.0, 25.0, 15.0)
+        [5] ParamDescriptor::custom("Base Delay", "BDly", 5.0, 25.0, 10.0)
                 .with_unit(ParamUnit::Milliseconds)
                 .with_step(0.5)
                 .with_id(ParamId(706), "chor_base_delay"),
@@ -460,6 +464,7 @@ impl ChorusKernel {
 
 impl DspKernel for ChorusKernel {
     type Params = ChorusParams;
+    const LEVEL: Level = crate::calibration::CHORUS;
 
     /// Process a stereo sample pair through the chorus.
     ///
@@ -503,7 +508,7 @@ impl DspKernel for ChorusKernel {
         self.lfo_phase_diagnostic = self.lfo1.phase();
 
         // ── Wet/Dry mix → Soft Limit → Output Level ──
-        let (out_l, out_r) = wet_dry_mix_stereo(left, right, wet_l, wet_r, mix);
+        let (out_l, out_r) = Self::blend_stereo(left, right, wet_l, wet_r, mix);
         (
             soft_limit(out_l, 1.0) * output,
             soft_limit(out_r, 1.0) * output,
@@ -709,7 +714,7 @@ mod tests {
 
     /// At 0% mix the output must approximate the dry input.
     ///
-    /// With `mix_pct = 0.0` the `wet_dry_mix_stereo` function returns the dry
+    /// With `mix_pct = 0.0` the blend (`Self::blend_stereo`) returns the dry
     /// signal. The subsequent `soft_limit` is transparent for signals below 1.0,
     /// and the default output level is 0 dB (unity gain).
     #[test]
@@ -753,7 +758,7 @@ mod tests {
             "Adapter param count must match ChorusParams::COUNT"
         );
 
-        // Verify ParamIds match the classic Chorus effect exactly.
+        // Verify ParamIds match the original pre-kernel Chorus effect exactly.
         assert_eq!(adapter.param_info(0).unwrap().id, ParamId(700)); // rate
         assert_eq!(adapter.param_info(1).unwrap().id, ParamId(701)); // depth
         assert_eq!(adapter.param_info(2).unwrap().id, ParamId(702)); // mix

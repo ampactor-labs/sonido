@@ -474,15 +474,15 @@ mod tests {
         let hilbert = HilbertTransform::new(256);
 
         let analytic = hilbert.analytic_signal(&[]);
-        assert!(analytic.is_empty());
+        assert_eq!(analytic, [] as [rustfft::num_complex::Complex<f32>; 0]);
 
         let phase = hilbert.instantaneous_phase(&[]);
-        assert!(phase.is_empty());
+        assert_eq!(phase, [] as [f32; 0]);
 
         let amplitude = hilbert.instantaneous_amplitude(&[]);
-        assert!(amplitude.is_empty());
+        assert_eq!(amplitude, [] as [f32; 0]);
 
         let unwrapped = HilbertTransform::unwrap_phase(&[]);
-        assert!(unwrapped.is_empty());
+        assert_eq!(unwrapped, [] as [f32; 0]);
     }
 }

@@ -870,6 +870,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9a8e94ea7f378bd32cbbd37198a4a91436180c5bb472411e48b5ec2e2124ae9e"
 dependencies = [
  "serde_core",
+ "serde_derive",
 ]
 
 [[package]]
@@ -897,6 +898,7 @@ name = "sonido-core"
 version = "0.1.0"
 dependencies = [
  "libm",
+ "serde",
 ]
 
 [[package]]
@@ -910,6 +912,7 @@ dependencies = [
  "defmt-rtt",
  "embassy-executor",
  "embassy-stm32",
+ "embassy-sync",
  "embassy-time",
  "embassy-usb",
  "embedded-alloc",
@@ -921,6 +924,7 @@ dependencies = [
  "sonido-patch",
  "sonido-platform",
  "sonido-registry",
+ "sonido-rigs",
  "static_cell",
  "stm32-fmc",
 ]
@@ -937,7 +941,9 @@ dependencies = [
 name = "sonido-patch"
 version = "0.1.0"
 dependencies = [
+ "serde",
  "sonido-core",
+ "sonido-platform",
 ]
 
 [[package]]
@@ -954,6 +960,16 @@ version = "0.1.0"
 dependencies = [
  "sonido-core",
  "sonido-effects",
+]
+
+[[package]]
+name = "sonido-rigs"
+version = "0.1.0"
+dependencies = [
+ "sonido-core",
+ "sonido-patch",
+ "sonido-platform",
+ "sonido-registry",
 ]
 
 [[package]]

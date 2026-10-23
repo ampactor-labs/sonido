@@ -1,10 +1,11 @@
-//! Compressor kernel — dynamics processing with soft-knee, sidechain HPF, and lookahead.
+//! Compressor kernel — dynamics processing with soft-knee, sidechain HPF, and
+//! program-dependent release (no lookahead; see the limiter for that).
 //!
 //! `CompressorKernel` owns DSP state (envelope followers, sidechain HPF,
 //! coefficient caches, gain reduction memory). Parameters are received via
 //! `&CompressorParams` each sample. Deployed via
-//! [`Adapter`](sonido_core::kernel::Adapter) for desktop/plugin, or called
-//! directly on embedded targets.
+//! [`Adapter`](sonido_core::kernel::Adapter) for desktop/plugin, or via `Adapter::new_direct`
+//! (no smoothing) on embedded targets.
 //!
 //! # Signal Flow
 //!
@@ -49,18 +50,24 @@
 //! let adapter = Adapter::new(CompressorKernel::new(48000.0), 48000.0);
 //! let mut effect: Box<dyn Effect> = Box::new(adapter);
 //!
-//! // Embedded / Daisy Seed (direct — no smoothing, ADCs are hardware-filtered)
+//! // Embedded / Daisy Seed — zero-smoothing adapter, as the pedal firmware uses
+//! let effect = Adapter::new_direct(CompressorKernel::new(48000.0), 48000.0);
+//!
+//! // Or drive the kernel directly with a typed params struct (no adapter)
 //! let mut kernel = CompressorKernel::new(48000.0);
-//! let params = CompressorParams::from_knobs(thresh, ratio, attack, release, makeup, mix);
+//! let params = CompressorParams::from_knobs(
+//!     thresh, ratio, attack, release, makeup, knee, detect, sc_freq, auto_mu, output, mix,
+//! );
 //! let (left, right) = kernel.process_stereo(input_l, input_r, &params);
 //! ```
 
 use sonido_core::kernel::{DspKernel, KernelParams, SmoothingStyle};
 use sonido_core::kernel_params;
+use sonido_core::level::Level;
 use sonido_core::{
     Biquad, Cached, DetectionMode, EnvelopeFollower, ParamDescriptor, ParamFlags, ParamId,
     ParamScale, ParamUnit, fast_db_to_linear, fast_linear_to_db, highpass_coefficients,
-    math::soft_limit, wet_dry_mix_stereo,
+    math::soft_limit,
 };
 
 // ── Constants ────────────────────────────────────────────────────────────────
@@ -96,6 +103,7 @@ const SC_HPF_Q: f32 = 0.707;
 /// | 8 | `auto_makeup` | index | 0–1 | 0 (Off) |
 /// | 9 | `output_db` | dB | −6–6 | 0.0 |
 /// | 10 | `mix_pct` | % | 0–100 | 100.0 |
+/// | 11 | `gain_reduction_db` | dB | −60–0 | 0.0 (READ_ONLY) |
 ///
 /// ## Smoothing Notes
 ///
@@ -223,7 +231,7 @@ impl CompressorParams {
     /// | `detect` | 6 | `detection` | 0 or 1 (Peak/RMS) |
     /// | `sc_freq` | 7 | `sidechain_freq_hz` | 20–500 Hz (log) |
     /// | `auto_mu` | 8 | `auto_makeup` | 0 or 1 (Off/On) |
-    /// | `output` | 9 | `output_db` | −20–+6 dB |
+    /// | `output` | 9 | `output_db` | −6–+6 dB |
     /// | `mix` | 10 | `mix_pct` | 0–100 % |
     #[allow(clippy::too_many_arguments)]
     pub fn from_knobs(
@@ -346,7 +354,8 @@ kernel_params! {
         [10] ParamDescriptor::custom("Mix", "Mix", 0.0, 100.0, 100.0)
                 .with_unit(ParamUnit::Percent)
                 .with_step(1.0)
-                .with_id(ParamId(310), "comp_mix"),
+                .with_id(ParamId(310), "comp_mix")
+                .with_flags(ParamFlags::AUTOMATABLE.union(ParamFlags::MACRO_EXCLUDE)),
             smoothing: SmoothingStyle::Standard, // mix — wet/dry blend
             get: this.mix_pct,
             set: |v| this.mix_pct = v;
@@ -569,6 +578,7 @@ impl CompressorKernel {
 
 impl DspKernel for CompressorKernel {
     type Params = CompressorParams;
+    const LEVEL: Level = crate::calibration::COMPRESSOR;
 
     /// Process a stereo sample pair with linked-stereo compression.
     ///
@@ -618,7 +628,7 @@ impl DspKernel for CompressorKernel {
 
         // ── Wet/dry blend ─────────────────────────────────────────────────
         let mix = params.mix_pct / 100.0;
-        let (mixed_l, mixed_r) = wet_dry_mix_stereo(left, right, comp_l, comp_r, mix);
+        let (mixed_l, mixed_r) = Self::blend_stereo(left, right, comp_l, comp_r, mix);
 
         // ── Soft limit → output level ─────────────────────────────────────
         let output = fast_db_to_linear(params.output_db);
@@ -679,7 +689,7 @@ impl DspKernel for CompressorKernel {
 
         // ── Wet/dry blend ─────────────────────────────────────────────────
         let mix = params.mix_pct / 100.0;
-        let (mixed_l, mixed_r) = wet_dry_mix_stereo(left, right, comp_l, comp_r, mix);
+        let (mixed_l, mixed_r) = Self::blend_stereo(left, right, comp_l, comp_r, mix);
 
         // ── Soft limit → output level ─────────────────────────────────────
         let output = fast_db_to_linear(params.output_db);
@@ -995,8 +1005,8 @@ mod tests {
         }
     }
 
-    /// The adapter's ParameterInfo must expose the same descriptors as the classic
-    /// Compressor effect — including the exact ParamId values (plugin API contracts).
+    /// The adapter's ParameterInfo must expose the same descriptors as the original
+    /// pre-kernel Compressor effect — including the exact ParamId values (plugin API contracts).
     #[test]
     fn adapter_param_info_matches() {
         let kernel = CompressorKernel::new(48000.0);

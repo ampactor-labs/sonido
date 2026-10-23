@@ -21,8 +21,11 @@ use baseview::{
 };
 use egui::{Context, Pos2, RawInput, Rect, Vec2};
 use raw_window_handle::HasRawWindowHandle;
+use sonido_gui_core::crt::CrtFrame;
 use std::sync::Arc;
+use std::time::Instant;
 
+use super::crt::{CrtParams, CrtPipeline};
 use super::translate;
 use crate::gui::PendingResize;
 
@@ -66,7 +69,59 @@ where
     P: HasRawWindowHandle,
     S: Send + 'static,
 {
-    let options = WindowOpenOptions {
+    let options = window_options(title, width, height, scale);
+    baseview::Window::open_parented(parent, options, move |window: &mut Window<'_>| {
+        EguiBridgeHandler::new(
+            window,
+            width,
+            height,
+            scale,
+            pending_resize,
+            state,
+            build,
+            update,
+            None,
+        )
+    })
+}
+
+/// Open a top-level egui window and block until it closes (the preview tool).
+///
+/// Same rendering path as [`open_parented`], CRT pass included. With
+/// `snapshot`, the window saves its framebuffer as a PNG after that many
+/// frames and closes itself.
+#[allow(clippy::too_many_arguments)]
+pub fn open_blocking<S>(
+    title: String,
+    width: u32,
+    height: u32,
+    scale: f64,
+    state: S,
+    build: impl FnOnce(&Context, &mut S) + Send + 'static,
+    update: impl FnMut(&Context, &mut S) + Send + 'static,
+    snapshot: Option<(std::path::PathBuf, u32)>,
+) where
+    S: Send + 'static,
+{
+    let options = window_options(title, width, height, scale);
+    let pending_resize = Arc::new(PendingResize::new(width, height));
+    baseview::Window::open_blocking(options, move |window: &mut Window<'_>| {
+        EguiBridgeHandler::new(
+            window,
+            width,
+            height,
+            scale,
+            pending_resize,
+            state,
+            build,
+            update,
+            snapshot,
+        )
+    });
+}
+
+fn window_options(title: String, width: u32, height: u32, scale: f64) -> WindowOpenOptions {
+    WindowOpenOptions {
         title,
         size: Size::new(f64::from(width), f64::from(height)),
         scale: WindowScalePolicy::ScaleFactor(scale),
@@ -74,53 +129,7 @@ where
             version: (3, 2),
             ..GlConfig::default()
         }),
-    };
-
-    let logical_width = width as f32;
-    let logical_height = height as f32;
-
-    baseview::Window::open_parented(parent, options, move |window: &mut Window<'_>| {
-        let gl_context = window
-            .gl_context()
-            .expect("GL context required for egui bridge");
-
-        #[allow(unsafe_code)]
-        // SAFETY: glow::Context wraps raw OpenGL function pointers loaded from
-        // the baseview GL context. The context is valid for the window lifetime.
-        let gl = unsafe {
-            Arc::new(glow::Context::from_loader_function(|s| {
-                gl_context.get_proc_address(s)
-            }))
-        };
-
-        let painter = egui_glow::Painter::new(Arc::clone(&gl), "", None, false)
-            .expect("Failed to create egui_glow::Painter");
-
-        let ctx = Context::default();
-
-        let physical_width = (logical_width * scale as f32) as u32;
-        let physical_height = (logical_height * scale as f32) as u32;
-
-        let mut handler = EguiBridgeHandler {
-            ctx,
-            gl,
-            painter,
-            raw_input: RawInput::default(),
-            physical_width,
-            physical_height,
-            scale,
-            mouse_pos: Pos2::ZERO,
-            pending_resize,
-            last_applied_logical: (width, height),
-            state,
-            update_fn: Box::new(update),
-        };
-
-        // Run the one-time build closure (font/theme setup).
-        (build)(&handler.ctx, &mut handler.state);
-
-        handler
-    })
+    }
 }
 
 /// Per-frame UI callback: draws the frame against the user state.
@@ -155,6 +164,81 @@ struct EguiBridgeHandler<S> {
     state: S,
     /// Per-frame UI callback.
     update_fn: UpdateFn<S>,
+    /// The CRT post-process pass, if the driver could build it.
+    crt: Option<CrtPipeline>,
+    /// Window creation time, for shader animation.
+    started: Instant,
+    /// Preview tool: write a PNG after N frames, then close.
+    snapshot: Option<(std::path::PathBuf, u32)>,
+    frames: u32,
+}
+
+/// The void every frame clears to (design-system `void`, #07060E).
+const VOID: [f32; 3] = [7.0 / 255.0, 6.0 / 255.0, 14.0 / 255.0];
+
+impl<S: Send + 'static> EguiBridgeHandler<S> {
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        window: &mut Window<'_>,
+        width: u32,
+        height: u32,
+        scale: f64,
+        pending_resize: Arc<PendingResize>,
+        state: S,
+        build: impl FnOnce(&Context, &mut S),
+        update: impl FnMut(&Context, &mut S) + Send + 'static,
+        snapshot: Option<(std::path::PathBuf, u32)>,
+    ) -> Self {
+        let gl_context = window
+            .gl_context()
+            .expect("GL context required for egui bridge");
+
+        #[allow(unsafe_code)]
+        // SAFETY: make_current binds the window's own GL context to this
+        // thread (the one baseview builds and drives the window on). glow then
+        // wraps function pointers loaded from that context, which is valid for
+        // the window lifetime.
+        let gl = unsafe {
+            gl_context.make_current();
+            Arc::new(glow::Context::from_loader_function(|s| {
+                gl_context.get_proc_address(s)
+            }))
+        };
+
+        let painter = egui_glow::Painter::new(Arc::clone(&gl), "", None, false)
+            .expect("Failed to create egui_glow::Painter");
+
+        let crt = match CrtPipeline::new(&gl) {
+            Ok(p) => Some(p),
+            Err(e) => {
+                tracing::warn!(error = %e, "CRT pass unavailable; rendering plain");
+                None
+            }
+        };
+
+        let mut handler = Self {
+            ctx: Context::default(),
+            gl,
+            painter,
+            raw_input: RawInput::default(),
+            physical_width: (width as f32 * scale as f32) as u32,
+            physical_height: (height as f32 * scale as f32) as u32,
+            scale,
+            mouse_pos: Pos2::ZERO,
+            pending_resize,
+            last_applied_logical: (width, height),
+            state,
+            update_fn: Box::new(update),
+            crt,
+            started: Instant::now(),
+            snapshot,
+            frames: 0,
+        };
+
+        // Run the one-time build closure (font/theme setup).
+        build(&handler.ctx, &mut handler.state);
+        handler
+    }
 }
 
 impl<S: Send + 'static> WindowHandler for EguiBridgeHandler<S> {
@@ -185,32 +269,49 @@ impl<S: Send + 'static> WindowHandler for EguiBridgeHandler<S> {
             Vec2::new(logical_w, logical_h),
         ));
 
+        // Tell the UI whether the CRT pass can run; it answers with the glass.
+        CrtFrame {
+            available: self.crt.is_some(),
+            ..CrtFrame::get(&self.ctx)
+        }
+        .set(&self.ctx);
+
         // Run the egui frame: user's update closure draws the UI.
         let full_output = self.ctx.run(self.raw_input.take(), |ctx| {
             (self.update_fn)(ctx, &mut self.state);
         });
+        let crt_frame = CrtFrame::get(&self.ctx);
 
         // Tessellate egui shapes into GPU-ready primitives.
         let primitives = self
             .ctx
             .tessellate(full_output.shapes, full_output.pixels_per_point);
 
-        // Set the GL viewport and clear.
-        #[allow(unsafe_code)]
-        unsafe {
-            use glow::HasContext;
-            self.gl.viewport(
-                0,
-                0,
-                self.physical_width as i32,
-                self.physical_height as i32,
-            );
-            self.gl.clear_color(0.1, 0.1, 0.12, 1.0);
-            self.gl
-                .clear(glow::COLOR_BUFFER_BIT | glow::DEPTH_BUFFER_BIT);
+        let (w, h) = (self.physical_width as i32, self.physical_height as i32);
+        let mut use_crt = crt_frame.enabled && self.crt.is_some();
+        if use_crt
+            && let Some(crt) = &mut self.crt
+            && let Err(e) = crt.begin(&self.gl, w, h, VOID)
+        {
+            tracing::warn!(error = %e, "CRT target allocation failed; rendering plain");
+            crt.destroy(&self.gl);
+            self.crt = None;
+            use_crt = false;
+        }
+        if !use_crt {
+            #[allow(unsafe_code)]
+            // SAFETY: GL context made current above.
+            unsafe {
+                use glow::HasContext;
+                self.gl.bind_framebuffer(glow::FRAMEBUFFER, None);
+                self.gl.viewport(0, 0, w, h);
+                self.gl.clear_color(VOID[0], VOID[1], VOID[2], 1.0);
+                self.gl
+                    .clear(glow::COLOR_BUFFER_BIT | glow::DEPTH_BUFFER_BIT);
+            }
         }
 
-        // Render egui primitives via glow.
+        // Render egui primitives via glow (into the CRT scene when active).
         self.painter.paint_and_update_textures(
             [self.physical_width, self.physical_height],
             full_output.pixels_per_point,
@@ -218,7 +319,34 @@ impl<S: Send + 'static> WindowHandler for EguiBridgeHandler<S> {
             &full_output.textures_delta,
         );
 
+        if use_crt && let Some(crt) = &mut self.crt {
+            crt.finish(
+                &self.gl,
+                &CrtParams {
+                    glass: crt_frame.glass,
+                    logical: Vec2::new(logical_w, logical_h),
+                    ppp,
+                    time: self.started.elapsed().as_secs_f32(),
+                    bezel: VOID,
+                },
+            );
+        }
+
+        self.frames += 1;
+        let mut close = false;
+        if let Some((path, after)) = &self.snapshot
+            && self.frames >= *after
+        {
+            if let Err(e) = super::snapshot::save_png(&self.gl, w, h, path) {
+                eprintln!("snapshot failed: {e}");
+            }
+            close = true;
+        }
+
         gl_context.swap_buffers();
+        if close {
+            window.close();
+        }
     }
 
     fn on_event(&mut self, _window: &mut Window<'_>, event: Event) -> EventStatus {
@@ -258,6 +386,9 @@ impl<S: Send + 'static> WindowHandler for EguiBridgeHandler<S> {
 
 impl<S> Drop for EguiBridgeHandler<S> {
     fn drop(&mut self) {
+        if let Some(mut crt) = self.crt.take() {
+            crt.destroy(&self.gl);
+        }
         self.painter.destroy();
     }
 }

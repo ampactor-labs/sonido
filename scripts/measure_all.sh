@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# measure_all.sh -- Automated measurement suite for all Sonido effects.
+# measure_all.sh -- Automated measurement suite for Sonido effects.
 #
-# Generates test signals, processes through every effect at defaults,
-# measures dynamics + distortion, prints a summary table.
+# Generates test signals, processes them through 19 of the 36 effects at
+# defaults (the EFFECTS list below), measures dynamics + distortion, and
+# prints a summary table.
 #
 # Usage: ./scripts/measure_all.sh
 #

@@ -4,6 +4,7 @@
 //! metadata and value access. [`SmoothingStyle`] specifies how each parameter
 //! should be smoothed by the platform adapter.
 
+use crate::level::{self, Level};
 use crate::param_info::ParamDescriptor;
 use crate::tempo::TempoContext;
 
@@ -468,6 +469,54 @@ pub trait KernelParams: Default + Clone + Send {
 pub trait DspKernel: Send {
     /// The parameter struct for this kernel.
     type Params: KernelParams;
+
+    /// This kernel's measured level calibration: its trim, and its wet/dry
+    /// correlation if it has a mix control (see [`crate::level`]). Kernels
+    /// with a mix control apply it in [`blend`](Self::blend), kernels
+    /// without one with [`level`](Self::level); either way where the sound
+    /// leaves the processing, before the output knob and any safety limiter,
+    /// so the limiter guards the final level. Generated, never hand-tuned.
+    const LEVEL: Level = Level::UNITY;
+
+    /// `x` at this kernel's calibrated level, for a kernel without a mix
+    /// control (one with a mix control is trimmed in [`blend`](Self::blend)).
+    #[inline]
+    fn level(x: f32) -> f32
+    where
+        Self: Sized,
+    {
+        x * Self::LEVEL.trim
+    }
+
+    /// [`level`](Self::level) for a stereo pair.
+    #[inline]
+    fn level_stereo(left: f32, right: f32) -> (f32, f32)
+    where
+        Self: Sized,
+    {
+        (left * Self::LEVEL.trim, right * Self::LEVEL.trim)
+    }
+
+    /// Blend `dry` and `wet` by `mix` (0–1) at this kernel's calibrated level.
+    #[inline]
+    fn blend(dry: f32, wet: f32, mix: f32) -> f32
+    where
+        Self: Sized,
+    {
+        level::blend(dry, wet, mix, &Self::LEVEL)
+    }
+
+    /// Stereo [`blend`](Self::blend).
+    #[inline]
+    fn blend_stereo(dry_l: f32, dry_r: f32, wet_l: f32, wet_r: f32, mix: f32) -> (f32, f32)
+    where
+        Self: Sized,
+    {
+        let level = &Self::LEVEL;
+        let (gd, gw) = level::mix_gains(mix, level.mix_correlation.unwrap_or(0.0));
+        let gw = gw * level.trim;
+        (dry_l * gd + wet_l * gw, dry_r * gd + wet_r * gw)
+    }
 
     /// Process a single mono sample.
     ///

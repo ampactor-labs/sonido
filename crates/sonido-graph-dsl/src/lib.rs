@@ -5,7 +5,7 @@
 //!
 //! # Architecture
 //!
-//! Three-layer design:
+//! Four modules:
 //! - **Parser** ([`parser`]): pure text → IR transformation, no audio dependencies
 //! - **Builder** ([`builder`]): IR → `ProcessingGraph`
 //!   with effect manifest for `GraphEngine::new_dag()`

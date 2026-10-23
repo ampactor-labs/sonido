@@ -22,25 +22,25 @@ makeup = "3"
 type = "distortion"
 [effects.params]
 drive = "12"
-tone = "4500"
-level = "-3"
-waveshape = "softclip"
+tone = "0"
+output = "-3"
+waveshape = "Soft Clip"
 
 # Modulation - add movement
 [[effects]]
 type = "chorus"
 [effects.params]
 rate = "1.2"
-depth = "0.4"
-mix = "0.25"
+depth = "40"
+mix = "25"
 
 # Time-based - add space
 [[effects]]
 type = "delay"
 [effects.params]
 time = "330"
-feedback = "0.35"
-mix = "0.3"
+feedback = "35"
+mix = "30"
 
 # Final filtering - tame highs
 [[effects]]

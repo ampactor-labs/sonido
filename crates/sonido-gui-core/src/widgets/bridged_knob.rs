@@ -266,55 +266,52 @@ pub fn bridged_knob_with_morph(
     label: &str,
     morph_markers: Option<(f32, f32)>,
 ) -> Response {
-    let theme = SonidoTheme::get(ui.ctx());
     let response = bridged_knob(ui, bridge, slot, param, label);
-
-    if let Some((a_plain, b_plain)) = morph_markers {
-        let desc = bridge.param_descriptor(slot, param);
-        let (min, max, _) = desc
-            .as_ref()
-            .map_or((0.0, 1.0, 0.5), |d| (d.min, d.max, d.default));
-
-        let norm_a = normalize(desc.as_ref(), a_plain, min, max);
-        let norm_b = normalize(desc.as_ref(), b_plain, min, max);
-
-        let rect = response.rect;
-        // Match knob.rs layout: center is offset from rect top by diameter/2
-        let diameter = 60.0_f32;
-        let center = egui::pos2(rect.center().x, rect.top() + diameter / 2.0);
-        let radius = diameter / 2.0 - 4.0;
-        let marker_radius = radius - 2.0;
-
-        // Knob arc angles (must match knob.rs: 270-degree sweep from 135 to 405 degrees)
-        let start_angle = std::f32::consts::PI * 0.75;
-        let sweep = std::f32::consts::PI * 1.5;
-
-        let painter = ui.painter();
-
-        // A marker — cyan (snapshot A)
-        let a_angle = start_angle + norm_a * sweep;
-        draw_marker_tick(
-            painter,
-            center,
-            marker_radius,
-            a_angle,
-            theme.colors.cyan,
-            &theme,
+    if let Some(markers) = morph_markers {
+        draw_morph_markers(
+            ui,
+            &response,
+            60.0,
+            bridge.param_descriptor(slot, param).as_ref(),
+            markers,
         );
+    }
+    response
+}
 
-        // B marker — amber (snapshot B)
-        let b_angle = start_angle + norm_b * sweep;
+/// Draw A/B morph ghost ticks on a knob already laid out in `response`:
+/// cyan at snapshot A's value, amber at B's (plain values, normalized through
+/// the parameter's scale). `diameter` must be the knob's.
+pub fn draw_morph_markers(
+    ui: &Ui,
+    response: &Response,
+    diameter: f32,
+    desc: Option<&ParamDescriptor>,
+    (a_plain, b_plain): (f32, f32),
+) {
+    let theme = SonidoTheme::get(ui.ctx());
+    let (min, max) = desc.map_or((0.0, 1.0), |d| (d.min, d.max));
+    let norm_a = normalize(desc, a_plain, min, max);
+    let norm_b = normalize(desc, b_plain, min, max);
+
+    // Knob geometry (knob.rs): ring centred diameter/2 below the rect top,
+    // 270° sweep from 135°.
+    let rect = response.rect;
+    let center = egui::pos2(rect.center().x, rect.top() + diameter / 2.0);
+    let marker_radius = diameter / 2.0 - 6.0;
+    let start_angle = std::f32::consts::PI * 0.75;
+    let sweep = std::f32::consts::PI * 1.5;
+    let painter = ui.painter();
+    for (norm, color) in [(norm_a, theme.colors.cyan), (norm_b, theme.colors.amber)] {
         draw_marker_tick(
             painter,
             center,
             marker_radius,
-            b_angle,
-            theme.colors.amber,
+            start_angle + norm * sweep,
+            color,
             &theme,
         );
     }
-
-    response
 }
 
 /// Draw a short radial tick mark at the given angle on the knob ring.
@@ -439,5 +436,57 @@ pub fn bridged_fader(
         }
     }
 
+    response
+}
+
+/// The cabinet's knob: [`bridged_knob`] in an effect family's accent, with
+/// the value under the ring as the host formats it and the label below that.
+///
+/// Ranges that span zero (gain trims, pans, bipolar depths) fill from twelve
+/// o'clock. The mouse wheel adjusts the knob while hovered.
+pub fn bridged_knob_accent(
+    ui: &mut Ui,
+    bridge: &dyn ParamBridge,
+    slot: SlotIndex,
+    param: ParamIndex,
+    accent: egui::Color32,
+    diameter: f32,
+) -> Response {
+    let desc = bridge.param_descriptor(slot, param);
+    let (min, max, default) = desc
+        .as_ref()
+        .map_or((0.0, 1.0, 0.5), |d| (d.min, d.max, d.default));
+    let label = desc.as_ref().map_or("?", |d| d.short_name);
+    let bipolar = min < 0.0 && max > 0.0 && (max + min).abs() <= 0.05 * (max - min);
+
+    let plain_value = bridge.get(slot, param);
+    let mut normalized = normalize(desc.as_ref(), plain_value, min, max);
+    let norm_default = normalize(desc.as_ref(), default, min, max);
+
+    let knob = Knob::new(&mut normalized, 0.0, 1.0, label)
+        .default(norm_default)
+        .diameter(diameter)
+        .accent(accent)
+        .bipolar(bipolar)
+        .wheel(true)
+        .format(move |n| match &desc {
+            Some(d) => d.format_value(d.denormalize(n)),
+            None => format!("{n:.2}"),
+        });
+    let response = ui.add(knob);
+
+    let desc = bridge.param_descriptor(slot, param);
+    let plain_out = denormalize(desc.as_ref(), normalized, min, max);
+    // Wheel and arrow-key changes have no drag to bracket them: send a
+    // complete gesture. Anything during a drag goes through gesture_wrap, so
+    // a drag's begin/end always pair up.
+    let in_drag = response.drag_started() || response.dragged() || response.drag_stopped();
+    if response.changed() && !in_drag && !response.double_clicked() {
+        bridge.begin_set(slot, param);
+        bridge.set(slot, param, plain_out);
+        bridge.end_set(slot, param);
+    } else {
+        gesture_wrap(&response, bridge, slot, param, plain_out, default);
+    }
     response
 }

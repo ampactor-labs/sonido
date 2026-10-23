@@ -456,13 +456,25 @@ pub(crate) fn build_audio_streams(
     error_count: Arc<AtomicU32>,
     sample_rate: f32,
     buffer_size: usize,
+    output_device: Option<&str>,
 ) -> Result<AudioStreamConfig, String> {
     use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 
     let host = cpal::default_host();
-    let output_device = host
-        .default_output_device()
-        .ok_or("No output device available")?;
+    // `--output` picks a device by index, exact name or unique partial name
+    // (the CLI's rule); otherwise the system default.
+    let output_device = match output_device {
+        #[cfg(not(target_arch = "wasm32"))]
+        Some(name) => sonido_io::find_output_device(&host, name).map_err(|e| e.to_string())?,
+        // The browser has one output (the AudioContext's); there is no choice to make.
+        #[cfg(target_arch = "wasm32")]
+        Some(_) => host
+            .default_output_device()
+            .ok_or("No output device available")?,
+        None => host
+            .default_output_device()
+            .ok_or("No output device available")?,
+    };
 
     // Use device's actual sample rate; fall back to passed-in value on error
     let (output_channels, sample_rate) = match output_device.default_output_config() {

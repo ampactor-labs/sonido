@@ -5,14 +5,14 @@ description = "Warm analog-style tape echo"
 type = "tape"
 [effects.params]
 drive = "4"
-saturation = "0.4"
+saturation = "40"
 
 [[effects]]
 type = "delay"
 [effects.params]
 time = "375"
-feedback = "0.45"
-mix = "0.4"
+feedback = "45"
+mix = "40"
 
 [[effects]]
 type = "filter"

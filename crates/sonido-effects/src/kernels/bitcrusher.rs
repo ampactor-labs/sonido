@@ -2,8 +2,8 @@
 //!
 //! `BitcrusherKernel` owns DSP state (held samples, counter, RNG state).
 //! Parameters are received via `&BitcrusherParams` each sample. Deployed via
-//! [`Adapter`](sonido_core::kernel::Adapter) for desktop/plugin, or called
-//! directly on embedded targets.
+//! [`Adapter`](sonido_core::kernel::Adapter) for desktop/plugin, or via `Adapter::new_direct`
+//! (no smoothing) on embedded targets.
 //!
 //! # Signal Flow
 //!
@@ -32,7 +32,10 @@
 //! let adapter = Adapter::new(BitcrusherKernel::new(48000.0), 48000.0);
 //! let mut effect: Box<dyn Effect> = Box::new(adapter);
 //!
-//! // Embedded / Daisy Seed (direct — no smoothing, ADCs are hardware-filtered)
+//! // Embedded / Daisy Seed — zero-smoothing adapter, as the pedal firmware uses
+//! let effect = Adapter::new_direct(BitcrusherKernel::new(48000.0), 48000.0);
+//!
+//! // Or drive the kernel directly with a typed params struct (no adapter)
 //! let mut kernel = BitcrusherKernel::new(48000.0);
 //! let params = BitcrusherParams::from_knobs(adc_bits, adc_rate, adc_jitter, adc_mix, adc_output);
 //! let (left, right) = kernel.process_stereo(input_l, input_r, &params);
@@ -41,9 +44,8 @@
 use libm::{floorf, powf};
 use sonido_core::kernel::{DspKernel, KernelParams, SmoothingStyle};
 use sonido_core::kernel_params;
-use sonido_core::{
-    ParamDescriptor, ParamFlags, ParamId, ParamUnit, fast_db_to_linear, wet_dry_mix_stereo,
-};
+use sonido_core::level::Level;
+use sonido_core::{ParamDescriptor, ParamFlags, ParamId, ParamUnit, fast_db_to_linear};
 
 // ═══════════════════════════════════════════════════════════════════════════
 //  Parameters
@@ -57,10 +59,10 @@ use sonido_core::{
 /// | Index | Field | Unit | Range | Default |
 /// |-------|-------|------|-------|---------|
 /// | 0 | `bits` | steps | 2–16 | 8.0 |
-/// | 1 | `rate` | steps | 1–64 | 1.0 |
+/// | 1 | `rate` | steps | 1–64 | 4.0 |
 /// | 2 | `jitter_pct` | % | 0–100 | 0.0 |
-/// | 3 | `mix_pct` | % | 0–100 | 50.0 |
-/// | 4 | `output_db` | dB | −20–+20 | 0.0 |
+/// | 3 | `mix_pct` | % | 0–100 | 100.0 |
+/// | 4 | `output_db` | dB | −6–+6 | 0.0 |
 #[derive(Debug, Clone, Copy)]
 pub struct BitcrusherParams {
     /// Bit depth (quantization resolution). Integer steps mapped to 2.0–16.0.
@@ -79,7 +81,7 @@ impl Default for BitcrusherParams {
     fn default() -> Self {
         Self {
             bits: 8.0,
-            rate: 1.0,
+            rate: 4.0,
             jitter_pct: 0.0,
             mix_pct: 100.0,
             output_db: 0.0,
@@ -97,7 +99,7 @@ impl BitcrusherParams {
     /// - `rate`: 0.0 → 1× downsample, 1.0 → 64× downsample (stepped)
     /// - `jitter`: 0.0 → no jitter, 1.0 → 100% jitter
     /// - `mix`: 0.0 → dry, 1.0 → fully wet
-    /// - `output`: 0.0 → −20 dB, 1.0 → +6 dB
+    /// - `output`: 0.0 → −6 dB, 1.0 → +6 dB
     pub fn from_knobs(bits: f32, rate: f32, jitter: f32, mix: f32, output: f32) -> Self {
         Self::from_normalized(&[bits, rate, jitter, mix, output])
     }
@@ -113,7 +115,7 @@ kernel_params! {
             get: this.bits,
             set: |v| this.bits = v;
 
-        [1] ParamDescriptor::custom("Downsample", "Down", 1.0, 64.0, 1.0)
+        [1] ParamDescriptor::custom("Downsample", "Down", 1.0, 64.0, 4.0)
                 .with_step(1.0)
                 .with_id(ParamId(1701), "crush_down")
                 .with_flags(ParamFlags::AUTOMATABLE.union(ParamFlags::STEPPED)),
@@ -258,6 +260,7 @@ impl BitcrusherKernel {
 
 impl DspKernel for BitcrusherKernel {
     type Params = BitcrusherParams;
+    const LEVEL: Level = crate::calibration::BITCRUSHER;
 
     /// Process a stereo sample pair through the bitcrusher.
     ///
@@ -288,7 +291,7 @@ impl DspKernel for BitcrusherKernel {
             self.counter -= floorf(self.counter);
         }
 
-        let (wet_l, wet_r) = wet_dry_mix_stereo(left, right, self.held_l, self.held_r, mix);
+        let (wet_l, wet_r) = Self::blend_stereo(left, right, self.held_l, self.held_r, mix);
         (wet_l * output_gain, wet_r * output_gain)
     }
 
@@ -374,7 +377,7 @@ mod tests {
         assert_eq!(d1.name, "Downsample");
         assert_eq!(d1.min, 1.0);
         assert_eq!(d1.max, 64.0);
-        assert_eq!(d1.default, 1.0);
+        assert_eq!(d1.default, 4.0);
         assert_eq!(d1.id, ParamId(1701));
         assert!(d1.flags.contains(ParamFlags::STEPPED));
 
@@ -489,7 +492,7 @@ mod tests {
         assert_eq!(adapter.param_info(4).unwrap().name, "Output");
         assert!(adapter.param_info(5).is_none());
 
-        // ParamIds must match classic effect exactly
+        // ParamIds must match original pre-kernel effect exactly
         assert_eq!(adapter.param_info(0).unwrap().id, ParamId(1700));
         assert_eq!(adapter.param_info(1).unwrap().id, ParamId(1701));
         assert_eq!(adapter.param_info(2).unwrap().id, ParamId(1702));
@@ -536,8 +539,8 @@ mod tests {
             "bits default should be 8.0"
         );
         assert!(
-            (params.rate - 1.0).abs() < 1e-6,
-            "rate default should be 1.0"
+            (params.rate - 4.0).abs() < 1e-6,
+            "rate default should be 4.0"
         );
         assert!(
             (params.jitter_pct - 0.0).abs() < 1e-6,

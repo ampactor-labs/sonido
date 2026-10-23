@@ -18,10 +18,11 @@
 //!
 //! # Linkwitz-Riley Crossovers
 //!
-//! A Linkwitz-Riley (LR2) crossover is two cascaded 2nd-order Butterworth filters
-//! (Q = 1/√2 ≈ 0.707) at the same frequency. This gives −6 dB at the crossover
-//! point and sums to a flat allpass response, preserving phase coherence when
-//! the bands are recombined.
+//! A 4th-order Linkwitz-Riley (LR4) crossover is two cascaded 2nd-order
+//! Butterworth filters (Q = 1/√2 ≈ 0.707) at the same frequency, giving
+//! 24 dB/oct slopes. This gives −6 dB at the crossover point and sums to a
+//! flat allpass response, preserving phase coherence when the bands are
+//! recombined.
 //!
 //! Reference: Linkwitz, "Active Crossover Networks for Noncoincident Drivers",
 //! JAES 1976; Zolzer, "DAFX" (2011), Ch. 3.
@@ -49,7 +50,10 @@
 //! let adapter = Adapter::new(MultibandCompKernel::new(48000.0), 48000.0);
 //! let mut effect: Box<dyn Effect> = Box::new(adapter);
 //!
-//! // Embedded / Daisy Seed (direct — no smoothing)
+//! // Embedded / Daisy Seed — zero-smoothing adapter, as the pedal firmware uses
+//! let effect = Adapter::new_direct(MultibandCompKernel::new(48000.0), 48000.0);
+//!
+//! // Or drive the kernel directly with a typed params struct (no adapter)
 //! let mut kernel = MultibandCompKernel::new(48000.0);
 //! let params = MultibandCompParams::default();
 //! let (left, right) = kernel.process_stereo(input_l, input_r, &params);
@@ -59,6 +63,7 @@
 use sonido_core::kernel::KernelParams;
 use sonido_core::kernel::{DspKernel, SmoothingStyle};
 use sonido_core::kernel_params;
+use sonido_core::level::Level;
 use sonido_core::{
     Biquad, Cached, EnvelopeFollower, ParamDescriptor, ParamId, ParamScale, ParamUnit,
     fast_db_to_linear, fast_linear_to_db, highpass_coefficients, lowpass_coefficients,
@@ -97,7 +102,7 @@ const BAND_RELEASE_MS: f32 = 100.0;
 /// | 8 | `low_gain_db` | dB | −12–12 | 0.0 |
 /// | 9 | `mid_gain_db` | dB | −12–12 | 0.0 |
 /// | 10 | `high_gain_db` | dB | −12–12 | 0.0 |
-/// | 11 | `output_db` | dB | −60–+6 | 0.0 |
+/// | 11 | `output_db` | dB | −6–+6 | 0.0 |
 #[derive(Debug, Clone, Copy)]
 pub struct MultibandCompParams {
     /// Low/mid crossover frequency in Hz.
@@ -162,7 +167,7 @@ pub struct MultibandCompParams {
 
     /// Output level in dB.
     ///
-    /// Range: −60.0–+6.0 dB (default 0.0). Final output trim applied after
+    /// Range: −6.0–+6.0 dB (default 0.0). Final output trim applied after
     /// the band sum.
     pub output_db: f32,
 }
@@ -307,10 +312,10 @@ fn set_stereo_biquad(biquads: &mut [Biquad; 2], c: &[f32; 6]) {
 ///
 /// # DSP State
 ///
-/// - `low_lp` / `low_lp2`: cascaded `[Biquad; 2]` lowpass for low band (LR2, L+R).
+/// - `low_lp` / `low_lp2`: cascaded `[Biquad; 2]` lowpass for low band (LR4, L+R).
 /// - `mid_hp` / `mid_hp2`: cascaded highpass biquads at xover_low.
 /// - `mid_lp` / `mid_lp2`: cascaded lowpass biquads at xover_high.
-/// - `high_hp` / `high_hp2`: cascaded highpass biquads for high band (LR2, L+R).
+/// - `high_hp` / `high_hp2`: cascaded highpass biquads for high band (LR4, L+R).
 /// - `low_env` / `mid_env` / `high_env`: per-band envelope followers (linked-stereo).
 /// - `xover_low_cache` / `xover_high_cache`: `[f32; 12]` change-detectors for crossover
 ///   coefficients. Each entry stores `[LP × 6, HP × 6]` to avoid per-sample trig calls.
@@ -318,12 +323,12 @@ fn set_stereo_biquad(biquads: &mut [Biquad; 2], c: &[f32; 6]) {
 /// # Linkwitz-Riley Crossover Topology
 ///
 /// All four filter pairs use the same topology: two consecutive biquad stages
-/// at the same frequency with Butterworth Q (1/√2). This cascades to −12 dB/oct
+/// at the same frequency with Butterworth Q (1/√2). This cascades to −24 dB/oct
 /// per slope and achieves flat magnitude sum at the crossover frequency.
 pub struct MultibandCompKernel {
     sample_rate: f32,
 
-    // ── Low band: LR2 lowpass at xover_low, [L, R] ────────────────────────
+    // ── Low band: LR4 lowpass at xover_low, [L, R] ────────────────────────
     low_lp: [Biquad; 2],
     low_lp2: [Biquad; 2],
 
@@ -333,7 +338,7 @@ pub struct MultibandCompKernel {
     mid_lp: [Biquad; 2],
     mid_lp2: [Biquad; 2],
 
-    // ── High band: LR2 highpass at xover_high, [L, R] ─────────────────────
+    // ── High band: LR4 highpass at xover_high, [L, R] ─────────────────────
     high_hp: [Biquad; 2],
     high_hp2: [Biquad; 2],
 
@@ -502,6 +507,7 @@ impl MultibandCompKernel {
 
 impl DspKernel for MultibandCompKernel {
     type Params = MultibandCompParams;
+    const LEVEL: Level = crate::calibration::MULTIBAND_COMP;
 
     /// Process a mono sample through the multiband compressor.
     ///
@@ -540,7 +546,7 @@ impl DspKernel for MultibandCompKernel {
             + mid * mid_gr * fast_db_to_linear(params.mid_gain_db)
             + high * high_gr * fast_db_to_linear(params.high_gain_db);
 
-        flush_denormal(out) * fast_db_to_linear(params.output_db)
+        Self::level(flush_denormal(out) * fast_db_to_linear(params.output_db))
     }
 
     /// Process a stereo sample pair through the multiband compressor.
@@ -618,7 +624,7 @@ impl DspKernel for MultibandCompKernel {
                 * output_gain,
         );
 
-        (out_l, out_r)
+        Self::level_stereo(out_l, out_r)
     }
 
     fn reset(&mut self) {

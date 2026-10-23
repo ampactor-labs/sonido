@@ -10,7 +10,11 @@ categories = ["multimedia::audio", "no-std"]
 
 [features]
 default = ["std"]
-std = ["serde?/std"]
+std = ["serde?/std", "param-text"]
+## `EffectWithParams::effect_format_value` / `effect_parse_value`. On with `std`;
+## the pedal firmware leaves it off so its 36 effect vtables don't link float
+## formatting and parsing (about 50 KB).
+param-text = []
 spectral = ["std", "dep:rustfft"]
 tracing = ["dep:tracing"]
 debug-alloc = ["dep:assert_no_alloc"]

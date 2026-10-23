@@ -7,7 +7,7 @@
 
 use std::path::PathBuf;
 
-use sonido_patch::validate::{Finding, PedalLimits, has_errors, validate_for_pedal};
+use sonido_patch::validate::{Finding, has_errors, validate_for_daisy};
 use sonido_patch::{Patch, SECTOR_SIZE, binary};
 use sonido_platform::cycle_table;
 
@@ -20,16 +20,7 @@ pub fn pedal_allowed_uids() -> Vec<u16> {
 ///
 /// Returns all findings; the caller refuses the pedal export iff [`has_errors`].
 pub fn validate_patch_for_pedal(patch: &Patch) -> Vec<Finding> {
-    let allowed = pedal_allowed_uids();
-    let limits = PedalLimits {
-        allowed_uids: &allowed,
-        cycle_table: cycle_table::EFFECT_CYCLES,
-        sdram_table: cycle_table::EFFECT_SDRAM,
-        cycle_budget: cycle_table::CYCLE_BUDGET_PER_BLOCK,
-        warn_fraction: cycle_table::WARN_FRACTION,
-        sdram_budget: cycle_table::SDRAM_BUDGET_BYTES,
-    };
-    validate_for_pedal(patch, &limits)
+    validate_for_daisy(patch)
 }
 
 /// Whether a patch is safe to flash to the pedal (no error-level findings).
@@ -53,17 +44,10 @@ pub fn patch_to_json(patch: &Patch) -> Result<String, serde_json::Error> {
     serde_json::to_string_pretty(patch)
 }
 
-/// The sidecar directory the graph-player CLAP plugin scans for patches:
-/// `$XDG_DATA_HOME/sonido/patches` (falling back to `~/.local/share/...`).
-///
-/// macOS/Windows path conventions are a follow-up; the value is created on first
-/// export.
+/// The rig library the graph-player plugin lists
+/// ([`sonido_config::paths::rig_library_dir`]); created on first export.
 pub fn clap_patches_dir() -> Option<PathBuf> {
-    let base = std::env::var_os("XDG_DATA_HOME")
-        .map(PathBuf::from)
-        .filter(|p| !p.as_os_str().is_empty())
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/share")))?;
-    Some(base.join("sonido").join("patches"))
+    sonido_config::paths::rig_library_dir()
 }
 
 /// Sanitize a patch name into a safe file stem.
@@ -119,29 +103,46 @@ mod tests {
     }
 
     #[test]
-    fn non_pedal_effect_blocks_pedal_export() {
-        // tape is UID 9 — not in the pedal set.
-        let patch = Patch::linear_chain("nope", vec![PatchNode::new(9, vec![])]);
+    fn unknown_effect_blocks_pedal_export() {
+        let patch = Patch::linear_chain("nope", vec![PatchNode::new(99, vec![])]);
         assert!(!can_export_to_pedal(&patch));
     }
 
     #[test]
-    fn heavy_chain_warns_or_blocks() {
-        // Two reverbs (UID 11, 64k each) + delay (40k) → 168k + overhead, ~53% —
-        // under budget but a four-reverb stack would warn/block. Sanity-check the
-        // wiring produces findings of the right shape.
+    fn every_effect_can_go_to_the_pedal() {
+        assert_eq!(pedal_allowed_uids().len(), 36);
+    }
+
+    #[test]
+    fn editor_and_pedal_apply_the_same_cpu_rule() {
+        // The pedal checks rigs with `cycle_table::chain_fits`; the editor with
+        // `validate_for_pedal`. They must agree on every rig.
+        let rigs: [&[u16]; 5] = [
+            &[1, 11, 17],
+            &[11, 11],
+            &[35],
+            &[11, 36],
+            &[9, 6, 3, 2, 1, 1],
+        ];
+        for uids in rigs {
+            let nodes = uids.iter().map(|&u| PatchNode::new(u, vec![])).collect();
+            let patch = Patch::linear_chain("rig", nodes);
+            assert_eq!(
+                can_export_to_pedal(&patch),
+                cycle_table::chain_fits(uids.iter().copied()),
+                "{uids:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn two_reverbs_are_refused() {
+        // 2 × 179k measured worst blocks = 112% of the budget.
         let patch = Patch::linear_chain(
             "stack",
-            vec![
-                PatchNode::new(11, vec![]),
-                PatchNode::new(11, vec![]),
-                PatchNode::new(11, vec![]),
-                PatchNode::new(11, vec![]),
-                PatchNode::new(11, vec![]),
-            ],
+            vec![PatchNode::new(11, vec![]), PatchNode::new(11, vec![])],
         );
         let findings = validate_patch_for_pedal(&patch);
-        // 5 × 64k = 320k + overhead > budget → an error.
         assert!(findings.iter().any(|f| f.severity == Severity::Error));
     }
 

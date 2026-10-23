@@ -3,7 +3,7 @@
 //! `FilterKernel` owns DSP state (biquad filters, sample rate, cached
 //! coefficients). Parameters are received via `&FilterParams` each sample.
 //! Deployed via [`Adapter`](sonido_core::kernel::Adapter) for
-//! desktop/plugin, or called directly on embedded targets.
+//! desktop/plugin, or via `Adapter::new_direct` (no smoothing) on embedded targets.
 //!
 //! # Signal Flow
 //!
@@ -35,7 +35,7 @@
 //! |-------|-------|------|-------|---------|
 //! | 0 | `cutoff_hz` | Hz | 20–20000 | 1000.0 |
 //! | 1 | `resonance` | ratio (Q) | 0.1–20.0 | 0.707 |
-//! | 2 | `output_db` | dB | −20–20 | 0.0 |
+//! | 2 | `output_db` | dB | −6–+6 | 0.0 |
 //! | 3 | `filter_type` | index | 0–3 | 0 (LPF) |
 //!
 //! # Deployment
@@ -45,7 +45,10 @@
 //! let adapter = Adapter::new(FilterKernel::new(48000.0), 48000.0);
 //! let mut effect: Box<dyn Effect> = Box::new(adapter);
 //!
-//! // Embedded / Daisy Seed (direct — no smoothing, ADCs are hardware-filtered)
+//! // Embedded / Daisy Seed — zero-smoothing adapter, as the pedal firmware uses
+//! let effect = Adapter::new_direct(FilterKernel::new(48000.0), 48000.0);
+//!
+//! // Or drive the kernel directly with a typed params struct (no adapter)
 //! let mut kernel = FilterKernel::new(48000.0);
 //! let params = FilterParams::from_knobs(adc_cutoff, adc_resonance, adc_output, adc_type);
 //! let (left, right) = kernel.process_stereo(input_l, input_r, &params);
@@ -53,6 +56,7 @@
 
 use sonido_core::kernel::{DspKernel, KernelParams, SmoothingStyle};
 use sonido_core::kernel_params;
+use sonido_core::level::Level;
 use sonido_core::math::soft_limit;
 use sonido_core::{
     Biquad, Cached, ParamDescriptor, ParamFlags, ParamId, ParamScale, ParamUnit,
@@ -71,9 +75,9 @@ use sonido_core::{
 ///
 /// | Index | Field | Unit | Range | Default |
 /// |-------|-------|------|-------|---------|
-/// | 0 | `cutoff_hz` | Hz | 20–20000 | 1000.0 |
-/// | 1 | `resonance` | ratio (Q) | 0.1–20.0 | 0.707 |
-/// | 2 | `output_db` | dB | −20–20 | 0.0 |
+/// | 0 | `cutoff_hz` | Hz | 20–20000 | 2200.0 |
+/// | 1 | `resonance` | ratio (Q) | 0.1–20.0 | 3.0 |
+/// | 2 | `output_db` | dB | −6–+6 | 0.0 |
 /// | 3 | `filter_type` | index | 0–3 | 0 (LPF) |
 #[derive(Debug, Clone, Copy)]
 pub struct FilterParams {
@@ -90,8 +94,8 @@ pub struct FilterParams {
 impl Default for FilterParams {
     fn default() -> Self {
         Self {
-            cutoff_hz: 1000.0,
-            resonance: 0.707,
+            cutoff_hz: 2200.0,
+            resonance: 3.0,
             output_db: 0.0,
             filter_type: 0.0,
         }
@@ -107,7 +111,7 @@ impl FilterParams {
     /// # Parameters
     /// - `cutoff`: normalized 0.0–1.0 → 20–20000 Hz (logarithmic)
     /// - `resonance`: normalized 0.0–1.0 → 0.1–20.0 (linear)
-    /// - `output`: normalized 0.0–1.0 → −20–+6 dB (linear)
+    /// - `output`: normalized 0.0–1.0 → −6–+6 dB (linear)
     /// - `filter_type`: normalized 0.0–1.0 → 0–3 (stepped: LPF/HPF/BPF/Notch)
     pub fn from_knobs(cutoff: f32, resonance: f32, output: f32, filter_type: f32) -> Self {
         Self::from_normalized(&[cutoff, resonance, output, filter_type])
@@ -124,10 +128,12 @@ kernel_params! {
                 max: 20000.0,
                 default: 1000.0,
                 step: 1.0,
+                flags: ParamFlags::AUTOMATABLE,
                 ..ParamDescriptor::mix()
             }
             .with_id(ParamId(1200), "flt_cutoff")
-            .with_scale(ParamScale::Logarithmic),
+            .with_scale(ParamScale::Logarithmic)
+            .with_default(2200.0),
             smoothing: SmoothingStyle::Slow, // cutoff — filter coefficient, avoid zipper
             get: this.cutoff_hz,
             set: |v| this.cutoff_hz = v;
@@ -140,9 +146,11 @@ kernel_params! {
                 max: 20.0,
                 default: 0.707,
                 step: 0.01,
+                flags: ParamFlags::AUTOMATABLE,
                 ..ParamDescriptor::mix()
             }
-            .with_id(ParamId(1201), "flt_resonance"),
+            .with_id(ParamId(1201), "flt_resonance")
+            .with_default(3.0),
             smoothing: SmoothingStyle::Slow, // resonance — filter coefficient, avoid zipper
             get: this.resonance,
             set: |v| this.resonance = v;
@@ -256,6 +264,7 @@ impl FilterKernel {
 
 impl DspKernel for FilterKernel {
     type Params = FilterParams;
+    const LEVEL: Level = crate::calibration::FILTER;
 
     fn process_stereo(&mut self, left: f32, right: f32, params: &FilterParams) -> (f32, f32) {
         // ── Coefficient update (only when cutoff, resonance, or filter type changes) ──
@@ -284,8 +293,8 @@ impl DspKernel for FilterKernel {
         let output_gain = fast_db_to_linear(params.output_db);
 
         // ── Biquad filtering → Soft limit → Output level ──
-        let out_l = soft_limit(self.biquad_l.process(left), 1.0) * output_gain;
-        let out_r = soft_limit(self.biquad_r.process(right), 1.0) * output_gain;
+        let out_l = soft_limit(Self::level(self.biquad_l.process(left)), 1.0) * output_gain;
+        let out_r = soft_limit(Self::level(self.biquad_r.process(right)), 1.0) * output_gain;
 
         (out_l, out_r)
     }
@@ -352,7 +361,7 @@ mod tests {
         assert_eq!(desc0.name, "Cutoff");
         assert!((desc0.min - 20.0).abs() < 0.01);
         assert!((desc0.max - 20000.0).abs() < 0.01);
-        assert!((desc0.default - 1000.0).abs() < 0.01);
+        assert!((desc0.default - 2200.0).abs() < 0.01);
         assert_eq!(desc0.id, ParamId(1200));
         assert_eq!(desc0.string_id, "flt_cutoff");
 
@@ -360,7 +369,7 @@ mod tests {
         assert_eq!(desc1.name, "Resonance");
         assert!((desc1.min - 0.1).abs() < 0.001);
         assert!((desc1.max - 20.0).abs() < 0.01);
-        assert!((desc1.default - 0.707).abs() < 0.001);
+        assert!((desc1.default - 3.0).abs() < 0.001);
         assert_eq!(desc1.id, ParamId(1201));
         assert_eq!(desc1.string_id, "flt_resonance");
 
@@ -526,8 +535,13 @@ mod tests {
             kernel.process_stereo(1.0, 1.0, &params);
         }
 
-        // After settling the biquad memory should have reached near-unity for DC.
+        // After settling the biquad memory should have reached near-unity for
+        // DC (the measured level trim divided out: this is the filter).
         let (out_l, out_r) = kernel.process_stereo(1.0, 1.0, &params);
+        let (out_l, out_r) = (
+            out_l / FilterKernel::LEVEL.trim,
+            out_r / FilterKernel::LEVEL.trim,
+        );
         assert!(
             (out_l - 1.0).abs() < 0.05,
             "DC should pass filter with gain ≈1.0, got {out_l}"

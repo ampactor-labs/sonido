@@ -118,6 +118,9 @@ pub trait SmoothingPolicy: Send {
 /// the adapter's snapshot is rebuilt each sample from smoother outputs.
 pub struct SmoothedPolicy {
     smoothers: Vec<SmoothedParam>,
+    /// READ_ONLY params, looked up once: their snapshot values come from
+    /// `update_diagnostics`, not the smoothers.
+    read_only: Vec<bool>,
     /// Tracks steady state: cleared on `set_target`, set when all settled.
     all_settled: bool,
 }
@@ -135,8 +138,12 @@ impl SmoothingPolicy for SmoothedPolicy {
                 style.time_ms(),
             ));
         }
+        let read_only = (0..count)
+            .map(|i| P::descriptor(i).is_some_and(|d| d.flags.contains(ParamFlags::READ_ONLY)))
+            .collect();
         Self {
             smoothers,
+            read_only,
             all_settled: true,
         }
     }
@@ -159,14 +166,12 @@ impl SmoothingPolicy for SmoothedPolicy {
     fn advance_all<P: KernelParams>(&mut self, snapshot: &mut P) -> bool {
         if !self.all_settled {
             for i in 0..self.smoothers.len() {
-                // Skip READ_ONLY params — their values are written by update_diagnostics(),
-                // not by smoothers. Advancing would overwrite the live diagnostic values.
-                if P::descriptor(i).is_some_and(|d| d.flags.contains(ParamFlags::READ_ONLY)) {
-                    let _ = self.smoothers[i].advance(); // advance but discard
-                    continue;
-                }
                 let value = self.smoothers[i].advance();
-                snapshot.set(i, flush_denormal(value));
+                // READ_ONLY values are written by update_diagnostics(); writing the
+                // smoother's would overwrite the live diagnostic.
+                if !self.read_only[i] {
+                    snapshot.set(i, flush_denormal(value));
+                }
             }
             self.all_settled = self.smoothers.iter().all(SmoothedParam::is_settled);
         }
@@ -530,6 +535,10 @@ impl<K: DspKernel, S: SmoothingPolicy> Effect for Adapter<K, S> {
 
     fn reset(&mut self) {
         self.kernel.reset();
+        self.snap_params();
+    }
+
+    fn snap_params(&mut self) {
         self.policy.snap_all();
         // Re-apply snapshot from policy targets after snap (SmoothedPolicy),
         // or leave snapshot as-is (DirectPolicy — it's already live).
@@ -562,7 +571,8 @@ impl<K: DspKernel, S: SmoothingPolicy> Effect for Adapter<K, S> {
 impl<K: DspKernel, S: SmoothingPolicy> TailReporting for Adapter<K, S> {
     /// Delegate to the kernel's tail duration.
     ///
-    /// Returns 0 for most effects. Reverb, delay, and looper kernels override
+    /// Returns 0 for most effects. The delay, looper, drone, and reverb kernels
+    /// (reverb, plate, spring, Harmonic Habitat) override
     /// [`DspKernel::tail_samples()`] to report their ring-out duration.
     fn tail_samples(&self) -> usize {
         self.kernel.tail_samples()

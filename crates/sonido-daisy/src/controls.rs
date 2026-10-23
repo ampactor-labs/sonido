@@ -1,6 +1,6 @@
 //! Lock-free shared control buffer for async control → real-time audio communication.
 //!
-//! [`ControlBuffer`] is the bridge between the asynchronous control task (writer, ~50 Hz)
+//! [`ControlBuffer`] is the bridge between the asynchronous control task (writer, ~100 Hz)
 //! and the real-time audio callback (reader, ~1500 Hz). It uses atomic operations with
 //! `Relaxed` ordering — safe on single-core Cortex-M7 where all memory accesses are
 //! sequentially consistent within the core.
@@ -10,7 +10,7 @@
 //! ```text
 //! ┌─────────────────┐      ControlBuffer      ┌──────────────────┐
 //! │  Control task    │ ──── write_knob() ────▶ │  Audio callback  │
-//! │  (Embassy, 50Hz) │ ──── write_toggle() ──▶ │  (DMA, 1500Hz)   │
+//! │  (Embassy, 100Hz)│ ──── write_toggle() ──▶ │  (DMA, 1500Hz)   │
 //! │                  │ ◀── read_led() ──────── │  write_led()     │
 //! └─────────────────┘                          └──────────────────┘
 //! ```
@@ -38,6 +38,16 @@ use core::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, Ordering};
 ///
 /// Values changing by less than this are considered noise, not intentional movement.
 const KNOB_EPSILON: f32 = 3e-4;
+
+/// Hysteresis band for knob readings, as a fraction of travel.
+///
+/// A knob's value moves only once the reading leaves this band around it, and
+/// then follows the reading at the band's edge. ADC and pot noise stay inside
+/// the band, so an untouched knob reads exactly the same every poll: the
+/// parameters it drives settle, and their smoothing stops costing CPU (on the
+/// Hothouse, a jittering knob kept a reverb rig ~8 points busier). A turning
+/// knob keeps full resolution and lags by 0.15% of travel, with no time lag.
+const KNOB_HYSTERESIS: f32 = 0.0015;
 
 /// Maximum raw ADC value for 16-bit resolution.
 const ADC_MAX_U16: f32 = 65535.0;
@@ -89,7 +99,7 @@ pub struct ControlBuffer<
     leds: [AtomicU32; LEDS],
     /// Expression pedal value as f32 bits (0.0–1.0 normalized).
     ///
-    /// Written by the hothouse control task at ~50 Hz; read by the audio
+    /// Written by the hothouse control task at ~100 Hz; read by the audio
     /// callback. Non-generic: there is always 0 or 1 expression input.
     expression: AtomicU32,
 }
@@ -162,11 +172,10 @@ impl<const KNOBS: usize, const TOGGLES: usize, const FOOTSWITCHES: usize, const 
 
     /// Writes a pre-normalized knob value (0.0–1.0).
     ///
-    /// ADC jitter (2 LSB at CYCLES387_5) maps to sub-audible param fluctuation
-    /// across any param range. The epsilon change detection (3e-4) prevents
-    /// noise-triggered updates. IIR smoothing was removed because it added
-    /// 460ms latency solving a non-problem — hardware oversampling is the
-    /// correct fix if noise ever becomes an issue.
+    /// The stored value follows the reading with [`KNOB_HYSTERESIS`], so
+    /// jitter never reaches the parameters; the ends of travel snap to exactly
+    /// 0.0 and 1.0. (An IIR filter was tried before and removed: it added
+    /// 460 ms of lag. Hysteresis adds none.)
     ///
     /// # Parameters
     ///
@@ -182,6 +191,16 @@ impl<const KNOBS: usize, const TOGGLES: usize, const FOOTSWITCHES: usize, const 
             normalized
         };
 
+        let held = f32::from_bits(self.knobs[index].load(Ordering::Relaxed));
+        let smoothed = if smoothed <= 0.0 || smoothed >= 1.0 {
+            smoothed
+        } else if smoothed > held + KNOB_HYSTERESIS {
+            smoothed - KNOB_HYSTERESIS
+        } else if smoothed < held - KNOB_HYSTERESIS {
+            smoothed + KNOB_HYSTERESIS
+        } else {
+            held
+        };
         self.knobs[index].store(smoothed.to_bits(), Ordering::Relaxed);
 
         // Change detection: compare against last written smoothed value.
@@ -288,7 +307,7 @@ impl<const KNOBS: usize, const TOGGLES: usize, const FOOTSWITCHES: usize, const 
 
     /// Writes a normalized expression pedal value (0.0–1.0).
     ///
-    /// Called by the hothouse control task at ~50 Hz with the pre-processed
+    /// Called by the hothouse control task at ~100 Hz with the pre-processed
     /// output from [`ExpressionInput::value()`](crate::expression::ExpressionInput::value).
     ///
     /// # Parameters
@@ -387,7 +406,26 @@ mod tests {
         buf.write_knob(0, 0.5);
         let (val, changed) = buf.read_knob_changed(0);
         assert!(changed, "large change should trigger knobs_changed");
-        assert!((val - 0.5).abs() < 1e-6);
+        assert!((val - 0.5).abs() <= KNOB_HYSTERESIS + 1e-6);
+    }
+
+    #[test]
+    fn jitter_inside_the_band_reads_still() {
+        let buf = TestBuffer::new();
+        buf.write_knob(0, 0.5);
+        let held = buf.read_knob(0);
+        for i in 0..100 {
+            let noise = if i % 2 == 0 { 0.0012 } else { -0.0012 };
+            buf.write_knob(0, held + noise);
+            assert_eq!(buf.read_knob(0), held);
+        }
+        // Real movement still gets through, and the ends are exact.
+        buf.write_knob(0, 0.7);
+        assert!((buf.read_knob(0) - 0.7).abs() <= KNOB_HYSTERESIS + 1e-6);
+        buf.write_knob(0, 1.0);
+        assert_eq!(buf.read_knob(0), 1.0);
+        buf.write_knob(0, 0.001);
+        assert_eq!(buf.read_knob(0), 0.0);
     }
 
     #[test]

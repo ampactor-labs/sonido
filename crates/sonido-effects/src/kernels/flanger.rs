@@ -2,8 +2,8 @@
 //!
 //! `FlangerKernel` owns DSP state (delay lines, LFOs, feedback samples).
 //! Parameters are received via `&FlangerParams` each sample. Deployed via
-//! [`Adapter`](sonido_core::kernel::Adapter) for desktop/plugin, or called
-//! directly on embedded targets.
+//! [`Adapter`](sonido_core::kernel::Adapter) for desktop/plugin, or via `Adapter::new_direct`
+//! (no smoothing) on embedded targets.
 //!
 //! # Signal Flow
 //!
@@ -34,7 +34,10 @@
 //! let adapter = Adapter::new(FlangerKernel::new(48000.0), 48000.0);
 //! let mut effect: Box<dyn Effect> = Box::new(adapter);
 //!
-//! // Embedded / Daisy Seed (direct — no smoothing, ADCs are hardware-filtered)
+//! // Embedded / Daisy Seed — zero-smoothing adapter, as the pedal firmware uses
+//! let effect = Adapter::new_direct(FlangerKernel::new(48000.0), 48000.0);
+//!
+//! // Or drive the kernel directly with a typed params struct (no adapter)
 //! let mut kernel = FlangerKernel::new(48000.0);
 //! let params = FlangerParams::from_knobs(0.5, 0.35, 0.5, 0.5, 0.0, 0.0, 3.0, 0.0);
 //! let (left, right) = kernel.process_stereo(input_l, input_r, &params);
@@ -43,10 +46,10 @@
 use libm::ceilf;
 use sonido_core::kernel::{DspKernel, KernelParams, SmoothingStyle};
 use sonido_core::kernel_params;
+use sonido_core::level::Level;
 use sonido_core::{
     DIVISION_LABELS, InterpolatedDelay, Lfo, NoteDivision, ParamDescriptor, ParamFlags, ParamId,
     ParamUnit, TempoContext, TempoManager, fast_db_to_linear, flush_denormal, index_to_division,
-    wet_dry_mix_stereo,
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -61,13 +64,13 @@ use sonido_core::{
 /// | Index | Field | Unit | Range | Default |
 /// |-------|-------|------|-------|---------|
 /// | 0 | `rate` | Hz | 0.05–5.0 | 0.5 |
-/// | 1 | `depth_pct` | % | 0–100 | 35.0 |
+/// | 1 | `depth_pct` | % | 0–100 | 50.0 |
 /// | 2 | `feedback_pct` | % | −95–95 | 50.0 |
 /// | 3 | `mix_pct` | % | 0–100 | 50.0 |
 /// | 4 | `tzf` | index | 0–1 | 0 (Off) |
 /// | 5 | `sync` | index | 0–1 | 0 (Off) |
-/// | 6 | `division` | index | 0–11 | 3 (Quarter) |
-/// | 7 | `output_db` | dB | −20–+6 | 0.0 |
+/// | 6 | `division` | index | 0–11 | 3 (Eighth) |
+/// | 7 | `output_db` | dB | −6–+6 | 0.0 |
 /// | 8 | `lfo_phase` | 0–1 | READ_ONLY diagnostic | 0.0 |
 #[derive(Debug, Clone, Copy)]
 pub struct FlangerParams {
@@ -110,12 +113,12 @@ pub struct FlangerParams {
     /// Note division index for tempo sync (0–11).
     ///
     /// Mapped via `index_to_division()`. Only active when `sync > 0.5`.
-    /// Default 3 (Quarter note).
+    /// Default 3 (Eighth note).
     pub division: f32,
 
     /// Output level in decibels.
     ///
-    /// Range: −20.0 to +6.0 dB. Applied after the wet/dry mix. Default 0.0 dB.
+    /// Range: −6.0 to +6.0 dB. Applied after the wet/dry mix. Default 0.0 dB.
     pub output_db: f32,
 
     /// Current LFO phase (0.0–1.0). READ_ONLY diagnostic — written by the
@@ -127,7 +130,7 @@ impl Default for FlangerParams {
     fn default() -> Self {
         Self {
             rate: 0.5,
-            depth_pct: 35.0,
+            depth_pct: 50.0,
             feedback_pct: 50.0,
             mix_pct: 50.0,
             tzf: 0.0,
@@ -155,7 +158,7 @@ impl FlangerParams {
     /// | `tzf` | 4 | `tzf` | 0 or 1 |
     /// | `sync` | 5 | `sync` | 0 or 1 |
     /// | `division` | 6 | `division` | 0–11 |
-    /// | `output` | 7 | `output_db` | −20–+6 dB |
+    /// | `output` | 7 | `output_db` | −6–+6 dB |
     #[allow(clippy::too_many_arguments)]
     pub fn from_knobs(
         rate: f32,
@@ -182,7 +185,8 @@ kernel_params! {
                 default: 35.0,
                 ..ParamDescriptor::depth()
             }
-            .with_id(ParamId(801), "flgr_depth"),
+            .with_id(ParamId(801), "flgr_depth")
+            .with_default(50.0),
             smoothing: SmoothingStyle::Standard, // depth — modulation amount
             get: this.depth_pct,
             set: |v| this.depth_pct = v;
@@ -351,6 +355,7 @@ impl FlangerKernel {
 
 impl DspKernel for FlangerKernel {
     type Params = FlangerParams;
+    const LEVEL: Level = crate::calibration::FLANGER;
 
     /// Process one stereo sample pair.
     ///
@@ -431,7 +436,7 @@ impl DspKernel for FlangerKernel {
         // is high, keeping perceived loudness consistent.
         let comp = sonido_core::gain::feedback_wet_compensation(libm::fabsf(feedback));
         let (out_l, out_r) =
-            wet_dry_mix_stereo(dry_l, dry_r, delayed_l * comp, delayed_r * comp, mix);
+            Self::blend_stereo(dry_l, dry_r, delayed_l * comp, delayed_r * comp, mix);
 
         (out_l * output_gain, out_r * output_gain)
     }
@@ -458,7 +463,7 @@ impl DspKernel for FlangerKernel {
         //
         // Until a dedicated state bit is added, we return 0 here and let the
         // adapter report latency by checking the current param value directly.
-        // This is the same approach used by the classic Flanger effect.
+        // This is the same approach used by the original pre-kernel Flanger effect.
         self.base_delay_samples as usize
     }
 

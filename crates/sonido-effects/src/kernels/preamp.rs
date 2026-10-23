@@ -3,7 +3,7 @@
 //! `PreampKernel` owns DSP state (tone biquad filter, sample rate, cached
 //! coefficient tracking). Parameters are received via `&PreampParams` each
 //! sample. Deployed via [`Adapter`](sonido_core::kernel::Adapter) for
-//! desktop/plugin, or called directly on embedded targets.
+//! desktop/plugin, or via `Adapter::new_direct` (no smoothing) on embedded targets.
 //!
 //! # Signal Flow
 //!
@@ -56,7 +56,10 @@
 //! let adapter = Adapter::new(PreampKernel::new(48000.0), 48000.0);
 //! let mut effect: Box<dyn Effect> = Box::new(adapter);
 //!
-//! // Embedded / Daisy Seed (direct — no smoothing, ADCs are hardware-filtered)
+//! // Embedded / Daisy Seed — zero-smoothing adapter, as the pedal firmware uses
+//! let effect = Adapter::new_direct(PreampKernel::new(48000.0), 48000.0);
+//!
+//! // Or drive the kernel directly with a typed params struct (no adapter)
 //! let mut kernel = PreampKernel::new(48000.0);
 //! let params = PreampParams::from_knobs(adc_gain, adc_tone, adc_output);
 //! let (left, right) = kernel.process_stereo(input_l, input_r, &params);
@@ -66,6 +69,7 @@ use libm::tanhf;
 
 use sonido_core::kernel::{DspKernel, KernelParams, SmoothingStyle};
 use sonido_core::kernel_params;
+use sonido_core::level::Level;
 use sonido_core::math::soft_limit;
 use sonido_core::{
     Biquad, Cached, ParamDescriptor, ParamId, ParamUnit, fast_db_to_linear, peaking_eq_coefficients,
@@ -99,9 +103,9 @@ const TONE_Q: f32 = 0.8;
 ///
 /// | Index | Field | Unit | Range | Default |
 /// |-------|-------|------|-------|---------|
-/// | 0 | `gain_db` | dB | 0–40 | 0.0 |
+/// | 0 | `gain_db` | dB | 0–40 | 15.0 |
 /// | 1 | `tone_db` | dB | −12–12 | 0.0 |
-/// | 2 | `output_db` | dB | −20–20 | 0.0 |
+/// | 2 | `output_db` | dB | −6–+6 | 0.0 |
 #[derive(Debug, Clone, Copy)]
 pub struct PreampParams {
     /// Input gain before the soft-clip stage, in decibels.
@@ -115,14 +119,14 @@ pub struct PreampParams {
     pub tone_db: f32,
     /// Output level trim after all processing, in decibels.
     ///
-    /// Range: −20.0–20.0 dB. Default 0.0 (unity).
+    /// Range: −6.0–+6.0 dB. Default 0.0 (unity).
     pub output_db: f32,
 }
 
 impl Default for PreampParams {
     fn default() -> Self {
         Self {
-            gain_db: 0.0,
+            gain_db: 15.0,
             tone_db: 0.0,
             output_db: 0.0,
         }
@@ -141,7 +145,7 @@ impl PreampParams {
 
 kernel_params! {
     PreampParams, this {
-        [0] ParamDescriptor::gain_db("Gain", "Gain", 0.0, 40.0, 0.0)
+        [0] ParamDescriptor::gain_db("Gain", "Gain", 0.0, 40.0, 15.0)
                 .with_id(ParamId(100), "pre_gain"),
             smoothing: SmoothingStyle::Standard, // gain — 10 ms, responsive but click-free
             get: this.gain_db,
@@ -257,6 +261,7 @@ impl PreampKernel {
 
 impl DspKernel for PreampKernel {
     type Params = PreampParams;
+    const LEVEL: Level = crate::calibration::PREAMP;
 
     /// Process a stereo sample pair through the clean preamp.
     ///
@@ -301,8 +306,8 @@ impl DspKernel for PreampKernel {
 
         // ── Safety limiter → Output level ──
         (
-            soft_limit(toned_l, 1.0) * output,
-            soft_limit(toned_r, 1.0) * output,
+            soft_limit(Self::level(toned_l), 1.0) * output,
+            soft_limit(Self::level(toned_r), 1.0) * output,
         )
     }
 
@@ -412,7 +417,7 @@ mod tests {
             "index 3 should be None"
         );
 
-        // Verify ParamId values match classic effect
+        // Verify ParamId values match original pre-kernel effect
         let gain_desc = PreampParams::descriptor(0).unwrap();
         assert_eq!(gain_desc.id, ParamId(100), "gain must be ParamId(100)");
 
@@ -541,7 +546,9 @@ mod tests {
             kernel.process_stereo(0.5, 0.5, &params);
         }
         let (out_l, _) = kernel.process_stereo(0.5, 0.5, &params);
-        // At 0 dB gain, 0 dB tone, 0 dB output: output ≈ input (biquad flat)
+        let out_l = out_l / PreampKernel::LEVEL.trim;
+        // At 0 dB gain, 0 dB tone, 0 dB output: output ≈ input (biquad flat),
+        // the measured level trim divided out
         assert!(
             (out_l - 0.5).abs() < 0.01,
             "Unity gain should pass signal: expected ~0.5, got {out_l}"

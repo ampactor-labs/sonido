@@ -15,7 +15,7 @@
 //!
 //! # Algorithm
 //!
-//! - **Capture buffer**: 1-second circular buffer per channel (48 000 samples).
+//! - **Capture buffer**: 65 536-sample circular buffer per channel (~1.36 s at 48 kHz).
 //! - **Grain spawn rate**: `density` grains per second. Each new grain is assigned
 //!   a random start position within the last `size_ms` of captured audio (scatter
 //!   controls how wide this window is) and a random playback speed offset
@@ -32,7 +32,10 @@
 //! let adapter = Adapter::new(TextureKernel::new(48000.0), 48000.0);
 //! let mut effect: Box<dyn Effect> = Box::new(adapter);
 //!
-//! // Embedded / Daisy Seed (direct — no smoothing)
+//! // Embedded / Daisy Seed — zero-smoothing adapter, as the pedal firmware uses
+//! let effect = Adapter::new_direct(TextureKernel::new(48000.0), 48000.0);
+//!
+//! // Or drive the kernel directly with a typed params struct (no adapter)
 //! let mut kernel = TextureKernel::new(48000.0);
 //! let params = TextureParams::default();
 //! let (left, right) = kernel.process_stereo(input_l, input_r, &params);
@@ -45,13 +48,14 @@ use alloc::vec::Vec;
 use sonido_core::kernel::KernelParams;
 use sonido_core::kernel::{DspKernel, SmoothingStyle};
 use sonido_core::kernel_params;
-use sonido_core::{ParamDescriptor, ParamId, ParamUnit, fast_db_to_linear, wet_dry_mix};
+use sonido_core::level::Level;
+use sonido_core::{ParamDescriptor, ParamFlags, ParamId, ParamUnit, fast_db_to_linear};
 
 // ═══════════════════════════════════════════════════════════════════════════
 //  Constants
 // ═══════════════════════════════════════════════════════════════════════════
 
-/// Capture buffer length in samples (1 second at 48 kHz, power-of-2 for fast modulo).
+/// Capture buffer length in samples (~1.36 s at 48 kHz, power-of-2 for fast modulo).
 const BUF_LEN: usize = 65536; // ~1.36 s at 48 kHz
 
 /// Maximum simultaneous grains.
@@ -122,6 +126,7 @@ kernel_params! {
         [2] ParamDescriptor {
                 name: "Scatter",
                 short_name: "Scatter",
+                flags: ParamFlags::AUTOMATABLE,
                 ..ParamDescriptor::mix()
             }
             .with_id(ParamId(3402), "tex_scatter"),
@@ -142,7 +147,8 @@ kernel_params! {
             set: |v| this.mix_pct = v;
 
         [5] ParamDescriptor::gain_db("Output", "Out", -60.0, 6.0, 0.0)
-                .with_id(ParamId(3405), "tex_output"),
+                .with_id(ParamId(3405), "tex_output")
+                .with_flags(ParamFlags::AUTOMATABLE.union(ParamFlags::MACRO_EXCLUDE)),
             smoothing: SmoothingStyle::Fast,     // output_db — 5 ms
             get: this.output_db,
             set: |v| this.output_db = v;
@@ -295,6 +301,7 @@ impl TextureKernel {
 
 impl DspKernel for TextureKernel {
     type Params = TextureParams;
+    const LEVEL: Level = crate::calibration::TEXTURE;
 
     fn process_stereo(&mut self, left: f32, right: f32, params: &TextureParams) -> (f32, f32) {
         // ── Write input to capture buffer ─────────────────────────────────
@@ -351,8 +358,8 @@ impl DspKernel for TextureKernel {
         let mix = params.mix_pct / 100.0;
         let output_gain = fast_db_to_linear(params.output_db);
 
-        let out_l = wet_dry_mix(left, wet_l, mix) * output_gain;
-        let out_r = wet_dry_mix(right, wet_r, mix) * output_gain;
+        let (out_l, out_r) = Self::blend_stereo(left, right, wet_l, wet_r, mix);
+        let (out_l, out_r) = (out_l * output_gain, out_r * output_gain);
 
         (out_l, out_r)
     }

@@ -21,9 +21,12 @@
 //! # Usage Tiers
 //!
 //! - **Tier 1**: Blinky (validate toolchain + flash)
-//! - **Tier 2**: Kernel benchmarks (DWT cycle counts for all registered effects)
+//! - **Tier 2**: Kernel benchmarks (DWT cycle counts for all 36 effect kernels)
 //! - **Tier 3**: Audio passthrough (validate codec + DMA)
 //! - **Tier 4**: Single effect processing (first real DSP on hardware)
+//! - **Full pedal**: `sonido_pedal` — a rig player: rigs from the editor, three
+//!   factory rigs, and a jam built on the footswitches, all through
+//!   `sonido_patch::PatchPlayer`
 
 #![no_std]
 
@@ -35,24 +38,23 @@ pub mod expression;
 pub mod hothouse;
 pub mod led;
 pub mod midi;
-pub mod qspi;
-/// Blocking QSPI read driver for the on-board W25Q64 flash.
+/// QSPI flash driver: reads anywhere, writes only the rig bank.
 pub mod qspi_flash;
 pub mod rcc;
 pub mod sdram;
 pub mod tap_tempo;
 
-/// Per-effect "noon preset" sweet-spot values — re-exported from `sonido-platform`.
-#[cfg(feature = "platform")]
-pub mod noon_presets;
-
 /// Runtime effect slot with knob mapping, bypass crossfade, and output sanitization.
 #[cfg(feature = "platform")]
 pub mod effect_slot;
 
-/// Load a patch from QSPI flash and build it into a runnable graph.
-#[cfg(feature = "alloc")]
+/// Rigs on the pedal: read from the rig bank, check, build their effects.
+#[cfg(feature = "platform")]
 pub mod patch_loader;
+
+/// Built-in factory rigs.
+#[cfg(feature = "platform")]
+pub mod rigs;
 
 pub use controls::ControlBuffer;
 pub use rcc::{ClockProfile, cycles_per_block, rcc_config};

@@ -36,7 +36,10 @@
 //! // Desktop / Plugin (via adapter — handles parameter smoothing)
 //! let adapter = Adapter::new(AmpKernel::new(48000.0), 48000.0);
 //!
-//! // Embedded / Daisy Seed (direct — no smoothing)
+//! // Embedded / Daisy Seed — zero-smoothing adapter, as the pedal firmware uses
+//! let effect = Adapter::new_direct(AmpKernel::new(48000.0), 48000.0);
+//!
+//! // Or drive the kernel directly with a typed params struct (no adapter)
 //! let mut kernel = AmpKernel::new(48000.0);
 //! let params = AmpParams::from_knobs(gain, bass, mid, treble, presence, sag, bright, master, output);
 //! let (left, right) = kernel.process_stereo(input_l, input_r, &params);
@@ -85,6 +88,7 @@ use sonido_core::biquad::Biquad;
 use sonido_core::dsp::{GainStage, ToneStack};
 use sonido_core::kernel::{DspKernel, KernelParams, SmoothingStyle};
 use sonido_core::kernel_params;
+use sonido_core::level::Level;
 use sonido_core::math::{
     asymmetric_clip, asymmetric_clip_ad, db_to_linear, soft_clip, soft_clip_ad,
 };
@@ -202,7 +206,7 @@ const POWER_STAGE_POST_DB: f32 = -12.0;
 /// | 5 | `sag_pct` | % | 0–100 | 30.0 |
 /// | 6 | `bright` | bool | 0–1 (STEPPED) | 0.0 |
 /// | 7 | `master_db` | dB | −60–0 | −6.0 |
-/// | 8 | `output_db` | dB | −60–6 | 0.0 |
+/// | 8 | `output_db` | dB | −6–+6 | 0.0 |
 #[derive(Debug, Clone, Copy)]
 pub struct AmpParams {
     /// Input gain percentage (0–100%). Maps to 0–40 dB preamp drive.
@@ -221,7 +225,7 @@ pub struct AmpParams {
     pub bright: f32,
     /// Master volume in dB (range: −60–0 dB).
     pub master_db: f32,
-    /// Output level trim in dB (range: −60–+6 dB).
+    /// Output level trim in dB (range: −6–+6 dB).
     pub output_db: f32,
 }
 
@@ -536,6 +540,7 @@ impl AmpKernel {
 
 impl DspKernel for AmpKernel {
     type Params = AmpParams;
+    const LEVEL: Level = crate::calibration::AMP;
 
     fn process_stereo(&mut self, left: f32, right: f32, params: &AmpParams) -> (f32, f32) {
         // ── Coefficient update: presence shelf ──────────────────────────────
@@ -616,7 +621,7 @@ impl DspKernel for AmpKernel {
             output_linear,
         );
 
-        (out_l, out_r)
+        Self::level_stereo(out_l, out_r)
     }
 
     fn reset(&mut self) {

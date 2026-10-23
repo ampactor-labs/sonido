@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
 # Bundle Sonido's CLAP plugins into loadable `.clap` artifacts.
 #
-# Each plugin is a `[[example]]` cdylib in `crates/sonido-plugin`. This script
-# builds them in release mode and packages the resulting shared libraries into
-# `.clap` files (Linux/Windows: a renamed shared lib; macOS: a proper bundle).
+# Every Sonido plugin (all 36 effects and the graph player) ships in ONE
+# binary: the `sonido` `[[example]]` cdylib in `crates/sonido-plugin`, whose
+# CLAP factory exports them all. This script builds it in release mode and
+# packages it as `sonido.clap` (Linux/Windows: a renamed shared lib; macOS: a
+# proper bundle). It still packages any other example cdylib it finds, so a
+# standalone single-effect build (`sonido_effect_entry!`) bundles the same way.
 #
 # Usage:
 #   scripts/bundle-clap.sh [--target <triple>] [--out <dir>]
@@ -27,8 +30,8 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-# The plugin list IS the example sources: every crates/sonido-plugin
-# examples/*.rs is a plugin. A source without a [[example]] cdylib entry in
+# The binary list IS the example sources: every crates/sonido-plugin
+# examples/*.rs is a .clap. A source without a [[example]] cdylib entry in
 # Cargo.toml fails the missing-output check below; an entry without a source
 # fails the cargo build — so the two cannot drift silently.
 PLUGINS=()

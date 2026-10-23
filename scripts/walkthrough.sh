@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # walkthrough.sh -- Unified guided tour of the Sonido DSP framework.
 #
-# Demonstrates the full Sonido experience: CLI signal generation, all 36 effects
-# (22 demos including variants), analysis tools, A/B comparison, presets, and
-# GUI guidance.
+# Demonstrates the full Sonido experience: CLI signal generation, a check that
+# all 36 effects are registered, 22 effect demos (19 effects, with variants and
+# a full chain), analysis tools, A/B comparison, presets, and GUI guidance.
 #
 # Usage:
 #   ./scripts/walkthrough.sh            # Full walkthrough with narration
@@ -306,10 +306,10 @@ else
 fi
 
 # ============================================================================
-# Section 6: GUI & TUI
+# Section 6: GUI
 # ============================================================================
 
-header "6. GUI & TUI"
+header "6. GUI"
 
 echo ""
 echo -e "  ${BOLD}GUI (graphical real-time processor):${RESET}"
@@ -325,19 +325,15 @@ fi
 echo ""
 echo -e "    ${CYAN}cargo run -p sonido-gui --release${RESET}"
 echo ""
-echo "  Device selection flags:"
-echo "    --input <device>       Input audio device"
+echo "  Flags:"
 echo "    --output <device>      Output audio device"
-echo "    --buffer-size <N>      Audio buffer size (default: 256)"
+echo "    --sample-rate <Hz>     Sample rate (default: 48000)"
+echo "    --buffer-size <N>      Audio buffer size (default: 2048)"
+echo "    --effect <id>          Single-effect mode"
 echo ""
-echo -e "  ${BOLD}TUI (terminal preset editor):${RESET}"
-echo ""
-echo -e "    ${CYAN}sonido tui --preset guitar_crunch${RESET}"
-echo ""
-echo "  The TUI is a preset parameter editor. For live audio processing,"
-echo "  use the GUI or CLI real-time mode."
+echo "  For live audio processing from the terminal, use 'sonido realtime'."
 
-pass "GUI/TUI guidance printed"
+pass "GUI guidance printed"
 
 # ============================================================================
 # Section 7: Summary
