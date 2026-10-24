@@ -22,6 +22,16 @@
 //! let sample = osc.advance();
 //! ```
 //!
+//! ## Modal Synthesis
+//!
+//! Struck bars, tines and bells as banks of decaying resonators, four at a
+//! time in SIMD on `wasm32`:
+//!
+//! - [`ModalBank`] - Up to `4 × G` two-pole resonators, one per vibration mode
+//! - [`Mallet`] - The strike: a pulse whose hardness sets the brightness
+//! - [`modal::presets`] - Marimba, vibraphone, glockenspiel, celesta, kalimba,
+//!   wood block, and bells built from a chord's tones
+//!
 //! ## Wavetable Oscillator
 //!
 //! Bandlimited wavetable synthesis with mip-mapping and morphing:
@@ -150,6 +160,7 @@ pub mod audio_mod;
 pub mod envelope;
 pub mod fm;
 pub mod mod_matrix;
+pub mod modal;
 pub mod oscillator;
 pub mod synth;
 pub mod voice;
@@ -161,6 +172,7 @@ pub use envelope::{AdsrEnvelope, EnvelopeState};
 pub use mod_matrix::{
     ModDestination, ModSourceId, ModulationMatrix, ModulationRoute, ModulationValues,
 };
+pub use modal::{Mallet, ModalBank, Mode};
 pub use oscillator::{Oscillator, OscillatorWaveform};
 pub use synth::{MonophonicSynth, PolyphonicSynth, SynthNode};
 pub use voice::{
