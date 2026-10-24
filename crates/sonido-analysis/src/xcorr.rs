@@ -218,6 +218,56 @@ pub fn peak_lag(correlation: &[f32], max_lag: usize) -> (i32, f32) {
     (lag, best_val)
 }
 
+/// Generalized cross-correlation with phase-transform weighting (GCC-PHAT).
+///
+/// Plain cross-correlation is dominated by whatever frequencies are loudest,
+/// so in a room its peak smears across reflections. GCC-PHAT divides the
+/// cross-spectrum by its own magnitude before the inverse FFT, keeping only
+/// phase, which turns a pure delay into a sharp spike (Knapp and Carter,
+/// "The generalized correlation method for estimation of time delay", IEEE
+/// Trans. ASSP 24(4), 1976). Full whitening is fragile in noise, so `beta`
+/// weights the cross-spectrum by `1 / |X*·Y|^beta`: `1.0` is classic PHAT,
+/// `0.0` is plain cross-correlation, and about `0.4`–`0.7` (PHAT-β) is the
+/// usual compromise for noisy, reverberant rooms.
+///
+/// The output has the same layout as [`xcorr_fft`]:
+/// `[R(-max_lag), …, R(0), …, R(max_lag)]`, so [`peak_lag`] reads it, and a
+/// positive lag means `y` lags `x`.
+pub fn gcc_phat(x: &[f32], y: &[f32], max_lag: usize, beta: f32) -> Vec<f32> {
+    let min_fft_size = x.len() + y.len().saturating_sub(1).max(1);
+    let fft_size = min_fft_size.next_power_of_two().max(2);
+    let fft = Fft::new(fft_size);
+
+    let mut buf_x: Vec<Complex<f32>> = x.iter().map(|&v| Complex::new(v, 0.0)).collect();
+    buf_x.resize(fft_size, Complex::new(0.0, 0.0));
+    let mut buf_y: Vec<Complex<f32>> = y.iter().map(|&v| Complex::new(v, 0.0)).collect();
+    buf_y.resize(fft_size, Complex::new(0.0, 0.0));
+    fft.forward_complex(&mut buf_x);
+    fft.forward_complex(&mut buf_y);
+
+    // Weighted cross-spectrum. The floor keeps silent bins from dividing by
+    // zero; it sits far below any bin with signal in it.
+    let beta = beta.clamp(0.0, 1.0);
+    let floor = 1e-12f32;
+    for (cx, cy) in buf_x.iter_mut().zip(buf_y.iter()) {
+        let g = cx.conj() * cy;
+        let mag = g.norm().max(floor);
+        *cx = g / mag.powf(beta);
+    }
+    fft.inverse_complex(&mut buf_x);
+
+    (-(max_lag as i64)..=(max_lag as i64))
+        .map(|lag| {
+            let idx = if lag >= 0 {
+                lag as usize
+            } else {
+                (fft_size as i64 + lag) as usize
+            };
+            buf_x.get(idx).map_or(0.0, |c| c.re)
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -344,5 +394,62 @@ mod tests {
             lag, delay as i32,
             "Positive lag should indicate y leads x: expected {delay}, got {lag}"
         );
+    }
+    /// A room in miniature: a delayed copy, a strong reflection and noise.
+    fn room(delay: usize, reflection: usize, noise: f32) -> (Vec<f32>, Vec<f32>) {
+        let n = 8192;
+        let src = white_noise(n + 400, 7);
+        let x: Vec<f32> = src[400..].to_vec();
+        let hiss = white_noise(n, 99);
+        let y: Vec<f32> = (0..n)
+            .map(|i| 0.6 * src[400 + i - delay] + 0.5 * src[400 + i - reflection] + noise * hiss[i])
+            .collect();
+        (x, y)
+    }
+
+    #[test]
+    fn gcc_phat_finds_the_delay_in_a_room() {
+        let (x, y) = room(37, 140, 0.3);
+        for beta in [1.0f32, 0.7, 0.4] {
+            let r = gcc_phat(&x, &y, 300, beta);
+            let (lag, _) = peak_lag(&r, 300);
+            assert_eq!(lag, 37, "beta {beta}");
+        }
+    }
+
+    #[test]
+    fn gcc_phat_peak_is_sharper_than_plain_xcorr() {
+        // Low-passed noise makes plain cross-correlation broad; PHAT whitens it.
+        let raw = white_noise(4096 + 64, 3);
+        let mut lp = vec![0.0f32; raw.len()];
+        for i in 1..raw.len() {
+            lp[i] = 0.95 * lp[i - 1] + 0.05 * raw[i];
+        }
+        let x = lp[64..].to_vec();
+        let y: Vec<f32> = (0..4096).map(|i| lp[64 + i - 21]).collect();
+        let width = |r: &[f32]| {
+            let (_, peak) = peak_lag(r, 100);
+            r.iter().filter(|v| v.abs() > 0.5 * peak.abs()).count()
+        };
+        let plain = xcorr_fft(&x, &y, 100);
+        let phat = gcc_phat(&x, &y, 100, 1.0);
+        assert_eq!(peak_lag(&phat, 100).0, 21);
+        assert!(
+            width(&phat) * 4 < width(&plain),
+            "{} vs {}",
+            width(&phat),
+            width(&plain)
+        );
+    }
+
+    #[test]
+    fn gcc_phat_with_beta_zero_is_plain_xcorr() {
+        let x = white_noise(512, 5);
+        let y = white_noise(512, 6);
+        let a = gcc_phat(&x, &y, 20, 0.0);
+        let b = xcorr_fft(&x, &y, 20);
+        for (p, q) in a.iter().zip(b.iter()) {
+            assert!((p - q).abs() < 1e-3, "{p} vs {q}");
+        }
     }
 }

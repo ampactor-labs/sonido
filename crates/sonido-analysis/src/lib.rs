@@ -16,7 +16,8 @@
 //! - [`cfc`] - Cross-Frequency Coupling (Phase-Amplitude Coupling) analysis
 //! - [`export`] - Export formats (FRD, CSV, PGM) for analysis results
 //! - [`lms`] - LMS/NLMS adaptive filters for noise/echo cancellation
-//! - [`xcorr`] - Cross-correlation (direct + FFT) with lag estimation
+//! - [`xcorr`] - Cross-correlation (direct + FFT) with lag estimation, and GCC-PHAT for
+//!   time-delay estimation in reverberant rooms
 //! - [`ddc`] - Digital down-conversion (NCO + FIR + decimation)
 //! - [`phase`] - Phase unwrapping (batch, quality-guided, streaming)
 //! - [`mod@resample`] - Rational resampling via polyphase filter (decimate, interpolate, P/Q)
