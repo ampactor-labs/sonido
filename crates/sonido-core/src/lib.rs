@@ -56,6 +56,19 @@
 //! - [`Oversampled`] - Generic wrapper for anti-aliased nonlinear processing (oversampling)
 //! - [`Adaa1`] - First-order Anti-Derivative Anti-Aliasing for static waveshapers
 //!
+//! ## Peaks, Carriers and Long Impulse Responses
+//!
+//! - [`TruePeakDetector`] - Streaming 4× true-peak measurement (ITU-R BS.1770-4 Annex 2)
+//! - [`TruePeakLimiter`] - Stereo lookahead limiter with a true-peak ceiling
+//! - [`Upconverter`] - Plays a complex baseband signal onto an audio carrier
+//! - `PartitionedConvolver` - Uniformly partitioned overlap-save convolution
+//!   (`spectral` feature)
+//!
+//! ## Randomness
+//!
+//! - [`CounterRng`] - Counter-based random numbers: draw `n` never depends on
+//!   draw `n − 1`, so any moment of a generative piece is reproducible alone
+//!
 //! ## Utilities
 //!
 //! - Math functions: [`db_to_linear`], [`linear_to_db`], [`fast_tanh`], etc.
@@ -119,6 +132,8 @@ pub mod biquad;
 pub mod cached;
 pub mod comb;
 pub mod compose;
+#[cfg(feature = "spectral")]
+pub mod convolver;
 pub mod dc_blocker;
 pub mod delay;
 pub mod dsp;
@@ -140,8 +155,11 @@ pub mod oversample;
 pub mod param;
 pub mod param_info;
 pub mod plugin_host;
+pub mod rng;
 pub mod svf;
 pub mod tempo;
+pub mod true_peak;
+pub mod upconvert;
 
 // Re-export main types at crate root
 pub use adaa::Adaa1;
@@ -153,6 +171,8 @@ pub use biquad::{
 pub use cached::{Cached, needs_update};
 pub use comb::{CombFilter, ModulatedComb};
 pub use compose::{EffectNode, GraphBuilder, feedback, par, seq};
+#[cfg(feature = "spectral")]
+pub use convolver::PartitionedConvolver;
 pub use dc_blocker::DcBlocker;
 pub use delay::{FixedDelayLine, InterpolatedDelay, Interpolation};
 pub use dsp::{GainStage, ToneStack};
@@ -186,8 +206,11 @@ pub use one_pole::OnePole;
 pub use oversample::{MAX_OVERSAMPLE_FACTOR, Oversampled};
 pub use param::{LinearSmoothedParam, SmoothedParam};
 pub use param_info::{ParamDescriptor, ParamFlags, ParamId, ParamScale, ParamUnit, ParameterInfo};
+pub use rng::CounterRng;
 pub use svf::{FourPoleSvf, StateVariableFilter, SvfOutput};
 pub use tempo::{
     DIVISION_LABELS, NoteDivision, TempoContext, TempoManager, TransportState, division_to_index,
     index_to_division,
 };
+pub use true_peak::{TruePeakDetector, TruePeakLimiter};
+pub use upconvert::Upconverter;
