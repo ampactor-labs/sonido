@@ -66,6 +66,10 @@ The foundation crate providing DSP primitives. Designed for `no_std` environment
 - `graph/`: `ProcessingGraph` (DAG routing), `GraphEngine`, `StereoSamples`
 - `kernel/`: `DspKernel`, `KernelParams`, `Adapter`, plus `MorphSpace` / `curve_lerp` / `ChainMorph` for A/B morphing
 - `MacroMap`: Six-knob macro mappings (`MacroTarget` = slot param or `GlobalParam`)
+- `TruePeakDetector` / `TruePeakLimiter`: streaming 4× true-peak measurement (BS.1770-4 Annex 2) and a stereo lookahead limiter that holds a true-peak ceiling
+- `Upconverter`: plays a complex baseband signal (a down-converted band) onto an audio carrier in real time, with gliding, phase-continuous carrier changes
+- `CounterRng`: counter-based random numbers, a pure function of key and counter, so any draw is reproducible without the draws before it
+- `PartitionedConvolver` (`spectral` feature): uniformly partitioned overlap-save convolution for long impulse responses, allocation-free after construction
 
 ### sonido-effects
 
@@ -182,6 +186,11 @@ Full synthesis engine for building synthesizers. `no_std` compatible.
 - `OscillatorWaveform`: Sine, Triangle, Saw, Square, Pulse(width), Noise
 - `WavetableOscillator` / `Wavetable`: Wavetable playback (`wavetable` module)
 - `FmOperator`, `Fm2Op`, `Fm4Op` (+ `Fm4Algorithm`): FM synthesis (`fm` module)
+
+**Modal synthesis:**
+- `ModalBank<G>`: up to `4 × G` two-pole resonators, one per vibration mode, four at a time in SIMD on `wasm32` (`modal` module)
+- `Mallet`: the strike, a raised-cosine pulse whose hardness sets which modes it reaches
+- `modal::presets`: marimba, vibraphone, glockenspiel, celesta, kalimba, wood block, and `chord_bell` (a bell whose partials are all chord tones)
 
 **Envelopes:**
 - `AdsrEnvelope`: Attack-Decay-Sustain-Release envelope generator

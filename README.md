@@ -118,15 +118,16 @@ Measured by in-repo tooling at 48 kHz through a 16384-point fast Fourier transfo
 
 ```
 crates/
-  sonido-core        DSP primitives, DspKernel and Adapter, Oversampled, the DAG graph engine   no_std
+  sonido-core        DSP primitives, DspKernel and Adapter, Oversampled, the DAG graph engine,
+                     true-peak limiting, up-conversion, counter-based random numbers            no_std
   sonido-effects     the 36 kernels and their parameter structs                                no_std
   sonido-registry    create-by-id factory; wraps each kernel in an Adapter                     no_std
-  sonido-synth       PolyBLEP (band-limited) oscillators, envelopes, voices                    no_std
+  sonido-synth       PolyBLEP (band-limited) oscillators, envelopes, voices, modal banks       no_std
   sonido-platform    hardware control abstractions (knobs, toggles, MIDI)                      no_std
   sonido-patch       the patch format: JSON, binary sector, runtime; pedal state, USB link     no_std
   sonido-rigs        the factory rigs (one set for the pedal and the graph player) and the pedal guide
   sonido-daisy       Daisy Seed firmware and the pedal examples; outside the workspace         no_std
-  sonido-analysis    FFT, THD, RT60 and other offline analysis
+  sonido-analysis    FFT, THD, RT60, GCC-PHAT and other offline analysis
   sonido-io          WAV files and cpal (cross-platform audio) streams
   sonido-config      presets and chain configuration
   sonido-graph-dsl   the text rig format and its builder
