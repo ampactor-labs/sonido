@@ -312,7 +312,7 @@ New capabilities that require new crates or significant architectural work.
 **Architecture:**
 - GRU cell: hidden state `h`, input `x`, 3 gate activations (sigmoid × 2, tanh × 1)
 - Hidden size 16 to 40 for guitar amp capture (tunable)
-- At 48 kHz with hidden size 32: about 6,600 FLOPs per sample (three gates of 32 × 33 multiply-adds, plus the output layer), or about 0.32 GFLOPS, which is within Cortex-M7 capability
+- At 48 kHz with hidden size 32: about 6,700 FLOPs per sample (three gates of 32 × 33 multiply-adds, plus the output layer), or about 0.32 GFLOPS, which is within Cortex-M7 capability
 - Model format: JSON header (architecture) + binary weights (f32 LE), compatible with the NAM format or custom training
 
 **Training pipeline:** External Python (PyTorch). The Rust crate is inference-only. Capture workflow: record DI → train on NAM/custom trainer → export weights → load in Sonido.
