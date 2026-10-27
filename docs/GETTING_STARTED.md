@@ -36,7 +36,7 @@ For development, use `cargo run -p sonido-cli -- <args>` to build and run from s
 
 ### GUI (Graphical Interface)
 
-For a visual, interactive experience:
+To use Sonido through its graphical interface:
 
 ```bash
 # Run the GUI application
@@ -61,9 +61,9 @@ make plugins-vst3   # also builds dist-vst3/sonido.vst3 (clap-wrapper shim that 
 
 ### Walkthrough (recommended)
 
-Run the full guided tour -- builds the CLI, checks that all 36 effects are registered,
-generates and verifies the demo WAVs, runs analysis, A/B comparison and preset demos,
-and prints listening guidance:
+Run the full guided tour. It builds the CLI, checks that all 36 effects are registered,
+generates and verifies the demo WAVs, runs the analysis, A/B comparison and preset
+demos, and prints listening guidance:
 
 ```bash
 ./scripts/walkthrough.sh           # Full walkthrough with narration
@@ -77,8 +77,8 @@ make verify-demos
 
 ### Generate Demos
 
-Generate all demo WAV files into `demos/` (5 source signals, 22 effect demos — 21
-single-effect renders plus a full chain — and 7 graph-topology demos). The script
+Generate all demo WAV files into `demos/`: 5 source signals, 22 effect demos (21
+single-effect renders plus a full chain), and 7 graph-topology demos. The script
 calls the release CLI binary, so build it first with `cargo build -p sonido-cli --release`:
 
 ```bash
@@ -98,7 +98,7 @@ cargo run -p sonido-effects --example chain_demo
 
 ## Your First Effect
 
-Let's create a simple distortion effect using the registry:
+Create a simple distortion effect with the registry:
 
 ```rust
 use sonido_core::Effect;
@@ -209,8 +209,8 @@ fn main() {
 
 ## Using the CLI
 
-Process a file through effects. Output filename is optional -- when omitted, it is
-auto-generated from the input stem and effect specification:
+Process a file through effects. The output filename is optional; when you omit it, the
+CLI generates one from the input stem and the effect specification:
 
 ```bash
 # Simple distortion (auto-generates input_distortion.wav)
@@ -272,7 +272,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ## Embedded/no_std Usage
 
-For embedded systems without standard library, use kernels directly (no adapter overhead):
+For embedded systems without the standard library, use kernels directly (no adapter overhead):
 
 ```toml
 [dependencies]
@@ -451,7 +451,7 @@ All runnable examples with their `cargo run` commands:
 
 ## WebAssembly Build
 
-Sonido's GUI compiles to `wasm32-unknown-unknown` for browser deployment. The same crate produces both native and wasm binaries without feature flags — cfg gates handle the differences at the source level.
+Sonido's GUI compiles to `wasm32-unknown-unknown` for browser deployment. The same crate produces both native and wasm binaries without feature flags; cfg gates handle the differences at the source level.
 
 ### Prerequisites
 
@@ -469,7 +469,7 @@ rustup target add wasm32-unknown-unknown
 cd crates/sonido-gui && trunk serve
 ```
 
-Opens at `http://localhost:8080`. Hot-reloads on source changes.
+The server opens at `http://localhost:8080` and hot-reloads on source changes.
 
 ### Production Build
 
@@ -477,7 +477,7 @@ Opens at `http://localhost:8080`. Hot-reloads on source changes.
 cd crates/sonido-gui && trunk build --release
 ```
 
-Output in `crates/sonido-gui/dist/`. The `dist/` directory is self-contained and can be served from any static host.
+The build writes its output to `crates/sonido-gui/dist/`. The `dist/` directory is self-contained and can be served from any static host.
 
 ### Compile Check (without full trunk build)
 
@@ -485,13 +485,13 @@ Output in `crates/sonido-gui/dist/`. The `dist/` directory is self-contained and
 cargo check --target wasm32-unknown-unknown -p sonido-gui
 ```
 
-This is faster than `trunk build` and sufficient to verify the wasm target compiles.
+This is faster than `trunk build` and is enough to verify that the wasm target compiles.
 
 ### What Works on Wasm
 
 - The node-graph editor with all 36 effects
 - Real-time audio via cpal's wasm backend (WebAudio API); audio resumes on the first user gesture (browser autoplay policy)
-- WAV file loading via browser file picker (`rfd::AsyncFileDialog`; files over 5,760,000 total samples — 60 s of 48 kHz stereo — are rejected)
+- WAV file loading via browser file picker (`rfd::AsyncFileDialog`; files over 5,760,000 total samples, which is 60 s of 48 kHz stereo, are rejected)
 - Session save/load as browser download/upload
 - Export of patch JSON and the pedal `.bin` sector as downloads
 
@@ -515,7 +515,7 @@ fn spawn_audio_thread() { ... }
 fn start_audio_worklet() { ... }
 ```
 
-Key per-target differences:
+The main differences between the targets:
 
 | Concern | Native | Wasm |
 |---------|--------|------|
