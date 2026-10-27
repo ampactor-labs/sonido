@@ -48,6 +48,10 @@ const BAND_Q: f32 = 6.0;
 const LOST_RATIO: f32 = 1e-3;
 const FOUND_RATIO: f32 = 1e-1;
 
+/// Below this mean-square level (-60 dBFS) a band holds no hum, only noise,
+/// and its crossings are not the grid's: the ear reports nothing from it.
+const FLOOR_ENV: f32 = 1e-6;
+
 /// What the ear heard, asked for once per tick.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct GridReading {
@@ -296,11 +300,13 @@ impl GridEar {
         } else if self.held_env > 0.0 && band.env < self.held_env * LOST_RATIO {
             self.lost = true;
         } else if self.held_env == 0.0 {
-            self.held_env = band.env;
+            if band.env >= FLOOR_ENV {
+                self.held_env = band.env;
+            }
         } else {
             self.held_env += self.held_k * (band.env - self.held_env);
         }
-        if self.lost {
+        if self.lost || band.env < FLOOR_ENV {
             self.tick_count = 0;
             return None;
         }
