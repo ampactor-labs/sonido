@@ -13,7 +13,7 @@
 >   bitcrusher, delay, reverb, ringmod, filter), not 3 or 15. Factory preset 2 uses delay.
 > - Graph rebuilds run in a separate `graph_rebuild_task` (every 20 ms), not in the
 >   control poll; the callback fades to dry while `GRAPH_UPDATING` is set.
-> - Morph mode uses K5 for morph time (0.1–5 s) and K6 for master level (−60..+12 dB).
+> - Morph mode uses K5 for morph time (0.1 to 5 s) and K6 for master level (−60..+12 dB).
 >   Holding both footswitches for 1.5 s enters the DFU bootloader.
 > - Not used: `TapTempo`, `TempoManager`.
 
@@ -86,9 +86,9 @@ static NODES: SharedMutex<[NodeState; 3]> = ...;
 ```
 
 The Mutex is a critical-section mutex (interrupt-disable), not a blocking mutex.
-On a single-core Cortex-M7 with cooperative embassy executor, this is zero-cost —
-there's no contention. It just satisfies Rust's safety requirements for mutable
-statics.
+On a single-core Cortex-M7 with cooperative embassy executor, this is zero-cost
+because there's no contention. It just satisfies Rust's safety requirements for
+mutable statics.
 
 ## Audio Callback Flow
 
@@ -117,7 +117,7 @@ Every 15th block (~100Hz control poll):
 
 ## Init Sequence
 
-Matches single_effect's proven pattern — no SDRAM, no milestones, no watchdog:
+Matches single_effect's proven pattern, with no SDRAM, no milestones and no watchdog:
 
 ```
 1. enable_d2_sram()
@@ -134,20 +134,20 @@ Matches single_effect's proven pattern — no SDRAM, no milestones, no watchdog:
 ## Graph Rebuild Strategy
 
 Rebuild happens inside the control poll (step 9), within the audio callback.
-Single-threaded — no contention. At 480MHz, rebuild_graph takes ~50µs, well
-within the 667µs block budget.
+This is single-threaded, so there is no contention. At 480MHz, rebuild_graph
+takes ~50µs, well within the 667µs block budget.
 
-`needs_rebuild` is a local bool in the closure. Set by footswitch scroll or
-topology change, consumed by the rebuild step. The GRAPH mutex is already held
+`needs_rebuild` is a local bool in the closure. A footswitch scroll or topology
+change sets it, and the rebuild step consumes it. The GRAPH mutex is already held
 during process_block, so rebuild just extends that critical section.
 
 ## Factory Presets
 
 3 presets (same as v1):
 
-1. "Room to Shimmer" — Reverb with morph from intimate room to infinite shimmer
-2. "Slap to Self-Osc" — (uses Delay, not available in Phase 1 — skip or use Chorus)
-3. "Clean to Saturated" — Distortion + Reverb
+1. "Room to Shimmer": Reverb with morph from intimate room to infinite shimmer
+2. "Slap to Self-Osc": uses Delay, which is not available in Phase 1 (skip it or use Chorus)
+3. "Clean to Saturated": Distortion + Reverb
 
 Adapt preset 2 to use available effects for Phase 1.
 
@@ -184,7 +184,7 @@ Old `sonido_pedal.rs` kept for reference. Add `sonido_pedal_v2` to
 ## Success Criteria
 
 1. Audio passes through with effects processing (no SAI overrun)
-2. Heartbeat LED stays alive (executor not starved)
+2. Heartbeat LED keeps blinking (executor not starved)
 3. Footswitches scroll effects and toggle bypass with LED feedback
 4. Toggles switch nodes, A/B mode, and topology
 5. Knobs control effect parameters with noon-biased mapping

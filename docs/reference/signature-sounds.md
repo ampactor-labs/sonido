@@ -1,83 +1,84 @@
 # Signature Sounds
 
 Brainstorming document for sounds and interactions that differentiate Sonido from
-textbook DSP implementations. The goal: effects that make players ask "what IS that?"
+textbook DSP implementations. The goal is effects that make players ask "what IS that?"
 
 ---
 
 ## The Problem
 
-Sonido has 36 production effects, all well-implemented with proper anti-aliasing,
+Sonido has 36 production effects, all well implemented with proper anti-aliasing,
 parameter smoothing, golden regression tests, and embedded deployment paths. They
-sound correct. They don't sound *distinctive*.
+sound correct, but they don't sound distinctive.
 
-Textbook implementations don't sell pedals. The DOD Rubberneck succeeded not because
-its BBD delay was technically superior, but because of creative decisions: the regen
-knob interaction that encourages self-oscillation as a *feature*, the rubberneck
-momentary switch that bends pitch in real time. The Eventide H9 isn't popular for
-its reverb algorithm -- it's popular because scene morphing turns parameter space
-into a performance instrument.
+Players do not buy a pedal for a correct textbook implementation. The DOD
+Rubberneck succeeded because of creative decisions, not because its BBD delay was
+technically superior. Its regen knob interaction lets players use self-oscillation
+as a feature, and its rubberneck momentary switch bends pitch in real time. The Eventide
+H9 is popular because scene morphing turns parameter space into a performance
+instrument, and not because of its reverb algorithm.
 
-Where's the creative spark? Sonido has the infrastructure (kernel architecture,
-DAG routing, preset morphing, analysis toolkit, synth engine) but hasn't yet
-exploited it for sounds that can't be made any other way.
+Sonido has the infrastructure (kernel architecture, DAG routing, preset morphing,
+analysis toolkit, synth engine) but hasn't yet used it for sounds that can't be
+made any other way.
 
 ---
 
 ## Design Principles
 
-These principles also inform the [Roadmap — Design Philosophy](../ROADMAP.md#design-philosophy) section.
+These principles also inform the [Design Philosophy section of the Roadmap](../ROADMAP.md#design-philosophy).
 
 ### Musicality Over Correctness (The Tom Cram Principle)
 
-DigiTech's best products — Whammy, Space Station, DOD reissues — succeeded because
-R&D prioritized *feel* over spec sheets. Tom Cram's team evaluated effects by
-playing through them, not by measuring THD. A waveshaper that cleans up when you
-roll back the guitar volume is more valuable than one with 0.001% lower distortion.
-This is the "volume knob cleanup" test: does the effect respond to playing dynamics
-the way a great amp does?
+DigiTech's best products (Whammy, Space Station, DOD reissues) succeeded because
+R&D put feel ahead of spec sheets. Tom Cram's team evaluated effects by playing
+through them, not by measuring THD. A waveshaper that cleans up when you roll back
+the guitar volume is better than one with 0.001% lower distortion. This is the
+"volume knob cleanup" test: does the effect respond to playing dynamics the way a
+great amp does?
 
 **Implications for Sonido:** Every effect should be evaluated by playing through it
 with a real guitar signal (or the built-in signal generator). Golden file tests
-ensure correctness; the creative bar is whether the effect makes you want to keep
+ensure correctness; the creative test is whether the effect makes you want to keep
 playing.
 
 ### Dynamic Response
 
-The best analog circuits change character with input level — not just volume, but
-tonal quality, harmonic content, and feel. A tube amp's transfer function morphs
-continuously from clean headroom through soft saturation to hard clipping. Digital
-effects should exploit this: envelope followers modulating waveshaper curves, input
-dynamics driving effect depth, compression that breathes.
+The best analog circuits change character with input level: their tonal quality,
+harmonic content, and feel change along with their volume. A tube amp's transfer
+function changes continuously from clean headroom through soft saturation to hard
+clipping. Digital effects should use this: envelope followers modulating
+waveshaper curves, input dynamics driving effect depth, compression whose gain
+moves audibly with the playing.
 
 ### Real-Time Expression
 
-The performance IS the sound. Parameters should respond to physical gestures --
-foot sweeps, knob combinations, playing dynamics -- in ways that create musical
-results, not just parameter changes. A wah pedal is the canonical example: the
-*sweep* is the effect, not the filter setting.
+A player's physical gestures are part of the sound. Parameters should respond to
+gestures such as foot sweeps, knob combinations, and playing dynamics in ways that
+create musical results. A wah pedal is the canonical example: the effect comes from
+sweeping the filter, not from any one filter setting.
 
 ### Unexpected Interaction
 
-The most interesting sounds come from parameters that interact nonlinearly. Chorus
-depth affecting feedback path. Delay time modulated by input envelope. Two controls
-that create a "sweet zone" where they interact constructively. Design for these
-interactions rather than isolated parameters.
+The most interesting sounds come from parameters that interact nonlinearly: chorus
+depth affecting the feedback path, delay time modulated by the input envelope, or
+two controls that create a "sweet zone" where they interact constructively. Design
+for these interactions rather than for isolated parameters.
 
 ### "What IS That?" Moments
 
-Sounds that can't be classified into existing effect categories. Not "a delay with
-modulation" but something that makes a player stop and explore. These moments come
-from combining domains that don't normally touch: synthesis + analysis, spectral +
-temporal, adaptive + generative.
+These are sounds that don't fit an existing effect category such as "a delay with
+modulation", and that make a player stop and explore. They come from combining
+domains that are usually kept apart: synthesis + analysis, spectral + temporal,
+adaptive + generative.
 
 ### Exploit Digital
 
-Do what analog can't. Negative delay (lookahead). Infinite freeze without noise
-buildup. Topology changes mid-performance. Spectral manipulation. Adaptive learning.
-Parameter-space trajectories through preset morphing. These are capabilities that
-have no analog equivalent -- they should be the foundation of signature sounds,
-not afterthoughts.
+Digital processing can do things analog circuits can't: negative delay
+(lookahead), infinite freeze without noise buildup, topology changes
+mid-performance, spectral manipulation, adaptive learning, and parameter-space
+trajectories through preset morphing. None of these has an analog equivalent, so
+signature sounds should be built on them.
 
 ---
 
@@ -85,11 +86,11 @@ not afterthoughts.
 
 ### 0. Dynamic Waveshaper Response
 
-**Concept:** Distortion that changes character based on playing dynamics — not just
-gain scaling, but the actual waveshaping transfer function morphing continuously
-with input level. Roll back the guitar volume and the clipping softens from hard
-clip to gentle saturation. Dig in hard and harmonic content shifts from even to
-odd harmonics. This is the "volume knob cleanup" that defines every great tube amp
+**Concept:** Distortion that changes character with playing dynamics. Beyond gain
+scaling, the waveshaping transfer function itself changes continuously with input
+level. Roll back the guitar volume and the clipping softens from hard clip to
+gentle saturation. Pick hard and the harmonic content shifts from even to odd
+harmonics. This is the "volume knob cleanup" that defines every great tube amp
 and the best transistor circuits (DOD 250, Klon Centaur, TS808).
 
 **Existing infrastructure:**
@@ -101,8 +102,8 @@ and the best transistor circuits (DOD 250, Klon Centaur, TS808).
 
 **What's novel:** Most digital distortions select a fixed transfer function and
 apply it at all levels. Dynamic waveshaping blends between transfer functions based
-on instantaneous input envelope. The blend coefficient becomes the "feel" parameter
-— how aggressively the character shifts with dynamics. At maximum sensitivity, you
+on instantaneous input envelope. The blend coefficient becomes the "feel" parameter:
+it sets how strongly the character shifts with dynamics. At maximum sensitivity, you
 get tube-like cleanup; at zero, you get the traditional fixed waveshaper.
 
 **Implementation sketch:**
@@ -113,22 +114,21 @@ get tube-like cleanup; at zero, you get the traditional fixed waveshaper.
 - Optional: asymmetric response (fast attack for pick transient, slow release for sustain)
 
 **Why this is #0:** This is the single most impactful change Sonido can make. It
-transforms distortion from "technically correct" to "feels like an amp." Every
-guitarist evaluates distortion by rolling back the volume knob. If it doesn't clean
-up, it's digital. If it does, it's magic.
+takes distortion from "technically correct" to "feels like an amp." Every guitarist
+evaluates distortion by rolling back the volume knob: if the sound doesn't clean
+up, it sounds digital, and if it does, it feels like an amp.
 
 **References:**
-- David Yeh, "Digital Implementation of Musical Distortion Circuits" (DAFx-2008) — dynamic waveshaping models
-- Tom Cram (DigiTech/DOD) — "volume knob cleanup" as the primary design target for digital distortion
-- Klon Centaur circuit analysis — level-dependent germanium diode clipping crossover
+- David Yeh, "Digital Implementation of Musical Distortion Circuits" (DAFx-2008): dynamic waveshaping models
+- Tom Cram (DigiTech/DOD): "volume knob cleanup" as the primary design target for digital distortion
+- Klon Centaur circuit analysis: level-dependent germanium diode clipping crossover
 
 ---
 
 ### 1. Scene Morphing
 
-**Concept:** Expression pedal sweeps through parameter-space trajectories. Not just
-A-to-B linear interpolation, but paths through multi-dimensional preset space with
-curves, waypoints, and hold zones.
+**Concept:** An expression pedal sweeps through parameter-space trajectories:
+paths through multi-dimensional preset space with curves, waypoints, and hold zones.
 
 **Existing infrastructure:**
 - `KernelParams::lerp()` already interpolates between any two parameter snapshots
@@ -136,7 +136,7 @@ curves, waypoints, and hold zones.
 - `from_normalized()` / `to_normalized()` for range mapping
 - Expression pedal input: `ExpressionInput` in `crates/sonido-daisy/src/expression.rs` (smoothing, deadzone, slew limiting)
 
-**What's novel:** Most morphing is linear A-to-B. Scene morphing with *waypoints*
+**What's novel:** Most morphing is linear A-to-B. Scene morphing with waypoints
 creates curved paths through parameter space. A single expression pedal sweep could
 move through 5 preset snapshots along a Catmull-Rom spline, creating tonal
 transitions that can't be achieved by tweaking individual knobs.
@@ -156,9 +156,9 @@ transitions that can't be achieved by tweaking individual knobs.
 
 ### 2. Living Topology
 
-**Concept:** DAG graph rewiring as a creative instrument. Footswitch or expression
-pedal changes routing in real time -- parallel becomes serial, feedback loops open
-and close, signal splits and recombines at different points.
+**Concept:** Rewiring the DAG graph as a creative instrument. A footswitch or
+expression pedal changes the routing in real time: parallel becomes serial, feedback
+loops open and close, and the signal splits and recombines at different points.
 
 **Existing infrastructure:**
 - `ProcessingGraph` supports atomic schedule swap with ~5ms crossfade (click-free)
@@ -166,8 +166,8 @@ and close, signal splits and recombines at different points.
 - `GraphCommand::ReplaceTopology` (in `sonido-gui`'s `chain_manager.rs`) for atomic swap
 - `sonido-graph-dsl` for topology description
 
-**What's novel:** No analog pedal can rewire its circuit in real time. Digital can.
-A single footswitch press could morph from:
+**What's novel:** No analog pedal can rewire its circuit in real time, but a digital
+one can. A single footswitch press could change the routing from:
 ```
 guitar -> distortion -> delay -> reverb -> out
 ```
@@ -176,13 +176,13 @@ to:
 guitar -> [distortion | reverb] -> delay -> out
          (parallel, 50/50 mix)
 ```
-with click-free crossfade. The topology change IS the effect.
+with a click-free crossfade. The change of topology is the effect the listener hears.
 
 **Implementation sketch:**
 - `TopologySet`: ordered list of compiled `ProcessingGraph` schedules
 - Footswitch cycles through topologies (or expression pedal crossfades)
 - Schedule crossfade already works (~5ms, `SmoothedParam`)
-- DSL console already parses topology strings -- wire up to footswitch bank
+- DSL console already parses topology strings; wire it up to the footswitch bank
 
 **References:**
 - Empress Zoia (modular routing, but menu-driven not real-time)
@@ -215,22 +215,22 @@ harmonic content modulates effect parameters in musically meaningful ways:
 
 **a. PAC Tremolo:** Comodulogram analysis extracts the coupling between low-frequency
 rhythm (pick strokes) and high-frequency harmonics. This coupling coefficient
-modulates tremolo depth/rate. Soft picking = gentle tremolo. Hard strumming =
-intense modulation. The effect responds to *how* you play, not just *what*.
+modulates tremolo depth/rate. Soft picking gives a gentle tremolo, and hard
+strumming gives intense modulation.
 
-**b. Adaptive Tone:** LMS filter trained on the player's signal over N seconds.
+**b. Adaptive Tone:** An LMS filter is trained on the player's signal over N seconds.
 The filter converges toward the spectral profile of the playing, then applies
-an inverse or complementary EQ. Result: tone that adapts to the guitar, pickup,
-and playing style automatically.
+an inverse or complementary EQ, so the tone adapts to the guitar, pickup, and
+playing style automatically.
 
-**c. Phase-Coherent Modulation:** Hilbert transform extracts instantaneous phase
-of the guitar signal. Modulation effects (chorus, flanger, phaser) sync their
-LFO phase to the guitar's phase structure rather than a free-running oscillator.
-Result: modulation that follows the music rather than fighting it.
+**c. Phase-Coherent Modulation:** A Hilbert transform extracts the instantaneous
+phase of the guitar signal. Modulation effects (chorus, flanger, phaser) sync their
+LFO phase to the guitar's phase structure rather than a free-running oscillator,
+so the modulation stays in step with the music.
 
 **References:**
 - Canolty et al., "High Gamma Power Is Phase-Locked to Theta Oscillations" (2006)
-- Widrow & Hoff, "Adaptive Switching Circuits" (1960) -- original LMS
+- Widrow & Hoff, "Adaptive Switching Circuits" (1960): original LMS
 - No known commercial guitar effect uses PAC or adaptive filtering
 
 ---
@@ -238,8 +238,8 @@ Result: modulation that follows the music rather than fighting it.
 ### 4. Space Station 2.0
 
 **Concept:** Guitar pitch detection drives PolyBLEP oscillators through independent
-effect chains. Already in ROADMAP.md as a planned feature. The *signature* version
-adds formant synthesis, chord detection, and harmonizer modes.
+effect chains. ROADMAP.md already lists this as a planned feature. The signature
+version adds formant synthesis, chord detection, and harmonizer modes.
 
 **Existing infrastructure:**
 - `sonido-synth`: PolyBLEP oscillators, ADSR envelopes, voice manager, mod matrix
@@ -247,8 +247,8 @@ adds formant synthesis, chord detection, and harmonizer modes.
 - DAG routing for parallel dry/synth paths
 - Full effect chain available for synth signal
 
-**What's novel beyond ROADMAP:** The roadmap describes basic pitch-tracking synth.
-The signature version exploits the full synth + effects + analysis stack:
+**What's novel beyond ROADMAP:** The roadmap describes a basic pitch-tracking synth.
+The signature version uses the full synth + effects + analysis stack:
 - **Formant synthesis**: Vowel filter bank applied to synth output. Guitar triggers
   synth, expression pedal sweeps through vowel shapes (ah-ee-oh-oo).
 - **Chord detection**: Multiple pitch detection → chord identification → synth
@@ -267,9 +267,9 @@ The signature version exploits the full synth + effects + analysis stack:
 
 ### 5. Spectral Effects
 
-**Concept:** FFT-domain effects using `sonido-analysis` infrastructure. Already
-in ROADMAP.md as "Spectral Processing Effects." The signature angle: spectral
-operations as *performance instruments*, not studio tools.
+**Concept:** FFT-domain effects using `sonido-analysis` infrastructure. ROADMAP.md
+already lists them as "Spectral Processing Effects." The signature version treats
+spectral operations as performance instruments, not studio tools.
 
 **Existing infrastructure:**
 - FFT, STFT, spectral analysis in `sonido-analysis`
@@ -280,17 +280,18 @@ operations as *performance instruments*, not studio tools.
 
 **a. Spectral Freeze + Resynth:** Hold a footswitch to capture an FFT frame.
 The frozen spectrum sustains indefinitely (no noise buildup, unlike reverb-based
-sustain). While held, play new notes -- the pitch changes but the spectral
-envelope stays frozen. Release to return to live signal.
+sustain). While the footswitch is held, play new notes: the pitch changes but the
+spectral envelope stays frozen. Release it to return to the live signal.
 
-**b. Spectral Morph:** Capture two spectral snapshots (A and B). Expression pedal
-crossfades between them in the frequency domain. At 50%, you get a sound that is
-neither A nor B -- it's the spectral average, which can be otherworldly.
+**b. Spectral Morph:** Capture two spectral snapshots (A and B). An expression pedal
+crossfades between them in the frequency domain. At 50%, you hear the spectral
+average of A and B, which can sound otherworldly.
 
-**c. Spectral Gate as Instrument:** Instead of noise reduction, use spectral gate
-creatively. Set the threshold so only the loudest harmonics pass through. Soft
-playing produces a thin, ghostly tone (fundamental only). Hard playing opens up
-the full spectrum. The gate threshold becomes an expression parameter.
+**c. Spectral Gate as Instrument:** Use a spectral gate as a creative effect
+instead of for noise reduction. Set the threshold so only the loudest harmonics
+pass through. Soft playing produces a thin, ghostly tone (fundamental only), and
+hard playing lets the full spectrum through. The gate threshold becomes an
+expression parameter.
 
 **References:**
 - Eventide Blackhole (spectral-ish reverb, infinite decay)
@@ -311,34 +312,35 @@ filtering infrastructure in `sonido-analysis`.
 
 **Sub-ideas:**
 
-**a. Style Mirror:** LMS filter trained on 30 seconds of playing. Extracts the
-spectral "fingerprint" of the player's style. When engaged, applies a complementary
-EQ that makes any guitar sound like *that player's* tone profile. Think: "make my
-Strat sound like it has the spectral profile of my Les Paul session."
+**a. Style Mirror:** An LMS filter trained on 30 seconds of playing extracts the
+spectral "fingerprint" of the player's style. When engaged, it applies a
+complementary EQ that makes any guitar sound like that player's tone profile. For
+example: "make my Strat sound like it has the spectral profile of my Les Paul
+session."
 
 **b. Dynamic Compressor Learning:** Cross-correlation between input envelope and
 desired output envelope (set by a reference recording or a simple "target dynamics"
 control). The compressor's ratio, threshold, and knee auto-adjust over time to
-match the target dynamic profile. Plays more expressively over time as it learns
-the player's dynamic range.
+match the target dynamic profile. As it adapts to the player's dynamic range
+over time, its output becomes more expressive.
 
 **c. Rhythm-Aware Effects:** Cross-correlation detects rhythmic periodicity in
 playing. Delay time, tremolo rate, and LFO speed auto-lock to detected rhythm.
-Unlike tap tempo, this happens continuously and adapts as the tempo changes.
-Playing rubato? The effects follow.
+Unlike tap tempo, this happens continuously and adapts as the tempo changes, so
+the effects follow a player who plays rubato.
 
 **References:**
 - No known commercial effect uses adaptive filtering for creative purposes
-- Academic: "Adaptive Audio Effects" -- Giannoulis et al. (DAFx 2012)
+- Academic: "Adaptive Audio Effects", Giannoulis et al. (DAFx 2012)
 - Related concept: Eventide H9 HotSwitch (but preset-based, not adaptive)
 
 ---
 
 ## audioDNA Inspirations
 
-The products analyzed so far via clean-room reverse engineering
-(Ventura Vibe, Obscura Delay, Dirty Robot, Polara Reverb) represent *conservative*
-design -- well-executed traditional effects.
+The products analyzed so far through clean-room reverse engineering
+(Ventura Vibe, Obscura Delay, Dirty Robot, Polara Reverb) are conservative
+designs: well-executed traditional effects.
 
 The creative gap is in products that create new categories:
 
@@ -353,8 +355,8 @@ The creative gap is in products that create new categories:
 | Cooper FX Generation Loss | Lo-fi as deliberate aesthetic (wow/flutter, noise, dropout) | Tape kernel extended with failure modes |
 
 These products succeed because they combine standard DSP building blocks in
-non-standard ways. Sonido has most of the building blocks. The missing piece is
-the *creative routing and interaction design* that turns building blocks into
+non-standard ways. Sonido has most of the building blocks, but it lacks the
+creative routing and interaction design that turns building blocks into
 instruments.
 
 ---
@@ -392,10 +394,10 @@ performance instrument.
 | Custom LUT | Arbitrary response for specific effects |
 | Hysteresis | Different curve up vs. down (heel-to-toe vs. toe-to-heel) |
 
-The expression pedal is the most underutilized control in guitar effects. Most
+The expression pedal is the most underused control in guitar effects. Most
 pedals map it linearly to one parameter. With scene morphing, a single sweep
-could traverse a multi-dimensional parameter space, creating tonal journeys
-that would require 6 simultaneous knob turns.
+could move through a multi-dimensional parameter space and make tonal changes
+that would otherwise require 6 simultaneous knob turns.
 
 ---
 
@@ -411,24 +413,24 @@ that would require 6 simultaneous knob turns.
 | Space Station 2.0 | Medium | High (synth, DAG, tuner pitch detector) | High (polyphonic detect) | 5th |
 | Adaptive Effects | Very High | Medium (LMS exists, needs RT bridge) | High | 6th |
 
-Dynamic waveshaper response is the highest-leverage single change: low effort
-(~200-400 LOC), builds on existing distortion kernel and envelope follower,
-and directly addresses the #1 quality gap between digital and analog distortion.
-This is the "does it clean up when you roll back the volume?" test that every
-guitarist applies instinctively.
+Dynamic waveshaper response is the single change with the most benefit for the
+effort: it is low effort (~200-400 LOC), builds on the existing distortion kernel
+and envelope follower, and directly addresses the #1 quality gap between digital
+and analog distortion. That gap is the "does it clean up when you roll back the
+volume?" test that every guitarist applies instinctively.
 
-Scene morphing and living topology follow as the next highest-leverage
-starting points: they build on infrastructure that already works and create
-genuinely new interaction paradigms. Cross-domain DSP is the most novel --
-no commercial product uses PAC or adaptive filtering for guitar effects --
-but requires bridging the offline analysis path to real-time processing.
+Scene morphing and living topology give the next most benefit for the effort:
+they build on infrastructure that already works and create new kinds of
+interaction. Cross-domain DSP is the most novel (no commercial product uses PAC
+or adaptive filtering for guitar effects), but it requires bridging the offline
+analysis path to real-time processing.
 
 ---
 
 ## See Also
 
-- [Roadmap](../ROADMAP.md) -- Planned capabilities and milestones
-- [Effects Reference](../EFFECTS_REFERENCE.md) -- Current 36 effects with parameters
-- [Kernel Architecture](../KERNEL_ARCHITECTURE.md) -- DspKernel/KernelParams patterns
-- [Embedded Guide](../EMBEDDED.md) -- Hardware targets and constraints
-- [Architecture](../ARCHITECTURE.md) -- Crate dependency graph
+- [Roadmap](../ROADMAP.md): Planned capabilities and milestones
+- [Effects Reference](../EFFECTS_REFERENCE.md): Current 36 effects with parameters
+- [Kernel Architecture](../KERNEL_ARCHITECTURE.md): DspKernel/KernelParams patterns
+- [Embedded Guide](../EMBEDDED.md): Hardware targets and constraints
+- [Architecture](../ARCHITECTURE.md): Crate dependency graph

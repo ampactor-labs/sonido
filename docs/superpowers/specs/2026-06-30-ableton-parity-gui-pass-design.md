@@ -2,105 +2,114 @@
 
 **Date:** 2026-06-30
 **Status:** Implemented (Info View = selection-driven v1; per-node/widget hover
-and desktop chrome-summon drawer are the documented fast-follows)
+and desktop chrome-summon drawer are documented as follow-up work)
 **Branch:** `feat/gui-ableton-parity`
 
-> **Note (2026-10-22):** As built, the Info View lives in `crates/sonido-gui/src/info_view.rs` (not `sonido-gui-core`), and `InfoPayload` is `{ title, description, params, shortcuts }`: the title and prose come from the registry, the live `(name, value)` pairs from `ParamDescriptor` / `ParamBridge`, not from the `Accessible` trait. It is selection-driven only (no per-widget hover target). Focus mode is `chrome_collapsed` in `app.rs`, toggled by a header button or `F`. The I/O strips this spec edits (`render_io_strip`, `render_phone_levels`) were later replaced by wall bars, see `2026-06-30-io-wall-bars-design.md`. The meter work (`MeterState`, `db_to_norm`, `smooth`, `DB_MARKS`) matches `crates/sonido-gui-core/src/widgets/meter.rs`.
+> **Note (2026-10-22):** As built, the Info View is in `crates/sonido-gui/src/info_view.rs` (not `sonido-gui-core`), and `InfoPayload` is `{ title, description, params, shortcuts }`: the title and prose come from the registry, the live `(name, value)` pairs from `ParamDescriptor` / `ParamBridge`, not from the `Accessible` trait. It is selection-driven only (no per-widget hover target). Focus mode is `chrome_collapsed` in `app.rs`, toggled by a header button or `F`. The I/O strips this spec edits (`render_io_strip`, `render_phone_levels`) were later replaced by wall bars, see `2026-06-30-io-wall-bars-design.md`. The meter work (`MeterState`, `db_to_norm`, `smooth`, `DB_MARKS`) matches `crates/sonido-gui-core/src/widgets/meter.rs`.
 
 Three GUI features that bring the hosted WASM GUI closer to Ableton Live's
-metering, layout flexibility, and contextual help — plus one bug already fixed
-along the way. Built in order: **Meters → Info View → Layout**, because each
-composes onto the prior.
+metering, layout flexibility, and contextual help, plus one bug fixed along the
+way. The build order is Meters, then Info View, then Layout, because each builds
+on the one before.
 
 ## Bug already fixed (precursor)
 
-The effect-palette search field re-grabbed focus every frame nothing else was
-focused (`app.rs`, palette sheet). On touch tiers this popped the soft keyboard
-the instant a thumb rested on the list to scroll. Fixed by gating auto-focus to
-non-touch breakpoints (`!self.breakpoint.is_compact()`). Touch users tap the
-field to type; the keyboard no longer ambushes a scroll.
+The effect-palette search field took keyboard focus again on every frame in
+which nothing else had focus (`app.rs`, palette sheet). On touch tiers this
+opened the soft keyboard as soon as a thumb touched the list to scroll it. The
+fix limits auto-focus to non-touch breakpoints (`!self.breakpoint.is_compact()`).
+Touch users tap the field to type, and scrolling the list no longer opens the
+keyboard.
 
 ## Common foundation
 
-Every feature needs **state that survives between frames** in an immediate-mode
-UI: peak-hold, ballistics, the held max-dB number, and "what is the Info View
-currently showing." Today the meter is stateless and the one bit of state that
-exists (`clip_latched: [bool; 2]`) is hand-threaded through the caller.
+Every feature needs state that persists between frames in an immediate-mode UI:
+peak-hold, ballistics, the held max-dB number, and "what is the Info View
+currently showing." Today the meter is stateless, and the one piece of state
+that exists (`clip_latched: [bool; 2]`) is passed through the caller by hand.
 
-The design moves this into **egui per-widget-id memory** (`ui.data_mut` keyed by
-the widget's `Response::id`). Any meter or widget anywhere gets the behavior for
-free, and the hand-threaded `clip_latched` array is retired (structural fix, not
-decoration).
+The design moves this into egui per-widget-id memory (`ui.data_mut` keyed by
+the widget's `Response::id`). Any meter or widget anywhere gets the behavior
+without extra code, and the `clip_latched` array that callers passed by hand is
+removed (a structural fix).
 
 ## 1. Meters (`sonido-gui-core/src/widgets/meter.rs`)
 
-`LevelMeter` is already "styled after Ableton Live's channel meters." This makes
-it *behave* like one.
+`LevelMeter` is already "styled after Ableton Live's channel meters." This change
+makes it behave like one.
 
 - **`MeterState` in egui memory**, keyed by widget id:
   `{ smoothed_rms, peak_hold, hold_age, max_peak_db }`. Updated each frame from
-  `ui.input(|i| i.stable_dt)`. `request_repaint` while settling so it animates.
-- **Ballistics** — RMS bar gets fast-attack / slow-release exponential
+  `ui.input(|i| i.stable_dt)`. It calls `request_repaint` while the values
+  settle, so the meter animates.
+- **Ballistics**: the RMS bar gets fast-attack / slow-release exponential
   smoothing (attack τ ≈ 10 ms, release τ ≈ 300 ms) instead of the raw per-frame
-  `rms`. Pure `smooth(current, target, dt, tau)` helper, unit-tested.
-- **Peak-hold + fall** — track the max peak; hold ≈ 1.5 s, then fall at
+  `rms`. A pure `smooth(current, target, dt, tau)` helper does this and is
+  unit-tested.
+- **Peak-hold + fall**: track the max peak; hold ≈ 1.5 s, then fall at
   ≈ 12 dB/s. Drawn as a bright cap line (`text_primary`).
-- **Dual-color peak/RMS** — fill `0→RMS` in the level color
-  (`meter_segment_color(rms)`), then `RMS→peak` in that color *lightened* (the
-  transient/headroom band). At a glance: average level + transient peak + the
-  crest-factor gap between them. Cap line marks the held peak.
-- **Numeric dB readout** — held `max_peak_db` printed in a small header strip at
-  the top of the meter; red once it exceeds 0 dBFS. Clicking the meter resets it.
-  This folds in (and retires) the separate external `CLIP` button + latch array.
-- **Warped scale** — replace the linear-amplitude `DB_MARKS` (which crushes the
-  low end: −6 dB sat at 50 % height) with **linear-in-dB over −60 → 0 dB**. One
-  `db_to_norm(db)` maps fill, peak, *and* ticks consistently. −6 dB now sits at
-  90 % height — the DAW-like feel. Marks: 0, −6, −12, −18, −24, −36, −48.
-  Floor / curve are constants, tunable.
-- **Horizontal variant reaches parity** (was a degraded fallback: no scale, no
-  clip, no hold) — same scale, dual-color, hold, readout.
+- **Dual-color peak/RMS**: fill `0→RMS` in the level color
+  (`meter_segment_color(rms)`), then `RMS→peak` in a lighter shade of that color
+  (the transient/headroom band). The meter then shows the average level, the
+  transient peak and the crest-factor gap between them. The cap line marks the
+  held peak.
+- **Numeric dB readout**: the held `max_peak_db` is printed in a small header
+  strip at the top of the meter and turns red once it exceeds 0 dBFS. Clicking
+  the meter resets it. The readout replaces the separate external `CLIP`
+  button + latch array, which are removed.
+- **Warped scale**: replace the linear-amplitude `DB_MARKS` (which leaves little
+  room for the low end: −6 dB sat at 50 % height) with a scale that is linear in
+  dB from −60 to 0 dB. One `db_to_norm(db)` maps fill, peak, and ticks
+  consistently. −6 dB now sits at 90 % height, as on DAW meters. Marks: 0, −6,
+  −12, −18, −24, −36, −48. The floor and curve are tunable constants.
+- **Horizontal variant**: gets the same scale, dual-color peak/RMS, hold and
+  readout. It was a degraded fallback with no scale, no clip and no hold.
 - **Out of scope:** `GainReductionMeter` (amber segmented, different display)
-  stays as-is.
-- **Tests:** `db_to_norm`, ballistics `smooth`, and peak-fall are pure functions
-  → unit-tested. Existing meter tests updated (drop `clip_latch` builder test).
+  stays as is.
+- **Tests:** `db_to_norm`, ballistics `smooth`, and peak-fall are pure functions,
+  so they are unit-tested. Existing meter tests updated (drop `clip_latch`
+  builder test).
 
 ### Caller changes (`app.rs`)
 
 - `render_io_strip` and `render_phone_levels`: drop the external `CLIP` button
-  and the `clip_latched[..]` reads/writes — the meter owns clip display + reset.
+  and the `clip_latched[..]` reads/writes, because the meter handles clip
+  display + reset itself.
 - Remove the `clip_latched: [bool; 2]` field and its initializer.
 
 ## 2. Info View (`sonido-gui-core` + `app.rs`)
 
-Ableton's Info View is a single static-text box. This beats it by unifying two
-description sources the project *already has* and adding live values.
+Ableton's Info View is a single static-text box. This design goes further: it
+combines two description sources the project already has and adds live values.
 
 - **`InfoPayload { name, value, description, shortcuts }`** sourced from the
-  **existing** `Accessible` trait (live `name` + formatted `value` + unit) and
-  the registry `EffectDescriptor::description`. This is the *same* source that
-  AccessKit will consume, so help text never drifts between the visible panel
-  and the screen reader (chosen extras: **live value** + **shared accessibility
-  source**; no rich content).
-- **Routing** — a frame-scoped "info target": a hovered widget sets it; falls
-  back to the currently selected node. The panel renders the target at end of
-  frame. A helper associates a `Response` with its payload when hovered.
-- **Shortcuts** — a small static context→shortcuts map, seeded from the
+  existing `Accessible` trait (live `name` + formatted `value` + unit) and
+  the registry `EffectDescriptor::description`. AccessKit will read the same
+  source, so the visible panel and the screen reader always show the same help
+  text (chosen extras: live value + shared accessibility source; no rich
+  content).
+- **Routing**: a frame-scoped "info target". A hovered widget sets it, and it
+  falls back to the currently selected node. The panel renders the target at the
+  end of the frame. A helper associates a `Response` with its payload when
+  hovered.
+- **Shortcuts**: a small static context→shortcuts map, seeded from the
   keyboard-nav handler.
-- **Placement** — a collapsible chrome panel, docked bottom-left on
-  Desktop/Tablet (Ableton's spot), in the drawer on Phone. Plain text + live
-  value + shortcuts only.
+- **Placement**: a collapsible chrome panel, docked bottom-left on
+  Desktop/Tablet (where Ableton puts it), in the drawer on Phone. Plain text +
+  live value + shortcuts only.
 
 ## 3. Full-width-on-demand layout (`app.rs`)
 
-"Full-width on demand," not "full-width forced": chrome stays dockable but
-collapses to give the canvas full width whenever wanted.
+The layout is "full-width on demand," not "full-width forced": chrome stays
+dockable but collapses to give the canvas full width when the user asks for it.
 
-- A **focus toggle** (`chrome_collapsed`: button + keyboard shortcut) collapses
+- A focus toggle (`chrome_collapsed`: button + keyboard shortcut) collapses
   the macro/morph band, I/O strips, and Info View so the canvas spans full
-  width — matching the approved mockup.
-- **Key reuse:** the Phone `Drawer`/FAB machinery already built generalizes to
-  all breakpoints as the "summon collapsed chrome" mechanism — this is mostly
-  lifting an existing gate from Phone-only to all sizes, not net-new layout.
+  width, as in the approved mockup.
+- **Reuse:** the Phone `Drawer`/FAB code already built generalizes to all
+  breakpoints as the "summon collapsed chrome" mechanism. Most of the work is
+  removing an existing Phone-only restriction so it applies at all sizes, rather
+  than building new layout.
 - Defaults: docked on Desktop/Tablet, hero on Phone (unchanged). The native
   1000×700 window still opens docked.
 
@@ -110,5 +119,5 @@ collapses to give the canvas full width whenever wanted.
   widget tests updated.
 - Info View: `InfoPayload` assembly from a mock `Accessible` + registry entry.
 - Layout: `chrome_collapsed` toggle state and breakpoint interaction.
-- Whole crate compiles (`cargo check -p sonido-gui`) and `cargo test` green at
+- Whole crate compiles (`cargo check -p sonido-gui`) and `cargo test` passes at
   each feature boundary; manual WASM check at the end.
