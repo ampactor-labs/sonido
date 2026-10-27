@@ -41,7 +41,8 @@ sonido generate noise demos/noise.wav --duration 2.0 --amplitude 0.3
 
 ### 0.4 WAV Inspection Tool
 
-Sonido includes a built-in `info` command for WAV inspection. No external tools required.
+Sonido includes a built-in `info` command for WAV inspection, so you do not need an
+external tool.
 
 ```bash
 sonido info demos/sine_440.wav
@@ -155,12 +156,13 @@ done
 
 - [ ] All 17 print PASS
 
-Values are in each parameter's display unit, with percentages as 0–100 (see
+Values are in each parameter's display unit, with percentages as 0 to 100 (see
 [CLI Guide: Parameter Values](CLI_GUIDE.md#parameter-values)).
 
 ### 2.2 Custom Params
 
-Explicit `--param` flags. Validates param parsing and non-default behavior.
+These commands set parameters with explicit `--param` flags. They test parameter parsing
+and non-default behavior.
 
 | # | Command | Expected Output | Pass |
 |---|---------|-----------------|------|
@@ -204,12 +206,13 @@ Each must be accepted without error.
 | 12 | `sonido process demos/sine_440.wav --effect tremolo --param waveform=square` | Tremolo square waveform | [ ] |
 | 13 | `sonido process demos/sine_440.wav --effect tremolo --param waveform=triangle` | Tremolo triangle waveform | [ ] |
 | 14 | `sonido process demos/sine_440.wav --effect wah --param mode=manual --param frequency=800` | Wah manual mode | [ ] |
-| 15 | `sonido process demos/noise.wav --effect filter --param resonance=10` | Filter high-Q resonance (range 0.1–20) | [ ] |
+| 15 | `sonido process demos/noise.wav --effect filter --param resonance=10` | Filter high-Q resonance (range 0.1 to 20) | [ ] |
 | 16 | `sonido process demos/sine_440.wav --effect eq --param low_gain=6 --param mid_gain=-3 --param high_gain=3` | EQ multi-band | [ ] |
 
 ### 2.4 Stereo Output Verification
 
-All outputs from 2.1 should be 2-channel (always-stereo default). Use `sonido info` or `soxi`.
+All outputs from 2.1 should be 2-channel, since the default output is always stereo.
+Use `sonido info` or `soxi`.
 
 ```bash
 for f in demos/sine_440_*.wav demos/noise_*.wav; do
@@ -219,7 +222,7 @@ done
 
 - [ ] Every file shows 2 channels
 
-Verify `--mono` forces 1-channel:
+Verify that `--mono` forces 1-channel output:
 
 ```bash
 sonido process demos/sine_440.wav /tmp/mono_test.wav --effect reverb --mono
@@ -616,7 +619,7 @@ sonido analyze imd demos/sine_440.wav
 
 ## Phase 6: CLI — Real-time Processing
 
-Requires audio devices. Press Ctrl+C to stop each test.
+This phase needs audio devices. Press Ctrl+C to stop each test.
 
 ### 6.1 Single Effect
 
@@ -734,10 +737,10 @@ For a few effects of different families (e.g. distortion, compressor, tremolo, r
 
 ### 7.8 Performance
 
-- [ ] Status bar shows sample rate, latency, CPU usage, and `Pedal: N/8 · CPU x%`, red for distortion → delay → reverb (86 %) and green once reverb is swapped for chorus; hovering it names the reasons
+- [ ] Status bar shows sample rate, latency, CPU usage, and `Pedal: N/8 · CPU x%`, red for distortion → delay → reverb (86 %) and green once reverb is swapped for chorus; hovering over it shows the reasons
 - [ ] No audio glitches during parameter changes
 
-Test lower buffer (default is 2048) and single-effect mode:
+Test a lower buffer size (the default is 2048) and single-effect mode:
 ```bash
 cargo run -p sonido-gui -- --buffer-size 128
 cargo run -p sonido-gui -- --effect distortion
@@ -869,8 +872,8 @@ If audio processing changed intentionally, regenerate golden files and verify th
 
 ## See Also
 
-- [CLI Guide](CLI_GUIDE.md) — Full command reference
-- [Effects Reference](EFFECTS_REFERENCE.md) — All 36 effects with parameters and DSP theory
-- [GUI Documentation](GUI.md) — GUI user guide
-- [Testing Guide](TESTING.md) — Testing guide (includes library consumer testing)
-- [DSP Fundamentals](DSP_FUNDAMENTALS.md) — Theory behind the implementations
+- [CLI Guide](CLI_GUIDE.md): Full command reference
+- [Effects Reference](EFFECTS_REFERENCE.md): All 36 effects with parameters and DSP theory
+- [GUI Documentation](GUI.md): GUI user guide
+- [Testing Guide](TESTING.md): Testing guide (includes library consumer testing)
+- [DSP Fundamentals](DSP_FUNDAMENTALS.md): Theory behind the implementations

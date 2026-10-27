@@ -42,7 +42,7 @@ loudness of its input.
 
 ### Rule 3: Output Parameter Contract
 
-Every effect exposes a dB gain staging parameter, normally as the **last**
+Every effect exposes a dB gain staging parameter, normally as the last
 `ParameterInfo` index. Most effects use `gain::output_param_descriptor()` from
 `crates/sonido-core/src/gain.rs`, which provides:
 
@@ -72,9 +72,9 @@ A few effects define their own range instead: distortion (-24 to +6 dB), tape
 (-12 to +12 dB, default -6 dB), and drone, glitch, texture and time-stretch
 (-60 to +6 dB).
 
-The output parameter is the player's control, not a level-matching tool:
-matching an effect to its input is Rule 8's measured trim, so don't move an
-output default to make an effect match.
+The output parameter is the player's control. Rule 8's measured trim matches
+an effect's level to its input, so don't move an output default to make an
+effect match.
 
 **Implementation:** See `crates/sonido-core/src/gain.rs` for the shared
 constructor, dB get/set helpers, and `ParamDescriptor`.
@@ -83,13 +83,13 @@ constructor, dB get/set helpers, and `ParamDescriptor`.
 
 The mix parameter must satisfy:
 
-- **mix = 0%** (or 0.0 internally): output equals the dry input -- no
-  processing artifacts, no latency compensation error. The blend itself is
+- **mix = 0%** (or 0.0 internally): output equals the dry input, with no
+  processing artifacts and no latency compensation error. The blend itself is
   exact at mix = 0; the test allows 5e-4 per sample for smoother residue and
   the output-gain stage.
-- **mix = 100%** (or 1.0 internally): output is **pure wet** (scaled by the
-  effect's level trim, Rule 8) -- no dry signal leakage.
-- **In between**, the level holds (Rule 8).
+- **mix = 100%** (or 1.0 internally): output is pure wet (scaled by the
+  effect's level trim, Rule 8), with no dry signal leakage.
+- **In between**, the level stays the same (Rule 8).
 
 **Implementation:** Effects with a mix control mix with `Self::blend()` /
 `Self::blend_stereo()`, provided by `DspKernel`
@@ -111,7 +111,7 @@ parameter setting within the declared range may produce unbounded energy growth.
 |-----------|-------|---------|
 | Feedback cap at 95% | `ParamDescriptor::feedback()` | `max: 95.0` percent; the `Adapter` clamps every value to the descriptor range before the kernel sees it. |
 | Wet-signal compensation | `gain::feedback_wet_compensation()` | Scales wet by `(1-fb)` for exact peak-gain cancellation in comb topologies (delay, flanger, phaser). |
-| Reverb FDN compensation | `reverb.rs` `update_derived()` | FDN feedback clamped to `0.0..0.99`; wet scaled by `sqrt(1-fb)` (moderate) -- the 8-line Hadamard mix spreads energy, so exact compensation is unnecessary. |
+| Reverb FDN compensation | `reverb.rs` `update_derived()` | FDN feedback clamped to `0.0..0.99`; wet scaled by `sqrt(1-fb)` (moderate). The 8-line Hadamard mix spreads energy, so exact compensation is unnecessary. |
 | Denormal flushing | `flush_denormal()` in `crates/sonido-core/src/math.rs` | Prevents CPU stalls from subnormal float decay in feedback paths. |
 | Feedback damping | `OnePole` in the reverb FDN, `CombFilter::set_damp()` in core | One-pole lowpass in the feedback path ensures HF energy decays faster than LF. |
 | Comb/allpass coefficient bounds | `CombFilter::set_feedback()`, `AllpassFilter::set_feedback()` | Clamped to `0.0..0.99` and `-0.99..0.99` respectively. |
@@ -137,7 +137,7 @@ the full dynamic range without premature saturation.
 
 **Chain-friendly:** When multiple effects are chained, each should neither
 amplify nor attenuate significantly at default settings (Rules 2 and 8), so the
-headroom budget propagates through the chain.
+same headroom budget holds at every stage of the chain.
 
 ### Rule 7: Parameter Vocabulary
 
@@ -154,12 +154,12 @@ All parameters use consistent units and naming from `ParamUnit` in
 | `None` | "" | Waveshape selector, reverb type |
 
 **Naming conventions:**
-- `ParamDescriptor::mix()` -- standard 0-100% wet/dry
-- `ParamDescriptor::depth()` -- standard 0-100% modulation depth
-- `ParamDescriptor::feedback()` -- standard 0-95% with stability cap
-- `ParamDescriptor::time_ms()` -- time parameter with custom range
-- `ParamDescriptor::gain_db()` -- gain parameter with custom range
-- `gain::output_param_descriptor()` -- universal output level
+- `ParamDescriptor::mix()`: standard 0-100% wet/dry
+- `ParamDescriptor::depth()`: standard 0-100% modulation depth
+- `ParamDescriptor::feedback()`: standard 0-95% with stability cap
+- `ParamDescriptor::time_ms()`: time parameter with custom range
+- `ParamDescriptor::gain_db()`: gain parameter with custom range
+- `gain::output_param_descriptor()`: universal output level
 
 Short names are 8 characters or fewer for hardware display compatibility
 (all current kernels comply; no test enforces it).
@@ -187,7 +187,7 @@ input (`None` for an effect without a mix control).
   correlation `ρ`.
 - **Without a mix control:** the kernel passes its sound through
   `Self::level` / `Self::level_stereo` where it leaves the processing, before its
-  output knob and any safety limiter, so the limiter guards the final level.
+  output knob and any safety limiter, so the limiter acts on the final level.
 
 **Measured, never hand-tuned:** `crates/sonido-effects/src/calibration.rs` is
 generated by
@@ -233,8 +233,8 @@ default parameters at 48 kHz (helpers in `crates/sonido-effects/tests/helpers`):
 | `rule7_vocabulary` | all | Non-empty names, `min < max`. |
 
 The stricter targets in Rules 1 and 2 (-1 dBFS ceiling, +/-1 dB parity) are
-design goals checked by the manual protocol below, not by this suite. Level at
-defaults is also held, as loudness on a guitar signal, by the level contract:
+design goals checked by the manual protocol below, not by this suite. The level
+contract also checks the level at defaults, as loudness on a guitar signal:
 
 `cargo test -p sonido-effects --test level_contract` checks Rule 8 for every
 registered effect but the looper and tuner, with the tolerances in the Rule 8
@@ -242,8 +242,8 @@ table. If it reports a calibration out of date, run the calibrate example.
 
 ### Delay, Flanger, Phaser: Feedback Compensation
 
-These effects use `gain::feedback_wet_compensation()` — exact `(1-fb)` wet-signal
-scaling that cancels comb-filter peak gain at resonance:
+These effects use `gain::feedback_wet_compensation()`, which scales the wet
+signal by exactly `(1-fb)` to cancel the comb filter's peak gain at resonance.
 
 The exact compensation guarantees the wet signal at resonance never exceeds
 the dry signal, regardless of feedback setting (`feedback_wet_compensation`
@@ -291,8 +291,8 @@ Verify the last parameter index is a gain/output control:
 sonido effects <effect>
 ```
 
-Check that the last listed parameter has unit "dB" and serves as a gain
-staging control.
+Check that the last listed parameter has unit "dB" and is a gain staging
+control.
 
 ### Rule 4: Wet/Dry Exactness Test
 

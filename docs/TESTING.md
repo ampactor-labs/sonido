@@ -21,8 +21,8 @@ cargo test -- --nocapture
 
 ## A note on "ignored" counts
 
-`cargo test` reports a number of **ignored** tests. These are **not disabled unit
-tests** — the codebase contains **zero `#[ignore]` attributes**. Every "ignored"
+`cargo test` reports a number of **ignored** tests. These are not disabled unit tests:
+the codebase contains no `#[ignore]` attributes. Every "ignored"
 entry is a documentation example whose code fence is marked ```` ```ignore ```` or
 ```` ```no_run ```` (illustrative snippets, embedded/hardware code, or examples
 that allocate a real audio device). Those fences are still **compile-checked** by
@@ -647,9 +647,9 @@ Every effect except the looper and tuner is held to one level contract
 at its defaults it plays at the loudness of its input, and its mix control does not
 change that loudness. The reference is `sonido_analysis::signals::reference_guitar`, a
 strummed guitar peaking at -20 dBFS (`NOMINAL_PEAK_DBFS`), measured as integrated LUFS
-(ITU-R BS.1770-4). Levels are matched in loudness, not peak, and for that reference:
-other material and input levels (into a saturating effect especially) measure
-differently.
+(ITU-R BS.1770-4). Levels are matched in loudness, not peak, and only for that
+reference. Other material and other input levels measure differently, especially into
+a saturating effect.
 
 Measured 2026-10-22 with
 `cargo test --release -p sonido-effects --test level_contract -- --nocapture`, which

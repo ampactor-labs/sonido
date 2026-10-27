@@ -35,9 +35,9 @@ cd crates/sonido-gui
 trunk serve
 ```
 
-Browsers keep audio suspended until a user gesture: the first click, key press, or PLAY resumes it. Hard-refresh (Ctrl+Shift+R) after a rebuild to bypass the cache. There is no headless wasm test runner; the browser is the runtime test. `cargo check` for wasm catches missing `#[cfg]` gates and std-only APIs that the native build doesn't.
+Browsers keep audio suspended until a user gesture: the first click, key press, or PLAY resumes it. Hard-refresh (Ctrl+Shift+R) after a rebuild to bypass the cache. There is no headless wasm test runner, so runtime testing happens in the browser. `cargo check` for wasm catches missing `#[cfg]` gates and std-only APIs that the native build doesn't.
 
-The web build differs from native only where a browser tab can't reach: Save/Load use the browser's download and file picker; Export offers patch JSON, the pedal `.bin`, and **Send to pedal** over Web Serial (Chrome and Edge; the browser asks which port to use and lists only the pedal); there is no CLAP-folder write or firmware update. The PEDAL window's controls guide downloads as an HTML page.
+The web build differs from native only where a browser tab lacks access: Save/Load use the browser's download and file picker; Export offers patch JSON, the pedal `.bin`, and **Send to pedal** over Web Serial (Chrome and Edge; the browser asks which port to use and lists only the pedal); there is no CLAP-folder write or firmware update. The PEDAL window's controls guide downloads as an HTML page.
 
 ## Command-Line Options
 
@@ -88,7 +88,7 @@ sonido-gui --screenshot editor.png --screenshot-size 1440x900
 +---------------------------------------------------------------------------+
 ```
 
-The layout adapts to width. **Desktop** (≥ 900 px) is shown above; on a wide window the header is a single row (drawn as two here), and it wraps when space runs out. **Tablet** (600–900 px) wraps the header and status bar and enlarges touch targets. **Phone** (< 600 px, web only, since the native window has an 800×550 minimum) drops the FOCUS and + EFFECT buttons and the info band, moves the macros and morph into a **RIG** drawer toggled from the header, and adds a floating **+** button over the canvas.
+The layout adapts to width. **Desktop** (≥ 900 px) is shown above; on a wide window the header is a single row (drawn as two here), and it wraps when space runs out. **Tablet** (600 to 900 px) wraps the header and status bar and enlarges touch targets. **Phone** (< 600 px, web only, since the native window has an 800×550 minimum) drops the FOCUS and + EFFECT buttons and the info band, moves the macros and morph into a **RIG** drawer toggled from the header, and adds a floating **+** button over the canvas.
 
 ### Header
 
@@ -102,12 +102,12 @@ The layout adapts to width. **Desktop** (≥ 900 px) is shown above; on a wide w
 - **Export**: see [Export](#export).
 - **Pedal**: the PEDAL window (see [The pedal window](#the-pedal-window)).
 - **GEN / FILE**: source select.
-- **MACROS**: **Auto** plus the six macro knobs K1–K6, then the rig's toggles **T1** and **T3** (in the RIG drawer on Phone).
+- **MACROS**: **Auto** plus the six macro knobs K1 to K6, then the rig's toggles **T1** and **T3** (in the RIG drawer on Phone).
 - **Right side**: audio status LED (green running, red stopped), plus, when present, `errors: N` (audio stream errors such as underruns), the last compile error, the last export result, and an audio start error with a **Retry** button.
 
 ### I/O wall bars
 
-The canvas is flanked by two full-height level meters, **IN** (left) and **OUT** (right). Each shows RMS with the peak headroom above it, a falling peak-hold line, and the highest peak in dBFS at the top, red past 0 dBFS. Click a meter to reset its peak. The **GAIN** knob at the foot of IN trims the source from −20 to +20 dB; the **VOL** knob at the foot of OUT sets the master from −40 to +6 dB. Both default to 0 dB. The Input and Output node pins are welded to the bars' inner edges.
+The canvas is flanked by two full-height level meters, **IN** (left) and **OUT** (right). Each shows RMS with the peak headroom above it, a falling peak-hold line, and the highest peak in dBFS at the top, red past 0 dBFS. Click a meter to reset its peak. The **GAIN** knob at the foot of IN trims the source from −20 to +20 dB; the **VOL** knob at the foot of OUT sets the master from −40 to +6 dB. Both default to 0 dB. The Input and Output node pins are fixed to the bars' inner edges.
 
 ## Graph Editor
 
@@ -135,7 +135,7 @@ Each effect's category and parameters are listed in [EFFECTS_REFERENCE.md](EFFEC
 - **Selected node**: a floating **Duplicate / Remove** bar appears at the canvas's top-left, and Delete or Backspace removes the node.
 - **Right-click a node**: Remove or Duplicate.
 - **Drag pin to pin**: wire an output to an input. One output may feed several inputs (fan-out), and an input may take several wires, which are summed (fan-in).
-- **Ctrl+Scroll / pinch**: zoom, clamped to 0.5×–1.5×.
+- **Ctrl+Scroll / pinch**: zoom, clamped between 0.5× and 1.5×.
 
 After every structural edit the nodes re-flow left to right by depth. If the last node feeding Output is removed, the nearest remaining node is wired to Output so the graph never goes silent.
 
@@ -148,12 +148,12 @@ Selecting an effect node opens its panel below the canvas, framed in the effect'
 - **Title row**: the effect name, an **ACTIVE / BYPASSED** toggle (a click-free per-effect bypass), and, once the morph is active, a **LOCK** toggle that holds this effect still while the morph sweeps the rest of the rig.
 - **Stepped parameters**: `cabinet::selector`, which draws segmented buttons for a few short options and otherwise a ◀ value ▶ stepper (click the value to advance, scroll to step).
 - **Continuous parameters**: LED-ring knobs in the family color (`bridged_knob_accent`), with the formatted value and the label under each ring. Ranges that span zero fill from twelve o'clock. When an effect has distinct A/B poses, cyan and amber ghost ticks mark each knob's A and B values.
-- **Every** visible parameter is shown, so the node's "N params" count matches the panel. Read-only and hidden parameters are skipped.
+- Every visible parameter is shown, so the node's "N params" count matches the panel. Read-only and hidden parameters are skipped.
 - **The looper** has its own transport panel instead.
 
 **Knob controls:** drag vertically (Shift for fine), scroll the mouse wheel over a knob (Shift for fine), use Up/Down on a focused knob (1 % per press, Shift 0.2 %), use Left/Right to move focus between knobs, and double-click to reset to default.
 
-**Right-click any knob or selector** to get **Map to Macro 1–6**, **Map to toggle T1 / T3**, or **Clear mapping**. A parameter has one control: mapping it to a macro or toggle unmaps it from any other.
+**Right-click any knob or selector** to get **Map to Macro** 1 to 6, **Map to toggle T1 / T3**, or **Clear mapping**. A parameter has one control: mapping it to a macro or toggle unmaps it from any other.
 
 With nothing selected, the area shows a one-line prompt.
 
@@ -163,10 +163,10 @@ Docked under the panel on Desktop/Tablet (hidden in Focus mode). It shows the se
 
 ## Macros
 
-Six performance knobs, **K1–K6**, sit in the header. Each macro sweeps any number of parameters at once.
+Six performance knobs, **K1** to **K6**, sit in the header. Each macro sweeps any number of parameters at once.
 
 - **Map**: right-click a parameter in an effect panel and choose **Map to Macro N**.
-- **Auto**: seeds one macro per effect in chain order (the first six), each bound to that effect's first continuous, musical parameter over its full range and curve. The knob position is set to reproduce the current value, so assigning never jumps the sound.
+- **Auto**: seeds one macro per effect in chain order (the first six), each bound to that effect's first continuous, musical parameter over its full range and curve. The knob position is set to reproduce the current value, so assigning a macro does not change the sound.
 - **Edit**: right-click a macro knob to open its mapping window. There you can rename it, set each target's min/max, invert (⇄), remove a target (✕), or **Clear all**.
 - **Hover** a macro knob for its name and target count. A small cyan dot under the knob marks a mapped macro.
 
@@ -213,7 +213,7 @@ The frequency is shown next to the selector for Sine and Saw Chord. It isn't adj
 
 - **Sample rate**: the rate in use (the device's).
 - **Latency**: one buffer, `buffer_size / sample_rate`, in ms.
-- **CPU**: audio-callback time as a percentage of the buffer duration, with a 60-sample sparkline. Green is ≤ 80 %, yellow is 80–100 %, and red is > 100 %. Debug builds append `(debug)`.
+- **CPU**: audio-callback time as a percentage of the buffer duration, with a 60-sample sparkline. Green is ≤ 80 %, yellow is 80 to 100 %, and red is > 100 %. Debug builds append `(debug)`.
 - **Pedal: N/8 · CPU x%**: the pedal's rule, the same one Export ▸ Pedal checks (`sonido_patch::validate::daisy_load`): the graph's effect count against the pedal's 8-node limit, and its estimated share of the pedal's CPU from the measured kernel costs (`sonido_platform::cycle_table`). Green fits; yellow is over 70 % (it runs, near the limit); red is over 80 %, more than 8 effects, an effect the pedal doesn't carry, or past its SDRAM. Hover for the reasons. For example, distortion → delay → reverb is red at 86 %: reverb alone is 62 %.
 - **Transport**: generator play/pause, signal type and frequency; in FILE mode, the file controls.
 
@@ -225,7 +225,7 @@ The buffer size is fixed at launch by `--buffer-size`; there is no in-app select
 
 ## Export
 
-The **Export** menu projects the rig to a canonical `sonido_patch::Patch` and offers:
+The **Export** menu converts the rig to a canonical `sonido_patch::Patch` and offers:
 
 - **Name**, a field at the top of the menu: the rig's name, which the pedal and the graph player show. It is saved in the session, and sending to the pedal again under the same name replaces the rig there.
 - **Export as CLAP patch** (native): writes `<name>.sonidopatch.json` (the rig's name, made file-safe) to the rig library, `sonido_config::paths::rig_library_dir()`. The graph-player plugin's RIG selector lists these alongside its built-in factory rigs. The directory is created on first export.
@@ -272,7 +272,7 @@ Global shortcuts are inactive while the ADD EFFECT palette or a macro mapping wi
                             +--------------------- MeteringData (in/out peak+RMS, CPU) --------+--> GUI
 ```
 
-Audio runs in a single cpal **output** callback that owns an `AudioProcessor` (`audio_processor.rs`). Each buffer it:
+Audio runs in a single cpal output callback that owns an `AudioProcessor` (`audio_processor.rs`). Each buffer it:
 
 1. Drains transport commands (play/pause, source, signal type, file load).
 2. Drains `GraphCommand`s (`ReplaceTopology` swaps in a freshly compiled `GraphEngine` and rebuilds the parameter bridge's slots).
