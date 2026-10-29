@@ -138,3 +138,33 @@ jobs:
         with:
           name: sonido_pedal
           path: crates/sonido-daisy/sonido_pedal.bin
+
+  # The release builds the editor with the release profile (fat LTO, one
+  # codegen unit); CI's tests build debug only. v0.2.0's Windows release
+  # build ran rustc out of memory linking sonido-gui, which no CI job saw.
+  # EXPERIMENT: the first entry reproduces the release settings; the others
+  # try a lighter link-time optimization.
+  gui-release-windows:
+    name: GUI release build (windows, lto=${{ matrix.lto }}, cgu=${{ matrix.cgu }})
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { lto: fat, cgu: 1 }
+          - { lto: thin, cgu: 1 }
+          - { lto: fat, cgu: 16 }
+    env:
+      RUSTFLAGS: ""
+      CARGO_PROFILE_RELEASE_LTO: ${{ matrix.lto }}
+      CARGO_PROFILE_RELEASE_CODEGEN_UNITS: ${{ matrix.cgu }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: gui-release-${{ matrix.lto }}-${{ matrix.cgu }}
+      - name: Build GUI (release profile)
+        run: cargo build --release --target x86_64-pc-windows-msvc -p sonido-gui
