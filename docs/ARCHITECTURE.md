@@ -7,7 +7,7 @@ Sonido is a production-grade DSP library designed for multi-target deployment:
 - **Embedded**: Electrosmith Daisy / Hothouse hardware
 - **Plugins**: one CLAP bundle via clack (`sonido.clap`: all 36 effects plus the graph player), and one VST3 bundle (`sonido.vst3`, a clap-wrapper shim that loads `sonido.clap`; `scripts/bundle-vst3.sh`)
 
-The library is built with stereo-first processing and no_std compatibility at its core.
+The library is designed around stereo-first processing and no_std compatibility.
 
 ## Crate Diagram
 
@@ -46,11 +46,11 @@ Libraries
 
 The foundation crate providing DSP primitives. Designed for `no_std` environments.
 
-**Why a separate core crate?** Every DSP system needs the same building blocks: delay lines, filters, LFOs, parameter smoothing. By isolating these into `sonido-core` with `no_std` support, the same primitives compile for desktop (x86_64) and embedded (ARM Cortex-M7) targets without conditional compilation in the effects. This mirrors the layered architecture used in commercial DSP frameworks like JUCE's `dsp` module and Faust's core library, but with Rust's zero-cost abstractions ensuring no runtime overhead from the abstraction boundary.
+**Why a separate core crate?** Every DSP system needs the same building blocks: delay lines, filters, LFOs, parameter smoothing. By isolating these into `sonido-core` with `no_std` support, the same primitives compile for desktop (x86_64) and embedded (ARM Cortex-M7) targets without conditional compilation in the effects. Commercial DSP frameworks use the same layering, for example JUCE's `dsp` module and Faust's core library. Here, Rust's zero-cost abstractions mean the abstraction boundary adds no runtime overhead.
 
-**Key components:**
+**Main components:**
 - `Effect` trait: Object-safe interface all effects implement (`snap_params()` jumps every smoothed parameter to its target, for a freshly built rig)
-- `level`: the level contract — `Level` (trim + wet/dry correlation), `blend()` (correlation-normalized constant-power mix), `NOMINAL_PEAK_DBFS`
+- `level`: the level contract, with `Level` (trim + wet/dry correlation), `blend()` (correlation-normalized constant-power mix) and `NOMINAL_PEAK_DBFS`
 - `SmoothedParam`: Zipper-free parameter changes with exponential/linear smoothing
 - `InterpolatedDelay` / `FixedDelayLine`: Delay buffers with fractional interpolation
 - `Biquad`: IIR filter building block for EQ, lowpass, highpass, etc.
@@ -94,19 +94,19 @@ The reverb is an 8-line Hadamard FDN on Freeverb delay tunings
 
 ### Kernel Architecture
 
-All 36 effects have kernel-architecture implementations in `crates/sonido-effects/src/kernels/` that separate pure DSP from parameter ownership. This enables two deployment modes from the same algorithm:
+All 36 effects have kernel-architecture implementations in `crates/sonido-effects/src/kernels/` that separate pure DSP from parameter ownership. This lets the same algorithm run in two deployment modes.
 
 **Three-layer pattern:**
 
-1. **`KernelParams`** (`XxxParams`) — typed parameter struct in user-facing units (dB, %, Hz). Provides indexed access (`get`/`set`), descriptor metadata, smoothing hints per parameter, preset morphing (`lerp`), and normalized ↔ user-unit conversion.
+1. **`KernelParams`** (`XxxParams`): a typed parameter struct in user-facing units (dB, %, Hz). It provides indexed access (`get`/`set`), descriptor metadata, smoothing hints per parameter, preset morphing (`lerp`), and normalized ↔ user-unit conversion.
 
-2. **`DspKernel`** (`XxxKernel`) — owns ONLY DSP state (filters, delay buffers, ADAA processors, LFO phases). Receives `&Params` by reference each sample. No `SmoothedParam`, no platform types.
+2. **`DspKernel`** (`XxxKernel`): owns only DSP state (filters, delay buffers, ADAA processors, LFO phases) and receives `&Params` by reference each sample. It holds no `SmoothedParam` and no platform types.
 
-3. **`Adapter<K, SmoothedPolicy>`** — bridges kernel to `Effect + ParameterInfo`. Owns per-parameter `SmoothedParam` instances configured from `KernelParams::smoothing()`. Advances smoothers per sample, writes into a params snapshot, and passes to `kernel.process_stereo()`. (Each kernel applies its own level trim, in `Self::blend` or `Self::level` / `Self::level_stereo`.)
+3. **`Adapter<K, SmoothedPolicy>`**: bridges the kernel to `Effect + ParameterInfo`. It owns per-parameter `SmoothedParam` instances configured from `KernelParams::smoothing()`. Each sample, it advances the smoothers, writes their values into a params snapshot, and passes the snapshot to `kernel.process_stereo()`. (Each kernel applies its own level trim, in `Self::blend` or `Self::level` / `Self::level_stereo`.)
 
-**Every target that plays rigs** uses `Adapter<K, SmoothedPolicy>`: the registry creates `Adapter<XxxKernel, SmoothedPolicy>` for all 36 effects, and the plugins, the editor, the CLI and the pedal firmware all build effects through it. The pedal (`crates/sonido-daisy/examples/sonido_pedal.rs`) plays every rig through `sonido_patch::PatchPlayer` with registry-built effects (`patch_loader::make_effect`) on an SDRAM heap, so a rig sounds the same as in the graph-player plugin. `Adapter<K, DirectPolicy>` (`Adapter::new_direct`) — the same `Effect + ParameterInfo` interface with no smoothing — remains for firmware examples that drive one kernel (`single_effect.rs`, `graph_audio_test.rs`); `single_delay.rs` and `single_reverb.rs` call the kernel directly with `XxxParams::from_knobs()`.
+Every target that plays rigs uses `Adapter<K, SmoothedPolicy>`: the registry creates `Adapter<XxxKernel, SmoothedPolicy>` for all 36 effects, and the plugins, the editor, the CLI and the pedal firmware all build effects through it. The pedal (`crates/sonido-daisy/examples/sonido_pedal.rs`) plays every rig through `sonido_patch::PatchPlayer` with registry-built effects (`patch_loader::make_effect`) on an SDRAM heap, so a rig sounds the same on the pedal as in the graph-player plugin. `Adapter<K, DirectPolicy>` (`Adapter::new_direct`) has the same `Effect + ParameterInfo` interface with no smoothing. It remains for firmware examples that drive one kernel (`single_effect.rs`, `graph_audio_test.rs`); `single_delay.rs` and `single_reverb.rs` call the kernel directly with `XxxParams::from_knobs()`.
 
-**Level contract.** Every kernel declares `const LEVEL: Level` (`crates/sonido-core/src/level.rs`), taken from the generated table `crates/sonido-effects/src/calibration.rs`: a trim and, for an effect with a mix control, the measured correlation of its wet signal with the dry input. Kernels mix with `Self::blend` / `Self::blend_stereo`, a sine/cosine constant-power law normalized for that correlation, so at its defaults every effect plays at the loudness of its input and its mix control does not change that loudness. The table is generated by `cargo run -p sonido-effects --example calibrate --release` (a strummed reference guitar at −20 dBFS peaks, integrated LUFS) and held by `tests/level_contract.rs`. See `docs/KERNEL_ARCHITECTURE.md`.
+**Level contract.** Every kernel declares `const LEVEL: Level` (`crates/sonido-core/src/level.rs`), taken from the generated table `crates/sonido-effects/src/calibration.rs`: a trim and, for an effect with a mix control, the measured correlation of its wet signal with the dry input. Kernels mix with `Self::blend` / `Self::blend_stereo`, a sine/cosine constant-power law normalized for that correlation, so at its defaults every effect plays at the loudness of its input and its mix control does not change that loudness. The table is generated by `cargo run -p sonido-effects --example calibrate --release` (a strummed reference guitar at −20 dBFS peaks, integrated LUFS) and checked by `tests/level_contract.rs`. See `docs/KERNEL_ARCHITECTURE.md`.
 
 `SmoothingStyle` tiers: `None` (snap), `Fast` (5ms), `Standard` (10ms), `Slow` (20ms), `Interpolated` (50ms), `Custom(ms)`.
 
@@ -126,7 +126,7 @@ Spectral analysis tools for reverse engineering hardware and signal analysis. Re
 - `ThdAnalyzer` / `ImdAnalyzer`: Harmonic and intermodulation distortion measurement
 - `ConstantQTransform` / `Chromagram`, `MelSpectrogram`, `StftAnalyzer`: Time-frequency analysis
 - `LufsMeter`, `StereoCorrelation`, `detect_pitch`: Loudness, stereo and pitch measurement
-- `loudness::effect_gain_db` and `signals` (`reference_guitar`, `strummed_guitar`): the measurement behind the level contract — the loudness change an effect makes to a synthetic strummed guitar peaking at −20 dBFS, in integrated LUFS
+- `loudness::effect_gain_db` and `signals` (`reference_guitar`, `strummed_guitar`): the measurement behind the level contract, which is the loudness change, in integrated LUFS, that an effect makes to a synthetic strummed guitar peaking at −20 dBFS
 
 **Advanced Spectral Analysis:**
 - `FilterBank`: Multi-band bandpass filter bank with 4th-order Butterworth filters
@@ -155,13 +155,13 @@ Audio I/O layer with pluggable backend abstraction, WAV file I/O, and full stere
 **Audio Backend Architecture (ADR-023):**
 - `AudioBackend` trait: Platform-agnostic interface for device enumeration and stream construction
 - `CpalBackend`: Default backend wrapping cpal (ALSA, CoreAudio, WASAPI, WebAudio)
-- `StreamHandle`: Type-erased RAII stream handle — dropping stops playback
+- `StreamHandle`: Type-erased RAII stream handle; dropping it stops playback
 - `BackendStreamConfig`: Backend-agnostic stream configuration
 
 **Components:**
 - `read_wav` / `write_wav`: Interleaved WAV file I/O (returns/takes a `WavSpec`)
 - `read_wav_stereo` / `write_wav_stereo`: Stereo WAV file I/O (mono files are duplicated to both channels)
-- `AudioStream`: Real-time audio streaming (`run`, `run_stereo`, `run_output`) — the cpal path the CLI uses
+- `AudioStream`: Real-time audio streaming (`run`, `run_stereo`, `run_output`); the CLI uses this cpal path
 
 Note: `StereoSamples` and `GraphEngine` live in `sonido-core` (in `src/graph/`). `sonido-io` re-exports both for backwards compatibility.
 
@@ -217,9 +217,9 @@ Full synthesis engine for building synthesizers. `no_std` compatible.
 
 Central registry for discovering and instantiating effects. Provides a unified API for the CLI, GUI, plugins, and firmware (the registry builds `no_std`).
 
-**Why a registry pattern?** The CLI, GUI, and potential plugin hosts all need to create effects by name or category. Without a registry, each application would duplicate the mapping from strings to constructors. The registry centralizes this with `EffectDescriptor` metadata, enabling features like "list all modulation effects" or "create effect by name from a preset file" without the application knowing about individual effect types. This is the Factory pattern adapted for DSP -- common in plugin frameworks like VST3 (which uses a similar `IPluginFactory` interface).
+**Why a registry pattern?** The CLI, GUI, and potential plugin hosts all need to create effects by name or category. Without a registry, each application would duplicate the mapping from strings to constructors. The registry centralizes this mapping, with `EffectDescriptor` metadata, so an application can "list all modulation effects" or "create effect by name from a preset file" without depending on individual effect types. This is the Factory pattern adapted for DSP. It is common in plugin frameworks; VST3, for example, uses a similar `IPluginFactory` interface.
 
-**Key components:**
+**Main components:**
 - `EffectRegistry`: Factory for creating effects by name
 - `EffectDescriptor`: Metadata (id, name, short_name, description, category, param_count)
 - `EffectCategory`: Effect categorization (Dynamics, Distortion, Modulation, etc.)
@@ -239,14 +239,14 @@ let mut effect = registry.create("distortion", 48000.0).unwrap();
 
 CLI-first configuration and preset management. Requires `std`.
 
-**Key components:**
+**Main components:**
 - `Preset`: Effect chain preset with metadata and effect configurations
 - `EffectConfig`: Single effect configuration with parameters
 - `EffectChain`: Runtime effect chain builder
 - `validation`: Effect type and parameter validation
 - `paths`: Platform-specific preset directories (user, system)
 - `factory_presets`: Built-in presets for common use cases (`sonido presets`; the graph player's built-in rigs come from `sonido-rigs`, not from these)
-- `patch`: `preset_to_patch` — convert a preset into a `sonido-patch` rig
+- `patch`: `preset_to_patch`, which converts a preset into a `sonido-patch` rig
 
 **Usage:**
 ```rust
@@ -269,7 +269,7 @@ preset.save(&user_presets_dir().join("my_preset.toml"))?;
 
 The canonical rig format, `Patch`: graph topology, per-node A/B parameters, six macros, the rig's two toggles (T1, T3), morph configuration and globals, by stable effect UID. Builds `no_std` (with `alloc`) for the firmware; the default `std` feature adds JSON (serde) and the host tools.
 
-**Key modules:**
+**Main modules:**
 - `binary`: one `Patch` ↔ one 4 KB QSPI sector (`encode`, `decode`); the toggle section is written only for a rig that uses its toggles (header flag bit 0)
 - `build`, `runtime`: `build_graph_from_patch` and `PatchPlayer`, which runs a rig in the graph-player plugin and on the pedal
 - `validate`: structural and pedal-fit checks; `validate_for_daisy` is the one pedal check the editor, the CLI and the factory-rig tests use (`sonido_platform::cycle_table`), and `daisy_load` the same CPU and memory estimate as numbers (the editor's status bar, the firmware's `check_rig`). A `Finding` is data (`Problem`) formatted only when shown, so the firmware carries no message text
@@ -281,17 +281,17 @@ The canonical rig format, `Patch`: graph topology, per-node A/B parameters, six 
 
 ### sonido-rigs
 
-The factory rigs: six `sonido_patch::Patch`es built from registry effects (`factory_rigs()`: Shimmer Cathedral, Fuzz Lab, Space Echo, Granular Drift, Harmonic Habitat, Amp Stack). One set serves the pedal (its `build.rs` encodes them into the firmware image) and the graph-player plugin's rig library. Every rig maps its macros by the pedal's knob rule: K1 input gain, K2 morph time, K3 master volume around a level-matching trim (generated into `src/trims.rs` by `cargo run -p sonido-rigs --example calibrate --release`), and K4–K6 the rig's own controls; `tests/factory.rs` holds every rig at the dry guitar's loudness, to the pedal's CPU and memory rule (`validate_for_daisy`), and to a binary round trip. `guide` draws how to play the pedal from `sonido_patch::controls`, the knob maps (`sonido_platform::knob_mapping`) and these rigs: `html_guide()` is a self-contained infographic (an annotated drawing of the pedal, the knobs' pages by mode, the effect-pick dial, every jam effect and rig), `text_card()`/`effect_card()` the same as a terminal card; `sonido pedal controls` shows them. Requires `std`.
+The factory rigs: six `sonido_patch::Patch`es built from registry effects (`factory_rigs()`: Shimmer Cathedral, Fuzz Lab, Space Echo, Granular Drift, Harmonic Habitat, Amp Stack). The same set is used by the pedal (its `build.rs` encodes them into the firmware image) and by the graph-player plugin's rig library. Every rig maps its macros by the pedal's knob rule: K1 input gain, K2 morph time, K3 master volume around a level-matching trim (generated into `src/trims.rs` by `cargo run -p sonido-rigs --example calibrate --release`), and K4 to K6 the rig's own controls. `tests/factory.rs` checks every rig against the dry guitar's loudness, the pedal's CPU and memory rule (`validate_for_daisy`), and a binary round trip. `guide` draws how to play the pedal from `sonido_patch::controls`, the knob maps (`sonido_platform::knob_mapping`) and these rigs: `html_guide()` is a self-contained infographic (an annotated drawing of the pedal, the knobs' pages by mode, the effect-pick dial, every jam effect and rig), and `text_card()`/`effect_card()` give the same content as a terminal card; `sonido pedal controls` shows them. Requires `std`.
 
 ### sonido-platform
 
 Hardware abstraction layer for multi-target deployment. Provides `no_std` compatible traits for physical controls and parameter mapping.
 
-**Why abstract hardware controls?** A physical knob on a Hothouse pedal, a GUI slider, a MIDI CC message, and a DAW automation lane all represent the same concept: a continuous control mapped to an effect parameter. The `PlatformController` trait and `ControlMapper` let effect code remain hardware-agnostic. The `ControlId` namespacing (`0x00XX` = hardware, `0x01XX` = GUI, `0x02XX` = MIDI) means the same mapping code handles all input sources without conflicts.
+**Why abstract hardware controls?** A physical knob on a Hothouse pedal, a GUI slider, a MIDI CC message, and a DAW automation lane are all the same thing: a continuous control mapped to an effect parameter. The `PlatformController` trait and `ControlMapper` let effect code remain hardware-agnostic. The `ControlId` namespacing (`0x00XX` = hardware, `0x01XX` = GUI, `0x02XX` = MIDI) means the same mapping code handles all input sources without conflicts.
 
-**Key components:**
+**Main components:**
 - `PlatformController`: Trait abstracting hardware I/O (knobs, toggles, footswitches, LEDs)
-- `ControlMapper<N>`: Fixed-capacity table mapping `ControlId`s to effect parameter indices; denormalizes 0–1 control values through each parameter's `ParamDescriptor`
+- `ControlMapper<N>`: Fixed-capacity table mapping `ControlId`s to effect parameter indices; denormalizes control values (0 to 1) through each parameter's `ParamDescriptor`
 - `ControlId`: Namespaced control identifiers (hardware, GUI, MIDI, automation)
 - `ControlType`: Control kinds (Knob, Toggle3Way, Toggle2Way, Footswitch, Led)
 - `ControlState`: Control value with change tracking
@@ -318,7 +318,7 @@ assert_eq!(mapper.get_param_index(ControlId::hardware(0)), Some(0));
 
 ### sonido-cli
 
-Command-line interface tying everything together.
+Command-line interface that combines the library crates in one tool.
 
 **Commands:**
 - `process`: File-based effect processing (`--effect`, `--chain`, `--graph` DSL, or `--preset`)
@@ -342,37 +342,37 @@ Command-line interface tying everything together.
 
 ### sonido-gui-core
 
-Shared GUI infrastructure for both standalone and plugin UIs. Contains everything needed to render effect parameter panels in any egui host. The visual identity is the Sonido design system — a vector-display arcade cabinet (phosphor glow, one accent color per effect family); `docs/DESIGN_SYSTEM.md` is the spec and `theme.rs` holds the values.
+Shared GUI infrastructure for both standalone and plugin UIs. Contains everything needed to render effect parameter panels in any egui host. Its look follows the Sonido design system, which is styled after a vector-display arcade cabinet (phosphor glow, one accent color per effect family); `docs/DESIGN_SYSTEM.md` is the spec and `theme.rs` holds the values.
 
-**Key modules:**
-- `param_bridge.rs`: `ParamBridge` trait — the abstraction boundary between GUI and audio thread. Includes `begin_set`/`end_set` gesture protocol for CLAP/VST3 undo grouping and automation recording.
-- `cabinet.rs`: `Cabinet` — the single-effect plugin layout (marquee, screen with live scope, knob deck, footer) every effect plugin draws
+**Main modules:**
+- `param_bridge.rs`: the `ParamBridge` trait, the abstraction boundary between the GUI and the audio thread. It includes the `begin_set`/`end_set` gesture protocol for CLAP/VST3 undo grouping and automation recording.
+- `cabinet.rs`: `Cabinet`, the single-effect plugin layout (marquee, screen with live scope, knob deck, footer) that every effect plugin draws
 - `effects_ui/`: `EffectPanel` trait + `create_panel`; every effect renders through one `GenericPanel` (all params as knobs) except the looper's custom panel
 - `widgets/`: Knob, Fader, `bridged_*` helpers (bridge-aware knob/fader/combo with gesture protocol), LedDisplay (7-segment), LevelMeter, GainReductionMeter, BypassToggle, FootswitchToggle, MorphBar, Spectrum/Waveform displays, macro panel, param→macro menu, `vector_font` (the stroke display face)
 - `widgets/glow.rs`: Phosphor bloom rendering primitives (`glow_circle`, `glow_line`, `glow_arc`, `glow_rect`, `neon_line`, `scanlines`)
 - `crt.rs`: Handshake with a host's GPU CRT post-process pass (painter-drawn scanlines as fallback)
-- `telemetry.rs`: `SignalTap` — lock-free audio→GUI peak meters and scope ring
-- `theme.rs`: `SonidoTheme` struct — single source of truth for the design-system tokens (colors, sizing, glow config, scanline config). Installed into `egui::Context::data()`, retrieved via `SonidoTheme::get(ctx)`. Includes `reduced_fx` flag for WASM performance.
+- `telemetry.rs`: `SignalTap`, the lock-free audio→GUI peak meters and scope ring
+- `theme.rs`: the `SonidoTheme` struct, the one place the design-system tokens are defined (colors, sizing, glow config, scanline config). It is installed into `egui::Context::data()` and retrieved via `SonidoTheme::get(ctx)`, and it includes a `reduced_fx` flag for WASM performance.
 
 **Why a separate gui-core?** Plugin hosts (CLAP via clack) need effect UIs but not cpal audio streams or preset management. By isolating widgets, the Cabinet, and the ParamBridge trait into gui-core, `sonido-plugin` depends on gui-core alone and provides its own `ParamBridge` implementation (`PluginParamBridge`) backed by lock-free atomic host parameters.
 
 ### sonido-plugin
 
-CLAP audio plugin adapter via the `clack` safe wrapper. Everything ships as ONE bundle: `examples/sonido.rs` exports `bundle.rs`'s `SonidoEntry`, whose CLAP factory lists all 36 effects (`bundle::CATALOG`, IDs `com.sonido.<effect-id-with-dashes>`) plus the graph player (`com.sonido.graph-player`). `scripts/bundle-clap.sh` packages it as `dist-clap/sonido.clap`; `scripts/bundle-vst3.sh` builds `dist-vst3/sonido.vst3`, a clap-wrapper v0.15.1 shim that loads `sonido.clap`. `make plugins` installs `~/.clap/sonido.clap`; `make plugins-vst3` also installs `~/.vst3/sonido.vst3`.
+CLAP audio plugin adapter via the `clack` safe wrapper. Everything ships as one bundle: `examples/sonido.rs` exports `bundle.rs`'s `SonidoEntry`, whose CLAP factory lists all 36 effects (`bundle::CATALOG`, IDs `com.sonido.<effect-id-with-dashes>`) plus the graph player (`com.sonido.graph-player`). `scripts/bundle-clap.sh` packages it as `dist-clap/sonido.clap`; `scripts/bundle-vst3.sh` builds `dist-vst3/sonido.vst3`, a clap-wrapper v0.15.1 shim that loads `sonido.clap`. `make plugins` installs `~/.clap/sonido.clap`; `make plugins-vst3` also installs `~/.vst3/sonido.vst3`.
 
 **Modules:**
 - `bundle.rs`: `CATALOG`, the multi-plugin `SonidoFactory`, and `SonidoEntry`
-- `lib.rs`: `sonido_effect_entry!` macro — still available to build a standalone single-effect `.clap`
-- `audio.rs`: Real-time audio processor — parameter sync, gesture events, stereo block processing
-- `gui.rs`: Plugin GUI — `PluginParamBridge` and `SonidoEditor` window lifecycle; every effect draws the gui-core `Cabinet`
+- `lib.rs`: the `sonido_effect_entry!` macro, which can still build a standalone single-effect `.clap`
+- `audio.rs`: Real-time audio processor (parameter sync, gesture events, stereo block processing)
+- `gui.rs`: Plugin GUI (`PluginParamBridge` and the `SonidoEditor` window lifecycle); every effect draws the gui-core `Cabinet`
 - `main_thread.rs`: CLAP params, state save/load (JSON), GUI extension, audio ports
-- `shared.rs`: `SonidoShared` — lock-free atomic parameter store shared across threads
-- `graph_player.rs`: Graph-player plugin — runs an exported `Patch` (six macros, morph, input/master gain)
-- `graph_editor.rs`: the graph player's editor — a RIG selector over the factory rigs (`sonido_rigs::factory_rigs`) and the rig library folder
+- `shared.rs`: `SonidoShared`, a lock-free atomic parameter store shared across threads
+- `graph_player.rs`: Graph-player plugin, which runs an exported `Patch` (six macros, morph, input/master gain)
+- `graph_editor.rs`: the graph player's editor, a RIG selector over the factory rigs (`sonido_rigs::factory_rigs`) and the rig library folder
 - `bin/sonido-preview.rs`: Opens one plugin's GUI in a window without a DAW (`--snapshot` for PNGs)
 
 **Shared infrastructure:**
-- `egui_bridge/`: Custom baseview-to-egui bridge (event translation, frame loop, `egui_glow` painter, CRT post-process), replacing `egui-baseview`
+- `egui_bridge/`: Custom baseview-to-egui bridge (event translation, frame loop, `egui_glow` painter, CRT post-process), used instead of `egui-baseview`
 - Lock-free parameter sync: `AtomicU32` (f32 bit-cast) per parameter, `AtomicU8` gesture flags
 - Host notification: `host.request_process()` for GUI parameter changes
 - Extensions: audio-ports, gui, latency, params, state, tail (reports the live effect's `tail_samples`), track-info
@@ -381,13 +381,13 @@ CLAP audio plugin adapter via the `clack` safe wrapper. Everything ships as ONE 
 
 Standalone real-time audio effects processor and node-graph editor built on egui (eframe) + cpal. Builds natively and for wasm32 (the browser demo).
 
-**Key modules:**
+**Main modules:**
 - `app.rs`: Main application state and UI layout
 - `audio_processor.rs`: Audio-thread processor and stream construction (owns the `GraphEngine`)
 - `audio_bridge.rs`: Lock-free communication between UI and audio thread (metering, transport and graph command channels)
 - `atomic_param_bridge.rs`: `ParamBridge` implementation using AtomicU32 per parameter
 - `graph_view.rs`: Visual node-graph editor (egui-snarl) with compile-to-engine
-- `morph_state.rs`: A/B morph — one global position, per-effect A/B parameter poses
+- `morph_state.rs`: A/B morph, with one global position and per-effect A/B parameter poses
 - `macro_autoassign.rs`: Auto-assigns the six performance macros from the chain
 - `chain_manager.rs`: `GraphCommand` enum for GUI→audio thread topology mutations
 - `session.rs`: Session save/load (graph topology, node parameters, editor state, the rig's name)
@@ -432,8 +432,9 @@ Standalone real-time audio effects processor and node-graph editor built on egui
 
 ### DAG Processing (ProcessingGraph)
 
-The `ProcessingGraph` in `sonido-core/src/graph/` replaces linear chains with compiled
-directed acyclic graph (DAG) routing. See ADR-025 for full design rationale.
+The `ProcessingGraph` in `sonido-core/src/graph/` routes audio through a compiled
+directed acyclic graph (DAG) instead of a linear chain. See ADR-025 for full design
+rationale.
 
 ```
 Mutation thread (main/GUI):
@@ -469,7 +470,7 @@ chain needs only 2 buffers (ping-pong). A diamond (split + 2 parallel + merge)
 needs 3.
 
 **Schedule swap**: When `compile()` produces a new schedule, old and new run
-simultaneously during a ~5ms crossfade via `SmoothedParam`. No clicks.
+simultaneously during a ~5ms crossfade via `SmoothedParam`, so the swap does not click.
 
 **Example topologies**:
 ```
@@ -484,8 +485,8 @@ Fan-out:    Input → Split → [E1] → Merge → Output  (4 buffers)
 `GraphEngine` in `sonido-core/src/graph/engine.rs` wraps `ProcessingGraph` with
 high-level chain management and exposes a dual API (ADR-027):
 
-- **NodeId-based** (`add_effect`, `remove_effect`, `reorder`) — for arbitrary DAG topologies.
-- **Slot-indexed** (`add_effect_named`, `remove_at`, `reorder_slots`, `set_param_at`, `set_bypass_at`, `snapshot`) — for linear chains with registry IDs.
+- **NodeId-based** (`add_effect`, `remove_effect`, `reorder`): for arbitrary DAG topologies.
+- **Slot-indexed** (`add_effect_named`, `remove_at`, `reorder_slots`, `set_param_at`, `set_bypass_at`, `snapshot`): for linear chains with registry IDs.
 
 `GraphEngine` is the topology owner for the GUI, CLI and graph player: the GUI's
 audio processor uses the slot-indexed API (and `new_dag()` for graphs built in the
@@ -533,7 +534,7 @@ All effects implement the `Effect` trait with stereo-first design.
 
 **Why stereo-first?** Most real-world audio is stereo. A mono-first API forces every stereo application to manually duplicate processing or wrap effects in stereo adapters. With stereo-first, the common case (stereo processing) requires no boilerplate, while mono processing derives automatically from the stereo path. The `is_true_stereo()` method lets hosts distinguish effects that have cross-channel interaction (reverb, ping-pong delay) from those that process channels independently (distortion, compressor). This metadata enables optimization: a host can skip the stereo path for dual-mono effects when rendering to mono.
 
-**Why object-safe?** The `Effect` trait avoids associated types, const generics, and non-object-safe methods so that `Box<dyn Effect>` works for dynamic effect chains. This is critical for the GUI chain view (drag-and-drop reordering), preset loading (creating effects by name at runtime), and the CLI (parsing effect names from command-line arguments). Static dispatch via `.chain()` and generics remains available for maximum performance in known configurations.
+**Why object-safe?** The `Effect` trait avoids associated types, const generics, and non-object-safe methods so that `Box<dyn Effect>` works for dynamic effect chains. The GUI chain view (drag-and-drop reordering), preset loading (creating effects by name at runtime), and the CLI (parsing effect names from command-line arguments) all depend on this. Static dispatch via `.chain()` and generics remains available for maximum performance in known configurations.
 
 ```rust
 pub trait Effect {
@@ -599,7 +600,7 @@ Dual-mono effects process each channel independently with the same algorithm.
 
 All effects implement the `ParameterInfo` trait for runtime parameter discovery.
 
-**Why index-based parameters?** Indexed parameters (rather than named string lookups) enable O(1) access in the audio thread and zero-allocation parameter changes. The `ParamDescriptor` provides metadata (name, unit, range, step) for UI generation without embedding strings in the hot path. The `short_name` field (max 8 characters) is for space-constrained displays: hardware/controller LCDs, compact knob labels, and name lookup (`find_param_by_name` matches `name` or `short_name`). This design is modeled after the VST3 parameter model, where parameters are identified by index for performance and by descriptor for presentation.
+**Why index-based parameters?** Indexed parameters (rather than named string lookups) enable O(1) access in the audio thread and zero-allocation parameter changes. The `ParamDescriptor` provides metadata (name, unit, range, step) for UI generation without embedding strings in the hot path. The `short_name` field (max 8 characters) is for space-constrained displays, such as hardware/controller LCDs and compact knob labels, and for name lookup (`find_param_by_name` matches `name` or `short_name`). This design is modeled after the VST3 parameter model, where parameters are identified by index for performance and by descriptor for presentation.
 
 ```rust
 pub trait ParameterInfo {
@@ -640,17 +641,13 @@ pub struct ParamDescriptor {
 }
 ```
 
-This enables:
-- **Hardware mapping**: Map pedal knobs to parameters by descriptor range and scale
-- **Plugin automation**: Expose parameters to DAW hosts
-- **Preset systems**: Save/restore parameter state by index
-- **Dynamic UIs**: Auto-generate parameter controls
+With the trait and its descriptors, pedal hardware can map knobs to parameters by descriptor range and scale, plugins can expose parameters to DAW hosts for automation, preset systems can save and restore parameter state by index, and UIs can generate parameter controls automatically.
 
 ## no_std Compatibility
 
 `sonido-core`, `sonido-effects`, `sonido-registry`, `sonido-synth`, `sonido-platform` and `sonido-patch` support `no_std` (with `alloc`) for embedded use.
 
-**Why `no_std`?** The target hardware (Electrosmith Daisy Seed running on ARM Cortex-M7) has no operating system and hard real-time constraints; the firmware supplies its own heap (on SDRAM) for construction-time allocation. Audio callbacks must complete within the buffer period (e.g., 64 samples / 48 kHz = 1.33 ms) with zero tolerance for missed deadlines. `no_std` builds are checked by `make test-nostd` and the manually dispatched `ci-manual.yml` workflow (`cargo test --no-default-features -p …`); they guarantee no code path can touch the filesystem or OS, and the design rule is that allocation happens at construction, never in the audio path.
+**Why `no_std`?** The target hardware (Electrosmith Daisy Seed running on ARM Cortex-M7) has no operating system and hard real-time constraints; the firmware supplies its own heap (on SDRAM) for construction-time allocation. Audio callbacks must complete within the buffer period (e.g., 64 samples / 48 kHz = 1.33 ms), and no deadline may be missed. `no_std` builds are checked by `make test-nostd` and the manually dispatched `ci-manual.yml` workflow (`cargo test --no-default-features -p …`); they guarantee no code path can touch the filesystem or OS, and the design rule is that allocation happens at construction, never in the audio path.
 
 ```toml
 [dependencies]
@@ -658,7 +655,7 @@ sonido-core = { version = "0.1", default-features = false }
 sonido-effects = { version = "0.1", default-features = false }
 ```
 
-Key design decisions for `no_std`:
+The main design decisions for `no_std`:
 - Use `libm` for math functions instead of `std::f32` (the `libm` crate provides software implementations of `sinf`, `expf`, `tanf`, etc. that work without libc)
 - Pre-allocated delay lines (maximum sizes determined at construction time, no dynamic allocation in the audio path)
 - Effect state stored in structs (no thread-locals, no statics, no `Rc`/`Arc` in kernels)
@@ -670,7 +667,7 @@ Parameters use `SmoothedParam` to avoid zipper noise.
 
 **Why per-sample smoothing?** When a user turns a knob, the parameter changes in discrete steps. Without smoothing, gain changes produce audible clicks ("zipper noise") and filter cutoff changes produce crackles. The `SmoothedParam` (`crates/sonido-core/src/param.rs`) implements a one-pole IIR lowpass filter on the parameter value itself: `current = current + coeff * (target - current)`. The coefficient is derived from the desired smoothing time: `coeff = 1 - exp(-1 / (time_ms/1000 * sample_rate))`. After one time constant, the value reaches 63% of the way to the target; after 5 time constants (~99.3%), it is effectively settled. It then snaps to the target exactly, once within one part in a million of the target's magnitude or once a step no longer moves the f32 value (a large value such as a 4 kHz cutoff would otherwise stall a few representable steps short and smooth forever), and a settled parameter's `advance()` returns at once.
 
-**Why exponential rather than linear?** Exponential smoothing (`SmoothedParam`) is the default because it has constant computational cost (one multiply-add per sample) and naturally decelerates as it approaches the target, producing smooth-sounding transitions. Linear smoothing (`LinearSmoothedParam`) is also available for cases like crossfades where a predictable, constant-rate transition is needed.
+**Why exponential rather than linear?** Exponential smoothing (`SmoothedParam`) is the default because it has constant computational cost (one multiply-add per sample) and slows down as it approaches the target, so transitions sound smooth. Linear smoothing (`LinearSmoothedParam`) is also available for cases like crossfades where a predictable, constant-rate transition is needed.
 
 ```rust
 // Exponential smoothing (default, natural-sounding)
@@ -706,12 +703,12 @@ The `sonido-platform` crate provides abstractions for hardware deployment:
 | FOOTSWITCH_1-2 | Momentary | Pressed / Released |
 | LED_1-2 | Status LED | On / Off |
 
-**The shipping firmware (`sonido_pedal.rs`)** is a rig player: it steps through
+The shipping firmware (`sonido_pedal.rs`) is a rig player: it steps through
 the jam, up to 15 rigs in its QSPI flash bank and the six factory rigs
 (`sonido-rigs`), and plays each through `sonido_patch::PatchPlayer`. On a rig the
 six knobs are its macros; in the jam they edit the selected slot, or with T2 in
-the middle set the jam's levels and pick its effects. The footswitches mean the
-same everywhere: an FS1 tap is on/off, an FS2 tap is tap tempo (T2 middle: a glide
+the middle set the jam's levels and pick its effects. The footswitches do the same
+thing everywhere: an FS1 tap is on/off, an FS2 tap is tap tempo (T2 middle: a glide
 A↔B), and either held 0.4 s changes rig.
 ```
 TOGGLE_1: Jam slot being edited (1 / 2 / 3)
@@ -749,10 +746,10 @@ developers (CLAP, VST3).
 
 ### Ownership Model
 
-`EffectWithParams` is `Send` but not `Sync` — the effect instance lives exclusively
-on the audio thread. Cross-thread parameter access goes through a `ParamBridge`
+`EffectWithParams` is `Send` but not `Sync`: the effect instance is used only on the
+audio thread. Cross-thread parameter access goes through a `ParamBridge`
 (`AtomicParamBridge` in the standalone GUI, `PluginParamBridge` over
-`SonidoShared` in the plugin), never direct shared references to the effect.
+`SonidoShared` in the plugin), never through direct shared references to the effect.
 
 ### Data Flow (standalone GUI)
 
@@ -804,7 +801,7 @@ clap-wrapper VST3 shim maps to `beginEdit` / `performEdit` / `endEdit`.
 
 ### Structural Changes
 
-Adding, removing, or replacing effects in the chain is NOT a parameter operation.
+Adding, removing, or replacing effects in the chain is not a parameter operation.
 In the standalone GUI these mutations flow through an unbounded `crossbeam-channel`
 of `GraphCommand` (`chain_manager.rs`):
 
@@ -821,12 +818,12 @@ Both bridges transport raw parameter values (f32 → u32 bit-cast → AtomicU32)
 Smoothing happens *inside* the effect after `set_param()`: the kernel's
 `Adapter<K, SmoothedPolicy>` calls the parameter's `SmoothedParam::set_target()`,
 and `advance()` produces the smoothed value per sample in the process loop
-(`DirectPolicy` adapters, used only by single-kernel firmware examples, skip this). The bridge never sees smoothed
-values.
+(`DirectPolicy` adapters, used only by single-kernel firmware examples, skip this).
+Smoothed values never pass through the bridge.
 
 ### Plugin Wrapper Contract
 
-Plugin wrappers (CLAP, VST3, nih-plug) must observe these rules:
+Plugin wrappers (CLAP, VST3, nih-plug) must follow these rules:
 
 1. **Call `set_param()` from the audio thread only.** Use an atomic
    `ParamBridge` implementation for cross-thread transport.

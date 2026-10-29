@@ -35,9 +35,9 @@ param = "value"
 ### Parameter names and values
 
 A parameter key is the parameter's name, short name or string id, ignoring
-case, spaces, dashes and underscores: the reverb's Room Size answers to
-`room_size`, `"Room Size"`, `room` or `rev_room_size`. `sonido effects <name>`
-lists an effect's parameters with their ranges.
+case, spaces, dashes and underscores. For example, the keys `room_size`,
+`"Room Size"`, `room` and `rev_room_size` all select the reverb's Room Size.
+`sonido effects <name>` lists an effect's parameters with their ranges.
 
 Values are in the parameter's own units, never normalized 0-1:
 
@@ -51,7 +51,8 @@ Values are in the parameter's own units, never normalized 0-1:
 | step | `waveshape = "Hard Clip"` or `waveshape = "1"` | a step label (any case) or its index |
 
 Unknown keys and out-of-range values are reported (out-of-range values are
-clamped); `cargo test -p sonido-config` checks every preset here loads clean.
+clamped); `cargo test -p sonido-config` checks that every preset here loads
+without errors.
 
 ## Available Effects
 
@@ -99,11 +100,11 @@ with their parameters):
 
 ## Included Presets
 
-- **guitar_crunch.toml** - Classic soft-clip overdrive (preamp into distortion)
-- **tape_delay.toml** - Warm tape-style echo with saturation
-- **subtle_chorus.toml** - Light stereo widening effect
-- **clean_boost.toml** - Transparent gain boost
-- **full_chain.toml** - Complete signal chain example
+- **guitar_crunch.toml**: Classic soft-clip overdrive (preamp into distortion)
+- **tape_delay.toml**: Warm tape-style echo with saturation
+- **subtle_chorus.toml**: Light stereo widening effect
+- **clean_boost.toml**: Transparent gain boost
+- **full_chain.toml**: Complete signal chain example
 
 ## Creating Custom Presets
 

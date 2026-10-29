@@ -143,6 +143,7 @@ pub mod envelope;
 pub mod fast_math;
 pub mod gain;
 pub mod graph;
+pub mod grid;
 pub mod kernel;
 pub mod level;
 pub mod lfo;
@@ -168,6 +169,7 @@ pub use biquad::{
     Biquad, bandpass_coefficients, highpass_coefficients, lowpass_coefficients, notch_coefficients,
     peaking_eq_coefficients,
 };
+pub use grid::{GridEar, GridReading};
 pub use cached::{Cached, needs_update};
 pub use comb::{CombFilter, ModulatedComb};
 pub use compose::{EffectNode, GraphBuilder, feedback, par, seq};

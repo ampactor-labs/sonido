@@ -1,6 +1,6 @@
 # DSP Fundamentals in Sonido
 
-This document explains the digital signal processing theory behind Sonido's implementations. Each section connects mathematical concepts to specific source code, showing how textbook DSP translates into production Rust.
+This document explains the digital signal processing theory behind Sonido's implementations. Each section connects the textbook math to the production Rust code that implements it.
 
 ## Table of Contents
 
@@ -30,7 +30,7 @@ This document explains the digital signal processing theory behind Sonido's impl
 
 The Nyquist-Shannon theorem states that a continuous signal can be perfectly reconstructed from discrete samples only if the signal contains no frequency components above half the sample rate (the Nyquist frequency). At 48 kHz, this limit is 24 kHz.
 
-**Aliasing** occurs when frequencies above Nyquist are present in a signal. Instead of being rejected, they fold back into the audible range as inharmonic artifacts. This is especially problematic for:
+**Aliasing** occurs when frequencies above Nyquist are present in a signal. They fold back into the audible range as inharmonic artifacts. This is especially problematic for:
 
 1. **Oscillators** generating non-sinusoidal waveforms (saw, square, pulse) whose Fourier series contain infinite harmonics
 2. **Nonlinear processing** (distortion, waveshaping) that creates new harmonics from the input signal
@@ -51,11 +51,11 @@ A naive digital sawtooth wave is defined as:
 saw(t) = 2t - 1,  t in [0, 1)
 ```
 
-This has an instantaneous discontinuity at `t = 0` where the value jumps from +1 to -1. In the frequency domain, this discontinuity produces harmonics at every integer multiple of the fundamental frequency, extending to infinity. Since a digital system cannot represent frequencies above Nyquist, these harmonics alias back, producing audible artifacts especially at higher pitches.
+This has an instantaneous discontinuity at `t = 0` where the value jumps from +1 to -1. In the frequency domain, this discontinuity produces harmonics at every integer multiple of the fundamental frequency, extending to infinity. Since a digital system cannot represent frequencies above Nyquist, these harmonics alias back and produce audible artifacts, especially at higher pitches.
 
 ### The PolyBLEP Solution
 
-PolyBLEP (Polynomial Band-Limited Step) applies a polynomial correction in a small region around each discontinuity. Rather than computing a true band-limited waveform (expensive), PolyBLEP approximates one by smoothing only the transition region.
+PolyBLEP (Polynomial Band-Limited Step) applies a polynomial correction in a small region around each discontinuity. Computing a true band-limited waveform is expensive, so PolyBLEP approximates one by smoothing only the transition region.
 
 The correction function in Sonido (`poly_blep` in `oscillator.rs`) is a 4th-order, C²-continuous polynomial spanning 2 samples on each side of the discontinuity:
 
@@ -89,11 +89,11 @@ fn poly_blep(t: f32, dt: f32) -> f32 {
 }
 ```
 
-The parameter `dt` is the phase increment per sample (`frequency / sample_rate`). This defines the width of the correction window. The key insight: the correction window scales with frequency. At higher frequencies (larger `dt`), the correction spans more of the waveform, providing stronger anti-aliasing exactly where it is needed most. The source documents roughly 50 dB of alias suppression, against about 30 dB for the common 2nd-order, 1-sample-window version (Välimäki et al., 2010).
+The parameter `dt` is the phase increment per sample (`frequency / sample_rate`). It sets the width of the correction window, so the window scales with frequency. At higher frequencies (larger `dt`), where aliasing is worst, the correction spans more of the waveform and gives stronger anti-aliasing. The source documents roughly 50 dB of alias suppression, against about 30 dB for the common 2nd-order, 1-sample-window version (Välimäki et al., 2010).
 
 ### Waveform Generation
 
-All waveform code lives in `generate_sample_at_phase_with_dt(phase, dt)`. `dt` is the nominal `phase_inc` for `advance()`, and the effective (modulated) phase step for `advance_with_pm()`.
+All waveform code is in `generate_sample_at_phase_with_dt(phase, dt)`. `dt` is the nominal `phase_inc` for `advance()`, and the effective (modulated) phase step for `advance_with_pm()`.
 
 **Sawtooth**: The naive sawtooth minus the PolyBLEP correction at phase 0:
 
@@ -151,7 +151,7 @@ Oversampling solves this by temporarily increasing the sample rate before nonlin
 
 ### Implementation: `Oversampled<const FACTOR: usize, E: Effect>`
 
-Sonido uses const generics to make the oversampling factor a compile-time parameter, enabling the compiler to optimize loops and eliminate branching.
+Sonido uses const generics to make the oversampling factor a compile-time parameter, so the compiler can optimize the loops and eliminate branching.
 
 **Upsampling** uses polyphase windowed-sinc interpolation with a Blackman-Harris window. An 8-sample input history is maintained as a circular buffer. For each output sub-sample, the corresponding polyphase kernel row is convolved with the input history:
 
@@ -176,9 +176,9 @@ fn upsample_channel(input: f32, history: &mut [f32; UPSAMPLE_TAPS], pos: &mut us
 
 `upsample()` / `upsample_right()` call this per channel.
 
-The polyphase decomposition avoids zero-stuffing: instead of inserting zeros and running a full-rate filter, each sub-sample evaluates only the sinc kernel taps that correspond to its fractional offset. The Blackman-Harris window provides >92 dB sidelobe suppression, ensuring interpolation images are well below the noise floor.
+The polyphase decomposition avoids zero-stuffing (inserting zeros and running a full-rate filter): each sub-sample evaluates only the sinc kernel taps that correspond to its fractional offset. The Blackman-Harris window provides >92 dB sidelobe suppression, so interpolation images stay well below the noise floor.
 
-This replaces the earlier linear interpolation approach, which suffered from HF rolloff proportional to `sinc(pi*f/fs)^2` — significant at high audio frequencies, especially with 2x oversampling where the image frequencies are close to the passband.
+Sonido uses windowed-sinc interpolation here because linear interpolation causes HF rolloff proportional to `sinc(pi*f/fs)^2`. The rolloff is significant at high audio frequencies, especially with 2x oversampling, where the image frequencies are close to the passband.
 
 **Downsampling** applies a 48-tap Kaiser-windowed sinc FIR anti-aliasing filter followed by decimation. All FACTOR processed samples are written into a circular FIR state buffer (no shifting), and the convolution sum is computed once, at the decimation point:
 
@@ -211,7 +211,7 @@ Three sets of coefficients are provided for 2x, 4x, and 8x oversampling. The cut
 | 4x | 0.225 x oversampled Nyquist | >80 dB |
 | 8x | 0.1125 x oversampled Nyquist | >80 dB |
 
-The Kaiser window beta of 8.0 was chosen to achieve >80 dB stopband attenuation with 48 taps. The relationship between beta and attenuation follows Kaiser's empirical formula: `A = 2.285*(M-1)*pi*df + 7.95` where A is the stopband attenuation in dB. At beta=8.0 with M=48, the achieved attenuation exceeds the 80 dB target across all three coefficient sets. All coefficient sets are symmetric (linear phase), preserving waveform shape through the oversampling path.
+The Kaiser window beta of 8.0 was chosen to achieve >80 dB stopband attenuation with 48 taps. The relationship between beta and attenuation follows Kaiser's empirical formula: `A = 2.285*(M-1)*pi*df + 7.95` where A is the stopband attenuation in dB. At beta=8.0 with M=48, the achieved attenuation exceeds the 80 dB target across all three coefficient sets. All coefficient sets are symmetric (linear phase), so they preserve waveform shape through the oversampling path.
 
 **Upsampling kernels (Blackman-Harris windowed sinc, 8 taps/phase):**
 
@@ -245,7 +245,7 @@ For the 48-tap downsample filter and 8-tap upsample kernel, this adds 27 samples
 
 **Source:** `crates/sonido-core/src/biquad.rs`
 
-The biquad is the workhorse of audio DSP. It implements a second-order IIR (Infinite Impulse Response) filter using the Transposed Direct Form II difference equation:
+The biquad is the standard general-purpose filter in audio DSP. It implements a second-order IIR (Infinite Impulse Response) filter using the Transposed Direct Form II difference equation:
 
 ```
 y[n] = b0 * x[n] + s1
@@ -255,7 +255,7 @@ s2   = b2 * x[n] - a2 * y[n]
 
 This requires 7 multiply-adds per sample with only 2 state variables (`s1`, `s2`).
 
-**Why Transposed Direct Form II?** Sonido uses TDF-II (`Biquad::process`, which also flushes denormals in the state registers) because it has the best numerical properties of all direct forms in 32-bit floating-point: reduced coefficient quantization error, improved dynamic range, and fewer limit-cycle oscillations with high-Q filters. The state variables represent accumulated future contributions rather than raw delay lines, keeping intermediate values in a tighter dynamic range. This is the standard topology used by professional audio frameworks (JUCE, Faust, RTNeural). For audio-rate modulation where coefficient changes are frequent, the SVF topology is preferred (see below).
+Sonido uses TDF-II (`Biquad::process`, which also flushes denormals in the state registers) because it has the best numerical properties of all direct forms in 32-bit floating-point: reduced coefficient quantization error, improved dynamic range, and fewer limit-cycle oscillations with high-Q filters. The state variables hold accumulated future contributions instead of acting as raw delay lines, which keeps intermediate values in a tighter dynamic range. It is the standard topology in professional audio frameworks (JUCE, Faust, RTNeural). For audio-rate modulation, where coefficients change often, the SVF topology is preferred (see below).
 
 ### RBJ Audio EQ Cookbook
 
@@ -281,9 +281,9 @@ self.b0 = b0 * a0_inv;
 
 **Source:** `crates/sonido-core/src/svf.rs`
 
-The SVF offers a different topology that simultaneously provides lowpass, highpass, bandpass, and notch outputs from a single processing step. Sonido implements the Chamberlin SVF with trapezoidal integration for improved stability.
+The SVF is a different topology that provides lowpass, highpass, bandpass, and notch outputs simultaneously from a single processing step. Sonido implements the Chamberlin SVF with trapezoidal integration for improved stability.
 
-**Why SVF over Biquad?** Two reasons:
+The SVF has two advantages over the biquad:
 
 1. **Modulation stability**: The SVF can have its cutoff frequency modulated at audio rate without the instability that biquad coefficient changes can cause. This makes it ideal for filter sweeps, envelope-following, and LFO modulation.
 
@@ -315,7 +315,7 @@ The state variables `ic1eq` and `ic2eq` use the "2x trick" for trapezoidal integ
 One-pole lowpass filters appear throughout Sonido as building blocks:
 
 - **Reverb feedback damping** (`OnePole` per FDN line in `reverb.rs`; `CombFilter::set_damp()` in `comb.rs`): A one-pole lowpass in the feedback path simulates frequency-dependent absorption in acoustic spaces. Higher frequencies decay faster, as they do in real rooms.
-- **Tone controls and HF rolloff**: `OnePole` lowpasses in kernels such as tape and the spring reverb tame high-frequency content.
+- **Tone controls and HF rolloff**: `OnePole` lowpasses in kernels such as tape and the spring reverb reduce high-frequency content.
 - **Parameter smoothing** (`param.rs`): Exponential smoothing is implemented as a one-pole lowpass.
 - **Envelope following**: Level detection uses one-pole filters for attack and release ballistics.
 
@@ -418,7 +418,7 @@ Because the matrix is orthogonal, every line's output feeds every other line, so
 
 **Damping**: each line has a `OnePole` lowpass in its feedback path. The `damping` parameter maps logarithmically to cutoff, `200 * 100^(1 - damping)` Hz (20 kHz at 0%, 200 Hz at 100%). High frequencies decay faster, mimicking air and wall absorption.
 
-**Stereo output**: L sums the even lines, R the odd lines (each x0.25), then scaled by `fdn_compensation`.
+**Stereo output**: L sums the even lines and R the odd lines (each x0.25); both are then scaled by `fdn_compensation`.
 
 ### Allpass Diffusion
 
@@ -438,7 +438,7 @@ y[n] = v[n−D] − g·v[n]
 H(z) = (−g + z⁻ᴰ) / (1 − g·z⁻ᴰ)    |H| = 1 at every frequency
 ```
 
-Freeverb's shortcut, `y = −x + v[n−D]`, has the response `(−1 + (1+g)·z⁻ᴰ) / (1 − g·z⁻ᴰ)`: up to about 2× gain where `z⁻ᴰ = −1`, even at `g = 0`. After a reverb that is only a coloration, but inside a feedback loop (the delay's diffusion, the plate's tank) it pushes the loop gain above 1.
+Freeverb's shortcut, `y = −x + v[n−D]`, has the response `(−1 + (1+g)·z⁻ᴰ) / (1 − g·z⁻ᴰ)`: up to about 2× gain where `z⁻ᴰ = −1`, even at `g = 0`. After a reverb, that gain is only a coloration. Inside a feedback loop (the delay's diffusion, the plate's tank), it pushes the loop gain above 1.
 
 ### Early Reflections and Stereo Width
 
@@ -477,7 +477,7 @@ Scaling the wet signal by `(1-g)` exactly cancels peak-gain amplification:
 output_at_resonance = c × 1/(1-g) = (1-g)/(1-g) = 1.0
 ```
 
-The compensated wet signal at resonance equals the dry signal, whatever the feedback. This is implemented in `gain::feedback_wet_compensation()` and used by delay, flanger, and phaser, which apply it to the wet signal before the mix. The mix (`blend`, see [Gain Staging](#gain-staging)) then applies the effect's fixed, measured level trim, so the compensation keeps the wet level from tracking the feedback knob and the trim matches the effect to its input at its defaults.
+The compensated wet signal at resonance equals the dry signal, whatever the feedback. This is implemented in `gain::feedback_wet_compensation()` and used by delay, flanger, and phaser, which apply it to the wet signal before the mix. The mix (`blend`, see [Gain Staging](#gain-staging)) then applies the effect's fixed, measured level trim. The compensation keeps the wet level from tracking the feedback knob, and the trim matches the effect's level to its input at its defaults.
 
 | Feedback | Compensation | Peak wet at resonance |
 |----------|-------------|----------------------|
@@ -488,11 +488,11 @@ The compensated wet signal at resonance equals the dry signal, whatever the feed
 | 0.9 | 0.100 | 1.0 |
 | 0.95 | 0.050 | 1.0 |
 
-At low feedback (g=0.1), compensation is 0.9 — barely any attenuation. At high feedback (g=0.9), compensation is 0.1 — the wet signal is quieter but the decay tail is correspondingly longer. The `output` parameter provides makeup gain if needed.
+At low feedback (g=0.1), compensation is 0.9, which is barely any attenuation. At high feedback (g=0.9), compensation is 0.1: the wet signal is quieter, but the decay tail is correspondingly longer. The `output` parameter provides makeup gain if needed.
 
 **Moderate compensation for the reverb FDN: `c = sqrt(1-g)`**
 
-The reverb's 8 mutually-prime lines are mixed by an orthogonal matrix and averaged 4 per channel, so energy spreads across many modes rather than piling up on one comb's teeth. Exact `(1-g)` compensation would be unnecessarily aggressive and leave the wet signal much quieter than the dry.
+The reverb's 8 mutually prime lines are mixed by an orthogonal matrix and averaged 4 per channel, so energy spreads across many modes instead of concentrating on the teeth of a single comb. Exact `(1-g)` compensation would attenuate more than necessary and leave the wet signal much quieter than the dry.
 
 The reverb uses `sqrt(1-g)` (`fdn_compensation`): the geometric mean of unity and exact compensation.
 
@@ -504,11 +504,11 @@ The reverb uses `sqrt(1-g)` (`fdn_compensation`): the geometric mean of unity an
 | Allpass cascade (phaser) | Unity magnitude | `(1-g)` conservative | Phaser |
 | Hadamard FDN (reverb) | spread over 8 mixed lines | `sqrt(1-g)` moderate | Reverb |
 
-The phaser's allpass cascade has unity magnitude at all frequencies — resonance is narrowband (3 notch-peak pairs vs hundreds of comb teeth). Exact compensation is conservative but harmless, keeping the phaser well within ceiling.
+The phaser's allpass cascade has unity magnitude at all frequencies, and its resonance is narrowband (3 notch-peak pairs vs hundreds of comb teeth). Exact compensation is conservative but harmless, and it keeps the phaser well within the ceiling.
 
-**Industry context:** Static wet-signal compensation is the standard approach for embedded/pedal DSP (FV-1, EQD Afterneath). DAW-grade reverbs (MAX/MSP gen~, Valhalla) sometimes use dynamic AGC, but the per-sample envelope tracking is too expensive for Sonido's embedded targets (Daisy Seed, Hothouse).
+Static wet-signal compensation is the standard approach for embedded/pedal DSP (FV-1, EQD Afterneath). DAW-grade reverbs (MAX/MSP gen~, Valhalla) sometimes use dynamic AGC, but its per-sample envelope tracking is too expensive for Sonido's embedded targets (Daisy Seed, Hothouse).
 
-Reference: CCRMA PASP, "Feedback Comb Filters" — peak gain = 1/(1-|g|).
+Reference: CCRMA PASP, "Feedback Comb Filters", which gives the peak gain as 1/(1-|g|).
 
 Source: `crates/sonido-core/src/gain.rs` (`feedback_wet_compensation`), `crates/sonido-effects/src/kernels/reverb.rs` (`update_derived`)
 
@@ -598,7 +598,7 @@ Input -> [Envelope] -> Drive (gain, dynamic) -> ADAA Waveshaper -> Tone EQ -> Mi
 
 The drive stage amplifies the input before waveshaping, pushing more of the signal into the nonlinear region. The tone control is a peaking biquad at 1 kHz (Q 0.7, -12 to +12 dB) after the waveshaper, followed by a `1/√drive` makeup gain that keeps loudness roughly steady as drive rises. A `soft_limit` safety stage and the output level follow the wet/dry mix.
 
-Default parameters are the effect's voiced sweet spot: **drive 26 dB**, **tone +1.5 dB**, **output 0 dB**, **mix 100%**. A freshly opened plugin and a pedal with its knobs at noon both start there, and the level contract trims the result to the input's loudness (see [Gain Staging](#gain-staging)).
+The default parameters are the settings the effect is tuned to sound best at: drive 26 dB, tone +1.5 dB, output 0 dB, mix 100%. A freshly opened plugin and a pedal with its knobs at noon both start there, and the level contract trims the result to the input's loudness (see [Gain Staging](#gain-staging)).
 
 ### Waveshaping Functions
 
@@ -608,9 +608,9 @@ Each waveshaping algorithm has a distinct harmonic character determined by the s
 
 **Asymmetric functions**: Functions that are not odd-symmetric produce even harmonics (2nd, 4th, 6th...) in addition to odd ones. Even harmonics are perceived as "warm" and "musical," characteristic of vacuum tube distortion.
 
-**Foldback distortion**: When the input exceeds a threshold, the signal folds back rather than clipping. This produces a rich, complex harmonic spectrum with both even and odd harmonics. The wavefolder behavior creates more harmonics as drive increases, rather than just compressing the signal as a clipper does. Like the other three modes, foldback uses first-order ADAA (piecewise parabolic antiderivative) to reduce aliasing artifacts.
+**Foldback distortion**: When the input exceeds a threshold, the signal folds back instead of clipping. This produces a complex harmonic spectrum with both even and odd harmonics. As drive increases, the wavefolder creates more harmonics, while a clipper just compresses the signal. Like the other three modes, foldback uses first-order ADAA (piecewise parabolic antiderivative) to reduce aliasing artifacts.
 
-**Dynamic Waveshaping**: The `dynamics` parameter modulates drive gain based on input level via an `EnvelopeFollower` (5 ms attack, 50 ms release). When input is quiet, drive is reduced by up to 80%, keeping the signal in the waveshaper's linear region — mimicking tube amp bias-point shift. At `dynamics=0` (default), no envelope processing occurs (zero overhead).
+**Dynamic Waveshaping**: The `dynamics` parameter modulates drive gain based on input level via an `EnvelopeFollower` (5 ms attack, 50 ms release). When input is quiet, drive is reduced by up to 80%, which keeps the signal in the waveshaper's linear region. This imitates the bias-point shift of a tube amp. At `dynamics=0` (default), no envelope processing occurs (zero overhead).
 
 ### Oversampling Integration
 
@@ -630,7 +630,7 @@ The compressor follows a feed-forward topology:
 Input -> Level Detection -> Gain Computer -> Gain Application -> Output
 ```
 
-In a feed-forward design, the gain reduction is computed from the input signal level, not the output. This provides more predictable behavior compared to feedback compressor topologies.
+In a feed-forward design, the gain reduction is computed from the input signal level, not the output. This gives more predictable behavior than feedback compressor topologies.
 
 ### Gain Computation: Soft Knee
 
@@ -640,13 +640,13 @@ The gain computer uses a soft-knee characteristic (`compute_gain_db` in `compres
 2. **Within knee** (`|overshoot| <= w`): `-((overshoot + w) / knee_db)^2 * overshoot * (1 - 1/ratio)`, compression increases smoothly
 3. **Above knee** (`overshoot > w`): `-overshoot * (1 - 1/ratio)`, full compression at the specified ratio
 
-The default threshold is **-18 dB** at a **4:1** ratio, which engages on most program material without heavy compression. The knee width (default **6 dB**) is exposed as a configurable parameter (`knee_db`, index 5), allowing users to dial between hard-knee (0 dB) and very soft transitions.
+The default threshold is -18 dB at a 4:1 ratio, which engages on most program material without heavy compression. The knee width (default 6 dB) is a configurable parameter (`knee_db`, index 5), so users can set anything from a hard knee (0 dB) to a very soft transition.
 
-The soft knee prevents the abrupt transition at the threshold that a hard-knee compressor exhibits, producing more transparent compression.
+The soft knee avoids the abrupt transition at the threshold that a hard-knee compressor has, which makes the compression more transparent.
 
 ### Ballistics: Attack and Release
 
-The envelope follower uses separate one-pole filters for attack (level increasing) and release (level decreasing). This creates the characteristic timing behavior:
+The envelope follower uses separate one-pole filters for attack (level increasing) and release (level decreasing), each with its own time:
 
 - **Attack time**: How quickly the compressor responds to transients
 - **Release time**: How quickly compression releases after the signal drops
@@ -682,7 +682,7 @@ Default methods (`mod_advance_unipolar`, `mod_advance_bipolar`) provide the conv
 - Bipolar [-1, 1] to unipolar [0, 1]: `(value + 1) * 0.5`
 - Unipolar [0, 1] to bipolar [-1, 1]: `value * 2 - 1`
 
-This allows effects to accept any modulation source interchangeably without caring about the source's native range.
+Effects can therefore accept any modulation source, whatever its native range.
 
 ### Chorus, Flanger, Phaser, Tremolo
 
@@ -750,7 +750,7 @@ The `TempoManager` tracks musical position using a sample counter and provides:
 - **Phase**: Fractional position within the current beat or bar (useful for syncing LFOs)
 - **Division conversion**: Convert note divisions to Hz, ms, or samples at the current tempo
 
-Transport control (`play`, `stop`, `reset`) gates the position counter, ensuring effects stay synchronized when playback stops and resumes.
+The position counter follows transport control (`play`, `stop`, `reset`), so effects stay synchronized when playback stops and resumes.
 
 ---
 
@@ -764,7 +764,7 @@ Nonlinear effects (distortion, saturation, wah) generate gain that depends on th
 
 ### Universal Output Level
 
-Effects in Sonido expose an `output` parameter (normally the last index in `ParameterInfo`; see `docs/DSP_QUALITY_STANDARD.md` Rule 3 for the exceptions) that provides -6 to +6 dB of post-processing level control (`OUTPUT_MIN_DB` / `OUTPUT_MAX_DB`, chosen so the knob's noon is 0 dB). Distortion, tape, drone, glitch, texture and time-stretch define wider ranges. The output level is applied as a linear gain multiplier at the end of the kernel's processing chain. It is the player's control; matching an effect to its input's loudness is the level contract's job (below).
+Effects in Sonido expose an `output` parameter (normally the last index in `ParameterInfo`; see `docs/DSP_QUALITY_STANDARD.md` Rule 3 for the exceptions) that provides -6 to +6 dB of post-processing level control (`OUTPUT_MIN_DB` / `OUTPUT_MAX_DB`, chosen so the knob's noon is 0 dB). Distortion, tape, drone, glitch, texture and time-stretch define wider ranges. The output level is applied as a linear gain multiplier at the end of the kernel's processing chain. It is the player's control. The level contract (below) matches an effect to its input's loudness.
 
 The `gain.rs` module provides the shared implementation (`output_param_descriptor()` plus these helpers):
 
@@ -793,9 +793,9 @@ pub struct Level {
 }
 ```
 
-A kernel with a mix control applies the trim to its wet signal inside `Self::blend` ([below](#level-preserving-mix)). A kernel without one passes its sound through `Self::level` / `Self::level_stereo` where it leaves the processing, before its output level and any safety limiter, so the limiter guards the final level (a +12 dB trim after the wah's limiter could reach +18 dBFS).
+A kernel with a mix control applies the trim to its wet signal inside `Self::blend` ([below](#level-preserving-mix)). A kernel without one passes its sound through `Self::level` / `Self::level_stereo` where it leaves the processing, before its output level and any safety limiter, so the limiter acts on the final level (a +12 dB trim after the wah's limiter could reach +18 dBFS).
 
-The calibration is measured, never hand-tuned. `cargo run -p sonido-effects --example calibrate --release` regenerates `crates/sonido-effects/src/calibration.rs`: it plays `sonido_analysis::signals::reference_guitar`, a synthetic strummed open-E chord (one strum a second, 6 s) peaking at `NOMINAL_PEAK_DBFS` = -20 dBFS (the median measured from a humbucker guitar into the Hothouse's line-level converter), through every registered effect, fully wet if it has a mix control and at its defaults otherwise. `sonido_analysis::loudness::effect_gain_db` measures the change in integrated loudness (ITU-R BS.1770-4 LUFS), the trim is scaled to cancel it, and for a mix control the zero-lag correlation of the fully wet output with the input becomes ρ. `crates/sonido-effects/tests/level_contract.rs` fails when an entry is more than 0.5 dB off, or when the mix moves the level more than 1.5 dB at 0, 25, 50 or 75% or at the default mix; rerun the example after changing a kernel's sound or defaults. The looper and tuner are uncalibrated utilities (unity trim).
+The calibration is measured, not tuned by hand. `cargo run -p sonido-effects --example calibrate --release` regenerates `crates/sonido-effects/src/calibration.rs`. It plays `sonido_analysis::signals::reference_guitar` through every registered effect, fully wet if the effect has a mix control and at its defaults otherwise. That signal is a synthetic strummed open-E chord (one strum a second, 6 s) peaking at `NOMINAL_PEAK_DBFS` = -20 dBFS, the median measured from a humbucker guitar into the Hothouse's line-level converter. `sonido_analysis::loudness::effect_gain_db` measures the change in integrated loudness (ITU-R BS.1770-4 LUFS), and the trim is scaled to cancel it. For an effect with a mix control, the zero-lag correlation of the fully wet output with the input becomes ρ. `crates/sonido-effects/tests/level_contract.rs` fails when an entry is more than 0.5 dB off, or when the mix moves the level more than 1.5 dB at 0, 25, 50 or 75% or at the default mix. Rerun the example after changing a kernel's sound or defaults. The looper and tuner are uncalibrated utilities (unity trim).
 
 ### Per-Effect Gain Staging
 
@@ -822,7 +822,7 @@ let normalized_l = filtered_l / safe_q;       // Unity peak gain at any Q
 let out_l = normalized_l * 0.8 + left * 0.2;  // 80/20 wet/dry blend for body
 ```
 
-At the center frequency: `(input * Q) / Q * 0.8 + input * 0.2 = input`. Unity. The normalization is algebraically exact regardless of Q. Unity at the center frequency is not unity on a guitar, though: at its defaults the wah measures 12.2 dB below its input on the reference guitar, and its level trim (+12.2 dB, applied by the adapter) restores it.
+At the center frequency, `(input * Q) / Q * 0.8 + input * 0.2 = input`, which is unity gain. The normalization is algebraically exact regardless of Q. Unity gain at the center frequency does not give unity level on a guitar, though: at its defaults the wah measures 12.2 dB below its input on the reference guitar, and its level trim (+12.2 dB, applied by the adapter) restores the level.
 
 ### Level-Preserving Mix
 
@@ -836,7 +836,7 @@ fn blend(dry: f32, wet: f32, mix: f32) -> f32 {
 }
 ```
 
-A linear crossfade, `dry·(1−m) + wet·m`, keeps the level only when wet and dry are equally loud and fully correlated. Two signals with correlation ρ at gains `a` and `b` sum to power `a² + b² + 2ρab`; for an uncorrelated wet (a reverb tail, an echo) the linear crossfade at `m = 0.5` has power 0.5, a 3 dB dip, and a wet that partly cancels the dry (ρ < 0) dips further.
+A linear crossfade, `dry·(1−m) + wet·m`, keeps the level only when wet and dry are equally loud and fully correlated. Two signals with correlation ρ at gains `a` and `b` sum to power `a² + b² + 2ρab`. For an uncorrelated wet (a reverb tail, an echo), the linear crossfade at `m = 0.5` has power 0.5, a 3 dB dip. A wet that partly cancels the dry (ρ < 0) dips further.
 
 `mix_gains` starts from the constant-power sine/cosine law and normalizes it by the blend's power at the measured correlation:
 
@@ -854,11 +854,11 @@ The blend's loudness is then the same at every mix for that correlation:
 - **ρ = 1** (saturation): `g_d + g_w = 1`, so amplitude is preserved as in a linear crossfade.
 - **ρ < 0** (partly cancelling wets, such as a vibrato's comb): `k > 1`, the boost the blend needs.
 
-The sine law, rather than `√m`, has a finite slope at both ends, so the first turn of a mix knob fades the wet in instead of jumping to -20 dB (`√0.01 = 0.1`). Mix 0 and 1 return exactly `(1, 0)` and `(0, 1)`.
+Unlike a `√m` law, the sine law has a finite slope at both ends, so the first turn of a mix knob fades the wet in instead of jumping to -20 dB (`√0.01 = 0.1`). Mix 0 and 1 return exactly `(1, 0)` and `(0, 1)`.
 
-`mix_gains` runs per sample in every effect with a mix control, so it uses no transcendentals (libm's `sqrtf` is a software routine on the Cortex-M7): `quarter_sine` is a fifth-order odd polynomial for `sin(πx/2)`, exact at `x = 1` and within 6e-4 elsewhere, and `k` is a bit-trick inverse square root refined by two Newton steps (within 5 ppm). Because `k` normalizes by the polynomial gains' actual power, the polynomial's own deviation from constant power cancels too.
+`mix_gains` runs per sample in every effect with a mix control, so it uses no transcendentals (libm's `sqrtf` is a software routine on the Cortex-M7). `quarter_sine` is a fifth-order odd polynomial for `sin(πx/2)`, exact at `x = 1` and within 6e-4 elsewhere. `k` is a bit-trick inverse square root refined by two Newton steps (within 5 ppm). Because `k` normalizes by the polynomial gains' actual power, the polynomial's own deviation from constant power cancels too.
 
-The linear helpers `wet_dry_mix()` / `wet_dry_mix_stereo()` (`crates/sonido-core/src/math.rs`, `dry + (wet - dry) * mix`) remain as plain crossfades: the graph engine uses `wet_dry_mix` for a node's bypass fade (`crates/sonido-core/src/graph/processing.rs`). Kernels don't use them.
+The linear helpers `wet_dry_mix()` / `wet_dry_mix_stereo()` (`crates/sonido-core/src/math.rs`, `dry + (wet - dry) * mix`) are plain crossfades. The graph engine uses `wet_dry_mix` for a node's bypass fade (`crates/sonido-core/src/graph/processing.rs`); kernels don't use them.
 
 ---
 
@@ -866,7 +866,7 @@ The linear helpers `wet_dry_mix()` / `wet_dry_mix_stereo()` (`crates/sonido-core
 
 **Source:** `crates/sonido-core/src/math.rs`
 
-A safety limiter applied as the final processing stage before the output level parameter. Its purpose is to guarantee bounded output under all parameter combinations — it is a backstop, not a musical effect.
+Soft limiting is a safety measure applied as the final processing stage, before the output level parameter. Its only purpose is to guarantee bounded output under all parameter combinations; it is not meant as a musical effect.
 
 ### Algorithm
 
@@ -886,13 +886,13 @@ Where:
 ### Transfer Function Properties
 
 - **Transparent below knee:** Signals below 90% of ceiling pass through unmodified
-- **Smooth transition:** The tanh function provides a continuously differentiable knee — no discontinuities that would produce clicks or harmonic artifacts
+- **Smooth transition:** The tanh function provides a continuously differentiable knee, with no discontinuities that would produce clicks or harmonic artifacts
 - **Hard ceiling guarantee:** As `|x| → ∞`, `tanh → 1.0`, so output asymptotically approaches but never exceeds `ceiling`
-- **Odd symmetry:** `f(-x) = -f(x)` — no even-harmonic generation from the limiter itself
+- **Odd symmetry:** `f(-x) = -f(x)`, so the limiter itself generates no even harmonics
 
 ### Usage Pattern
 
-Applied in effects where nonlinear processing or resonant filters can produce unbounded gain:
+It is applied in effects where nonlinear processing or resonant filters can produce unbounded gain:
 
 ```rust
 // In the kernel, after DSP and mix, before output level
@@ -903,7 +903,7 @@ Kernels using this pattern with a 1.0 ceiling: chorus, compressor, distortion, e
 
 ### Reference
 
-Knee-based soft limiting framework: Giannoulis et al., "Digital Dynamic Range Compressor Design — A Tutorial and Analysis," *J. Audio Eng. Soc.* 60(6), 2012.
+Knee-based soft limiting framework: Giannoulis et al., "Digital Dynamic Range Compressor Design: A Tutorial and Analysis," *J. Audio Eng. Soc.* 60(6), 2012.
 
 ---
 
@@ -911,15 +911,15 @@ Knee-based soft limiting framework: Giannoulis et al., "Digital Dynamic Range Co
 
 **Source:** `crates/sonido-core/src/gain.rs`, `param.rs`, `param_info.rs`, `one_pole.rs`, `math.rs`
 
-Sonido extracts recurring DSP patterns into a shared vocabulary in `sonido-core`. This eliminates copy-paste duplication across the 36 effects while establishing consistent conventions.
+Sonido extracts recurring DSP patterns into a shared vocabulary in `sonido-core`. This removes copy-paste duplication across the 36 effects and gives them consistent conventions.
 
 ### SmoothedParam Presets
 
-Rather than scattering magic numbers (`10.0`, `5.0`, `20.0`, `50.0`) across constructors, effects use named presets with documented semantics:
+Effects use named presets with documented meanings for the common smoothing times (`10.0`, `5.0`, `20.0`, `50.0`), so these values do not appear as magic numbers in constructors:
 
 | Preset | Time | Use Case |
 |--------|------|----------|
-| `SmoothedParam::fast()` | 5 ms | Drive, nonlinear gain — needs fast response |
+| `SmoothedParam::fast()` | 5 ms | Drive, nonlinear gain (needs fast response) |
 | `SmoothedParam::standard()` | 10 ms | Most params (rate, depth, mix, level) |
 | `SmoothedParam::slow()` | 20 ms | Filter coefficients, EQ, reverb decay |
 | `SmoothedParam::interpolated()` | 50 ms | Delay time, predelay (avoids pitch artifacts) |
@@ -928,13 +928,13 @@ Rather than scattering magic numbers (`10.0`, `5.0`, `20.0`, `50.0`) across cons
 
 Common parameter descriptors are constructed via factory methods rather than inline struct literals:
 
-- `ParamDescriptor::mix()` — 0-100%, default 50%
-- `ParamDescriptor::depth()` — 0-100%, default 50%
-- `ParamDescriptor::feedback()` — 0-95%, default 50%
-- `ParamDescriptor::time_ms(name, short, min, max, default)` — custom time param
-- `ParamDescriptor::gain_db(name, short, min, max, default)` — custom gain param
+- `ParamDescriptor::mix()`: 0-100%, default 50%
+- `ParamDescriptor::depth()`: 0-100%, default 50%
+- `ParamDescriptor::feedback()`: 0-95%, default 50%
+- `ParamDescriptor::time_ms(name, short, min, max, default)`: custom time param
+- `ParamDescriptor::gain_db(name, short, min, max, default)`: custom gain param
 
-`.with_default(v)` overrides a factory's default with the effect's own sweet spot (chorus: `ParamDescriptor::depth().with_default(60.0)`). The descriptor default is what a fresh plugin starts at and what a pedal knob at noon selects, and `XxxParams::default()` must match it (`crates/sonido-effects/tests/default_parity.rs`).
+`.with_default(v)` overrides a factory's default with the value that sounds best on that effect (chorus: `ParamDescriptor::depth().with_default(60.0)`). The descriptor default is what a fresh plugin starts at and what a pedal knob at noon selects, and `XxxParams::default()` must match it (`crates/sonido-effects/tests/default_parity.rs`).
 
 ### OnePole Filter
 
@@ -977,7 +977,7 @@ IEEE 754 precision for predictable cycle counts.
 
 ### When to Use
 
-Use fast_math functions in **hot DSP loops on embedded targets** (Cortex-M7) where transcendental calls dominate cycle budget. The error margins are inaudible for all documented use cases (LFO modulation, dynamics, filter coefficients). For offline processing or non-embedded targets, prefer the standard `libm` functions.
+Use fast_math functions in hot DSP loops on embedded targets (Cortex-M7) where transcendental calls dominate cycle budget. The error margins are inaudible for all documented use cases (LFO modulation, dynamics, filter coefficients). For offline processing or non-embedded targets, prefer the standard `libm` functions.
 
 Used by `Lfo` (`fast_sin_turns`), the SVF (`fast_tan`), and most effect kernels (`fast_db_to_linear` for output gain); see ADR-020.
 
@@ -998,9 +998,9 @@ Used by `Lfo` (`fast_sin_turns`), the SVF (`fast_tan`), and most effect kernels 
 
 ### The Subnormal Problem
 
-IEEE 754 floating-point numbers have a special category called **subnormal** (or **denormalized**) numbers. These are values between zero and the smallest normal float (~1.175e-38 for f32). While mathematically valid, processing subnormals incurs a severe CPU penalty on most architectures -- up to 100x slower than normal float operations on x86 and ARM. This happens because subnormals cannot be handled by the hardware fast path and must be processed in microcode.
+IEEE 754 floating-point numbers have a special category called **subnormal** (or **denormalized**) numbers. These are values between zero and the smallest normal float (~1.175e-38 for f32). Subnormals are mathematically valid, but processing them incurs a severe CPU penalty on most architectures: up to 100x slower than normal float operations on x86 and ARM. The hardware fast path cannot handle subnormals, so they are processed in microcode.
 
-In audio DSP, subnormals arise naturally in feedback loops: comb filters, allpass filters, delay lines with feedback, and IIR filters all produce decaying signals that eventually enter the subnormal range. Without mitigation, a reverb tail fading to silence can cause the CPU to spike dramatically.
+In audio DSP, subnormals arise naturally in feedback loops: comb filters, allpass filters, delay lines with feedback, and IIR filters all produce decaying signals that eventually enter the subnormal range. Without mitigation, a reverb tail fading to silence can cause a large spike in CPU load.
 
 ### Flush Strategy: `flush_denormal()`
 
@@ -1013,7 +1013,7 @@ pub fn flush_denormal(x: f32) -> f32 {
 }
 ```
 
-The threshold of 1e-20 is well above the IEEE 754 subnormal range (~1.2e-38) but far below any audible signal level. This provides a comfortable margin: values below 1e-20 are inaudible (at -400 dBFS) and serve no purpose other than to eventually decay into the problematic subnormal range.
+The threshold of 1e-20 is well above the IEEE 754 subnormal range (~1.2e-38) but far below any audible signal level. This provides a comfortable margin: values below 1e-20 are inaudible (at -400 dBFS), and if left alone they would only decay further into the subnormal range.
 
 ### Where flush_denormal Is Applied
 
@@ -1061,9 +1061,9 @@ The `FixedDelayLine<const N: usize>` uses const generics for stack allocation, a
 
 Several mechanisms prevent DC offset accumulation:
 
-1. **Leaky integrators**: The triangle oscillator uses a leak of `1 - min(f / fs, 0.1)` instead of `1.0` as the integrator coefficient, ensuring any DC accumulation decays away
+1. **Leaky integrators**: The triangle oscillator uses a leak of `1 - min(f / fs, 0.1)` instead of `1.0` as the integrator coefficient, so any DC accumulation decays away
 2. **Allpass structure**: The Schroeder allpass (`y[n] = v[n−D] − g·v[n]`) has unity gain at every frequency, DC included, so it adds no DC gain to a feedback loop (Freeverb's `y = −x + v[n−D]` shortcut has gain `g/(1−g)` at DC; see [Allpass Diffusion](#allpass-diffusion))
-3. **Feedback clamping**: Comb, allpass, and reverb FDN feedback are clamped below 1.0 (maximum 0.99), ensuring energy always decays
+3. **Feedback clamping**: Comb, allpass, and reverb FDN feedback are clamped below 1.0 (maximum 0.99), so energy always decays
 
 ### Float Precision
 

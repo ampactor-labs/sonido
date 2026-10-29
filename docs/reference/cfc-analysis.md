@@ -62,9 +62,9 @@ println!("Preferred Phase: {:.2} rad ({:.1} deg)",
 PAC quantifies how the amplitude envelope of a high-frequency oscillation varies systematically with the phase of a low-frequency oscillation.
 
 The analysis pipeline:
-1. **Bandpass filter** the signal into phase and amplitude bands
-2. **Hilbert transform** to extract instantaneous phase and amplitude
-3. **Compute coupling metric** (MVL or KL divergence)
+1. Bandpass filter the signal into phase and amplitude bands
+2. Hilbert transform to extract instantaneous phase and amplitude
+3. Compute coupling metric (MVL or KL divergence)
 
 ### Modulation Index
 
@@ -207,7 +207,7 @@ for (i, &amp) in result.mean_amplitude_per_phase.iter().enumerate() {
 
 ## Comodulogram
 
-A comodulogram shows PAC across multiple frequency pairs, revealing which combinations show the strongest coupling.
+A comodulogram shows PAC across multiple frequency pairs, so you can see which combinations have the strongest coupling.
 
 ### CLI
 
@@ -461,10 +461,10 @@ sonido analyze pac physarum.wav \
 
 ### Interpretation
 
-1. **Always use surrogate testing** for significance
-2. **Report effect size** (MI) along with p-value
-3. **Consider multiple comparisons** when testing many frequency pairs
-4. **Validate with simulations** using synthetic coupled signals
+1. Always use surrogate testing for significance
+2. Report effect size (MI) along with p-value
+3. Consider multiple comparisons when testing many frequency pairs
+4. Validate with simulations using synthetic coupled signals
 
 ### Common Pitfalls
 

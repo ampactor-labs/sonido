@@ -1,16 +1,16 @@
 # Synthesis Guide
 
-Complete guide to the `sonido-synth` crate for building synthesizers.
+A guide to the `sonido-synth` crate for building synthesizers.
 
 ## Overview
 
 The `sonido-synth` crate provides audio synthesis building blocks including:
 
-- **Oscillators** - PolyBLEP anti-aliased waveforms (sine, saw, square, triangle, pulse, noise)
-- **Envelopes** - ADSR envelope generators (with optional hold) and exponential curves
-- **Voice Management** - Polyphonic voice allocation with multiple stealing strategies and unison sub-voices
-- **Modulation Matrix** - Flexible routing from sources to destinations
-- **Complete Synths** - Ready-to-use monophonic and polyphonic synthesizers
+- **Oscillators**: PolyBLEP anti-aliased waveforms (sine, saw, square, triangle, pulse, noise)
+- **Envelopes**: ADSR envelope generators (with optional hold) and exponential curves
+- **Voice Management**: Polyphonic voice allocation with multiple stealing strategies and unison sub-voices
+- **Modulation Matrix**: Routing from modulation sources to destinations
+- **Complete Synths**: Ready-to-use monophonic and polyphonic synthesizers
 
 All components are `no_std` compatible for embedded use.
 
@@ -51,21 +51,21 @@ The `Oscillator` type generates audio-rate waveforms with PolyBLEP (Polynomial B
 
 ### The Aliasing Problem
 
-Waveforms with sharp transitions -- sawtooth, square, pulse -- contain harmonics that extend to infinity. When a digital oscillator generates these waveforms naively, harmonics above the Nyquist frequency (half the sample rate) fold back into the audible spectrum as inharmonic artifacts. A naive sawtooth at 5 kHz sampled at 48 kHz has harmonics at 10, 15, 20, 25 kHz... The 25 kHz harmonic exceeds Nyquist (24 kHz) and aliases to 23 kHz -- an inharmonic frequency unrelated to the fundamental, heard as harsh, metallic distortion.
+Waveforms with sharp transitions (sawtooth, square, pulse) contain harmonics that extend to infinity. When a digital oscillator generates these waveforms naively, harmonics above the Nyquist frequency (half the sample rate) fold back into the audible spectrum as inharmonic artifacts. A naive sawtooth at 5 kHz sampled at 48 kHz has harmonics at 10, 15, 20, 25 kHz... The 25 kHz harmonic exceeds Nyquist (24 kHz) and aliases to 23 kHz, an inharmonic frequency unrelated to the fundamental that is heard as harsh, metallic distortion.
 
 Three classical approaches exist for band-limited oscillator synthesis:
 
-1. **Additive synthesis**: Sum individual sine harmonics up to Nyquist. Produces perfect results but costs O(f_s/f_0) sine evaluations per sample -- impractical for real-time.
+1. **Additive synthesis**: Sum individual sine harmonics up to Nyquist. Produces perfect results but costs O(f_s/f_0) sine evaluations per sample, which is impractical in real time.
 2. **Wavetable oscillators (BLIT/BLEP)**: Pre-compute band-limited waveforms at multiple frequencies. Uses memory and requires interpolation between tables.
-3. **PolyBLEP**: Apply a polynomial correction to the naive waveform near discontinuities. Minimal CPU cost, no memory overhead, good quality.
+3. **PolyBLEP**: Apply a polynomial correction to the naive waveform near discontinuities. Adds minimal CPU cost and no memory overhead, and gives good quality.
 
-Sonido uses PolyBLEP (approach 3) for its balance of quality, performance, and simplicity -- especially important for `no_std` embedded targets where memory for wavetables may be limited.
+Sonido uses PolyBLEP (approach 3) for its balance of quality, performance, and simplicity. That balance is especially important on `no_std` embedded targets, where memory for wavetables may be limited.
 
 ### PolyBLEP Theory
 
-The Band-Limited Step (BLEP) function represents the difference between an ideal (infinite-bandwidth) step and a band-limited step. Convolving each discontinuity with the BLEP residual removes the aliasing energy. However, the ideal BLEP is an infinitely long sinc function -- impractical for real-time use.
+The Band-Limited Step (BLEP) function represents the difference between an ideal (infinite-bandwidth) step and a band-limited step. Convolving each discontinuity with the BLEP residual removes the aliasing energy. However, the ideal BLEP is an infinitely long sinc function, which is impractical for real-time use.
 
-PolyBLEP approximates this correction with a short polynomial applied only in the immediate vicinity of each discontinuity. The `poly_blep` function in `crates/sonido-synth/src/oscillator.rs` is a 4th-order (degree-4, C²-continuous) polynomial whose window spans 2 samples on each side of the discontinuity:
+PolyBLEP approximates this correction with a short polynomial applied only near each discontinuity. The `poly_blep` function in `crates/sonido-synth/src/oscillator.rs` is a 4th-order (degree-4, C²-continuous) polynomial whose window spans 2 samples on each side of the discontinuity:
 
 ```
 poly_blep(t, dt):                    // n measured in samples from the edge
@@ -82,9 +82,9 @@ poly_blep(t, dt):                    // n measured in samples from the edge
 A4 = -43/48, A3 = 7/6, A2 = 1/2, A0 = -1, C = -11/48
 ```
 
-Here `t` is the current phase [0, 1) and `dt` is the phase increment per sample (frequency/sample_rate). Because the window is measured in samples, higher frequencies get a correction spread over a larger fraction of the cycle -- this is correct because faster phase increments concentrate more aliasing energy near the transition.
+Here `t` is the current phase [0, 1) and `dt` is the phase increment per sample (frequency/sample_rate). Because the window is measured in samples, higher frequencies get a correction spread over a larger fraction of the cycle. This is correct because faster phase increments concentrate more aliasing energy near the transition.
 
-The coefficients come from a C²-continuous fit to the ideal BLEP residual (Välimäki et al., "Antialiasing Oscillators", IEEE Signal Processing Magazine, 2010). The source documents roughly 50 dB of alias suppression, against about 30 dB for the common 2nd-order, 1-sample-window version. For more, combine with the 2x-8x oversampling available via `Oversampled<FACTOR, E>` in `sonido-core` (`MAX_OVERSAMPLE_FACTOR = 8`).
+The coefficients come from a C²-continuous fit to the ideal BLEP residual (Välimäki et al., "Antialiasing Oscillators", IEEE Signal Processing Magazine, 2010). The source documents roughly 50 dB of alias suppression, against about 30 dB for the common 2nd-order, 1-sample-window version. For more suppression, combine it with the 2x-8x oversampling available via `Oversampled<FACTOR, E>` in `sonido-core` (`MAX_OVERSAMPLE_FACTOR = 8`).
 
 ### Per-Waveform Implementation
 
@@ -93,13 +93,13 @@ The coefficients come from a C²-continuous fit to the ideal BLEP residual (Väl
 saw = naive_saw - poly_blep(phase, phase_inc)
 ```
 
-**Square / Pulse** (`generate_pulse_with_dt`): A pulse wave has two discontinuities per cycle -- the rising edge at phase 0 and the falling edge at phase = duty_cycle. PolyBLEP is applied at both:
+**Square / Pulse** (`generate_pulse_with_dt`): A pulse wave has two discontinuities per cycle: the rising edge at phase 0 and the falling edge at phase = duty_cycle. PolyBLEP is applied at both:
 ```
 pulse = naive_pulse + poly_blep(phase, dt) - poly_blep(rem_euclid(phase - duty + 1, 1), dt)
 ```
 `Square` is `Pulse(0.5)`; `Pulse(duty)` clamps the duty cycle to 0.01-0.99.
 
-**Triangle**: Rather than applying PolyBLEP directly to the triangle wave (which has slope discontinuities, not step discontinuities), Sonido integrates a PolyBLEP-corrected square wave. This is mathematically sound because the integral of a square wave is a triangle wave. The integration uses a leaky integrator rather than a pure accumulator to prevent DC drift, with a frequency-adaptive leak:
+**Triangle**: The triangle wave has slope discontinuities, not step discontinuities, so Sonido integrates a PolyBLEP-corrected square wave instead of applying PolyBLEP to the triangle directly. This is mathematically sound because the integral of a square wave is a triangle wave. The integration uses a leaky integrator instead of a pure accumulator to prevent DC drift, and the leak adapts to frequency:
 ```
 blep_square = square + poly_blep(phase, dt) - poly_blep(rem_euclid(phase + 0.5, 1), dt)
 leak = 1 - min(frequency / sample_rate, 0.1)
@@ -107,7 +107,7 @@ triangle = leak * prev_output + blep_square * dt * 4.0
 ```
 The scaling factor `4.0` normalizes the triangle amplitude. The leak approaches 1.0 at low frequencies (minimal leakage) and is floored at 0.9 so very high frequencies cannot run away.
 
-**Sine**: No PolyBLEP needed -- sine waves are inherently band-limited (single harmonic).
+**Sine**: No PolyBLEP needed, because sine waves are inherently band-limited (single harmonic).
 
 **Noise** (`generate_noise`): Uses xorshift32 PRNG for white noise generation. No anti-aliasing needed since white noise has a flat spectrum by definition.
 
@@ -187,7 +187,7 @@ The `AdsrEnvelope` generates attack-decay-sustain-release envelopes with exponen
 
 ### Exponential Envelope Curves
 
-ADSR envelopes in Sonido use exponential curves rather than linear ramps. This matches the behavior of analog synth circuits (capacitor charge/discharge) and aligns with human loudness perception, which is logarithmic. A linear envelope sounds unnaturally abrupt at the start of attack and sluggish at the end; an exponential envelope accelerates naturally.
+ADSR envelopes in Sonido use exponential curves rather than linear ramps. This matches the behavior of analog synth circuits (capacitor charge/discharge) and fits human loudness perception, which is logarithmic. A linear envelope sounds unnaturally abrupt at the start of attack and sluggish at the end; an exponential envelope accelerates naturally.
 
 The implementation (`crates/sonido-synth/src/envelope.rs`) computes a one-pole coefficient from the time parameter:
 
@@ -197,7 +197,7 @@ coefficient = exp(-1.0 / (time_ms/1000 * sample_rate))
 
 This produces an exponential approach toward the target level, reaching approximately 63% of the way in one time constant. Each segment aims at an overshoot target so it terminates in finite time: attack heads for 1.2 (1.05-1.5 via `set_attack_curve`) and ends when the level reaches 1.0; decay ends within 1e-4 of sustain; release ends below 1e-5 (about -100 dB) and returns to `Idle`. `set_decay_curve` / `set_release_curve` (-1.0 to 1.0) reshape the other segments.
 
-**Retriggering**: When `gate_on()` is called while the envelope is already active (e.g., during release), the envelope restarts from the current level rather than resetting to zero. This prevents clicks from abrupt level jumps -- a common artifact in naive envelope implementations.
+**Retriggering**: When `gate_on()` is called while the envelope is already active (e.g., during release), the envelope restarts from the current level rather than resetting to zero. This prevents clicks from abrupt level jumps, a common artifact in naive envelope implementations.
 
 ### Parameters
 
@@ -248,7 +248,7 @@ match env.state() {
 
 ### Retriggering
 
-The envelope supports smooth retriggering - calling `gate_on()` while active preserves the current level to avoid clicks:
+The envelope supports smooth retriggering: calling `gate_on()` while the envelope is active preserves the current level, which avoids clicks:
 
 ```rust
 env.gate_on();

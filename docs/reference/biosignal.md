@@ -28,7 +28,7 @@ The KL method is more robust to signal length and less sensitive to outliers tha
 
 ### Signal Processing Pipeline
 
-1. **Band extraction** (`crates/sonido-analysis/src/filterbank.rs`): 4th-order Butterworth bandpass filters (two cascaded biquad sections per cutoff) isolate the phase and amplitude bands. The Q values 0.541 and 1.307 are the Butterworth cascade values for 4th-order response -- they provide maximally flat passband with steep rolloff.
+1. **Band extraction** (`crates/sonido-analysis/src/filterbank.rs`): 4th-order Butterworth bandpass filters (two cascaded biquad sections per cutoff) isolate the phase and amplitude bands. The Q values 0.541 and 1.307 are the Butterworth cascade values for 4th-order response, which give a maximally flat passband with steep rolloff.
 
 2. **Hilbert transform** (`crates/sonido-analysis/src/hilbert.rs`): FFT-based computation of the analytic signal. Positive frequencies are doubled, negative frequencies zeroed, then IFFT produces the complex analytic signal. Instantaneous amplitude = magnitude, instantaneous phase = argument.
 
@@ -36,7 +36,7 @@ The KL method is more robust to signal length and less sensitive to outliers tha
 
 ### Comodulogram
 
-The `Comodulogram` (`cfc.rs`) computes PAC for a grid of frequency pairs, producing a 2D matrix where each cell shows coupling strength between a phase frequency and an amplitude frequency. This reveals which frequency pairs have the strongest coupling -- for example, theta-phase / gamma-amplitude coupling in EEG data typically shows as a hot spot around (6 Hz, 40-80 Hz).
+The `Comodulogram` (`cfc.rs`) computes PAC for a grid of frequency pairs, producing a 2D matrix where each cell shows coupling strength between a phase frequency and an amplitude frequency. The matrix shows which frequency pairs have the strongest coupling. For example, theta-phase / gamma-amplitude coupling in EEG data typically shows as a hot spot around (6 Hz, 40-80 Hz).
 
 ### EEG Frequency Bands
 
@@ -53,7 +53,7 @@ The `filterbank::eeg_bands` module defines standard clinical/research bands:
 
 ## Electric Fish (Weakly Electric)
 
-Electric Organ Discharge (EOD) signals from gymnotiform and mormyrid fish are ideal candidates - they occupy the audio frequency range (50-1000 Hz).
+Electric Organ Discharge (EOD) signals from gymnotiform and mormyrid fish are ideal candidates because they occupy the audio frequency range (50-1000 Hz).
 
 ### Species Identification via Waveform
 
@@ -101,7 +101,7 @@ sonido analyze spectrum fish.wav --method welch --overlap 0.8 --fft-size 65536 -
 
 ## Slime Mold (Physarum polycephalum)
 
-Slime mold electrical oscillations are extremely slow (0.01-0.1 Hz). The trick: treat your sampling interval as a "virtual sample rate."
+Slime mold electrical oscillations are extremely slow (0.01-0.1 Hz). To analyze them, treat your sampling interval as a "virtual sample rate."
 
 ### Data Preparation
 
@@ -163,8 +163,8 @@ sonido analyze transfer electrode1.wav electrode2.wav --group-delay
 
 ## Tips
 
-1. **Normalize your data** to -1.0 to 1.0 range before conversion to WAV
-2. **Use appropriate FFT sizes** - longer for slow signals
-3. **Welch averaging** is essential for noisy biological recordings
-4. **Export spectrograms to CSV** for visualization in Python/R/MATLAB
-5. **Group delay** can reveal signal propagation in distributed systems
+1. Normalize your data to -1.0 to 1.0 range before conversion to WAV
+2. Use appropriate FFT sizes: longer for slow signals
+3. Welch averaging is essential for noisy biological recordings
+4. Export spectrograms to CSV for visualization in Python/R/MATLAB
+5. Group delay can reveal signal propagation in distributed systems
