@@ -291,7 +291,11 @@ impl GridEar {
         self.tracked = best;
 
         let band = &self.bands[self.tracked];
-        let level_db = if band.env > 1e-12 { 10.0 * log10f(band.env) } else { -120.0 };
+        let level_db = if band.env > 1e-12 {
+            10.0 * log10f(band.env)
+        } else {
+            -120.0
+        };
         // Lost and found, against the level the hum has held.
         if self.lost {
             if band.env > self.held_env * FOUND_RATIO {
@@ -338,6 +342,12 @@ impl GridEar {
             0.0
         };
 
-        Some(GridReading { hz_fast, hz, rocof, level_db, harmonic: band.harmonic })
+        Some(GridReading {
+            hz_fast,
+            hz,
+            rocof,
+            level_db,
+            harmonic: band.harmonic,
+        })
     }
 }

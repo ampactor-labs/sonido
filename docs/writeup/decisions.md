@@ -166,7 +166,7 @@ The rule lives in one Rust module (`crates/sonido-patch/src/controls.rs`). The f
 
 ## 11. How I check it
 
-The tree has 2,002 `#[test]` functions (counted 2026-10-29). The ones that matter most for the decisions above:
+The tree has 2,011 `#[test]` functions (counted 2026-10-29). The ones that matter most for the decisions above:
 
 - **Golden files.** The output of 32 of the 36 effects is compared against checked-in reference files. A test fails on a mean squared error above 10⁻⁶, a signal-to-noise ratio below 60 dB, or a spectral correlation under 0.9999. Changing the biquads from Direct Form I to Transposed Direct Form II meant regenerating the golden files it changed.
 - **The aliasing suite** (section 2).

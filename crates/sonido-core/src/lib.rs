@@ -81,7 +81,7 @@
 //!
 //! ```toml
 //! [dependencies]
-//! sonido-core = { version = "0.1", default-features = false }
+//! sonido-core = { version = "0.2", default-features = false }
 //! ```
 //!
 //! # Example
@@ -169,7 +169,6 @@ pub use biquad::{
     Biquad, bandpass_coefficients, highpass_coefficients, lowpass_coefficients, notch_coefficients,
     peaking_eq_coefficients,
 };
-pub use grid::{GridEar, GridReading};
 pub use cached::{Cached, needs_update};
 pub use comb::{CombFilter, ModulatedComb};
 pub use compose::{EffectNode, GraphBuilder, feedback, par, seq};
@@ -191,6 +190,7 @@ pub use graph::{
     GraphSnapshot, NodeId, NodeKind, NodeRate, ProcessStep, ProcessingGraph, SnapshotEntry,
     SnapshotTopology, StereoBuffer, StereoSamples, TopoNode,
 };
+pub use grid::{GridEar, GridReading};
 pub use kernel::{
     Adapter, ChainMorph, DirectPolicy, DspKernel, KernelParams, MorphCurve, MorphMode, MorphSpace,
     SmoothedPolicy, SmoothingPolicy, SmoothingStyle, curve_lerp,

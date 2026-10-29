@@ -1108,8 +1108,9 @@ On 2026-10-22, after these fixes and the control redesign, the pedal was measure
 on hardware. The jam distortion → reverb → ringmod ran at 74 to 75% mean and
 84 to 85% peak, with 0 blocks over budget. Two rounds through every factory rig and
 the jam, plus a rig written to and erased from the bank over USB, gave 0 codec
-overruns (worst block 91.4%). The firmware image is 477,944 bytes of the
-491,520-byte (480 KB) BOOT_SRAM limit; CI fails a build that doesn't fit.
+overruns (worst block 91.4%). The firmware image is 482,024 bytes of the
+491,520-byte (480 KB) BOOT_SRAM limit (built 2026-10-29); CI fails a build that
+doesn't fit.
 
 ### Flash: Rig Bank and State Sector
 

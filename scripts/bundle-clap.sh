@@ -20,6 +20,9 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
+# The bundle version is the workspace version, so a release bump reaches it.
+VERSION="$(sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\(.*\)"/\1/p' Cargo.toml)"
+
 TARGET=""
 OUT="$ROOT/dist-clap"
 while [[ $# -gt 0 ]]; do
@@ -75,8 +78,8 @@ bundle_macos() {  # $1 plugin name, $2 lib path
   <key>CFBundleIdentifier</key><string>com.ampactorlabs.$name</string>
   <key>CFBundleName</key><string>$name</string>
   <key>CFBundlePackageType</key><string>BNDL</string>
-  <key>CFBundleVersion</key><string>0.1.0</string>
-  <key>CFBundleShortVersionString</key><string>0.1.0</string>
+  <key>CFBundleVersion</key><string>$VERSION</string>
+  <key>CFBundleShortVersionString</key><string>$VERSION</string>
 </dict>
 </plist>
 PLIST

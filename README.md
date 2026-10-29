@@ -171,7 +171,7 @@ To see a plugin's UI without a host, `cargo run -p sonido-plugin --bin sonido-pr
 
 The web editor deploys from [.github/workflows/pages.yml](.github/workflows/pages.yml): on a push to `main` that touches `crates/**` (or a manual dispatch) it runs `trunk build --release --public-url /sonido/` (trunk is the WebAssembly bundler) in `crates/sonido-gui` and publishes `dist/` to GitHub Pages at https://ampactor.dev/sonido/.
 
-Releases come from [.github/workflows/release.yml](.github/workflows/release.yml) on a `v*` tag: it builds the CLI, the GUI, the CLAP bundles (`scripts/bundle-clap.sh`) and the VST3 shims (`scripts/bundle-vst3.sh`, clap-wrapper v0.15.1; VST3 is Steinberg's plugin format) for linux-x64, macos-x64, macos-arm64 and windows-x64, exports the factory presets, and attaches one archive per target to a GitHub release. Releases also carry the pedal firmware, `sonido_pedal.bin` with its SHA-256; update a pedal with `sonido pedal update sonido_pedal.bin` (CI runs upload the same file as the `sonido_pedal` artifact). v0.1.0 (2026-07-20) is the one release so far, with those four archives; the VST3 shims and the firmware joined the workflow after it.
+Releases come from [.github/workflows/release.yml](.github/workflows/release.yml) on a `v*` tag: it builds the CLI, the GUI, the CLAP bundles (`scripts/bundle-clap.sh`) and the VST3 shims (`scripts/bundle-vst3.sh`, clap-wrapper v0.15.1; VST3 is Steinberg's plugin format) for linux-x64, macos-x64, macos-arm64 and windows-x64, exports the factory presets, and attaches one archive per target to a GitHub release. Releases also carry the pedal firmware, `sonido_pedal.bin` with its SHA-256; update a pedal with `sonido pedal update sonido_pedal.bin` (CI runs upload the same file as the `sonido_pedal` artifact). The release notes are the tag's section of [docs/CHANGELOG.md](docs/CHANGELOG.md). v0.2.0 (2026-10-29) is the first release with the VST3 shims and the firmware; v0.1.0 (2026-07-19) had the four archives only.
 
 ## Testing
 
@@ -182,7 +182,7 @@ cargo test -p sonido-effects                     # 367 unit tests plus 129 acros
 cargo test --no-default-features -p sonido-core  # the no_std build
 ```
 
-There are 1,954 `#[test]` functions in the tree (`grep -rho '#\[test\]' crates | wc -l`, 2026-10-22), 1,926 outside the excluded ARM crate, and no `#[ignore]`. The main groups of tests:
+There are 2,011 `#[test]` functions in the tree (`git grep -ho '#\[test\]' -- crates | wc -l`, 2026-10-29), 1,983 outside the excluded ARM crate, and no `#[ignore]`. The main groups of tests:
 
 - Golden-file regression pins the output of 32 of the 36 effects against checked-in references and fails on a mean squared error (MSE) above 1e-6, a signal-to-noise ratio (SNR) below 60 dB or a spectral correlation under 0.9999, each threshold explained next to the constant that sets it (`crates/sonido-effects/tests/regression.rs`). Drone, glitch, texture and time_stretch have no golden file.
 - An aliasing suite fails the distortion, preamp or tape kernel when its inharmonic energy is above 5% of the total and above a plain tanh clipper's; ADAA is meant to keep it below that. The amp's test only checks that its output is not noise, and the preamp clips without ADAA (`crates/sonido-effects/tests/aliasing.rs`).

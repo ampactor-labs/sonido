@@ -42,7 +42,7 @@
 //!
 //! ```toml
 //! [dependencies]
-//! sonido-registry = { version = "0.1", default-features = false }
+//! sonido-registry = { version = "0.2", default-features = false }
 //! ```
 
 #![cfg_attr(not(feature = "std"), no_std)]

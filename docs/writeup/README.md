@@ -110,7 +110,7 @@ Some of these are decisions, and the rest are gaps. I list them both because a l
 - **Pitch shifting is granular**, with two or four overlapping grains. It is not a phase vocoder, and there is no harmonizer.
 - **The distortion's dynamics control changes the drive, not the shape of the clipping curve.** Level-dependent waveshaping, which is what makes a guitar's volume knob clean up an analog circuit, is on the roadmap.
 - **Hardware testing is manual.** CI builds, lints and size-checks the firmware, but only I test it, by flashing it and playing. Two of the earlier per-effect VST3 shims passed Steinberg's validator (47/47) once, by hand; the current shim hasn't been through it. Only a manually run CI workflow validates the CLAP plugins.
-- **Not a product.** The API is unstable, nothing is on crates.io, and the one tagged release (v0.1.0, July 2026) predates both the VST3 shims and the firmware in the release workflow.
+- **Not a product.** The API is unstable and nothing is on crates.io. Tagged releases on GitHub carry the desktop builds, the plugins and the pedal firmware; v0.2.0 (October 2026) is the latest.
 
 ## 5. The long write-ups
 
@@ -141,4 +141,4 @@ Some of these are decisions, and the rest are gaps. I list them both because a l
 | 80% | the most of a block a rig's measured worst blocks may add up to | `CHAIN_FRACTION` in `crates/sonido-platform/src/cycle_table.rs` |
 | 74.7% mean, 84–85% slowest | the whole pedal, measured in a Hothouse with a guitar, running distortion, reverb and ring modulator | [EMBEDDED.md](../EMBEDDED.md#chain-configurations), 2026-10-22 |
 | 0.5 dB | the most a calibrated effect, fully wet, may differ from the dry guitar's loudness | `crates/sonido-effects/tests/level_contract.rs` |
-| 2,002 | `#[test]` functions in the tree | `grep -rho '#\[test\]' crates \| wc -l`, 2026-10-29 |
+| 2,011 | `#[test]` functions in the tree | `git grep -ho '#\[test\]' -- crates \| wc -l`, 2026-10-29 |

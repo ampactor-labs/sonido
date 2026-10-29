@@ -4168,7 +4168,7 @@ dependencies = [
 
 [[package]]
 name = "sonido-analysis"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "criterion",
  "rustfft",
@@ -4178,7 +4178,7 @@ dependencies = [
 
 [[package]]
 name = "sonido-cli"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -4206,7 +4206,7 @@ dependencies = [
 
 [[package]]
 name = "sonido-config"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "dirs",
  "libm",
@@ -4222,7 +4222,7 @@ dependencies = [
 
 [[package]]
 name = "sonido-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "assert_no_alloc",
  "criterion",
@@ -4235,7 +4235,7 @@ dependencies = [
 
 [[package]]
 name = "sonido-effects"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "criterion",
  "libm",
@@ -4248,7 +4248,7 @@ dependencies = [
 
 [[package]]
 name = "sonido-graph-dsl"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "sonido-config",
  "sonido-core",
@@ -4259,7 +4259,7 @@ dependencies = [
 
 [[package]]
 name = "sonido-gui"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "arc-swap",
  "clap",
@@ -4299,7 +4299,7 @@ dependencies = [
 
 [[package]]
 name = "sonido-gui-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "egui",
  "sonido-core",
@@ -4309,7 +4309,7 @@ dependencies = [
 
 [[package]]
 name = "sonido-io"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "cpal",
  "hound",
@@ -4322,7 +4322,7 @@ dependencies = [
 
 [[package]]
 name = "sonido-patch"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "proptest",
  "serde",
@@ -4335,7 +4335,7 @@ dependencies = [
 
 [[package]]
 name = "sonido-platform"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "libm",
  "sonido-analysis",
@@ -4345,7 +4345,7 @@ dependencies = [
 
 [[package]]
 name = "sonido-plugin"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "arc-swap",
  "baseview",
@@ -4371,7 +4371,7 @@ dependencies = [
 
 [[package]]
 name = "sonido-registry"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "sonido-core",
  "sonido-effects",
@@ -4379,7 +4379,7 @@ dependencies = [
 
 [[package]]
 name = "sonido-rigs"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "sonido-analysis",
  "sonido-core",
@@ -4390,7 +4390,7 @@ dependencies = [
 
 [[package]]
 name = "sonido-synth"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "criterion",
  "libm",

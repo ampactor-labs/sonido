@@ -89,7 +89,9 @@ use static_cell::StaticCell;
 use sonido_core::grid::GridEar;
 use sonido_daisy::controls::HothouseBuffer;
 use sonido_daisy::hothouse::{POLL_INTERVAL_MS, hothouse_control_task};
-use sonido_daisy::{BLOCK_SIZE, BufWriter, ClockProfile, SAMPLE_RATE, heartbeat, led::UserLed, u24_to_f32, usb_task};
+use sonido_daisy::{
+    BLOCK_SIZE, BufWriter, ClockProfile, SAMPLE_RATE, heartbeat, led::UserLed, u24_to_f32, usb_task,
+};
 
 #[global_allocator]
 static HEAP: Heap = Heap::empty();
@@ -143,10 +145,18 @@ fn write_fixed(w: &mut BufWriter<'_>, value: i32, decimals: u32) {
     let whole = abs / scale as u32;
     let frac = abs % scale as u32;
     match decimals {
-        4 => { let _ = write!(w, "{sign}{whole}.{frac:04}"); }
-        3 => { let _ = write!(w, "{sign}{whole}.{frac:03}"); }
-        1 => { let _ = write!(w, "{sign}{whole}.{frac:01}"); }
-        _ => { let _ = write!(w, "{sign}{whole}"); }
+        4 => {
+            let _ = write!(w, "{sign}{whole}.{frac:04}");
+        }
+        3 => {
+            let _ = write!(w, "{sign}{whole}.{frac:03}");
+        }
+        1 => {
+            let _ = write!(w, "{sign}{whole}.{frac:01}");
+        }
+        _ => {
+            let _ = write!(w, "{sign}{whole}");
+        }
     }
 }
 
@@ -168,14 +178,30 @@ async fn line_task(mut class: CdcAcmClass<'static, Driver<'static, peripherals::
             let valid = VALID.load(Ordering::Relaxed) == 1;
             let mut w = BufWriter::new(&mut buf);
             let _ = write!(w, "{{\"hz_fast\":");
-            if valid { write_fixed(&mut w, HZ_FAST_X1E4.load(Ordering::Relaxed), 4); } else { let _ = write!(w, "null"); }
+            if valid {
+                write_fixed(&mut w, HZ_FAST_X1E4.load(Ordering::Relaxed), 4);
+            } else {
+                let _ = write!(w, "null");
+            }
             let _ = write!(w, ",\"hz\":");
-            if valid { write_fixed(&mut w, HZ_X1E4.load(Ordering::Relaxed), 4); } else { let _ = write!(w, "null"); }
+            if valid {
+                write_fixed(&mut w, HZ_X1E4.load(Ordering::Relaxed), 4);
+            } else {
+                let _ = write!(w, "null");
+            }
             let _ = write!(w, ",\"rocof\":");
-            if valid { write_fixed(&mut w, ROCOF_X1E3.load(Ordering::Relaxed), 3); } else { let _ = write!(w, "null"); }
+            if valid {
+                write_fixed(&mut w, ROCOF_X1E3.load(Ordering::Relaxed), 3);
+            } else {
+                let _ = write!(w, "null");
+            }
             let _ = write!(w, ",\"level_db\":");
             write_fixed(&mut w, LEVEL_X10.load(Ordering::Relaxed), 1);
-            let _ = write!(w, ",\"harmonic\":{},\"source\":\"pedal\"}}\r\n", HARMONIC.load(Ordering::Relaxed));
+            let _ = write!(
+                w,
+                ",\"harmonic\":{},\"source\":\"pedal\"}}\r\n",
+                HARMONIC.load(Ordering::Relaxed)
+            );
             let len = w.pos;
             let mut ok = true;
             for chunk in buf[..len].chunks(64) {
@@ -367,9 +393,18 @@ async fn main(spawner: Spawner) {
     spawner.spawn(heartbeat(led)).unwrap();
 
     let ctrl = sonido_daisy::hothouse_pins!(p);
-    spawner.spawn(hothouse_control_task(ctrl, &CONTROLS)).unwrap();
+    spawner
+        .spawn(hothouse_control_task(ctrl, &CONTROLS))
+        .unwrap();
 
-    let driver = Driver::new_fs(p.USB_OTG_FS, Irqs, p.PA12, p.PA11, EP_OUT_BUF.init([0u8; 256]), hal::usb::Config::default());
+    let driver = Driver::new_fs(
+        p.USB_OTG_FS,
+        Irqs,
+        p.PA12,
+        p.PA11,
+        EP_OUT_BUF.init([0u8; 256]),
+        hal::usb::Config::default(),
+    );
     let mut usb_config = embassy_usb::Config::new(0x1209, 0x0001);
     usb_config.manufacturer = Some("Sonido");
     usb_config.product = Some("HUM grid pedal");
@@ -407,7 +442,9 @@ async fn main(spawner: Spawner) {
         dma1_ch0: p.DMA1_CH0,
         dma1_ch1: p.DMA1_CH1,
     };
-    let interface = audio_peripherals.prepare_interface(Default::default()).await;
+    let interface = audio_peripherals
+        .prepare_interface(Default::default())
+        .await;
     let mut interface = defmt::unwrap!(interface.start_interface().await);
     defmt::info!("grid_pedal: listening");
 
@@ -439,7 +476,11 @@ async fn main(spawner: Spawner) {
                             HARMONIC.store(r.harmonic as u32, Ordering::Relaxed);
                             VALID.store(1, Ordering::Relaxed);
                             let dev = libm::fabsf(r.hz_fast - NOMINAL_HZ);
-                            let past = if dev > DEADBAND { (dev - DEADBAND) / FULL_AT } else { 0.0 };
+                            let past = if dev > DEADBAND {
+                                (dev - DEADBAND) / FULL_AT
+                            } else {
+                                0.0
+                            };
                             rate_hz = 0.5 + 3.5 * if past > 1.0 { 1.0 } else { past };
                             event = libm::fabsf(r.rocof) > ROCOF_ENTER;
                             lost = false;
@@ -457,7 +498,13 @@ async fn main(spawner: Spawner) {
                 if phase >= 1.0 {
                     phase -= 1.0;
                 }
-                let breathe = if lost { 1.0 } else if phase < 0.5 { 1.0 } else { 0.0 };
+                let breathe = if lost {
+                    1.0
+                } else if phase < 0.5 {
+                    1.0
+                } else {
+                    0.0
+                };
                 CONTROLS.write_led(0, breathe);
                 CONTROLS.write_led(1, if lost || event { 1.0 } else { 0.0 });
             })

@@ -7,7 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-29
+
 ### Added
+- **Write-ups** (`docs/writeup/`): the project from the top down, a build log of the pedal, and decision notes on the DSP, with each number traced to a file, a test or a commit.
+- **Each plugin's screen is its family's picture**, measured from a private copy of the plugin's own kernel at its current values, or computed from the live signal: the transfer curve (HEAT), the level curve (VOLT), the frequency response (WAVE), the impulse-response envelope (ECHO), the live spectrum (FLUX and the graph player) and the stereo field (LINE). The picture fills the screen, with labelled axes, and the live signal moves inside it. It replaces the starfield, sun and scrolling grid (`docs/DESIGN_SYSTEM.md`, `crates/sonido-gui-core/src/picture.rs`).
+- **Editor nodes show their first two settings**, live and formatted as the panel formats them, and each node's LED and meters show that effect's own signal (`MeteringData::node_peaks`). A canvas too narrow for the chain side by side stacks it top to bottom.
+- **The web editor opens on the demo chain** (Distortion, Delay, Reverb) and pauses when its tab is hidden.
+- **The grid ear** (`sonido_core::grid::GridEar`): a `no_std` estimator that reads the mains hum's frequency (over 100 ms and over 1 s), its rate of change and its level from any audio signal that carries the hum, following the loudest of its first three harmonics. The `grid_pedal` firmware example runs it on the Hothouse: audio passes through unchanged, the pedal writes one JSON line every 50 ms over USB serial, and as a USB keyboard it types a key for each footswitch and for toggle 1.
+- **True-peak metering and limiting** in `sonido-core`: `TruePeakDetector` measures true peak with a 4× 48-tap Kaiser-windowed sinc interpolator (ITU-R BS.1770-4 Annex 2), and `TruePeakLimiter` holds a stereo signal under a true-peak ceiling, reaching its target gain before each peak arrives. Also `Upconverter` (a complex baseband onto an audio carrier, with phase-continuous glides), `CounterRng` (every draw a pure function of key and counter) and `PartitionedConvolver` (uniformly partitioned overlap-save, allocation-free after construction; `spectral` feature).
+- **Modal banks** in `sonido-synth`: `ModalBank` runs one two-pole resonator per vibration mode, four at a time (SIMD on wasm32 with `simd128`), struck by `Mallet`, with presets for marimba, vibraphone, glockenspiel, celesta, kalimba and wood block, and `chord_bell`, a bell whose partials are all chord tones.
+- **GCC-PHAT time-delay estimation** in `sonido-analysis` (`gcc_phat`), with an adjustable whitening exponent.
 - **The editor's PEDAL window**: opens the illustrated controls guide, and natively shows the connected pedal's firmware, CPU load and rig list with **Play**, **Erase** (confirmed) and **Send this rig**, on a worker thread.
 - **Send to pedal from the browser editor** over Web Serial (Chrome, Edge): the browser lists only the pedal's port, and the rig goes to the slot of the bank rig with the same name, or else to the first empty one, by the same rules as the native client (`client::choose_send_slot`, `reply`, `slot_rig`, `slot_sector`; `LinkClient::bank` reads the bank's names for both and for `sonido pedal list`).
 - **Assignable T1 and T3 in rigs**: a rig's two outer toggles are now its own three-way switches (`Patch::toggles`), each setting the parameters mapped to it to a value per position, applied after the morph and before the knobs. Every factory rig maps parameters to both (Shimmer Cathedral's interval, Fuzz Lab's clipping and filter, Space Echo's tone and spring, Granular Drift's glitch mode and grain size, Harmonic Habitat's tail and swirl, Amp Stack's gate and bright switch); these mappings are tested to stay within 4 dB and to change the sound. The editor maps a parameter to T1/T3 from its right-click menu and records into the toggle's current position; the graph-player plugin has T1/T3 params; the pedal guide shows each rig's toggles. Link protocol 3: `sonido pedal push` and Send to pedal warn when the pedal's firmware is older and would ignore them.
@@ -43,6 +53,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **VST3 wrapper shims**: `scripts/bundle-vst3.sh` packages a [clap-wrapper](https://github.com/free-audio/clap-wrapper) shim per CLAP plugin (`dist-vst3/`, `make plugins-vst3`); each `.vst3` loads the `.clap` of the same name from the standard CLAP install locations. Release artifacts now ship a `vst3/` directory beside `clap/` on all targets. Two wrapped plugins (delay and EQ, as per-effect shims) passed Steinberg's VST3 validator (47/47) on Linux, run by hand
 
 ### Changed
+- **Version 0.2.0.** The macOS CLAP bundle now takes its version from the workspace version (`scripts/bundle-clap.sh`).
+- **One button style in the editor**: every text button is a chip, and the header reads in groups (transport, edit, session, source, performance).
+- **The docs read as plain English**, rewritten sentence by sentence with code, numbers and links unchanged.
+- **Docs corrected against the code**: the STM32H750's Cortex-M7 has a double-precision FPU (ADR-010 now gives f32's real reasons); time_stretch's Sync works; the preamp clips without ADAA, and the aliasing suite's assertions are described as written; the kernel docs no longer say the pedal plays unsmoothed kernels.
 - **The graph player's macros start at noon**, where every rig is voiced, and its deck names them (and the toggles) after the rig's own knobs: a factory rig no longer loads 12 dB quiet with every macro at zero.
 - **Validation findings are data** (`validate::Problem`, formatted when shown), and the firmware's rig check uses the shared CPU and memory estimate (`daisy_load`), so the pedal carries no validation message text.
 - **The editor's status bar shows the pedal's real rule**: `Pedal: N/8 · CPU x%`, coloured by the result Export ▸ Pedal gives (green fits, yellow near the limit, red refused), with the reasons on hover. It replaces `Daisy: N/3`, which counted effects against a limit the pedal no longer has and showed distortion → delay → reverb green at 86 % of the pedal's CPU. Both read `sonido_patch::validate::daisy_load` (`PedalLimits::load`), which `validate_for_pedal` now reports from.
@@ -69,4 +83,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Pedal gestures**: footswitch effect scrolling, the FS1 double-tap clear, both-footswitch bypass, and the 3 s both-footswitch bootloader hold
 
 ### Fixed
+- **The web editor on a light-mode system** fell back to egui's stock light style: a white canvas with near-invisible buttons. The theme is now Sonido Night whatever the system says.
+- **Editor node meters** showed the whole output's peak (the LED) or nothing (the L/R meters); each now shows its own effect's signal.
 - **Pedal: every rig change dropped audio** three or four times: one executor ran audio and everything else, and building a rig took up to 12 ms (a factory rig's graph) against about 0.6 ms of slack. The audio task now runs on its own interrupt-priority executor and preempts every other task; the rest reach the pedal's state through a short critical section. The cabinet also built its impulse response a second time in its first audio block (~4 ms of software trig); it now normalizes with a rotating phasor and keeps the IR it was built with. Measured: 0 codec overruns across every factory rig, the jam, and USB flash writes.
+
+## [0.1.0] - 2026-07-19
+
+The first release. Its full notes are in this file at the [v0.1.0 tag](https://github.com/ampactor-labs/sonido/blob/v0.1.0/docs/CHANGELOG.md).
