@@ -107,7 +107,7 @@ The sine law has a finite slope at both ends of the knob. The first few degrees 
 
 ## 7. Knobs: noon is the default
 
-**What I built.** Each parameter's descriptor holds its full range and a default. The default is the voiced sweet spot, and a pedal knob at 12 o'clock selects exactly that default. The left half of the knob's travel maps the minimum to the default, and the right half maps the default to the maximum. Each half follows the parameter's own scale (linear, logarithmic or power). Stepped parameters split their options around the default the same way. A pedal at noon and a freshly opened plugin therefore start identical. Sources: [ADR-030](../DESIGN_DECISIONS.md#adr-030-noon-mapping-belongs-in-the-embedded-layer), `crates/sonido-platform/src/param_map.rs`.
+**What I built.** Each parameter's descriptor holds its full range and a default. The default is the voiced sweet spot, and a knob on the pedal's jam pages at 12 o'clock selects exactly that default. The left half of the knob's travel maps the minimum to the default, and the right half maps the default to the maximum. Each half follows the parameter's own scale (linear, logarithmic or power). Stepped parameters split their options around the default the same way. A jam effect at noon and a freshly opened plugin therefore start identical. (A rig's knobs drive its macros, whose curves the rig's author sets.) Sources: [ADR-030](../DESIGN_DECISIONS.md#adr-030-noon-mapping-belongs-in-the-embedded-layer), `crates/sonido-platform/src/param_map.rs`.
 
 **What I tried first.** Two other approaches, each in use for a while.
 
@@ -134,11 +134,11 @@ The rule checks out against the whole pedal. Distortion into reverb into ring mo
 
 ## 9. Controls for a pedal without a screen
 
-**What I built.** One rule for the controls, the same in every rig and mode ([ADR-032](../DESIGN_DECISIONS.md#adr-032-one-control-rule-for-the-pedal)).
+**What I built.** One rule for the controls ([ADR-032](../DESIGN_DECISIONS.md#adr-032-one-control-rule-for-the-pedal)).
 
 - **Footswitches.** The left one taps on and off; bypass is a 5 ms crossfade to dry while the rig keeps running. The right one taps tempo, or glides between sound A and sound B when the middle toggle is in its middle position. Holding either for 0.4 s changes rig, and the change happens while the switch is still held.
 - **Middle toggle.** Up is A, middle is morph, down is B.
-- **Knobs.** The top row is levels, and the top-right knob is always a volume. The bottom row holds the three controls that shape the sound most.
+- **Knobs.** In the jam and the factory rigs, the top row is levels and extras, and the top-right knob is always a volume. The bottom row holds the three controls that shape the sound most. A rig from the editor maps its knobs however its author did.
 - **LEDs.** Each LED shows what the footswitch below it does.
 
 The rule lives in one Rust module (`crates/sonido-patch/src/controls.rs`). The firmware's control loop calls it, and so does the code that draws the illustrated guide `sonido pedal controls` opens (`sonido_rigs::guide`), so the guide can't drift from the pedal.

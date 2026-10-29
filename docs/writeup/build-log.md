@@ -62,9 +62,9 @@ The chip has several kinds of memory, and they run at different speeds:
 | SDRAM (external chip) | 64 MB | 4 to 8 wait states | every delay line, reverb tank and looper buffer |
 | QSPI flash (external chip) | 8 MB | slow, for storage | the program at rest, 15 rig slots, the saved state |
 
-At power-on the Electrosmith bootloader copies the program from QSPI flash into SRAM and runs it from there. That puts a hard limit on the program's size: 491,520 bytes. The current firmware is 477,944 bytes, about 13 KB under the limit, and CI fails any build that doesn't fit.
+At power-on the Electrosmith bootloader copies the program from QSPI flash into SRAM and runs it from there. That puts a hard limit on the program's size: 491,520 bytes. The firmware is now within about 10 KB of that limit (482,016 bytes when built on 2026-10-29), and CI fails any build that doesn't fit.
 
-The effects' memory lives in the 64 MB SDRAM. A two-second stereo delay takes 776 KB, the reverb 118 KB, and the looper 23 MB (60 seconds of stereo). SDRAM is slow, but the processor's data cache helps a lot here, because a delay line reads and writes memory in order. In practice memory is never the limit on this pedal. CPU time is.
+The effects' memory lives in the 64 MB SDRAM. A two-second stereo delay takes 776 KB, the reverb 118 KB, and the looper 23 MB (60 seconds of stereo). SDRAM is slow, but the processor's data cache helps a lot here, because a delay line reads and writes memory in order. In practice memory is almost never the limit on this pedal (only a rig with three loopers would outgrow it). CPU time is.
 
 ## Where the CPU goes
 
@@ -89,7 +89,7 @@ The same rule runs in three places: the editor's status bar while you build a ri
 
 ## What went wrong, in order
 
-These are the problems I hit, in order. Each one says what I saw or heard, what caused it, and what I changed.
+These are the problems I hit, roughly in the order I hit them; the October fixes all landed on 22 October. Each one says what I saw or heard, what caused it, and what I changed.
 
 **2026-03-06: first code on the chip.** The first firmware blinked an LED and timed the effects. Early on I switched to the bootloader's BOOT_SRAM mode, where the program runs from fast internal SRAM instead of directly from flash. That is why the 480 KB limit exists.
 
@@ -97,19 +97,19 @@ These are the problems I hit, in order. Each one says what I saw or heard, what 
 
 **2026-03-10: everything was too slow.** A timing run of the 19 effects I had then added up to 791% of the budget, and the reverb alone took 372%. Three kinds of change fixed it. I turned on the Cortex-M7's instruction and data caches, told the compiler which CPU it was targeting, and replaced the slowest operations in the inner loops: a library `sin` with a fast approximation, cubic interpolation with linear in the modulated delay lines, and no interpolation at all in the lines that don't move. The reverb dropped from 1,191,763 cycles per block to 159,033, a 7.5× speedup, and the total dropped by 4.5×. After that, every effect fit the budget on its own.
 
-**2026-03-10: turning on the cache in the wrong order.** With the data cache enabled while the audio DMA was starting up, the DMA fell behind and the codec reported overruns. The cache's start-up sequence stalls the memory bus, and the DMA controller couldn't get its turn. The fix was ordering. The firmware now turns the cache on immediately after setting up memory, before the audio starts.
+**2026-03-10: turning on the cache in the wrong order.** With the data cache enabled while the audio DMA was starting up, the DMA fell behind and the codec reported overruns. The cache's start-up sequence stalls the memory bus, and the DMA controller couldn't get its turn. First I deferred the cache until half a second after the audio had started. In April, with overruns still turning up, I went the other way: the firmware now turns the cache on right after setting up memory, before the audio starts at all.
 
 **2026-03-13: reading the knobs crashed the chip.** My first pedal code read the knobs inside the audio callback. An analog-to-digital conversion waits for the converter to finish, and those waits pushed the callback past its deadline. The result was DMA overruns, and sometimes a hard fault that stopped the processor. The knob reads moved into their own task, which is the two-loop design shown above, and the audio callback only reads numbers the control task has already stored. The same change smoothed each knob reading with a low-pass filter set to match the default in the Daisy's C++ library. It took 460 ms to reach 90% of a knob turn, and I removed it five days later.
 
 **2026-03-19: knobs that wouldn't take over.** When you switch rigs or sounds, each knob's position no longer matches the value it controls. My first approach locked each knob until you swept it to within 5% of the stored value, which is how many synths handle this. Without a screen, though, you can't see where that value is, so a locked knob seemed dead. In October I changed it: now a knob takes over once it has moved 2% of its travel.
 
-**April to October: a footswitch gesture that could reboot the pedal.** From April the firmware had a gesture to restart into the bootloader for firmware updates: hold both footswitches for 1.5 seconds. Both footswitches together also meant bypass, and one bypass stomp lasted long enough to reboot the pedal mid-play. I raised the hold to 3 seconds, which only made it less likely, and later the same day I took the bootloader off the footswitches entirely. Now you reach it only by holding both footswitches while you power on, or by sending a request over USB.
+**April to October: a footswitch gesture that could reboot the pedal.** In April I added a gesture to restart into the bootloader for firmware updates: hold both footswitches for 3 seconds. The firmware counted the hold in control polls, so when I doubled the control rate two days later, the hold quietly became 1.5 seconds. Both footswitches together also meant bypass, and one bypass stomp lasted long enough to reboot the pedal mid-play. I put the hold back to 3 seconds, which only made it less likely, and later that day I took the bootloader off the footswitches entirely. Now you reach it only by holding both footswitches while you power on, or by sending a request over USB.
 
 **May: half of a knob did nothing.** The delay time runs from 1 ms to 2 s. The bottom half of the knob's travel was short delays that sounded like comb filtering, not echoes. On the pedal, the knob now starts at 30 ms. A plugin still offers the full range, because there you can type a value. In October the filter cutoff knob got a 150 Hz floor and the bitcrusher a 5-bit floor, for the same reason.
 
 **October: a jittery knob cost CPU.** Pot readings jitter a little even when nobody touches them. Now each knob has a dead band: a reading has to move more than 0.15% of the knob's travel before the stored value changes, so a knob you aren't touching reads exactly the same value on every poll. This mattered for CPU, not only for feel. While a knob jitters, the parameter it drives keeps smoothing toward a new value and recalculating its coefficients, and one jittery knob kept a reverb rig about 8 points busier.
 
-**October: the tuner skipped every 43 ms.** The tuner looks for pitch in a 2,048-sample window and updates every 1,024 samples. It did that whole analysis inside one audio block: 9,166,077 cycles, 29 times the budget, so every update was a dropout. It now spreads the work across the blocks between updates, one step per sample, and its worst block is 63.7%.
+**October: the tuner skipped every 43 ms.** The tuner works at a 24 kHz analysis rate. It looks for pitch in a 2,048-sample window and updates every 1,024 samples, about every 43 ms. It did that whole analysis inside one audio block: 9,166,077 cycles, 29 times the budget, so every update was a dropout. It now spreads the work across the blocks between updates, one step per sample, and its worst block is 63.7%.
 
 **October: every rig change dropped audio three or four times.** The firmware uses Embassy, a Rust framework that runs many tasks on one core. A task gives up the processor only when it reaches a point where it waits. Building a rig is a long stretch of work: up to 12 ms for one factory rig, and up to 5.7 ms for a single effect. With everything on one executor, the audio had about 0.6 ms of slack, so it waited behind the rig loader and missed blocks. I moved the audio task to its own interrupt-priority executor. It now interrupts anything else at any instruction. While a new rig is being built, the pedal plays the dry signal, and then it crossfades to the new rig.
 
@@ -125,7 +125,7 @@ After those fixes I ran two rounds through every factory rig and the jam, plus w
 
 ## Playing it
 
-The pedal has no screen, so every control does the same job in every rig:
+The pedal has no screen, so the footswitches and the middle toggle do the same job in every rig, and the jam and the factory rigs lay out their knobs the same way:
 
 | Control | What it does |
 |---|---|
@@ -134,12 +134,12 @@ The pedal has no screen, so every control does the same job in every rig:
 | Right footswitch, tap | Tap tempo. With the middle toggle in its middle position, it glides between sound A and sound B instead. |
 | Right footswitch, hold 0.4 s | Next rig |
 | Middle toggle (T2) | Up: sound A. Middle: morph. Down: sound B. |
-| Top row of knobs | Levels. The top-right knob is always a volume. |
-| Bottom row of knobs | The three controls that shape the sound most |
+| Top row of knobs (jam, factory rigs) | Levels and extras. The top-right knob is always a volume. |
+| Bottom row of knobs (jam, factory rigs) | The three controls that shape the sound most |
 | Left LED | On while the pedal is on. It blinks the rig's number after a change, or an error code if a rig was refused. |
 | Right LED | Flashes the tempo. In morph, it is dark at A, lit at B, and flickers while gliding. |
 
-Holding a footswitch acts at 0.4 s, while your foot is still down, so you don't have to guess when to let go. Running `sonido pedal controls` opens an illustrated guide to the pedal in your browser: a drawing with every control labeled, generated from the same code the firmware's control loop calls.
+A rig you build in the editor maps its six knobs however you set them. Holding a footswitch acts at 0.4 s, while your foot is still down, so you don't have to guess when to let go. Running `sonido pedal controls` opens an illustrated guide to the pedal in your browser: a drawing with every control labeled, generated from the same code the firmware's control loop calls.
 
 The rig list wraps around. It starts with the **jam**: three slots you fill from eight effects using the knobs, wired in a line, in parallel, or as one effect feeding two parallel ones (set with T3). Next come up to 15 rigs you've sent from your computer, then six factory rigs:
 
@@ -164,7 +164,7 @@ To get a rig onto the pedal:
 - **From the command line:** `sonido pedal push my_rig.json`. Use `sonido pedal list` to see what's on the pedal, and `sonido pedal play "Space Echo"` to switch to a rig.
 - **From the browser:** Send to pedal goes over Web Serial, in Chrome or Edge. I've built this but haven't yet tested it against a real pedal.
 
-Over USB, the pedal shows up as a serial device named "Sonido Pedal". It checks every rig before storing it. If a rig is refused, the left LED blinks a code:
+Over USB, the pedal shows up as a serial device named "Sonido Pedal". It checks every rig before storing it, and a refused send is reported back to the editor or the command line. If the pedal can't load a rig, or a jam pick would be too heavy, the left LED blinks a code:
 
 | Blinks | Meaning |
 |---:|---|
@@ -177,7 +177,7 @@ Over USB, the pedal shows up as a serial device named "Sonido Pedal". It checks 
 
 1. **Build the Hothouse kit** following Cleveland Music Co.'s guide, and seat the Daisy Seed.
 2. **Check the bootloader.** Press RESET on the Seed. If the LED pulses slowly for about 2.5 seconds, the Electrosmith bootloader is installed. If not, start the chip's ROM bootloader (hold BOOT while you press and release RESET), open [flash.daisy.audio](https://flash.daisy.audio/) in Chrome, and use "Flash Latest Bootloader". After that, use a plain RESET.
-3. **Get the firmware.** CI builds `sonido_pedal.bin` on every push and keeps it as a downloadable artifact named `sonido_pedal`. The release workflow attaches it to releases, but the one release so far (v0.1.0) came out before that was added. To build it yourself instead:
+3. **Get the firmware.** CI builds `sonido_pedal.bin` on every push to `main` and every pull request, and keeps it as a downloadable artifact named `sonido_pedal`. The release workflow attaches it to releases, but the one release so far (v0.1.0) came out before that was added. To build it yourself instead:
 
    ```sh
    rustup target add thumbv7em-none-eabihf

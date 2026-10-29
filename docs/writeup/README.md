@@ -67,7 +67,7 @@ XxxKernel            the DSP: process_stereo(left, right, &params) -> (left, rig
 Adapter<K, Policy>   per-parameter smoothing and the plugin-facing interface
 ```
 
-The kernel is the part every target shares. It holds only DSP state (filter memory, delay lines, oscillator phases) and receives its parameters by reference on every call. The adapter around it smooths parameter changes over 5 to 50 ms and gives hosts a uniform interface. The plugins, the editor and the pedal all build effects the same way, through one registry, with the same adapter. The parameter struct is also the preset format, so morphing between two presets is linear interpolation of two structs. Full write-up: [KERNEL_ARCHITECTURE.md](../KERNEL_ARCHITECTURE.md).
+The kernel is the part every target shares. It holds only DSP state (filter memory, delay lines, oscillator phases) and receives its parameters by reference on every call. The adapter around it smooths parameter changes over 5 to 50 ms and gives hosts a uniform interface. The plugins, the editor and the pedal all build effects the same way, through one registry, with the same adapter. The parameter struct is also the preset format, so morphing between two presets interpolates between two structs, parameter by parameter (geometrically for frequencies, with switches snapping over at the midpoint). Full write-up: [KERNEL_ARCHITECTURE.md](../KERNEL_ARCHITECTURE.md).
 
 ### A rig is a graph
 
@@ -75,11 +75,11 @@ Effects are nodes and audio connections are edges, so parallel paths and merges 
 
 ### Every effect plays at the loudness of its input
 
-At its default settings, every effect plays at the same integrated loudness (LUFS) as the dry signal, and turning its mix knob does not change that loudness. I don't set these levels by ear. A calibration program plays a synthetic strummed guitar through every effect, measures the result, and writes a table of trims into the source. A test fails if any effect drifts more than 0.5 dB from the dry signal. This matters most on the pedal: when you switch effects mid-song, a level mismatch is a volume jump. Full write-up: [ADR-031](../DESIGN_DECISIONS.md#adr-031-one-measured-level-contract), and [the level section of the decision notes](decisions.md#6-level-measured-not-chosen).
+At its default settings, every effect (apart from two utilities, the looper and the tuner) plays at the same integrated loudness (LUFS) as the dry signal, and turning its mix knob does not change that loudness. I don't set these levels by ear. A calibration program plays a synthetic strummed guitar through every effect, measures the result, and writes a table of trims into the source. A test holds each of those effects within 0.5 dB of the dry signal when fully wet, and within 1.5 dB across its mix range. This matters most on the pedal: when you switch effects mid-song, a level mismatch is a volume jump. Full write-up: [ADR-031](../DESIGN_DECISIONS.md#adr-031-one-measured-level-contract), and [the level section of the decision notes](decisions.md#6-level-measured-not-chosen).
 
 ### A knob at noon selects the default
 
-Each parameter's default value is its voiced sweet spot. On the pedal, a knob at 12 o'clock selects exactly that default: the left half of the knob's travel covers the minimum up to the default, and the right half covers the default up to the maximum. A pedal with every knob at noon and a freshly opened plugin therefore start out identical. Full write-up: [ADR-030](../DESIGN_DECISIONS.md#adr-030-noon-mapping-belongs-in-the-embedded-layer).
+Each parameter's default value is its voiced sweet spot. On the pedal's jam pages, a knob at 12 o'clock selects exactly that default: the left half of the knob's travel covers the minimum up to the default, and the right half covers the default up to the maximum. A jam effect with every knob at noon and a freshly opened plugin therefore start out identical. Full write-up: [ADR-030](../DESIGN_DECISIONS.md#adr-030-noon-mapping-belongs-in-the-embedded-layer).
 
 ### One CPU rule, measured on the chip
 
@@ -87,7 +87,7 @@ At 48 kHz the pedal processes audio in blocks of 32 samples, so each block has 0
 
 ### One control rule on the pedal
 
-The pedal has no screen, so every control means the same thing in every rig. The left footswitch turns the pedal on and off, and the right one sets tap tempo. Holding either one changes rig. The top row of knobs controls levels, and the top-right knob is always a volume. The bottom row shapes the sound. Running `sonido pedal controls` opens an illustrated guide to the pedal, drawn from the same code the firmware runs. Full write-up: [ADR-032](../DESIGN_DECISIONS.md#adr-032-one-control-rule-for-the-pedal).
+The pedal has no screen, so the footswitches mean the same thing in every rig: the left one turns the pedal on and off, the right one sets tap tempo, and holding either one changes rig. In the jam and the factory rigs, the top row of knobs holds levels and extras, with the top-right knob always a volume, and the bottom row shapes the sound. A rig you build in the editor maps its knobs however you set them. Running `sonido pedal controls` opens an illustrated guide to the pedal, drawn from the same code the firmware runs. Full write-up: [ADR-032](../DESIGN_DECISIONS.md#adr-032-one-control-rule-for-the-pedal).
 
 ## 4. What it does not do
 
@@ -98,8 +98,8 @@ Some of these are decisions, and the rest are gaps. I list them both because a l
 - **No oversampling on any shipping path.** The distortion, amp and tape kernels use antiderivative anti-aliasing (ADAA) instead. An oversampling wrapper exists in the code, but at 4× it costs nearly four times as much CPU, and the pedal can't spare that. [Why](decisions.md#2-aliasing-adaa-instead-of-oversampling).
 - **No automatic gain control.** Levels are measured offline and fixed, because a per-sample loudness tracker costs CPU on the pedal.
 - **No 64-bit floats.** Everything runs in `f32`, which halves the memory of every delay line and keeps to the Cortex-M7's faster single-precision arithmetic.
-- **No screen and no modes on the pedal.** One control rule replaces them.
-- **No way to restart into the bootloader during play.** A firmware update starts only from a power-on gesture or a USB request.
+- **No screen on the pedal, and no footswitch whose job depends on a mode.** One control rule replaces them.
+- **No footswitch gesture that restarts into the bootloader during play.** A firmware update starts from a power-on gesture or a USB request from the computer.
 
 **Not yet:**
 
@@ -109,7 +109,7 @@ Some of these are decisions, and the rest are gaps. I list them both because a l
 - **The cabinet IRs are synthesized.** The code generates them as exponentially decaying filtered noise; they are not measurements of real cabinets. You can't load your own IR yet.
 - **Pitch shifting is granular**, with two or four overlapping grains. It is not a phase vocoder, and there is no harmonizer.
 - **The distortion's dynamics control changes the drive, not the shape of the clipping curve.** Level-dependent waveshaping, which is what makes a guitar's volume knob clean up an analog circuit, is on the roadmap.
-- **Hardware testing is manual.** CI builds, lints and size-checks the firmware, but only I test it, by flashing it and playing. Two of the earlier per-effect VST3 shims passed Steinberg's validator (47/47) once, by hand; the current shim hasn't been through it, and CI validates only the CLAP plugins.
+- **Hardware testing is manual.** CI builds, lints and size-checks the firmware, but only I test it, by flashing it and playing. Two of the earlier per-effect VST3 shims passed Steinberg's validator (47/47) once, by hand; the current shim hasn't been through it. Only a manually run CI workflow validates the CLAP plugins.
 - **Not a product.** The API is unstable, nothing is on crates.io, and the one tagged release (v0.1.0, July 2026) predates both the VST3 shims and the firmware in the release workflow.
 
 ## 5. The long write-ups
@@ -135,10 +135,10 @@ Some of these are decisions, and the rest are gaps. I list them both because a l
 | Number | What it is | Where it comes from |
 |---|---|---|
 | 36 | effects | the registry's own inventory test, `crates/sonido-registry/src/lib.rs` |
-| 37 | plugins in one bundle (36 effects and the graph player) | `crates/sonido-plugin/tests/plugin_inventory.rs` |
+| 37 | plugins in one bundle (36 effects and the graph player) | `crates/sonido-plugin/src/bundle.rs` |
 | 480 MHz, 10,000 cycles per sample | the pedal's clock, divided by 48,000 samples per second | [EMBEDDED.md](../EMBEDDED.md#daisy-seed) |
 | 32 samples, 0.67 ms, 320,000 cycles | one audio block on the pedal | `BLOCK_SIZE` in `crates/sonido-daisy/src/lib.rs` |
 | 80% | the most of a block a rig's measured worst blocks may add up to | `CHAIN_FRACTION` in `crates/sonido-platform/src/cycle_table.rs` |
 | 74.7% mean, 84–85% slowest | the whole pedal, measured in a Hothouse with a guitar, running distortion, reverb and ring modulator | [EMBEDDED.md](../EMBEDDED.md#chain-configurations), 2026-10-22 |
-| 0.5 dB | the most any effect may differ from the dry guitar's loudness | `crates/sonido-effects/tests/level_contract.rs` |
+| 0.5 dB | the most a calibrated effect, fully wet, may differ from the dry guitar's loudness | `crates/sonido-effects/tests/level_contract.rs` |
 | 2,002 | `#[test]` functions in the tree | `grep -rho '#\[test\]' crates \| wc -l`, 2026-10-29 |
