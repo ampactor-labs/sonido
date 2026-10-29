@@ -21,7 +21,7 @@ use sonido_core::{GlobalParam, MacroMap, MacroMapping, MacroTarget, MorphCurve, 
 use sonido_gui_core::effects_ui;
 use sonido_gui_core::theme::{Family, SonidoTheme};
 use sonido_gui_core::widgets::{MacroAction, morph_bar, take_macro_action};
-use sonido_gui_core::widgets::{VectorText, glow};
+use sonido_gui_core::widgets::{VectorText, chip, chip_button, glow};
 use sonido_gui_core::{ParamBridge, ParamIndex, SlotIndex};
 
 use crate::info_view::{self, InfoPayload};
@@ -537,24 +537,12 @@ impl SonidoApp {
                 .show(ctx, |ui| {
                     egui::Frame::popup(ui.style()).show(ui, |ui| {
                         ui.horizontal(|ui| {
-                            if ui
-                                .button(
-                                    egui::RichText::new("Duplicate")
-                                        .font(FontId::monospace(11.0))
-                                        .color(theme.colors.text_primary),
-                                )
-                                .clicked()
+                            if chip(ui, "DUPLICATE", theme.colors.text_primary, false).clicked()
                                 && let Some(n) = self.graph_view.selected_node
                             {
                                 self.graph_view.duplicate_node(n);
                             }
-                            if ui
-                                .button(
-                                    egui::RichText::new("Remove")
-                                        .font(FontId::monospace(11.0))
-                                        .color(theme.colors.red),
-                                )
-                                .clicked()
+                            if chip(ui, "REMOVE", theme.colors.red, false).clicked()
                                 && let Some(n) = self.graph_view.selected_node
                             {
                                 self.graph_view.remove_node(n);
@@ -763,155 +751,33 @@ impl SonidoApp {
             wordmark.paint(ui.painter(), rect.min + vec2(2.0, 3.0), "SONIDO", &theme);
             ui.add_space(12.0);
 
-            // Transport: ONE prominent Play/Pause for both GEN and FILE sources.
-            // Green when playing, amber when stopped. On the web the click is a
-            // user gesture, so toggle_transport() also resumes the AudioContext —
-            // one tap on PLAY both starts the source and unblocks the output.
+            // ── Transport: PLAY and BYPASS, the two that change what you hear.
+            // One Play/Pause for both GEN and FILE sources: amber stopped,
+            // green playing. On the web the click is a user gesture, so
+            // toggle_transport() also resumes the AudioContext.
             let playing = self.file_player.is_playing();
             let (play_label, play_color) = if playing {
                 ("PAUSE", theme.colors.green)
             } else {
                 ("PLAY", theme.colors.amber)
             };
-            let play_btn = ui.button(
-                egui::RichText::new(play_label)
-                    .font(FontId::monospace(14.0))
-                    .color(play_color)
-                    .strong(),
-            );
+            let play_btn = chip(ui, play_label, play_color, playing);
             let play_led = pos2(play_btn.rect.right() + 8.0, play_btn.rect.center().y);
             glow::glow_circle(ui.painter(), play_led, 3.0, play_color, &theme);
             ui.add_space(12.0);
             if play_btn.on_hover_text("Play / Pause  (Space)").clicked() {
                 self.toggle_transport();
             }
-
-            ui.separator();
-
-            // RIG drawer toggle — Phone only. The performance band can't stay
-            // docked on a 390px screen, so it becomes a summonable drawer.
-            if self.breakpoint == Breakpoint::Phone {
-                let rig_open = self.drawer == Drawer::Rig;
-                let rig_color = if rig_open {
-                    theme.colors.cyan
-                } else {
-                    theme.colors.text_dim
-                };
-                if ui
-                    .button(
-                        egui::RichText::new("RIG")
-                            .font(FontId::monospace(11.0))
-                            .color(rig_color)
-                            .strong(),
-                    )
-                    .on_hover_text("Show/hide macros + morph")
-                    .clicked()
-                {
-                    self.drawer = if rig_open { Drawer::None } else { Drawer::Rig };
-                }
-                ui.separator();
-            }
-
-            // FOCUS toggle — Desktop/Tablet. Collapses docked chrome for a
-            // full-width canvas; the floating add affordances stay live.
-            if self.breakpoint != Breakpoint::Phone {
-                let focus_color = if self.chrome_collapsed {
-                    theme.colors.cyan
-                } else {
-                    theme.colors.text_dim
-                };
-                if ui
-                    .button(
-                        egui::RichText::new("FOCUS")
-                            .font(FontId::monospace(11.0))
-                            .color(focus_color)
-                            .strong(),
-                    )
-                    .on_hover_text("Max canvas \u{2014} hide morph + info band  (F)")
-                    .clicked()
-                {
-                    self.chrome_collapsed = !self.chrome_collapsed;
-                }
-                ui.separator();
-            }
-
-            // Undo / Redo — touch-reachable (was keyboard-only, dead on mobile).
-            let can_undo = !self.undo_stack.is_empty();
-            let can_redo = !self.redo_stack.is_empty();
-            let undo_color = if can_undo {
-                theme.colors.text_primary
-            } else {
-                theme.colors.text_dim
-            };
-            if ui
-                .button(
-                    egui::RichText::new("UNDO")
-                        .font(FontId::monospace(11.0))
-                        .color(undo_color),
-                )
-                .on_hover_text("Undo  (Ctrl+Z)")
-                .clicked()
-            {
-                self.undo();
-            }
-            let redo_color = if can_redo {
-                theme.colors.text_primary
-            } else {
-                theme.colors.text_dim
-            };
-            if ui
-                .button(
-                    egui::RichText::new("REDO")
-                        .font(FontId::monospace(11.0))
-                        .color(redo_color),
-                )
-                .on_hover_text("Redo  (Ctrl+Shift+Z)")
-                .clicked()
-            {
-                self.redo();
-            }
-
-            // Add-node: a labeled button (clearer than a bare "+"). On phone the
-            // thumb-reachable FAB over the canvas does this job instead.
-            if self.breakpoint != Breakpoint::Phone {
-                let add_color = if self.palette_open {
-                    theme.colors.amber
-                } else {
-                    theme.colors.text_primary
-                };
-                if ui
-                    .button(
-                        egui::RichText::new("+ EFFECT")
-                            .font(FontId::monospace(11.0))
-                            .color(add_color)
-                            .strong(),
-                    )
-                    .on_hover_text("Add an effect node to the graph")
-                    .clicked()
-                {
-                    self.palette_open = !self.palette_open;
-                }
-            }
-
-            ui.separator();
-
-            // BYPASS (promoted from status bar)
             let chain_bypassed = self.audio_bridge.chain_bypass().load(Ordering::Relaxed);
             let bypass_color = if chain_bypassed {
                 theme.colors.red
             } else {
                 theme.colors.text_dim
             };
-            let bypass_btn = ui.button(
-                egui::RichText::new("BYPASS")
-                    .font(FontId::monospace(11.0))
-                    .color(bypass_color)
-                    .strong(),
-            );
-            let circle_center = pos2(bypass_btn.rect.right() + 8.0, bypass_btn.rect.center().y);
-            glow::glow_circle(ui.painter(), circle_center, 3.0, bypass_color, &theme);
-            ui.add_space(10.0);
-            if bypass_btn.clicked() {
+            if chip(ui, "BYPASS", bypass_color, chain_bypassed)
+                .on_hover_text("Bypass the whole chain")
+                .clicked()
+            {
                 self.audio_bridge
                     .chain_bypass()
                     .store(!chain_bypassed, Ordering::SeqCst);
@@ -919,37 +785,83 @@ impl SonidoApp {
 
             ui.separator();
 
-            // Session save / load + export. Native uses OS file dialogs; the
-            // web build uses the browser file picker (load) and download (save),
-            // so the buttons are present on both — only USB flash and folder
-            // writes stay native-only (a browser tab can't reach them).
-            if ui
-                .button(
-                    egui::RichText::new("Save")
-                        .font(FontId::monospace(12.0))
-                        .color(theme.colors.text_primary),
-                )
+            // ── Edit: undo, redo, add, and the canvas view.
+            let can_undo = !self.undo_stack.is_empty();
+            let can_redo = !self.redo_stack.is_empty();
+            let avail = |on: bool| {
+                if on {
+                    theme.colors.text_primary
+                } else {
+                    theme.colors.text_dim
+                }
+            };
+            if chip(ui, "UNDO", avail(can_undo), false)
+                .on_hover_text("Undo  (Ctrl+Z)")
                 .clicked()
             {
+                self.undo();
+            }
+            if chip(ui, "REDO", avail(can_redo), false)
+                .on_hover_text("Redo  (Ctrl+Shift+Z)")
+                .clicked()
+            {
+                self.redo();
+            }
+            // On phone the thumb-reachable FAB over the canvas adds instead.
+            if self.breakpoint != Breakpoint::Phone {
+                let add_color = if self.palette_open {
+                    theme.colors.amber
+                } else {
+                    theme.colors.text_primary
+                };
+                if chip(ui, "+ EFFECT", add_color, self.palette_open)
+                    .on_hover_text("Add an effect node to the graph")
+                    .clicked()
+                {
+                    self.palette_open = !self.palette_open;
+                }
+                // FOCUS collapses docked chrome for a full-width canvas.
+                let focus_color = if self.chrome_collapsed {
+                    theme.colors.cyan
+                } else {
+                    theme.colors.text_dim
+                };
+                if chip(ui, "FOCUS", focus_color, self.chrome_collapsed)
+                    .on_hover_text("Max canvas \u{2014} hide morph + info band  (F)")
+                    .clicked()
+                {
+                    self.chrome_collapsed = !self.chrome_collapsed;
+                }
+            } else {
+                // RIG drawer: the performance band can't stay docked on a
+                // 390 px screen, so it becomes a summonable drawer.
+                let rig_open = self.drawer == Drawer::Rig;
+                let rig_color = if rig_open {
+                    theme.colors.cyan
+                } else {
+                    theme.colors.text_dim
+                };
+                if chip(ui, "RIG", rig_color, rig_open)
+                    .on_hover_text("Show/hide macros + morph")
+                    .clicked()
+                {
+                    self.drawer = if rig_open { Drawer::None } else { Drawer::Rig };
+                }
+            }
+
+            ui.separator();
+
+            // ── Session: save, load, export, the pedal. Native uses OS file
+            // dialogs; the web build uses the browser file picker and
+            // download, so these are present on both.
+            if chip(ui, "SAVE", theme.colors.text_primary, false).clicked() {
                 self.save_session();
             }
-            if ui
-                .button(
-                    egui::RichText::new("Load")
-                        .font(FontId::monospace(12.0))
-                        .color(theme.colors.text_primary),
-                )
-                .clicked()
-            {
+            if chip(ui, "LOAD", theme.colors.text_primary, false).clicked() {
                 self.load_session();
             }
             self.render_export_menu(ui);
-            if ui
-                .button(
-                    egui::RichText::new("Pedal")
-                        .font(FontId::monospace(12.0))
-                        .color(theme.colors.text_primary),
-                )
+            if chip(ui, "PEDAL", theme.colors.text_primary, false)
                 .on_hover_text("How to play the pedal, and the pedal over USB")
                 .clicked()
             {
@@ -958,11 +870,11 @@ impl SonidoApp {
 
             ui.separator();
 
-            // FILE source toggle
+            // ── Source: the generator or a file.
             self.file_player.render_source_toggle(ui);
 
-            // Performance macros K1-K6, compact. On phone they live in the RIG
-            // drawer instead (the header stays minimal there).
+            // ── Performance: macros K1–K6 and the pedal's toggles. On phone
+            // they live in the RIG drawer instead.
             if self.breakpoint != Breakpoint::Phone {
                 ui.separator();
                 self.render_macro_strip(ui);
@@ -1469,7 +1381,10 @@ impl SonidoApp {
                 format!("Auto-assign macros K1..K6 to the {chain_len} effect(s) in the chain")
             };
             if ui
-                .add_enabled(chain_len > 0, egui::Button::new("Auto").small())
+                .add_enabled(
+                    chain_len > 0,
+                    chip_button("AUTO", theme.colors.text_secondary, false),
+                )
                 .on_hover_text(tip)
                 .clicked()
             {
@@ -1748,13 +1663,14 @@ impl SonidoApp {
                 } else {
                     label.as_str()
                 };
+                let color = if selected {
+                    theme.colors.cyan
+                } else {
+                    theme.colors.text_secondary
+                };
                 let resp = ui
-                    .add(
-                        egui::Button::new(egui::RichText::new(text).font(FontId::monospace(9.0)))
-                            .small()
-                            .selected(selected),
-                    )
-                    .on_hover_text(format!("{} {place}", toggle.label()));
+                    .add(chip_button(text, color, selected).small())
+                    .on_hover_text(format!("Pedal toggle {}: {place}", toggle.label()));
                 if resp.clicked() && !selected {
                     self.toggle_positions[t] = p as u8;
                     flipped = true;
@@ -2229,10 +2145,9 @@ impl SonidoApp {
         use sonido_patch::validate::Severity;
         let theme = SonidoTheme::get(ui.ctx());
 
-        ui.menu_button(
-            egui::RichText::new("Export")
-                .font(FontId::monospace(12.0))
-                .color(theme.colors.text_primary),
+        egui::menu::menu_custom_button(
+            ui,
+            chip_button("EXPORT", theme.colors.text_primary, false),
             |ui| {
                 self.rig_name_field(ui);
                 let patch = self.current_patch();
@@ -2458,10 +2373,9 @@ impl SonidoApp {
     #[cfg(target_arch = "wasm32")]
     fn render_export_menu(&mut self, ui: &mut egui::Ui) {
         let theme = SonidoTheme::get(ui.ctx());
-        ui.menu_button(
-            egui::RichText::new("Export")
-                .font(FontId::monospace(12.0))
-                .color(theme.colors.text_primary),
+        egui::menu::menu_custom_button(
+            ui,
+            chip_button("EXPORT", theme.colors.text_primary, false),
             |ui| {
                 self.rig_name_field(ui);
                 let patch = self.current_patch();
@@ -2933,7 +2847,44 @@ impl eframe::App for SonidoApp {
                         .node_ids()
                         .filter(|(_, n)| matches!(n, SonidoNode::Effect { .. }))
                         .count();
-                    self.graph_view.slot_activity = vec![self.metering.output_peak; slot_count];
+                    // Each node shows its first settings, live.
+                    let effect_ids: Vec<&str> = self
+                        .graph_view
+                        .snarl
+                        .node_ids()
+                        .filter_map(|(_, n)| match n {
+                            SonidoNode::Effect { effect_id, .. } => Some(*effect_id),
+                            _ => None,
+                        })
+                        .collect();
+                    self.graph_view.slot_readouts = (0..slot_count)
+                        .map(|slot| {
+                            let slot = SlotIndex(slot);
+                            // Only once the bridge holds this graph's slots
+                            // (the audio thread rebuilds it on compile).
+                            if effect_ids.get(slot.0) != Some(&self.bridge.effect_id(slot)) {
+                                return Vec::new();
+                            }
+                            let params = (0..self.bridge.param_count(slot)).filter_map(|i| {
+                                let p = ParamIndex(i);
+                                self.bridge
+                                    .param_descriptor(slot, p)
+                                    .map(|d| (d, self.bridge.get(slot, p)))
+                            });
+                            crate::graph_view::readout_lines(params)
+                        })
+                        .collect();
+                    // Each node's LED and meters show its own output.
+                    let peaks = &self.metering.node_peaks;
+                    self.graph_view.slot_peaks = (0..slot_count)
+                        .map(|i| peaks.get(i).copied().unwrap_or_default())
+                        .collect();
+                    self.graph_view.slot_activity = self
+                        .graph_view
+                        .slot_peaks
+                        .iter()
+                        .map(|&(l, r)| l.max(r))
+                        .collect();
                     self.graph_view.show(&mut child)
                 };
 

@@ -1,6 +1,7 @@
 //! Audio-specific GUI widgets.
 //!
 //! Reusable widgets for building audio effect interfaces:
+//! - [`chip`] / [`chip_button`] — The design system's one text button
 //! - [`Knob`] — Rotary control with drag, fine control, and double-click reset
 //! - [`Fader`] — Vertical slot fader with LED-segment fill
 //! - [`bridged_knob`] — Bridge-aware knob with auto-format and gesture protocol
@@ -18,6 +19,7 @@
 //! - [`param_macro_menu`] / [`take_macro_action`] — Right-click param → macro mapping
 
 mod bridged_knob;
+mod chip;
 pub mod fader;
 pub mod glow;
 mod knob;
@@ -35,6 +37,7 @@ pub use bridged_knob::{
     bridged_combo, bridged_fader, bridged_knob, bridged_knob_accent, bridged_knob_fmt,
     bridged_knob_with_morph, draw_morph_markers, gesture_wrap,
 };
+pub use chip::{CHIP_HEIGHT, chip, chip_button};
 pub use fader::Fader;
 pub use knob::Knob;
 pub use led_display::LedDisplay;
