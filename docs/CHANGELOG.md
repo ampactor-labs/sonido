@@ -83,6 +83,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Pedal gestures**: footswitch effect scrolling, the FS1 double-tap clear, both-footswitch bypass, and the 3 s both-footswitch bootloader hold
 
 ### Fixed
+- **The Windows release build.** Rust 1.99.1 (LLVM 23.1.1) runs out of memory compiling the editor for `x86_64-pc-windows-msvc`. It fails at every LTO and optimization setting tried, and on the July code that built then; Rust 1.97.0 builds it. The release builds Windows with 1.97.0, and a new CI job runs that build on every pull request, since the test jobs build debug only and never saw it.
 - **The shelving EQ panicked at sample rates below about 2.1 kHz**, where its Nyquist ceiling falls under the high shelf's 1 kHz floor; a plugin panic takes the host down. Steinberg's VST3 validator found it at its 1,234.5678 Hz test rate. The ceiling now wins (`shelf_frequency`), and a test runs the validator's odd rates.
 - **The web editor on a light-mode system** fell back to egui's stock light style: a white canvas with near-invisible buttons. The theme is now Sonido Night whatever the system says.
 - **Editor node meters** showed the whole output's peak (the LED) or nothing (the L/R meters); each now shows its own effect's signal.

@@ -139,35 +139,24 @@ jobs:
           name: sonido_pedal
           path: crates/sonido-daisy/sonido_pedal.bin
 
-  # The release builds the editor with the release profile (fat LTO, one
-  # codegen unit); CI's tests build debug only. v0.2.0's Windows release
-  # build ran rustc out of memory linking sonido-gui, which no CI job saw.
-  # EXPERIMENT, round 2: thin LTO and 16 codegen units ran out of memory too.
+  # The release builds the editor with the release profile; the test jobs
+  # build debug only. v0.2.0's Windows release build failed: rustc 1.99.1
+  # (LLVM 23.1.1) ran out of memory compiling sonido-gui for
+  # x86_64-pc-windows-msvc, at any LTO or optimization setting, even on code
+  # that built in July, while 1.97.0 builds it (PR #10). This job runs the
+  # release's Windows editor build, toolchain included; try a newer
+  # toolchain here before moving release.yml's Windows entry off 1.97.0.
   gui-release-windows:
-    name: GUI release build (windows, ${{ matrix.name }})
+    name: GUI release build (windows)
     runs-on: windows-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - { name: "9ed2c62, built fine on 2026-07-24", ref: 9ed2c62900fb618c7d474fafdfbe3e178cc99343, lto: fat, opt: 3, toolchain: stable }
-          - { name: "d8cb552, before the GUI pass", ref: d8cb55228c89f41f3c0df0d356b006abe1a3ebe8, lto: fat, opt: 3, toolchain: stable }
-          - { name: "no LTO", ref: "", lto: "false", opt: 3, toolchain: stable }
-          - { name: "opt-level 2", ref: "", lto: fat, opt: 2, toolchain: stable }
-          - { name: "rustc 1.97.0", ref: "", lto: fat, opt: 3, toolchain: "1.97.0" }
     env:
       RUSTFLAGS: ""
-      CARGO_PROFILE_RELEASE_LTO: ${{ matrix.lto }}
-      CARGO_PROFILE_RELEASE_OPT_LEVEL: ${{ matrix.opt }}
     steps:
       - uses: actions/checkout@v5
-        with:
-          ref: ${{ matrix.ref }}
       - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: ${{ matrix.toolchain }}
+          toolchain: "1.97.0"
           targets: x86_64-pc-windows-msvc
-      - name: Toolchain
-        run: rustc --version --verbose
+      - uses: Swatinem/rust-cache@v2
       - name: Build GUI (release profile)
         run: cargo build --release --target x86_64-pc-windows-msvc -p sonido-gui
