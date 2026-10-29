@@ -138,3 +138,25 @@ jobs:
         with:
           name: sonido_pedal
           path: crates/sonido-daisy/sonido_pedal.bin
+
+  # The release builds the editor with the release profile; the test jobs
+  # build debug only. v0.2.0's Windows release build failed: rustc 1.99.1
+  # (LLVM 23.1.1) ran out of memory compiling sonido-gui for
+  # x86_64-pc-windows-msvc, at any LTO or optimization setting, even on code
+  # that built in July, while 1.97.0 builds it (PR #10). This job runs the
+  # release's Windows editor build, toolchain included; try a newer
+  # toolchain here before moving release.yml's Windows entry off 1.97.0.
+  gui-release-windows:
+    name: GUI release build (windows)
+    runs-on: windows-latest
+    env:
+      RUSTFLAGS: ""
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.97.0"
+          targets: x86_64-pc-windows-msvc
+      - uses: Swatinem/rust-cache@v2
+      - name: Build GUI (release profile)
+        run: cargo build --release --target x86_64-pc-windows-msvc -p sonido-gui
