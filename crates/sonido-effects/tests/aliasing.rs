@@ -185,9 +185,11 @@ fn distortion_adaa_suppresses_aliasing() {
     );
 }
 
-/// Preamp ADAA keeps inharmonic energy low at high gain.
+/// The preamp keeps inharmonic energy low at high gain.
 ///
-/// PreampKernel uses ADAA gain stage. Params: 0=gain_db.
+/// PreampKernel has no ADAA: its soft clipper is linear up to +20 dB and
+/// engages only above that. This test holds it to the same bound as the ADAA
+/// kernels. Params: 0=gain_db.
 #[test]
 fn preamp_adaa_suppresses_aliasing() {
     let mut effect = Adapter::new(PreampKernel::new(SAMPLE_RATE), SAMPLE_RATE);

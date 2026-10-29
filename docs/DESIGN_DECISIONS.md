@@ -404,7 +404,7 @@ Use `f32` exclusively for all audio processing, state storage, and parameter val
 - **Sufficient precision**: `f32` provides ~144 dB of dynamic range, exceeding 24-bit audio converters (~144 dB theoretical) and far exceeding the ~120 dB range of human hearing.
 - **Cache efficiency**: `f32` uses half the memory bandwidth of `f64`. For delay lines (potentially tens of thousands of samples), this translates directly to fewer cache misses.
 - **SIMD alignment**: Four `f32` values fit in a 128-bit SIMD register (SSE/NEON), enabling future vectorization. Only two `f64` values fit, halving throughput.
-- **Embedded compatibility**: ARM Cortex-M7 (Daisy Seed) has a single-precision FPU. Double-precision operations would require software emulation, dramatically reducing performance.
+- **Embedded speed**: The Daisy Seed's Cortex-M7 (STM32H750) has a double-precision FPU, but double-precision arithmetic is slower than single-precision there, and `f64` state takes twice the memory and twice the cache space. (This record used to say the M7 had no double-precision FPU; ST's product page for the STM32H750 lists one.)
 
 ### Where f64 Could Help
 

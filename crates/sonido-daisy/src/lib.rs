@@ -7,7 +7,7 @@
 //!
 //! # Target Hardware
 //!
-//! - **MCU**: STM32H750IBK6 (ARM Cortex-M7, 480 MHz, single-precision FPU)
+//! - **MCU**: STM32H750IBK6 (ARM Cortex-M7, 480 MHz, double-precision FPU)
 //! - **Audio**: PCM3060 codec (seed 1.2), 24-bit stereo via SAI + DMA, 48 kHz default
 //! - **Memory**: 128 KB DTCM (0-wait), 512 KB AXI SRAM, 64 MB SDRAM
 //!

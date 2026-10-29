@@ -1431,7 +1431,7 @@ Decouples time and pitch using independently controlled granular read heads. Ref
 - **Pitch Ratio**: independent of time. 0.5 = octave down, 2.0 = octave up.
 - **Freeze**: holds the current buffer contents, stops writing.
 - **Density**: number of overlapping grains, 1 at 0% up to 8 at 100%.
-- **Sync**: reserved for tempo sync; currently has no effect on the audio.
+- **Sync**: snaps the grain length to the power-of-two beat subdivision (1/2, 1/4, 1/8, … of a beat) nearest Grain Size, at the host tempo (120 BPM until the host reports one).
 
 **CLI:**
 

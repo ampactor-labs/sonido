@@ -282,7 +282,7 @@ Est. cycles/sample = desktop_ns/sample × (desktop_GHz / cortex_GHz) × arch_pen
 These estimates have significant uncertainty (±50%):
 - The 4x architecture penalty is a rough heuristic. Actual penalty depends on
   memory access patterns, branch prediction, and FPU utilization.
-- Cortex-M7 has a single-precision FPU, which helps f32 DSP, but no floating-point SIMD.
+- The Cortex-M7 has a hardware FPU (single and double precision), which helps f32 DSP, but no floating-point SIMD.
 - Cache effects differ: the i5-6300U has a 3 MB L3; the STM32H750's Cortex-M7 has
   16 KB I-cache + 16 KB D-cache.
 - The Daisy Seed runs at 480 MHz but memory access to AXI SRAM has wait

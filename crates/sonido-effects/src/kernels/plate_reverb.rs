@@ -39,7 +39,7 @@
 //! let adapter = Adapter::new(PlateReverbKernel::new(48000.0), 48000.0);
 //! let mut effect: Box<dyn Effect> = Box::new(adapter);
 //!
-//! // Embedded / Daisy Seed — zero-smoothing adapter, as the pedal firmware uses
+//! // Embedded / Daisy Seed — zero-smoothing adapter for single-effect firmware examples (the pedal itself uses `Adapter::new`)
 //! let effect = Adapter::new_direct(PlateReverbKernel::new(48000.0), 48000.0);
 //!
 //! // Or drive the kernel directly with a typed params struct (no adapter)

@@ -15,7 +15,7 @@ Cleveland Music Co. Hothouse DIY pedal platform.
 |------|-------|
 | MCU | STM32H750IBK6 (ARM Cortex-M7, single core) |
 | Clock | 480 MHz (libDaisy defaults to 400 MHz for thermal headroom) |
-| FPU | Single-precision hardware FPU (no double, no SIMD) |
+| FPU | Single- and double-precision hardware FPU (no SIMD) |
 | SDRAM | 64 MB (Alliance AS4C16M32MSA-6) on the "65 MB" variant |
 | QSPI Flash | 8 MB (ISSI IS25LP064A on current Seeds, JEDEC id `9D 60 17`; the Winbond W25Q64JV, `EF 40 17`, shares its command set) |
 | Audio Codec | PCM3060 (TI) on Rev 7, the current production revision |

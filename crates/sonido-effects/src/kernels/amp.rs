@@ -36,7 +36,7 @@
 //! // Desktop / Plugin (via adapter — handles parameter smoothing)
 //! let adapter = Adapter::new(AmpKernel::new(48000.0), 48000.0);
 //!
-//! // Embedded / Daisy Seed — zero-smoothing adapter, as the pedal firmware uses
+//! // Embedded / Daisy Seed — zero-smoothing adapter for single-effect firmware examples (the pedal itself uses `Adapter::new`)
 //! let effect = Adapter::new_direct(AmpKernel::new(48000.0), 48000.0);
 //!
 //! // Or drive the kernel directly with a typed params struct (no adapter)
