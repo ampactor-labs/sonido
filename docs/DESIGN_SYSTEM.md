@@ -9,13 +9,13 @@ Every Sonido plugin is the same arcade cabinet, lit in its effect family's color
 A vector-display arcade machine at night (Tempest, Battlezone): thin beams of light with a white-hot core and a colored halo, on a violet-black void, behind curved glass. Three references shaped it:
 
 - **Vector displays.** Lines, bloom and phosphor persistence are the whole look. The halo carries the hue; the core of the beam is near-white. That one detail is what makes a line look lit rather than painted.
-- **Synthwave composition.** A low horizon, a perspective grid moving toward you, a cockpit in the foreground (the control deck), primary actions fixed to the edges.
-- **The OP-1 rule: show, don't describe.** The screen is the plugin's own signal, live: what a knob does is visible on the scope.
+- **An instrument panel.** The screen is one instrument, a cockpit sits in the foreground (the control deck), and primary actions are fixed to the edges. Nothing on the glass is scenery.
+- **The OP-1 rule: show, don't describe.** The screen is the effect itself: what a knob does is visible on its picture.
 
 ## Principles
 
 1. **One structure, six lights.** Layout, components and behavior are identical across all 36 effects. Only the family accent changes, so knowing one plugin means knowing all of them.
-2. **The screen shows the real signal.** The scope draws the plugin's own input (ghost) and output (beam), from the audio thread. Nothing on the screen is decoration pretending to be data.
+2. **The screen shows the real signal.** The screen is the effect's own picture, measured from its kernel or drawn from the audio thread's tap. Nothing on the screen is decoration, and nothing is decoration pretending to be data.
 3. **Fixed edges.** Power is always top-right, the status line is always bottom-left, and meters are always IN on the left and OUT on the right.
 4. **Light carries meaning, text carries values.** Values are bright neutral text; labels are muted. Color marks family, level and state, in short marks, never in body text.
 5. **Readable through the glass.** Curvature, scanlines and aberration apply only inside the screen. Every control and every value stays outside it, crisp.
@@ -88,15 +88,15 @@ Level is never color alone: segments have position, the CLIP latch says CLIP, an
 **Cabinet** (`cabinet::Cabinet`): the whole plugin window, top to bottom:
 
 - **Marquee.** The SONIDO wordmark over `FX//<FAMILY>`, a partner-colored slash, the effect name in slanted Sonido Vector, speed stripes graded partner→accent, and the power button.
-- **Screen**, between the IN and OUT meters. A starfield over a perspective grid whose speed follows output level, the scope across the sky, and in the middle a dark plate with the family's picture ([`picture.rs`](../crates/sonido-gui-core/src/picture.rs)), plus any read-only readouts (e.g. GR on the compressor). Every picture is real data: measured from a private copy of the effect's own kernel with the plugin's current values, or computed from the live tap.
+- **Screen**, between the IN and OUT meters. The whole glass is the family's picture ([`picture.rs`](../crates/sonido-gui-core/src/picture.rs)) on the dark tube, with its own axes, each labelled, plus any read-only readouts (e.g. GR on the compressor). There is no scenery: every line is an axis or a value. Every picture is real data: measured from a private copy of the effect's own kernel with the plugin's current values, or computed from the live tap, and the live signal moves inside it (the distortion's signal traces along its curve, the compressor's dot rides its curve, the spectrum is the signal).
 
   | Family | Picture | Source |
   |---|---|---|
-  | HEAT | transfer curve, output against input (scaled to its own peak, since effects are level-matched) | kernel: a full-scale 100 Hz sine |
+  | HEAT | transfer curve, output against input (scaled to its own peak, since effects are level-matched), with the live signal tracing along it | kernel: a full-scale 100 Hz sine; tap |
   | VOLT | level curve, dB in against dB out, with a dot where the signal is now | kernel: a 1 kHz sine stepped in 3 dB levels |
   | WAVE | frequency response, 20 Hz–20 kHz, ±24 dB | kernel: an impulse |
   | ECHO | impulse response envelope over 2.5 s: taps and decays (a synced delay says SYNC @ 120 BPM, the kernel's own tempo without a host) | kernel: an impulse, at 24 kHz |
-  | FLUX, RIG | live spectrum, input ghost against output beam, with the LFO's phase where the kernel publishes it | tap |
+  | FLUX, RIG | live spectrum, input ghost against output beam (smoothed: up fast, down slow), with the LFO's phase where the kernel publishes it | tap |
   | LINE | stereo field (mid up, side across) | tap |
   | tuner | a big note readout and a ±50 ¢ needle | — |
 
@@ -126,10 +126,7 @@ The value is shown in the host's own formatting (`ParamDescriptor::format_value`
 
 ## Motion
 
-Motion is ambient and audio-reactive, and it stops when the plugin is bypassed:
-
-- The grid scrolls at 0.25 + 2.2 × output energy rows per second.
-- Stars twinkle at individual rates.
+Nothing on the screen moves for its own sake. What moves is the signal: the distortion's trace along its curve, the compressor's level dot, the spectrum and the stereo field, and the curves themselves when a knob turns. A bypassed plugin's pictures dim under INSERT COIN, lit and still.
 
 The UI repaints every frame the host gives it.
 
@@ -158,6 +155,6 @@ cargo run -p sonido-plugin --bin sonido-preview -- delay --bypassed --snapshot o
 cargo run -p sonido-plugin --bin sonido-preview -- graph-player --demo-rig
 ```
 
-The preview opens the real plugin editor (same bridge, same CRT pass) in its own window, fed by a background thread that runs a test riff through the real effect, so the meters, scope and readouts move. `--snapshot` saves a PNG and exits.
+The preview opens the real plugin editor (same bridge, same CRT pass) in its own window, fed by a background thread that runs a test riff through the real effect, so the meters, pictures and readouts move. `--snapshot` saves a PNG and exits.
 
 Adding a component: build it from the tokens above (`SonidoTheme::get(ctx)`, `Family::accent()`), draw lit things with `glow::neon_*`, keep text outside the glass, and check it in at least two families with the preview.

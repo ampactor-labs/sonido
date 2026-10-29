@@ -1,4 +1,4 @@
-//! Screen pictures: what each family's screen shows where the sun used to be.
+//! Screen pictures: what each family's screen shows, across the whole glass.
 //!
 //! The design system's rule is that the screen shows the real signal, so
 //! every picture is either measured from the effect's own kernel or computed
