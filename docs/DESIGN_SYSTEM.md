@@ -19,7 +19,7 @@ A vector-display arcade machine at night (Tempest, Battlezone): thin beams of li
 3. **Fixed edges.** Power is always top-right, the status line is always bottom-left, and meters are always IN on the left and OUT on the right.
 4. **Light carries meaning, text carries values.** Values are bright neutral text; labels are muted. Color marks family, level and state, in short marks, never in body text.
 5. **Readable through the glass.** Curvature, scanlines and aberration apply only inside the screen. Every control and every value stays outside it, crisp.
-6. **Bypass is "game over", not hidden.** A bypassed cabinet dims the screen and blinks INSERT COIN; every control stays visible and live.
+6. **Bypass is "game over", not hidden.** A bypassed cabinet dims the screen and shows INSERT COIN, lit and still; every control stays visible and live.
 
 ## Tokens
 
@@ -88,12 +88,26 @@ Level is never color alone: segments have position, the CLIP latch says CLIP, an
 **Cabinet** (`cabinet::Cabinet`): the whole plugin window, top to bottom:
 
 - **Marquee.** The SONIDO wordmark over `FX//<FAMILY>`, a partner-colored slash, the effect name in slanted Sonido Vector, speed stripes graded partner→accent, and the power button.
-- **Screen**, between the IN and OUT meters. A starfield, a banded sun sinking into the horizon (its slits scroll), and a perspective grid whose speed follows output level. The scope overlays them, plus any read-only readouts (e.g. GR on the compressor). The tuner replaces the sun with a big note readout and a ±50 ¢ needle.
+- **Screen**, between the IN and OUT meters. A starfield over a perspective grid whose speed follows output level, the scope across the sky, and in the middle a dark plate with the family's picture ([`picture.rs`](../crates/sonido-gui-core/src/picture.rs)), plus any read-only readouts (e.g. GR on the compressor). Every picture is real data: measured from a private copy of the effect's own kernel with the plugin's current values, or computed from the live tap.
+
+  | Family | Picture | Source |
+  |---|---|---|
+  | HEAT | transfer curve, output against input (scaled to its own peak, since effects are level-matched) | kernel: a full-scale 100 Hz sine |
+  | VOLT | level curve, dB in against dB out, with a dot where the signal is now | kernel: a 1 kHz sine stepped in 3 dB levels |
+  | WAVE | frequency response, 20 Hz–20 kHz, ±24 dB | kernel: an impulse |
+  | ECHO | impulse response envelope over 2.5 s: taps and decays (a synced delay says SYNC @ 120 BPM, the kernel's own tempo without a host) | kernel: an impulse, at 24 kHz |
+  | FLUX, RIG | live spectrum, input ghost against output beam, with the LFO's phase where the kernel publishes it | tap |
+  | LINE | stereo field (mid up, side across) | tap |
+  | tuner | a big note readout and a ±50 ¢ needle | — |
+
+  The kernel pictures re-measure when a value changes, at most ten times a second while a knob moves.
 - **Deck.** Selectors first, flowed left to right, then a centered grid of knobs.
 - **Rig HUD** (graph player only, `Cabinet::set_rig`). The rig's name and its chain as chips in each effect's family color, top-left of the sky. With no rig loaded, the screen says NO RIG LOADED and where rigs come from.
 - **Footer.** The status line on the left: the name and value of whatever is under the pointer, otherwise the effect's description. Engine facts and the CRT switch sit on the right.
 
 `Cabinet::new(effect_id)` lights a cabinet from the registry; `Cabinet::custom(id, title, description, family)` builds one for something that isn't a single effect, as the graph player does. `cabinet::preferred_size(&descriptors)` gives the window size: 720 pt wide, and tall enough to fit the deck with no scrolling.
+
+**Chip** (`widgets::chip`, `chip_button`): the one text button, in the editor's header, menus and toggles. Uppercase Share Tech Mono 11 on a tint of its own color (10%, 22% when active), outlined in that color, at least 22 pt tall. Color carries state: amber stopped, green playing, red bypassed or destructive, `text_dim` unavailable.
 
 **Knob** (`Knob`, bound by `bridged_knob_accent`): a 25-segment LED ring over a dark well, with lit segments in the accent and unlit ones in `dim`. A range centered on zero fills from twelve o'clock. Interaction:
 
@@ -115,9 +129,7 @@ The value is shown in the host's own formatting (`ParamDescriptor::format_value`
 Motion is ambient and audio-reactive, and it stops when the plugin is bypassed:
 
 - The grid scrolls at 0.25 + 2.2 × output energy rows per second.
-- The sun's slits drift down, and it swells by up to 5% with energy.
 - Stars twinkle at individual rates.
-- INSERT COIN blinks at 1.2 Hz with a 62% duty cycle.
 
 The UI repaints every frame the host gives it.
 

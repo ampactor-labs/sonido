@@ -35,7 +35,7 @@ cd crates/sonido-gui
 trunk serve
 ```
 
-Browsers keep audio suspended until a user gesture: the first click, key press, or PLAY resumes it. Hard-refresh (Ctrl+Shift+R) after a rebuild to bypass the cache. There is no headless wasm test runner; the browser is the runtime test. `cargo check` for wasm catches missing `#[cfg]` gates and std-only APIs that the native build doesn't.
+Browsers keep audio suspended until a user gesture: the first click, key press, or PLAY resumes it. Hiding the tab (switching tabs, or leaving the browser for another app on a phone) pauses the transport, and it stays paused when you come back. Hard-refresh (Ctrl+Shift+R) after a rebuild to bypass the cache. There is no headless wasm test runner; the browser is the runtime test. `cargo check` for wasm catches missing `#[cfg]` gates and std-only APIs that the native build doesn't.
 
 The web build differs from native only where a browser tab can't reach: Save/Load use the browser's download and file picker; Export offers patch JSON, the pedal `.bin`, and **Send to pedal** over Web Serial (Chrome and Edge; the browser asks which port to use and lists only the pedal); there is no CLAP-folder write or firmware update. The PEDAL window's controls guide downloads as an HTML page.
 
@@ -70,8 +70,8 @@ sonido-gui --screenshot editor.png --screenshot-size 1440x900
 
 ```
 +---------------------------------------------------------------------------+
-| SONIDO PLAY FOCUS UNDO REDO +EFFECT BYPASS Save Load Export GEN FILE  ... |
-|   ... MACROS Auto (K1)..(K6)                               [errors] (o)   |
+| SONIDO PLAY BYPASS | UNDO REDO +EFFECT FOCUS | SAVE LOAD EXPORT PEDAL |  |
+|   GEN FILE | MACROS AUTO (K1)..(K6) | T1 UP MID DOWN  T3 ...  [errors] (o) |
 +---------------------------------------------------------------------------+
 |IN|                       GRAPH CANVAS                                |OUT|
 |  |   o──[Distortion]──[Delay]──[Reverb]──o                           |   |
@@ -92,17 +92,14 @@ The layout adapts to width. **Desktop** (≥ 900 px) is shown above; on a wide w
 
 ### Header
 
+Every control is a chip (the design system's one text button), in five groups:
+
 - **SONIDO**: the vector wordmark.
-- **PLAY / PAUSE**: one transport for both sources (Space).
-- **FOCUS**: hides the info band and morph band for a full-height canvas (F). Desktop/Tablet.
-- **UNDO / REDO**: structural edits (Ctrl+Z, Ctrl+Shift+Z / Ctrl+Y), 64 steps deep.
-- **+ EFFECT**: opens the ADD EFFECT palette (Desktop/Tablet).
-- **BYPASS**: bypasses the whole chain with a 5 ms crossfade to the dry signal.
-- **Save / Load**: the session as JSON (see [Sessions](#sessions)).
-- **Export**: see [Export](#export).
-- **Pedal**: the PEDAL window (see [The pedal window](#the-pedal-window)).
-- **GEN / FILE**: source select.
-- **MACROS**: **Auto** plus the six macro knobs K1–K6, then the rig's toggles **T1** and **T3** (in the RIG drawer on Phone).
+- **Transport.** **PLAY / PAUSE**, one transport for both sources (Space); **BYPASS**, the whole chain with a 5 ms crossfade to the dry signal.
+- **Edit.** **UNDO / REDO**, structural edits (Ctrl+Z, Ctrl+Shift+Z / Ctrl+Y), 64 steps deep; **+ EFFECT**, the ADD EFFECT palette; **FOCUS**, hides the info and morph bands for a full-height canvas (F). On Phone, **RIG** takes the place of the last two.
+- **Session.** **SAVE / LOAD**, the session as JSON (see [Sessions](#sessions)); **EXPORT** (see [Export](#export)); **PEDAL**, the PEDAL window (see [The pedal window](#the-pedal-window)).
+- **Source.** **GEN / FILE**.
+- **Performance.** **MACROS**: **AUTO** plus the six macro knobs K1–K6, then the pedal's toggle switches **T1** and **T3** (in the RIG drawer on Phone).
 - **Right side**: audio status LED (green running, red stopped), plus, when present, `errors: N` (audio stream errors such as underruns), the last compile error, the last export result, and an audio start error with a **Retry** button.
 
 ### I/O wall bars
@@ -111,10 +108,10 @@ The canvas is flanked by two full-height level meters, **IN** (left) and **OUT**
 
 ## Graph Editor
 
-The canvas is an [egui-snarl](https://crates.io/crates/egui-snarl) node graph. It opens with Input wired straight to Output (plain passthrough).
+The canvas is an [egui-snarl](https://crates.io/crates/egui-snarl) node graph. Natively it opens with Input wired straight to Output (plain passthrough); the web build opens on the demo chain, Distortion → Delay → Reverb, so a visitor sees what it is for.
 
 - **Input / Output**: fixed, one each; they have no menu and can't be selected.
-- **Effect nodes**: any registry effect. The header shows the effect name and the body shows its count of visible parameters. Node, header and wire colors come from the effect's family (`Family::from_category(..).accent()`):
+- **Effect nodes**: any registry effect. The header shows the effect name; the body shows its first two settings, live, in the host's formatting, and under them the node's own L/R output meters (the LED beside the name lights with the same signal). Node, header and wire colors come from the effect's family (`Family::from_category(..).accent()`):
 
 | Category | Family | Color |
 |----------|--------|-------|
@@ -132,12 +129,12 @@ Each effect's category and parameters are listed in [EFFECTS_REFERENCE.md](EFFEC
 - **+ EFFECT**: opens a searchable palette of all effects (type to filter). The pick is appended as the last node before Output and selected.
 - **Right-click canvas**: a search field plus category submenus. The new node is spliced into the wire nearest the click.
 - **Click a node**: selects it and opens its panel. Click empty canvas to deselect.
-- **Selected node**: a floating **Duplicate / Remove** bar appears at the canvas's top-left, and Delete or Backspace removes the node.
-- **Right-click a node**: Remove or Duplicate.
+- **Selected node**: a floating **DUPLICATE / REMOVE** bar appears at the canvas's top-left, and Delete or Backspace removes the node.
+- **Right-click a node**: DUPLICATE or REMOVE.
 - **Drag pin to pin**: wire an output to an input. One output may feed several inputs (fan-out), and an input may take several wires, which are summed (fan-in).
 - **Ctrl+Scroll / pinch**: zoom, clamped to 0.5×–1.5×.
 
-After every structural edit the nodes re-flow left to right by depth. If the last node feeding Output is removed, the nearest remaining node is wired to Output so the graph never goes silent.
+After every structural edit the nodes re-flow left to right by depth; on a canvas too narrow for the columns side by side (a phone), top to bottom. If the last node feeding Output is removed, the nearest remaining node is wired to Output so the graph never goes silent.
 
 **Compilation.** Every structural edit recompiles automatically. The compiler walks the snarl topology, inserts Split nodes for fan-out and Merge nodes for fan-in (so you never place them yourself), builds a `ProcessingGraph`, creates the effects through the registry, and sends a `GraphCommand::ReplaceTopology` that the audio thread swaps in at the next buffer. Explicit Split/Merge nodes in older sessions still load and compile.
 
@@ -148,7 +145,7 @@ Selecting an effect node opens its panel below the canvas, framed in the effect'
 - **Title row**: the effect name, an **ACTIVE / BYPASSED** toggle (a click-free per-effect bypass), and, once the morph is active, a **LOCK** toggle that holds this effect still while the morph sweeps the rest of the rig.
 - **Stepped parameters**: `cabinet::selector`, which draws segmented buttons for a few short options and otherwise a ◀ value ▶ stepper (click the value to advance, scroll to step).
 - **Continuous parameters**: LED-ring knobs in the family color (`bridged_knob_accent`), with the formatted value and the label under each ring. Ranges that span zero fill from twelve o'clock. When an effect has distinct A/B poses, cyan and amber ghost ticks mark each knob's A and B values.
-- **Every** visible parameter is shown, so the node's "N params" count matches the panel. Read-only and hidden parameters are skipped.
+- **Every** visible parameter is shown; the node's readout is the first two of them. Read-only and hidden parameters are skipped.
 - **The looper** has its own transport panel instead.
 
 **Knob controls:** drag vertically (Shift for fine), scroll the mouse wheel over a knob (Shift for fine), use Up/Down on a focused knob (1 % per press, Shift 0.2 %), use Left/Right to move focus between knobs, and double-click to reset to default.
