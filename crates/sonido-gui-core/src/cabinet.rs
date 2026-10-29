@@ -5,8 +5,8 @@
 //!
 //! ```text
 //! ┌ MARQUEE ─ SONIDO / FX·HEAT ─── DISTORTION ─────────── //// (⏻) ┐
-//! │ IN ▮▮ │ SCREEN: stars · sun · horizon · scrolling grid,  │ OUT ▮▮ │
-//! │       │ live scope (input ghost, output trace), HUD      │        │
+//! │ IN ▮▮ │ SCREEN: the family's picture across the glass,   │ OUT ▮▮ │
+//! │       │ its labelled axes, readouts                      │        │
 //! ├ DECK ──────────────────────────────────────────────────────────┤
 //! │ [selectors]                                                    │
 //! │  (knob) (knob) (knob) (knob) …  wrapping, centred              │
@@ -16,12 +16,13 @@
 //! Rules it keeps (see `docs/DESIGN_SYSTEM.md`):
 //! - The power button sits top-right, always; bypass turns the game off
 //!   (the screen dims and shows INSERT COIN), it never hides controls.
-//! - The screen shows the real signal: the scope is the plugin's own input
-//!   and output, so what a knob does is visible, not described.
+//! - The screen shows the effect itself: the family's picture (`picture`),
+//!   measured from the kernel or the tap, fills the glass, so what a knob
+//!   does is visible, not described. No scenery: every line is an axis or
+//!   a value.
 //! - Values are bright neutral text, labels muted; color carries meaning
 //!   (family, level) in short marks, never in body text.
-//! - Motion is ambient and audio-reactive (grid speed follows output level)
-//!   and stops when bypassed.
+//! - Nothing moves for its own sake; what moves is the signal.
 
 use egui::epaint::Mesh;
 use egui::text::{LayoutJob, TextFormat};
@@ -32,6 +33,10 @@ use egui::{
 use sonido_core::{ParamDescriptor, ParamFlags};
 
 use crate::crt::CrtFrame;
+use crate::picture::{
+    F_HI, F_LO, FREQ_BINS, IMPULSE_SECONDS, LEVELS_DB, Measured, PictureKind, Probe, bin_freq,
+    spectrum,
+};
 use crate::telemetry::{Peaks, SCOPE_LEN, ScopeFrame, SignalTap};
 use crate::theme::{Family, SonidoTheme};
 use crate::widgets::{VectorText, bridged_knob_accent, glow};
@@ -241,20 +246,24 @@ pub struct Cabinet {
     meters_in: MeterState,
     meters_out: MeterState,
     scope: Vec<ScopeFrame>,
-    /// Grid scroll phase (0..1 per grid row).
-    grid_phase: f32,
-    /// Smoothed output energy 0..1 driving the scene.
-    energy: f32,
     last_time: Option<f64>,
-    /// Scope display gain (auto, 1–8×): the meters report level honestly,
-    /// so the scope is free to show shape at any level.
-    scope_gain: f32,
     /// User's CRT switch (only shown when the renderer offers the pass).
     crt_on: bool,
     /// Param under the pointer this frame: (full name, formatted value).
     hover: Option<(String, String)>,
     /// Rig shown on the screen (graph player), if any.
     rig: Option<RigView>,
+    /// What the screen shows.
+    picture: PictureKind,
+    /// The private kernel the probe pictures are measured from.
+    probe: Probe,
+    /// Smoothed input and output peaks (linear), for the level picture's dot.
+    level: [f32; 2],
+    /// Param values as of this frame, for the probe and the sync label.
+    values: Vec<f32>,
+    /// The spectrum picture's input and output (dBFS per bin), smoothed
+    /// across frames like an analyzer's ballistics so it settles, not flickers.
+    spectra: [Vec<f32>; 2],
 }
 
 impl Cabinet {
@@ -281,13 +290,15 @@ impl Cabinet {
             meters_in: MeterState::default(),
             meters_out: MeterState::default(),
             scope: vec![ScopeFrame::default(); SCOPE_WINDOW * 2],
-            grid_phase: 0.0,
-            energy: 0.0,
             last_time: None,
-            scope_gain: 1.0,
             crt_on: true,
             hover: None,
             rig: None,
+            picture: PictureKind::for_effect(id, family),
+            probe: Probe::new(id, PictureKind::for_effect(id, family)),
+            level: [0.0; 2],
+            values: Vec::new(),
+            spectra: [vec![-120.0; FREQ_BINS], vec![-120.0; FREQ_BINS]],
         }
     }
 
@@ -318,7 +329,7 @@ impl Cabinet {
         self.last_time = Some(now);
         ui.ctx().request_repaint();
 
-        // Telemetry → ballistics and scene energy.
+        // Telemetry → meter ballistics, the scope frames, the level dot.
         let peaks = io.tap.map_or(Peaks::default(), SignalTap::take_peaks);
         self.meters_in.update(peaks.input, dt);
         self.meters_out.update(peaks.output, dt);
@@ -326,14 +337,34 @@ impl Cabinet {
             tap.read_scope(&mut self.scope);
         }
         let out_peak = peaks.output[0].max(peaks.output[1]);
-        let target = (out_peak * 1.6).min(1.0);
-        let k = if target > self.energy { 0.35 } else { 0.04 };
-        self.energy += (target - self.energy) * k;
+
+        if self.picture == PictureKind::Spectrum {
+            let sr = if io.sample_rate > 0.0 {
+                io.sample_rate
+            } else {
+                48_000.0
+            };
+            let newest = &self.scope[self.scope.len() - SCOPE_WINDOW..];
+            let input: Vec<f32> = newest.iter().map(|f| f.input).collect();
+            let output: Vec<f32> = newest.iter().map(|f| (f.left + f.right) * 0.5).collect();
+            for (smooth, now) in self
+                .spectra
+                .iter_mut()
+                .zip([spectrum(&input, sr), spectrum(&output, sr)])
+            {
+                // Up fast, down slow.
+                for (s, n) in smooth.iter_mut().zip(now) {
+                    *s += (n - *s) * if n > *s { 0.5 } else { 0.12 };
+                }
+            }
+        }
+
+        let in_peak = peaks.input[0].max(peaks.input[1]);
+        for (l, p) in self.level.iter_mut().zip([in_peak, out_peak]) {
+            *l += (p - *l) * if p > *l { 0.5 } else { 0.08 };
+        }
 
         let bypassed = bridge.is_bypassed(slot);
-        if !bypassed {
-            self.grid_phase = (self.grid_phase + dt * (0.25 + 2.2 * self.energy)).fract();
-        }
 
         let full = ui.max_rect();
         ui.painter().rect_filled(full, 0.0, theme.colors.void);
@@ -343,6 +374,10 @@ impl Cabinet {
             .filter_map(|i| bridge.param_descriptor(slot, ParamIndex(i)))
             .collect();
         let deck_h = deck_height(&descs, deck_inner_width(inner.width()));
+        self.values.clear();
+        self.values
+            .extend((0..descs.len()).map(|i| bridge.get(slot, ParamIndex(i))));
+        self.probe.update(&self.values, io.sample_rate, now);
 
         let marquee = Rect::from_min_size(inner.min, vec2(inner.width(), MARQUEE_H));
         let footer = Rect::from_min_max(pos2(inner.left(), inner.bottom() - FOOTER_H), inner.max);
@@ -373,7 +408,14 @@ impl Cabinet {
         self.meter(ui, meter_in, "IN", false, &theme);
         self.meter(ui, meter_out, "OUT", true, &theme);
         self.screen(
-            ui, screen, bridge, slot, bypassed, now as f32, &descs, &theme,
+            ui,
+            screen,
+            bridge,
+            slot,
+            bypassed,
+            &descs,
+            io.sample_rate,
+            &theme,
         );
         self.footer(ui, footer, io, &theme);
     }
@@ -533,114 +575,34 @@ impl Cabinet {
         bridge: &dyn ParamBridge,
         slot: SlotIndex,
         bypassed: bool,
-        t: f32,
         descs: &[ParamDescriptor],
+        sample_rate: f32,
         theme: &SonidoTheme,
     ) {
         let painter = ui.painter_at(rect);
         let accent = self.family.accent();
-        let partner = self.family.partner();
-        let horizon = rect.top() + rect.height() * 0.6;
-        let sky = Rect::from_min_max(rect.min, pos2(rect.right(), horizon));
-        let floor = Rect::from_min_max(pos2(rect.left(), horizon), rect.max);
 
-        // Sky: void at the top warming to the partner color at the horizon.
+        // The glass is the effect's own picture and nothing else: a dark
+        // tube, the picture's axes, the picture.
         painter.rect_filled(rect, 0.0, theme.colors.void);
-        vertical_gradient(
-            &painter,
-            sky,
-            theme.colors.void,
-            partner.gamma_multiply(0.22),
-        );
-
-        // Stars: fixed positions, each twinkling at its own rate.
-        for i in 0..42u32 {
-            let h = hash(i);
-            let p = pos2(
-                sky.left() + h.0 * sky.width(),
-                sky.top() + h.1 * sky.height() * 0.85,
+        if self.picture == PictureKind::Tuner {
+            self.tuner_hud(&painter, rect, bridge, slot, descs, theme);
+        } else {
+            // A rig's name and chain sit across the top; the picture below.
+            let top = if self.rig.as_ref().is_some_and(|r| !r.chain.is_empty()) {
+                70.0
+            } else {
+                12.0
+            };
+            let plot = Rect::from_min_max(
+                pos2(rect.left() + 46.0, rect.top() + top),
+                pos2(rect.right() - 18.0, rect.bottom() - 24.0),
             );
-            let tw = 0.35 + 0.65 * (t * (0.6 + h.2 * 2.2) + h.0 * 40.0).sin().abs();
-            painter.circle_filled(
-                p,
-                if h.2 > 0.85 { 1.3 } else { 0.8 },
-                theme.colors.text_primary.gamma_multiply(tw * 0.7),
-            );
-        }
-
-        // Sun: banded disc sinking into the horizon, slits scrolling down.
-        // (The tuner's sky belongs to its readout instead.)
-        if self.effect_id != "tuner" {
-            let r = (sky.height() * 0.78).min(rect.width() * 0.17) * (1.0 + 0.05 * self.energy);
-            let sun_c = pos2(rect.center().x, horizon);
-            painter.circle_filled(sun_c, r * 1.35, accent.gamma_multiply(0.05));
-            painter.circle_filled(sun_c, r * 1.12, accent.gamma_multiply(0.07));
-            let mut y = sun_c.y - r;
-            while y < horizon {
-                let dy = sun_c.y - y;
-                let half = (r * r - dy * dy).max(0.0).sqrt();
-                let u = 1.0 - dy / r; // 0 at the top of the disc, 1 at the horizon
-                let lower = ((u - 0.4) / 0.6).clamp(0.0, 1.0);
-                let slit = (u * 7.0 - t * 0.35).rem_euclid(1.0) < 0.12 + 0.38 * lower;
-                if lower == 0.0 || !slit {
-                    let c = lerp_color(accent, partner, u);
-                    painter.line_segment(
-                        [pos2(sun_c.x - half, y), pos2(sun_c.x + half, y)],
-                        Stroke::new(2.0_f32, c.gamma_multiply(0.92)),
-                    );
-                }
-                y += 2.0;
-            }
-        }
-
-        // Floor: perspective grid rushing toward the viewer.
-        vertical_gradient(
-            &painter,
-            floor,
-            partner.gamma_multiply(0.10),
-            theme.colors.void,
-        );
-        let grid = accent.gamma_multiply(if bypassed { 0.25 } else { 0.75 });
-        let rows = 9;
-        for i in 0..rows {
-            let d = (i as f32 + self.grid_phase) / rows as f32;
-            let y = horizon + floor.height() * d * d;
-            painter.line_segment(
-                [pos2(rect.left(), y), pos2(rect.right(), y)],
-                Stroke::new(1.0 + d, grid.gamma_multiply(0.25 + 0.75 * d)),
-            );
-        }
-        let spokes = 14;
-        for k in -spokes..=spokes {
-            let s = k as f32 / spokes as f32;
-            let top = pos2(rect.center().x + s * rect.width() * 0.08, horizon);
-            let bottom = pos2(rect.center().x + s * rect.width() * 1.6, rect.bottom());
-            painter.line_segment(
-                [top, bottom],
-                Stroke::new(1.0_f32, grid.gamma_multiply(0.6)),
-            );
-        }
-        glow::neon_line(
-            &painter,
-            pos2(rect.left(), horizon),
-            pos2(rect.right(), horizon),
-            partner,
-            1.5,
-            theme,
-        );
-
-        // Scope: the plugin's own signal. Input as a ghost, output as a beam.
-        let scope_mid = sky.top() + sky.height() * 0.52;
-        let amp = sky.height() * 0.42;
-        self.scope_traces(&painter, rect, scope_mid, amp, bypassed, theme);
-
-        // Tuner gets a real tuner readout.
-        if self.effect_id == "tuner" {
-            self.tuner_hud(&painter, sky, bridge, slot, descs, theme);
+            self.picture(&painter, plot, bypassed, descs, sample_rate, theme);
         }
 
         if let Some(rig) = &self.rig {
-            self.rig_hud(&painter, rect, sky, rig, theme);
+            self.rig_hud(&painter, rect, rect, rig, theme);
         }
 
         // Diagnostics the kernel publishes (gain reduction, gate state).
@@ -649,16 +611,15 @@ impl Cabinet {
         // Attract mode: bypass is "game over", not a hidden state.
         if bypassed {
             painter.rect_filled(rect, 0.0, theme.colors.void.gamma_multiply(0.55));
-            if (t * 1.2).fract() < 0.62 {
-                let style = VectorText::new(20.0, accent).stroke(2.0);
-                let size = style.size("INSERT COIN");
-                style.paint(
-                    &painter,
-                    rect.center() - size / 2.0 - vec2(0.0, 10.0),
-                    "INSERT COIN",
-                    theme,
-                );
-            }
+            // Lit and still: a blink is fun once and noise the fiftieth time.
+            let style = VectorText::new(20.0, accent).stroke(2.0);
+            let size = style.size("INSERT COIN");
+            style.paint(
+                &painter,
+                rect.center() - size / 2.0 - vec2(0.0, 10.0),
+                "INSERT COIN",
+                theme,
+            );
             painter.text(
                 rect.center() + vec2(0.0, 18.0),
                 Align2::CENTER_CENTER,
@@ -684,57 +645,353 @@ impl Cabinet {
         );
     }
 
-    fn scope_traces(
-        &mut self,
+    /// The family's picture across the whole screen, in `plot`: a measured
+    /// curve, or the live spectrum or stereo field from the tap. Every line
+    /// on it is an axis or a value, and every axis says what it is.
+    #[allow(clippy::too_many_lines)]
+    fn picture(
+        &self,
         painter: &egui::Painter,
-        rect: Rect,
-        mid: f32,
-        amp: f32,
+        plot: Rect,
         bypassed: bool,
+        descs: &[ParamDescriptor],
+        sample_rate: f32,
         theme: &SonidoTheme,
     ) {
-        let accent = self.family.accent();
-        let partner = self.family.partner();
-        let frames = &self.scope;
-        let n = frames.len();
-        // Trigger on the first rising zero crossing of the output in the
-        // older half, so a steady tone stands still.
-        let mono = |f: &ScopeFrame| (f.left + f.right) * 0.5;
-        let start = (1..n - SCOPE_WINDOW)
-            .find(|&i| mono(&frames[i - 1]) <= 0.0 && mono(&frames[i]) > 0.0)
-            .unwrap_or(n - SCOPE_WINDOW);
-        let window = &frames[start..start + SCOPE_WINDOW];
-        let peak = window
-            .iter()
-            .map(|f| f.input.abs().max(mono(f).abs()))
-            .fold(0.0_f32, f32::max);
-        let target = (0.85 / peak.max(1e-4)).clamp(1.0, 8.0);
-        // Fast to shrink (no clipping on a loud hit), slow to grow back.
-        let k = if target < self.scope_gain { 0.5 } else { 0.03 };
-        self.scope_gain += (target - self.scope_gain) * k;
-        let gain = self.scope_gain;
-        let left = rect.left() + 10.0;
-        let width = rect.width() - 20.0;
-        let points_n = (width / 2.0) as usize;
-        let at = |i: usize, v: f32| {
-            pos2(
-                left + width * i as f32 / points_n as f32,
-                mid - (v * gain).clamp(-1.2, 1.2) * amp,
-            )
-        };
-        let pick = |i: usize| &window[i * (SCOPE_WINDOW - 1) / points_n.max(1)];
-        let input: Vec<Pos2> = (0..=points_n).map(|i| at(i, pick(i).input)).collect();
-        let output: Vec<Pos2> = (0..=points_n).map(|i| at(i, mono(pick(i)))).collect();
-        painter.add(Shape::line(
-            input,
-            Stroke::new(1.2_f32, partner.gamma_multiply(0.55)),
-        ));
-        let beam = if bypassed {
+        let accent = if bypassed {
             theme.colors.text_dim
         } else {
-            accent
+            self.family.accent()
         };
-        glow::neon_polyline(painter, &output, beam, 2.0, theme);
+        let partner = self.family.partner();
+        // Axis text is read, so it takes the label color; guides stay dim.
+        let dim = theme.colors.text_secondary;
+        let font = FontId::monospace(10.0);
+        let guide = Stroke::new(1.0_f32, theme.colors.text_dim.gamma_multiply(0.35));
+        let axis = Stroke::new(1.0_f32, theme.colors.text_dim.gamma_multiply(0.75));
+        // Map a value in [lo, hi] to the plot's x or y.
+        let fx = |v: f32, lo: f32, hi: f32| plot.left() + (v - lo) / (hi - lo) * plot.width();
+        let fy = |v: f32, lo: f32, hi: f32| {
+            plot.bottom() - ((v - lo) / (hi - lo)).clamp(0.0, 1.0) * plot.height()
+        };
+        let log_x = |f: f32| plot.left() + (f / F_LO).ln() / (F_HI / F_LO).ln() * plot.width();
+        // A vertical guide at x, labelled under the plot.
+        let v_tick = |x: f32, text: &str, stroke: Stroke| {
+            painter.line_segment([pos2(x, plot.top()), pos2(x, plot.bottom())], stroke);
+            painter.text(
+                pos2(x, plot.bottom() + 5.0),
+                Align2::CENTER_TOP,
+                text,
+                font.clone(),
+                dim,
+            );
+        };
+        // A horizontal guide at y, labelled left of the plot.
+        let h_tick = |y: f32, text: &str, stroke: Stroke| {
+            painter.line_segment([pos2(plot.left(), y), pos2(plot.right(), y)], stroke);
+            painter.text(
+                pos2(plot.left() - 6.0, y),
+                Align2::RIGHT_CENTER,
+                text,
+                font.clone(),
+                dim,
+            );
+        };
+        // What an axis measures, at its far end.
+        let x_name = |text: &str| {
+            painter.text(
+                pos2(plot.right(), plot.bottom() - 4.0),
+                Align2::RIGHT_BOTTOM,
+                text,
+                font.clone(),
+                dim,
+            );
+        };
+        let y_name = |text: &str| {
+            painter.text(
+                pos2(plot.left() + 4.0, plot.top()),
+                Align2::LEFT_TOP,
+                text,
+                font.clone(),
+                dim,
+            );
+        };
+        let newest = &self.scope[self.scope.len() - SCOPE_WINDOW..];
+        let silent = newest
+            .iter()
+            .all(|f| f.input.abs().max(f.left.abs()).max(f.right.abs()) < 1e-4);
+        let no_signal = || {
+            painter.text(
+                plot.center(),
+                Align2::CENTER_CENTER,
+                "NO SIGNAL",
+                FontId::monospace(12.0),
+                dim,
+            );
+        };
+        let mono = |f: &ScopeFrame| (f.left + f.right) * 0.5;
+
+        match (self.picture, self.probe.measured()) {
+            (PictureKind::Transfer, Measured::Transfer(curve)) => {
+                // Sonido level-matches its effects, so the output is often far
+                // under full scale: scale to the curve's own peak, since the
+                // shape is the point.
+                let top = curve.iter().fold(1e-3_f32, |m, p| m.max(p[1].abs())) * 1.15;
+                for (v, text) in [(-1.0, "-1"), (-0.5, "-.5"), (0.5, ".5"), (1.0, "+1")] {
+                    v_tick(fx(v, -1.0, 1.0), text, guide);
+                }
+                v_tick(fx(0.0, -1.0, 1.0), "0", axis);
+                h_tick(fy(0.0, -top, top), "0", axis);
+                // The signal now, riding the curve: each sample's input
+                // against its output.
+                if !silent {
+                    let trail: Vec<Pos2> = newest
+                        .iter()
+                        .step_by(2)
+                        .map(|f| {
+                            pos2(
+                                fx(f.input.clamp(-1.0, 1.0), -1.0, 1.0),
+                                fy(mono(f), -top, top),
+                            )
+                        })
+                        .collect();
+                    painter.add(Shape::line(
+                        trail,
+                        Stroke::new(1.0_f32, partner.gamma_multiply(0.6)),
+                    ));
+                }
+                let pts: Vec<Pos2> = curve
+                    .iter()
+                    .map(|p| pos2(fx(p[0], -1.0, 1.0), fy(p[1], -top, top)))
+                    .collect();
+                glow::neon_polyline(painter, &pts, accent, 2.0, theme);
+                x_name("IN");
+                y_name("OUT");
+            }
+            (PictureKind::Level, Measured::Level(curve)) => {
+                let lo = LEVELS_DB[0];
+                let top = (curve.iter().fold(0.0_f32, |m, &v| m.max(v)) / 6.0).ceil() * 6.0;
+                for db in [-48.0_f32, -36.0, -24.0, -12.0, 0.0] {
+                    v_tick(fx(db, lo, 0.0), &format!("{db}"), guide);
+                    h_tick(fy(db, lo, top), &format!("{db}"), guide);
+                }
+                // Unity: above it would be gain, under it is reduction.
+                painter.line_segment(
+                    [
+                        pos2(fx(lo, lo, 0.0), fy(lo, lo, top)),
+                        pos2(fx(0.0, lo, 0.0), fy(0.0, lo, top)),
+                    ],
+                    axis,
+                );
+                let pts: Vec<Pos2> = LEVELS_DB
+                    .iter()
+                    .zip(curve)
+                    .map(|(&i, &o)| pos2(fx(i, lo, 0.0), fy(o, lo, top)))
+                    .collect();
+                glow::neon_polyline(painter, &pts, accent, 2.0, theme);
+                // Where the signal is now.
+                let [now_in, now_out] = self.level;
+                if now_in > 1e-3 {
+                    let to_db = |v: f32| 20.0 * v.max(1e-9).log10();
+                    let p = pos2(
+                        fx(to_db(now_in).clamp(lo, 0.0), lo, 0.0),
+                        fy(to_db(now_out), lo, top),
+                    );
+                    glow::glow_circle(painter, p, 4.0, theme.colors.text_primary, theme);
+                }
+                x_name("IN dB");
+                y_name("OUT dB");
+            }
+            (PictureKind::Response, Measured::Response(gains)) => {
+                const RANGE: f32 = 24.0;
+                for (f, text) in [
+                    (50.0, "50"),
+                    (100.0, "100"),
+                    (200.0, ""),
+                    (500.0, "500"),
+                    (1000.0, "1k"),
+                    (2000.0, ""),
+                    (5000.0, "5k"),
+                    (10_000.0, "10k"),
+                ] {
+                    v_tick(log_x(f), text, guide);
+                }
+                for db in [-12.0_f32, 12.0] {
+                    h_tick(fy(db, -RANGE, RANGE), &format!("{db:+}"), guide);
+                }
+                h_tick(fy(0.0, -RANGE, RANGE), "0", axis);
+                let nyquist = self.probe.rate().max(1.0) * 0.5;
+                let pts: Vec<Pos2> = (0..FREQ_BINS)
+                    .filter(|&k| bin_freq(k) < nyquist)
+                    .map(|k| pos2(log_x(bin_freq(k)), fy(gains[k], -RANGE, RANGE)))
+                    .collect();
+                glow::neon_polyline(painter, &pts, accent, 2.0, theme);
+                x_name("Hz");
+                y_name("dB");
+            }
+            (PictureKind::Impulse, Measured::Impulse(env)) => {
+                const FLOOR: f32 = -60.0;
+                for i in 0..=5 {
+                    let s = i as f32 * 0.5;
+                    v_tick(fx(s, 0.0, IMPULSE_SECONDS), &format!("{s}"), guide);
+                }
+                for db in [-40.0_f32, -20.0] {
+                    h_tick(fy(db, FLOOR, 0.0), &format!("{db}"), guide);
+                }
+                h_tick(fy(0.0, FLOOR, 0.0), "0", axis);
+                let n = env.len().max(1);
+                let x_of = |i: usize| plot.left() + (i as f32 + 0.5) / n as f32 * plot.width();
+                for (i, &v) in env.iter().enumerate() {
+                    if v <= FLOOR {
+                        continue;
+                    }
+                    painter.line_segment(
+                        [
+                            pos2(x_of(i), plot.bottom()),
+                            pos2(x_of(i), fy(v.min(0.0), FLOOR, 0.0)),
+                        ],
+                        Stroke::new(1.6_f32, accent.gamma_multiply(0.85)),
+                    );
+                }
+                let tops: Vec<Pos2> = env
+                    .iter()
+                    .enumerate()
+                    .map(|(i, &v)| pos2(x_of(i), fy(v.min(0.0), FLOOR, 0.0)))
+                    .collect();
+                glow::neon_polyline(painter, &tops, partner, 1.0, theme);
+                x_name("s");
+                // A synced delay probed without a host runs at the kernel's
+                // own default tempo; say so rather than pretend.
+                let synced = descs
+                    .iter()
+                    .zip(&self.values)
+                    .any(|(d, &v)| d.string_id.ends_with("_sync") && v > 0.5);
+                y_name(if synced {
+                    "dB · SYNC @ 120 BPM"
+                } else {
+                    "dB · IMPULSE RESPONSE"
+                });
+            }
+            (PictureKind::Spectrum, _) => {
+                const FLOOR: f32 = -72.0;
+                for (f, text) in [
+                    (50.0, "50"),
+                    (100.0, "100"),
+                    (500.0, "500"),
+                    (1000.0, "1k"),
+                    (5000.0, "5k"),
+                    (10_000.0, "10k"),
+                ] {
+                    v_tick(log_x(f), text, guide);
+                }
+                for db in [-48.0_f32, -24.0] {
+                    h_tick(fy(db, FLOOR, 0.0), &format!("{db}"), guide);
+                }
+                h_tick(fy(0.0, FLOOR, 0.0), "0", axis);
+                if silent {
+                    no_signal();
+                } else {
+                    let sr = if sample_rate > 0.0 {
+                        sample_rate
+                    } else {
+                        48_000.0
+                    };
+                    let [input, output] = &self.spectra;
+                    let line = |db: &[f32]| -> Vec<Pos2> {
+                        (0..FREQ_BINS)
+                            .filter(|&k| bin_freq(k) < sr * 0.5)
+                            .map(|k| pos2(log_x(bin_freq(k)), fy(db[k], FLOOR, 0.0)))
+                            .collect()
+                    };
+                    painter.add(Shape::line(
+                        line(input),
+                        Stroke::new(1.2_f32, partner.gamma_multiply(0.55)),
+                    ));
+                    glow::neon_polyline(painter, &line(output), accent, 2.0, theme);
+                }
+                // Which line is which, in their own colors.
+                let key = pos2(plot.left() + 4.0, plot.top());
+                let g = painter.text(key, Align2::LEFT_TOP, "IN", font.clone(), partner);
+                painter.text(
+                    pos2(g.right() + 10.0, key.y),
+                    Align2::LEFT_TOP,
+                    "OUT",
+                    font.clone(),
+                    accent,
+                );
+                // The LFO, where the kernel publishes its phase.
+                let phase = descs.iter().zip(&self.values).find_map(|(d, &v)| {
+                    (d.flags.contains(ParamFlags::READ_ONLY) && d.name.contains("Phase"))
+                        .then_some(v)
+                });
+                if let Some(ph) = phase {
+                    let c = pos2(plot.right() - 14.0, plot.top() + 14.0);
+                    painter.circle_stroke(c, 10.0, Stroke::new(1.0_f32, dim));
+                    let a = std::f32::consts::TAU * ph - std::f32::consts::FRAC_PI_2;
+                    glow::glow_circle(
+                        painter,
+                        c + vec2(a.cos(), a.sin()) * 10.0,
+                        3.0,
+                        accent,
+                        theme,
+                    );
+                    painter.text(
+                        c - vec2(16.0, 0.0),
+                        Align2::RIGHT_CENTER,
+                        "LFO",
+                        font.clone(),
+                        dim,
+                    );
+                }
+                x_name("Hz");
+            }
+            (PictureKind::Stereo, _) => {
+                let c = plot.center();
+                let r = plot.height().min(plot.width()) * 0.5;
+                for dir in [vec2(-1.0, -1.0), vec2(1.0, -1.0)] {
+                    let d = dir.normalized() * r;
+                    painter.line_segment([c - d, c + d], guide);
+                }
+                painter.line_segment([c - vec2(0.0, r), c + vec2(0.0, r)], axis);
+                for (at, text, align) in [
+                    (
+                        c + vec2(-1.0, -1.0).normalized() * r,
+                        "L",
+                        Align2::RIGHT_BOTTOM,
+                    ),
+                    (
+                        c + vec2(1.0, -1.0).normalized() * r,
+                        "R",
+                        Align2::LEFT_BOTTOM,
+                    ),
+                    (c - vec2(0.0, r), "MONO", Align2::CENTER_BOTTOM),
+                ] {
+                    painter.text(at, align, text, font.clone(), dim);
+                }
+                if silent {
+                    no_signal();
+                } else {
+                    let peak = newest
+                        .iter()
+                        .fold(0.0_f32, |m, f| m.max(f.left.abs()).max(f.right.abs()));
+                    let gain =
+                        (0.9 / peak.max(1e-4)).clamp(1.0, 8.0) * r / std::f32::consts::SQRT_2;
+                    // Mid up, side across: mono draws a vertical line.
+                    let pts: Vec<Pos2> = newest
+                        .iter()
+                        .step_by(2)
+                        .map(|f| {
+                            pos2(
+                                c.x + (f.right - f.left) * gain,
+                                c.y - (f.left + f.right) * gain,
+                            )
+                        })
+                        .collect();
+                    glow::neon_polyline(painter, &pts, accent, 1.2, theme);
+                }
+            }
+            _ => {}
+        }
     }
 
     fn readouts(
@@ -823,8 +1080,8 @@ impl Cabinet {
         let pivot = pos2(sky.center().x, sky.bottom() - 4.0);
         let r = (sky.height() - 14.0).min(sky.width() * 0.32);
 
-        // The note goes big, on a dark plate so the grid never fights it;
-        // plate first, so the needle sweeps over it.
+        // The note goes big, on a dark plate; plate first, so the needle
+        // sweeps over it.
         let style = VectorText::new((sky.height() * 0.34).clamp(22.0, 48.0), color).stroke(2.8);
         let size = style.size(&note);
         let at = pos2(
@@ -863,7 +1120,8 @@ impl Cabinet {
             let dir = vec2(a.cos(), a.sin());
             glow::neon_line(
                 painter,
-                pivot + dir * (r * 0.35),
+                // The outer ring only: the note sits inside it.
+                pivot + dir * (r * 0.74),
                 pivot + dir * (r - 2.0),
                 color,
                 2.4,
@@ -1544,18 +1802,6 @@ fn power_icon(painter: &egui::Painter, c: Pos2, r: f32, color: Color32, theme: &
         1.8,
         theme,
     );
-}
-
-/// Three stable pseudo-random numbers in 0..1 for index `i`.
-fn hash(i: u32) -> (f32, f32, f32) {
-    let mut x = i.wrapping_mul(0x9E37_79B9) ^ 0x85EB_CA6B;
-    let mut next = || {
-        x ^= x << 13;
-        x ^= x >> 17;
-        x ^= x << 5;
-        (x & 0xFFFF) as f32 / 65535.0
-    };
-    (next(), next(), next())
 }
 
 #[cfg(test)]

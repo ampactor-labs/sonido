@@ -100,6 +100,29 @@ pub enum CompileError {
     GraphError(#[from] sonido_core::graph::GraphError),
 }
 
+/// About how wide an effect node with a readout draws, in points (body,
+/// pins and frame), for laying nodes out without overlap.
+const NODE_WIDTH: f32 = 200.0;
+
+/// How many settings an effect node shows.
+const READOUT_LINES: usize = 2;
+
+/// An effect node's live readout: its first [`READOUT_LINES`] visible
+/// parameters as `SHORT value`, each value in the host's own formatting
+/// ([`ParamDescriptor::format_value`]), so a node and its panel agree.
+pub fn readout_lines(
+    params: impl IntoIterator<Item = (sonido_core::ParamDescriptor, f32)>,
+) -> Vec<String> {
+    params
+        .into_iter()
+        .filter(|(d, _)| {
+            !d.flags.contains(ParamFlags::HIDDEN) && !d.flags.contains(ParamFlags::READ_ONLY)
+        })
+        .take(READOUT_LINES)
+        .map(|(d, v)| format!("{} {}", d.short_name.to_uppercase(), d.format_value(v)))
+        .collect()
+}
+
 /// Visual node-graph editor wrapping [`Snarl<SonidoNode>`].
 ///
 /// Provides a high-level API for rendering the graph and compiling it
@@ -120,10 +143,15 @@ pub struct GraphView {
     /// Per-effect-slot L/R peak levels (0.0--1.0), updated each frame from
     /// audio-thread metering data. Drives the inline L/R meter strips.
     pub slot_peaks: Vec<(f32, f32)>,
+    /// Per-effect-slot live readout: its first parameters, formatted.
+    pub slot_readouts: Vec<Vec<String>>,
     /// Target positions a re-flow is easing nodes toward. Non-empty while the
     /// layout is animating; each frame nodes glide a fraction of the remaining
     /// distance, so a topology edit settles smoothly instead of snapping.
     arrange_targets: HashMap<NodeId, egui::Pos2>,
+    /// Re-flow on the next frame (after a transform is captured), asked for
+    /// by code rather than a user edit: the demo chain on startup.
+    arrange_requested: bool,
     /// Most recent pan/zoom transform, captured during `draw_background`. Used
     /// to weld the Input/Output pins to the screen walls each frame. `None`
     /// until the first frame has rendered.
@@ -167,7 +195,9 @@ impl GraphView {
             topology_changed: false,
             slot_activity: Vec::new(),
             slot_peaks: Vec::new(),
+            slot_readouts: Vec::new(),
             arrange_targets: HashMap::new(),
+            arrange_requested: false,
             last_viewport: None,
         }
     }
@@ -235,9 +265,11 @@ impl GraphView {
                 input: 0,
             },
         );
-        // Open with the first effect selected so its param panel is visible.
+        // Open with the first effect selected so its param panel is visible,
+        // laid out for whatever canvas the first frame finds.
         self.selected_node = first_effect;
         self.topology_changed = true;
+        self.arrange_requested = true;
     }
 
     /// Weld the Input/Output pins to the left/right screen walls.
@@ -353,7 +385,7 @@ impl GraphView {
             }
         }
 
-        const COL_SPACING: f32 = 170.0;
+        const COL_SPACING: f32 = NODE_WIDTH + 30.0;
         const ROW_SPACING: f32 = 80.0;
 
         // Center the chain on the current viewport center (in graph space), so a
@@ -368,6 +400,12 @@ impl GraphView {
                 (c.x, c.y)
             })
             .unwrap_or((380.0, 200.0));
+        // A canvas too narrow for the columns side by side (a phone) stacks
+        // them top to bottom instead; the wires still read in order.
+        let stacked = self.last_viewport.as_ref().is_some_and(|vp| {
+            let cols = depth.values().copied().max().unwrap_or(0) as f32 + 1.0;
+            vp.rect.width() / vp.scale < cols * COL_SPACING
+        });
 
         // Pre-count rows per column so each column's stack centers vertically.
         let max_col = depth.values().copied().max().unwrap_or(0);
@@ -393,10 +431,18 @@ impl GraphView {
             let col = depth.get(&id).copied().unwrap_or(0);
             let rows_in_col = col_rows.get(&col).copied().unwrap_or(1);
             let row = rows_at.entry(col).or_insert(0);
-            let pos = egui::pos2(
-                start_x + col as f32 * COL_SPACING,
-                center_y + (*row as f32 - (rows_in_col as f32 - 1.0) / 2.0) * ROW_SPACING,
-            );
+            let pos = if stacked {
+                let across = (*row as f32 - (rows_in_col as f32 - 1.0) / 2.0) * COL_SPACING;
+                egui::pos2(
+                    center_x - NODE_WIDTH / 2.0 + across,
+                    center_y + (col as f32 - max_col as f32 / 2.0) * ROW_SPACING,
+                )
+            } else {
+                egui::pos2(
+                    start_x + col as f32 * COL_SPACING,
+                    center_y + (*row as f32 - (rows_in_col as f32 - 1.0) / 2.0) * ROW_SPACING,
+                )
+            };
             *row += 1;
             // Record the target; `animate_arrange` eases toward it each frame.
             self.arrange_targets.insert(id, pos);
@@ -453,6 +499,7 @@ impl GraphView {
             theme,
             slot_activity: &self.slot_activity,
             slot_peaks: &self.slot_peaks,
+            slot_readouts: &self.slot_readouts,
             captured_viewport: &mut captured_viewport,
         };
         self.snarl
@@ -465,7 +512,7 @@ impl GraphView {
 
         // Re-flow the graph after a user topology edit so nodes never overlap
         // and the signal path reads left→right. Applied next frame.
-        if needs_arrange {
+        if needs_arrange || std::mem::take(&mut self.arrange_requested) {
             self.auto_arrange();
         }
 
@@ -972,6 +1019,8 @@ struct SonidoViewer<'a> {
     slot_activity: &'a [f32],
     /// Per-effect-slot L/R peak levels (0.0--1.0) for inline mini meters.
     slot_peaks: &'a [(f32, f32)],
+    /// Per-effect-slot readout lines (see [`readout_lines`]).
+    slot_readouts: &'a [Vec<String>],
     /// Receives this frame's pan/zoom transform, captured in `draw_background`,
     /// so [`GraphView`] can weld the I/O pins to the screen walls next frame.
     captured_viewport: &'a mut Option<Viewport>,
@@ -1197,15 +1246,8 @@ impl SnarlViewer<SonidoNode> for SonidoViewer<'_> {
         _scale: f32,
         snarl: &mut Snarl<SonidoNode>,
     ) {
-        if let SonidoNode::Effect {
-            category,
-            descriptors,
-            ..
-        } = &snarl[node]
-        {
-            let dim = self.theme.colors.text_secondary;
+        if let SonidoNode::Effect { descriptors, .. } = &snarl[node] {
             let is_selected = *self.selected_node == Some(node);
-            let accent = category_color(*category);
 
             // Resolve slot index for this effect node.
             let mut slot_idx = 0usize;
@@ -1218,26 +1260,38 @@ impl SnarlViewer<SonidoNode> for SonidoViewer<'_> {
                 }
             }
 
-            // Plain label — selection is handled via final_node_rect().
-            // Count only *visible* params so the badge matches the editor panel,
-            // which skips HIDDEN/READ_ONLY params (e.g. the tuner's outputs).
-            let visible_params = descriptors
-                .iter()
-                .filter(|d| {
-                    !d.flags.contains(ParamFlags::HIDDEN)
-                        && !d.flags.contains(ParamFlags::READ_ONLY)
-                })
-                .count();
-            // Compact: the category is already conveyed by the node color and
-            // header, so the body just needs the param count. Keeps nodes narrow
-            // enough to fit several across a phone canvas without overlap.
-            let body_text = format!("{visible_params} params");
-            let color = if is_selected { accent } else { dim };
-            let body_resp = ui.label(
-                RichText::new(body_text)
-                    .font(FontId::monospace(9.0))
-                    .color(color),
-            );
+            // Plain labels — selection is handled via final_node_rect().
+            // The body is the effect's first settings, live, so a chain reads
+            // as what it does; before the first frame of values, the count of
+            // visible params (HIDDEN/READ_ONLY skipped, as the panel does).
+            let color = if is_selected {
+                self.theme.colors.text_primary
+            } else {
+                self.theme.colors.text_secondary
+            };
+            let lines = self
+                .slot_readouts
+                .get(slot_idx)
+                .filter(|l| !l.is_empty())
+                .cloned()
+                .unwrap_or_else(|| {
+                    let visible = descriptors
+                        .iter()
+                        .filter(|d| {
+                            !d.flags.contains(ParamFlags::HIDDEN)
+                                && !d.flags.contains(ParamFlags::READ_ONLY)
+                        })
+                        .count();
+                    vec![format!("{visible} params")]
+                });
+            // One label, one line per setting: it sizes to its longest line.
+            let body_rect = ui
+                .label(
+                    RichText::new(lines.join("\n"))
+                        .font(FontId::monospace(10.0))
+                        .color(color),
+                )
+                .rect;
 
             // Inline L/R peak meters — thin colored strips at the bottom of the node.
             let (peak_l, peak_r) = self.slot_peaks.get(slot_idx).copied().unwrap_or((0.0, 0.0));
@@ -1247,7 +1301,7 @@ impl SnarlViewer<SonidoNode> for SonidoViewer<'_> {
             // available width creates a layout feedback loop — the node balloons
             // to the whole canvas and jitters frame-to-frame, badly on mobile.
             let meter_height = 4.0_f32;
-            let meter_w = body_resp.rect.width().max(48.0);
+            let meter_w = body_rect.width().max(64.0);
             let (meter_rect, _) = ui.allocate_exact_size(
                 egui::vec2(meter_w, meter_height * 2.0 + 2.0),
                 egui::Sense::hover(),
@@ -1404,26 +1458,29 @@ impl SnarlViewer<SonidoNode> for SonidoViewer<'_> {
         _scale: f32,
         snarl: &mut Snarl<SonidoNode>,
     ) {
-        if ui.button("Remove").clicked() {
-            // Clear selection if this node was selected.
-            if *self.selected_node == Some(node) {
-                *self.selected_node = None;
-            }
-            snarl.remove_node(node);
-            ensure_output_connected(snarl);
-            *self.topology_changed = true;
-            *self.needs_arrange = true;
-            ui.close_menu();
-            return;
-        }
-
-        if ui.button("Duplicate").clicked() {
+        let theme = sonido_gui_core::SonidoTheme::get(ui.ctx());
+        if sonido_gui_core::widgets::chip(ui, "DUPLICATE", theme.colors.text_primary, false)
+            .clicked()
+        {
             let original = snarl[node].clone();
             let original_pos = snarl
                 .get_node_info(node)
                 .map_or(egui::pos2(0.0, 0.0), |n| n.pos);
             let offset = egui::vec2(30.0, 30.0);
             snarl.insert_node(original_pos + offset, original);
+            *self.topology_changed = true;
+            *self.needs_arrange = true;
+            ui.close_menu();
+            return;
+        }
+
+        if sonido_gui_core::widgets::chip(ui, "REMOVE", theme.colors.red, false).clicked() {
+            // Clear selection if this node was selected.
+            if *self.selected_node == Some(node) {
+                *self.selected_node = None;
+            }
+            snarl.remove_node(node);
+            ensure_output_connected(snarl);
             *self.topology_changed = true;
             *self.needs_arrange = true;
             ui.close_menu();
@@ -1686,6 +1743,23 @@ fn collect_smoothing(effect_id: &str, sample_rate: f32) -> Vec<SmoothingStyle> {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn node_readout_is_the_first_visible_settings_in_host_formatting() {
+        let registry = sonido_registry::EffectRegistry::new();
+        let fx = registry.create("distortion", 48_000.0).unwrap();
+        let params: Vec<_> = (0..fx.effect_param_count())
+            .filter_map(|i| fx.effect_param_info(i).map(|d| (d, fx.effect_get_param(i))))
+            .collect();
+        let lines = readout_lines(params.clone());
+        assert_eq!(lines.len(), 2);
+        let (d, v) = params[0];
+        assert_eq!(
+            lines[0],
+            format!("{} {}", d.short_name.to_uppercase(), d.format_value(v))
+        );
+    }
+
     use super::*;
 
     fn output_has_input(gv: &GraphView) -> bool {
