@@ -451,7 +451,14 @@ impl SonidoTheme {
         style.spacing.window_margin = egui::Margin::same(12);
         style.spacing.button_padding = egui::vec2(8.0, 4.0);
 
-        ctx.set_style(style);
+        // Sonido has one look, Sonido Night. egui keeps a style per theme
+        // and follows the system's light/dark setting, so `set_style` alone
+        // lands in whichever slot is active at startup, and a light-mode OS
+        // then switches to egui's stock light style (a white canvas). Pin
+        // the theme and write both slots.
+        ctx.set_theme(egui::Theme::Dark);
+        ctx.set_style_of(egui::Theme::Light, style.clone());
+        ctx.set_style_of(egui::Theme::Dark, style);
     }
 
     /// Get meter segment color based on normalized position (0.0 = bottom, 1.0 = top).
@@ -474,6 +481,24 @@ pub type Theme = SonidoTheme;
 #[cfg(test)]
 mod layout_tests {
     use super::*;
+
+    #[test]
+    fn a_light_mode_system_still_gets_sonido_night() {
+        let ctx = Context::default();
+        let theme = SonidoTheme::default();
+        theme.apply(&ctx);
+        let input = egui::RawInput {
+            system_theme: Some(egui::Theme::Light),
+            ..Default::default()
+        };
+        let _ = ctx.run(input, |_| {});
+        assert_eq!(ctx.theme(), egui::Theme::Dark);
+        assert_eq!(ctx.style().visuals.panel_fill, theme.colors.void);
+        assert_eq!(
+            ctx.style_of(egui::Theme::Light).visuals.panel_fill,
+            theme.colors.void
+        );
+    }
 
     #[test]
     fn io_strip_width_clamps() {
