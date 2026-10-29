@@ -409,6 +409,10 @@ impl AudioProcessor {
 
         // Send metering data (non-blocking)
         let count = frames.max(1) as f32;
+        let mut node_peaks = [(0.0, 0.0); crate::audio_bridge::NODE_METERS];
+        for (peak, &id) in node_peaks.iter_mut().zip(self.graph.chain_order()) {
+            *peak = self.graph.node_peak(id).unwrap_or_default();
+        }
         let _ = self.metering_tx.try_send(MeteringData {
             input_peak,
             input_rms: (input_rms_sum / count).sqrt(),
@@ -417,6 +421,7 @@ impl AudioProcessor {
             gain_reduction: 0.0,
             cpu_usage: cpu_pct,
             playback_position_secs: self.file_pb.position_secs(),
+            node_peaks,
         });
 
         // Return the scratch buffers (with their grown capacity) for next block.

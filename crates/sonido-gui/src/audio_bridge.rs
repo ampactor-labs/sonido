@@ -95,7 +95,13 @@ pub struct MeteringData {
     pub cpu_usage: f32,
     /// File playback position in seconds (0.0 when not playing a file).
     pub playback_position_secs: f32,
+    /// Each effect's own output peak (left, right; linear), in slot order,
+    /// for the first [`NODE_METERS`] slots.
+    pub node_peaks: [(f32, f32); NODE_METERS],
 }
+
+/// How many effect slots carry their own meter in [`MeteringData`].
+pub const NODE_METERS: usize = 32;
 
 /// Audio bridge for communication between GUI and audio threads.
 ///
@@ -322,6 +328,7 @@ mod tests {
             gain_reduction: 3.0,
             cpu_usage: 12.5,
             playback_position_secs: 0.0,
+            ..MeteringData::default()
         });
 
         let data = bridge.receive_metering();
