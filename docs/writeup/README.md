@@ -109,7 +109,7 @@ Some of these are decisions, and the rest are gaps. I list them both because a l
 - **The cabinet IRs are synthesized.** The code generates them as exponentially decaying filtered noise; they are not measurements of real cabinets. You can't load your own IR yet.
 - **Pitch shifting is granular**, with two or four overlapping grains. It is not a phase vocoder, and there is no harmonizer.
 - **The distortion's dynamics control changes the drive, not the shape of the clipping curve.** Level-dependent waveshaping, which is what makes a guitar's volume knob clean up an analog circuit, is on the roadmap.
-- **Hardware testing is manual.** CI builds, lints and size-checks the firmware, but only I test it, by flashing it and playing. Two of the earlier per-effect VST3 shims passed Steinberg's validator (47/47) once, by hand; the current shim hasn't been through it. Only a manually run CI workflow validates the CLAP plugins.
+- **Hardware testing is manual.** CI builds, lints and size-checks the firmware, but only I test it, by flashing it and playing. The v0.2.0 VST3 shim passed Steinberg's validator (1,739 tests across all 37 plugins) when I ran it by hand; no CI job runs it. Only a manually run CI workflow validates the CLAP plugins.
 - **Not a product.** The API is unstable and nothing is on crates.io. Tagged releases on GitHub carry the desktop builds, the plugins and the pedal firmware; v0.2.0 (October 2026) is the latest.
 
 ## 5. The long write-ups

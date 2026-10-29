@@ -194,7 +194,7 @@ There are 2,011 `#[test]` functions in the tree (`git grep -ho '#\[test\]' -- cr
 
 On every push and pull request to `main`, [.github/workflows/ci.yml](.github/workflows/ci.yml) runs `cargo fmt --all --check`, `cargo clippy --workspace --all-targets` with `RUSTFLAGS=-D warnings`, `cargo test --workspace` on Ubuntu, macOS and Windows, and a `wasm32-unknown-unknown` build of the editor. Behind `workflow_dispatch`, [.github/workflows/ci-manual.yml](.github/workflows/ci-manual.yml) adds `--no-default-features` tests for the six `no_std` crates, `cargo doc` with warnings denied, the cargo-deny dependency policy, criterion benchmarks compared with critcmp, llvm-cov coverage, and the CLAP conformance checker clap-validator 0.3.2 over every bundled plugin.
 
-Not tested: the ARM path (CI's `firmware` job builds, lints and size-checks `sonido_pedal.bin`, but `sonido-daisy` is outside the workspace and its 28 tests never run in CI; I verify the firmware by flashing it and listening); the VST3 shims (no workflow runs Steinberg's validator; `docs/CHANGELOG.md` records one run by hand); the two Usage blocks above (no doctest includes them); and performance, because the benchmark job uploads a comparison for a human to read and fails nothing.
+Not tested: the ARM path (CI's `firmware` job builds, lints and size-checks `sonido_pedal.bin`, but `sonido-daisy` is outside the workspace and its 28 tests never run in CI; I verify the firmware by flashing it and listening); the VST3 shim (no workflow runs Steinberg's validator; the v0.2.0 shim passed it on Linux, run by hand on 2026-10-29); the two Usage blocks above (no doctest includes them); and performance, because the benchmark job uploads a comparison for a human to read and fails nothing.
 
 ## Limitations
 
@@ -209,7 +209,7 @@ The other gaps:
 - The editor sends a rig to the pedal by name only: it replaces the bank rig with the same name or takes the first empty slot (`client::choose_send_slot` in `crates/sonido-patch/src/client.rs`), on the first pedal it finds. Its PEDAL window plays and erases bank rigs, but choosing a slot and updating the firmware are CLI-only (`sonido pedal push --slot`, `update`); a firmware update needs `dfu-util` installed.
 - Sending from the browser editor over Web Serial is built but untested against a pedal (`crates/sonido-gui/src/web_serial.rs`); it needs Chrome or Edge.
 - No shipping path oversamples. Aliasing control depends on ADAA in the distortion, tape and amp kernels, and the aliasing suite measures only those three plus the preamp; no other kernel is measured for aliasing.
-- VST3 is unvalidated in CI. The shims come from clap-wrapper (`scripts/bundle-vst3.sh`) and only clap-validator runs in a workflow, so only CLAP has a validation record.
+- VST3 is unvalidated in CI. The shim comes from clap-wrapper (`scripts/bundle-vst3.sh`), and only clap-validator runs in a workflow. Steinberg's validator passed the v0.2.0 shim by hand on Linux (1,739 tests across the 37 plugins, none failed); a later change can break it unnoticed.
 - 4 of the 36 effects (drone, glitch, texture, time_stretch) have no golden regression file.
 - No crates.io release, no pinned MSRV (minimum supported Rust version), and the benchmark job has no regression gate.
 - The browser build has no file system: presets stay in memory, the export menu downloads the JSON patch and the pedal sector, the controls guide downloads, and writing to the CLAP folder needs the native app (`crates/sonido-gui/src/app.rs`).
