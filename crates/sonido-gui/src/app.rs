@@ -50,6 +50,10 @@ pub struct SonidoApp {
     /// Whether we've re-called play() after a user gesture (wasm autoplay policy).
     #[cfg(target_arch = "wasm32")]
     audio_resumed: bool,
+    /// Set by the page's `visibilitychange` listener when it paused the
+    /// transport because the tab was hidden; the next frame shows PAUSE.
+    #[cfg(target_arch = "wasm32")]
+    hidden_pause: Arc<std::sync::atomic::AtomicBool>,
     metering: MeteringData,
 
     /// Registry-driven parameter bridge (GUI ↔ audio thread).
@@ -267,11 +271,16 @@ impl SonidoApp {
         #[cfg(target_arch = "wasm32")]
         let (load_tx, load_rx) = std::sync::mpsc::channel();
 
+        #[cfg(target_arch = "wasm32")]
+        let hidden_pause = pause_when_hidden(transport_tx.clone());
+
         let mut app = Self {
             audio_bridge,
             _audio_streams: Vec::new(),
             #[cfg(target_arch = "wasm32")]
             audio_resumed: false,
+            #[cfg(target_arch = "wasm32")]
+            hidden_pause,
             metering: MeteringData::default(),
             bridge,
             registry,
@@ -331,6 +340,14 @@ impl SonidoApp {
             buffer_size = app.buffer_size,
             "app initialized (device rate detected)"
         );
+
+        // The web build opens on the demo chain rather than an empty canvas:
+        // a visitor sees what the editor is for before touching anything.
+        // Nothing persists in the browser, so there is no saved graph to keep.
+        #[cfg(target_arch = "wasm32")]
+        if !single_effect {
+            app.graph_view.populate_demo();
+        }
 
         // Auto-compile AFTER start_audio so we use the real device rate
         if !single_effect {
@@ -2684,6 +2701,17 @@ impl eframe::App for SonidoApp {
             }
         }
 
+        // The tab was hidden while playing: the listener already paused the
+        // audio thread; show PAUSE so coming back doesn't look like a fault.
+        #[cfg(target_arch = "wasm32")]
+        if self
+            .hidden_pause
+            .swap(false, std::sync::atomic::Ordering::Relaxed)
+            && self.file_player.is_playing()
+        {
+            self.file_player.toggle_play_pause();
+        }
+
         // Resume audio on first user gesture (wasm autoplay policy).
         // Browsers suspend the AudioContext until a *trusted* user interaction;
         // re-calling play() from within that activation window resumes it.
@@ -3009,4 +3037,36 @@ impl eframe::App for SonidoApp {
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
         self.stop_audio();
     }
+}
+
+/// Pause the transport whenever the page is hidden.
+///
+/// A phone keeps a page's Web Audio running after its browser is left for
+/// another app, and a hidden tab gets no frames, so the pause can't wait for
+/// `update()`: the listener sends it straight to the audio thread and raises
+/// the returned flag for the next frame to pick up.
+#[cfg(target_arch = "wasm32")]
+fn pause_when_hidden(
+    transport_tx: crossbeam_channel::Sender<crate::file_player::TransportCommand>,
+) -> Arc<std::sync::atomic::AtomicBool> {
+    use wasm_bindgen::JsCast;
+    use wasm_bindgen::closure::Closure;
+
+    let flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let Some(document) = web_sys::window().and_then(|w| w.document()) else {
+        return flag;
+    };
+    let raised = Arc::clone(&flag);
+    let doc = document.clone();
+    let on_change = Closure::<dyn FnMut()>::new(move || {
+        if doc.hidden() {
+            let _ = transport_tx.send(crate::file_player::TransportCommand::Pause);
+            raised.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+    });
+    let _ = document
+        .add_event_listener_with_callback("visibilitychange", on_change.as_ref().unchecked_ref());
+    // The listener lives as long as the page.
+    on_change.forget();
+    flag
 }
