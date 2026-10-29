@@ -8,11 +8,11 @@ Complete reference for the `sonido` command-line tool.
 cargo install --path crates/sonido-cli
 ```
 
-> **During development**, use `cargo run -p sonido-cli -- <args>` instead of a bare `sonido` command.
-> This builds from source every time, avoiding stale binary issues. Add `--release` for
+> During development, use `cargo run -p sonido-cli -- <args>` instead of a bare `sonido` command.
+> It builds from source every time, so you never run a stale binary. Add `--release` for
 > real-time audio or batch processing where DSP speed matters.
 >
-> Examples in this guide show `sonido <cmd>` for brevity — substitute `cargo run -p sonido-cli --` in practice.
+> Examples in this guide show `sonido <cmd>` for brevity; when you run them, substitute `cargo run -p sonido-cli --`.
 
 ## Commands Overview
 
@@ -43,8 +43,8 @@ Process an audio file through one or more effects.
 sonido process <INPUT> [OUTPUT] [OPTIONS]
 ```
 
-When OUTPUT is omitted, the output filename is auto-generated from the input stem and
-the effect specification, written next to the input file. For example,
+When OUTPUT is omitted, the output is written next to the input file, with a name
+generated from the input stem and the effect specification. For example,
 `sonido process input.wav --effect reverb` produces `input_reverb.wav`. User-supplied
 parameters are part of the name (`--effect distortion --param drive=15` gives
 `input_distortion_drive=15.wav`), chain effects are joined with `+`, graph splits are
@@ -65,15 +65,15 @@ characters are truncated.
 | `--mono` | Force mono output (default is always stereo, even for mono input) |
 
 If several of `--preset`, `--chain` and `--effect` are given, the first in that order
-wins. `--chain` and `--graph` conflict, and `--graph` conflicts with `--effect`,
-`--chain` and `--preset`.
+takes precedence. `--chain` and `--graph` cannot be used together, and `--graph` cannot
+be combined with `--effect`, `--chain` or `--preset`.
 
 ### Parameter Values
 
 Parameter keys match a parameter's full name or short name, case-insensitively, with
 `_` standing for a space (`room_size` → "Room Size"); a few aliases such as
 `time` (delay) and `bits` (bitcrusher) are also accepted. Values are in the parameter's
-display unit: dB, Hz, ms, and **percent as 0–100** (so `mix=50`, not `mix=0.5`).
+display unit: dB, Hz, ms, and percent as 0 to 100 (so `mix=50`, not `mix=0.5`).
 Enum parameters take their label (`waveshape=foldback`, `mode=manual`) and switches
 take `on`/`off`. Out-of-range values are clamped. `sonido effects <name>` lists every
 parameter with its range and default.
@@ -137,7 +137,7 @@ sonido process input.wav --chain "preamp:gain=6||distortion"
 ### Graph Syntax
 
 The `--graph` flag extends chain syntax with `split()` for parallel routing (DAG topologies).
-Mutually exclusive with `--effect`, `--chain`, and `--preset`.
+It cannot be combined with `--effect`, `--chain`, or `--preset`.
 
 ```
 graph       ::= path
@@ -159,9 +159,9 @@ effect_spec ::= name ( ':' key '=' value ( ',' key '=' value )* )?
 | `-` | Dry passthrough (only inside `split()`) |
 
 **Split semantics:** All split paths are summed at the merge point. This doubles amplitude
-for a wet/dry split — use a limiter after the merge or reduce effect output levels.
+for a wet/dry split, so use a limiter after the merge or reduce effect output levels.
 
-**Constraints:** `split()` requires 2–8 paths (`MAX_SPLIT_TARGETS`). Empty paths are rejected. `-` is only valid
+**Constraints:** `split()` requires 2 to 8 paths (`MAX_SPLIT_TARGETS`). Empty paths are rejected. `-` is only valid
 inside a split path. Splits can be nested.
 
 ```bash
@@ -191,7 +191,7 @@ sonido process input.wav --graph "preamp:gain=8 | distortion:drive=25 | reverb:d
 
 ## realtime
 
-Process live audio through effects in real-time.
+Process live audio through effects in real time.
 
 ### Basic Usage
 
@@ -372,7 +372,7 @@ sonido generate impulse <OUTPUT> [OPTIONS]
 | `--sample-rate <N>` | Sample rate (default: 48000) |
 | `--amplitude <N>` | Impulse amplitude (default: 1.0) |
 
-> **Note:** Unlike other generate commands, `--length` is specified in **samples**, not seconds.
+> **Note:** Unlike other generate commands, `--length` is specified in samples, not seconds.
 > For a 1-second impulse response at 48kHz, use `--length 48000`.
 
 ```bash
@@ -397,7 +397,7 @@ sonido generate silence silence.wav --duration 2.0
 
 #### osc
 
-Generate an oscillator waveform using PolyBLEP anti-aliasing. Produces cleaner waveforms than simple mathematical generation.
+Generate an oscillator waveform using PolyBLEP anti-aliasing, which gives cleaner waveforms than simple mathematical generation.
 
 ```bash
 sonido generate osc <OUTPUT> [OPTIONS]
@@ -607,9 +607,9 @@ sonido analyze spectrogram <INPUT> -o <OUTPUT.csv> [OPTIONS]
 |--------|-------------|
 | `--fft-size <N>` | FFT size (default: 2048) |
 | `--hop <N>` | Hop size (default: fft_size / 4) |
+| `-o, --output <FILE>` | Output CSV file (required) |
 
 Frames use a Hann window.
-| `-o, --output <FILE>` | Output CSV file (required) |
 
 ```bash
 sonido analyze spectrogram recording.wav -o spectrogram.csv --fft-size 4096 --hop 512
@@ -794,7 +794,7 @@ Output includes:
 
 #### cqt
 
-Constant-Q Transform analysis with logarithmic frequency resolution. Useful for musical pitch analysis where you need equal resolution per octave.
+Constant-Q Transform analysis with logarithmic frequency resolution. It suits musical pitch analysis, where you need equal resolution per octave.
 
 ```bash
 sonido analyze cqt <INPUT> [OPTIONS]
@@ -844,7 +844,7 @@ sonido compare <REFERENCE> <IMPLEMENTATION> [OPTIONS]
 | `-o, --output <FILE>` | Output detailed JSON report |
 | `--detailed` | Show per-band frequency analysis |
 
-Both files are trimmed to the shorter length. Calculates:
+Both files are trimmed to the shorter length. The command calculates:
 - MSE, RMSE and SNR (time domain)
 - RMS and peak level of each file, and their difference
 - Spectral correlation and average magnitude difference (dB)
@@ -894,7 +894,7 @@ sonido info recording.wav
 # File Size:   984.4 KB
 ```
 
-This replaces the need for external tools like `soxi` for basic WAV inspection.
+For basic WAV inspection, you do not need an external tool such as `soxi`.
 
 ---
 
@@ -1070,7 +1070,7 @@ sonido presets delete <NAME> [OPTIONS]
 
 | Option | Description |
 |--------|-------------|
-| `--force` | Required — confirms deletion |
+| `--force` | Required to confirm the deletion |
 
 #### copy
 
@@ -1126,7 +1126,7 @@ sonido presets paths
 ## pedal
 
 Talk to a Sonido pedal over USB (`crates/sonido-cli/src/commands/pedal.rs`). While it
-plays, the pedal is a USB serial device (`1209:0001`) speaking the rig link
+plays, the pedal is a USB serial device (`1209:0001`) that communicates over the rig link
 (`sonido_patch::link`; see `docs/EMBEDDED.md`, USB Rig Link). These commands list and
 play its rigs, send rigs to its bank, read rigs and the jam back as editor JSON, and
 update its firmware.
@@ -1153,23 +1153,23 @@ sonido pedal update sonido_pedal.bin      # firmware update over USB DFU
 
 | Subcommand | Description |
 |------------|-------------|
-| `controls [EFFECT] [--text] [--html FILE]` | Open an illustrated guide to playing the pedal in the default browser: a drawing of the pedal with every knob, toggle, LED and footswitch called out (each footswitch press per T2 position, each toggle position), the knobs' three pages colour-coded by mode (jam sound, jam setup, rig), the jam's effect-pick dial, the rig list, every jam effect's and factory rig's K1–K6 and the power-on gestures. With an effect, the guide opens at that effect. `--text` prints the same facts as an 80-column card instead (ANSI-styled on a terminal unless `NO_COLOR` is set); with an effect, that effect's knobs with each one's travel (fully left … fully right, including the pedal's knob floors) and noon. `--html FILE` writes the page without opening it; the page is self-contained and prints. Needs no pedal: it is drawn from this build's `sonido_patch::controls`, knob maps, effect parameters and factory rigs (`sonido_rigs::guide`), so it matches firmware built from the same source |
+| `controls [EFFECT] [--text] [--html FILE]` | Open an illustrated guide to playing the pedal in the default browser: a drawing of the pedal with every knob, toggle, LED and footswitch called out (each footswitch press per T2 position, each toggle position), the knobs' three pages colour-coded by mode (jam sound, jam setup, rig), the jam's effect-pick dial, the rig list, every jam effect's and factory rig's K1 to K6 and the power-on gestures. With an effect, the guide opens at that effect. `--text` prints the same facts as an 80-column card instead (ANSI-styled on a terminal unless `NO_COLOR` is set); with an effect, that effect's knobs with each one's travel (fully left … fully right, including the pedal's knob floors) and noon. `--html FILE` writes the page without opening it; the page is self-contained and can be printed. It needs no pedal: the guide is generated from this build's `sonido_patch::controls`, knob maps, effect parameters and factory rigs (`sonido_rigs::guide`), so it matches firmware built from the same source |
 | `info` | Firmware and link protocol, what the pedal plays (and whether it is off), its morph position and CPU load (last second's mean and peak), and its bank slots, factory rigs and effect count |
 | `list` | The rig list, in the order the footswitches step through it: the jam with its effects, each bank slot, the factory rigs; marks the one playing |
-| `push [FILE]` | Send a rig to the bank: it replaces the bank rig with the same name, or takes the first empty slot (`-s, --slot <N>`: bank slot 1–15 instead). Checked here with `validate_for_daisy`, then again by the pedal, which plays it at once |
-| `pull <WHAT>` | Save a bank rig (`1`–`15`) or the jam (`jam`) as editor JSON (`-o, --output <FILE>`); prints the rig without `-o` |
-| `erase <SLOT>` | Empty bank slot 1–15 (if it was playing, the pedal returns to the jam) |
-| `play <RIG>` | Play `jam`, a bank slot `1`–`15`, or a factory rig by name (case-insensitive) |
+| `push [FILE]` | Send a rig to the bank: it replaces the bank rig with the same name, or takes the first empty slot (`-s, --slot <N>` selects a bank slot from 1 to 15 instead). The rig is checked here with `validate_for_daisy`, then again by the pedal, which plays it at once |
+| `pull <WHAT>` | Save a bank rig (`1` to `15`) or the jam (`jam`) as editor JSON (`-o, --output <FILE>`); prints the rig without `-o` |
+| `erase <SLOT>` | Empty a bank slot from 1 to 15 (if its rig was playing, the pedal returns to the jam) |
+| `play <RIG>` | Play `jam`, a bank slot from `1` to `15`, or a factory rig by name (case-insensitive) |
 | `update [FIRMWARE]` | Restart the pedal into its bootloader; with a firmware `.bin`, flash it with `dfu-util` (the pedal then restarts into it); without one, print the `dfu-util` command |
 
 `push` reads its rig like [`patch export`](#rig-export): a `.json` rig from the
 editor, a `.bin` sector, a preset `.toml`, or `--from-dsl`, with `-t, --topology` and
 `--name`. The global `--port <PORT>` names the serial port; without it the first
-Sonido pedal found is used. Bank slots are numbered 1–15 here (the link counts from 0).
+Sonido pedal found is used. Bank slots are numbered 1 to 15 here (the link counts from 0).
 
-`update` asks the running pedal for its bootloader over USB, waits up to 10 s for the
-Daisy bootloader to appear, and flashes the image to `0x90040000`; it needs
-`dfu-util` installed, and it refuses the STM32 ROM bootloader (BOOT held through
+`update` restarts the running pedal into its bootloader over USB, waits up to 10 s for
+the Daisy bootloader to appear, and flashes the image to `0x90040000`; it needs
+`dfu-util` installed, and it rejects the STM32 ROM bootloader (BOOT held through
 RESET), which cannot reach the pedal's QSPI flash. Download `sonido_pedal.bin` from a
 GitHub release (or a CI run's `sonido_pedal` artifact), or build the image as in
 `crates/sonido-daisy/examples/sonido_pedal.rs`:
@@ -1207,7 +1207,7 @@ output = "-6"
 Parameter values follow the same rules as `--param`. An effect entry with
 `bypassed = true` is skipped.
 
-The `topology` field is optional — omitting it defaults to linear chaining.
+The `topology` field is optional and defaults to linear chaining.
 Valid values: `"linear"`, `"parallel"`, `"fan"`. `process`, `realtime` and `play` always
 run a preset as a linear chain, and `sonido patch export` and `sonido pedal push` take
 the topology from their `--topology` option (default `linear`, or `parallel`), not
@@ -1226,7 +1226,7 @@ sonido realtime --preset my_preset.toml
 canonical `sonido-patch` model, which stores effects by stable UID and carries macros,
 morph and globals. `export` reads a rig (a `.json` from the editor or a `.bin`
 sector) or builds one from a preset `.toml` or a DSL chain, and writes it as `.json`
-(the editor and the graph player) or as a `.bin` pedal sector, chosen by the output
+(for the editor and the graph player) or as a `.bin` pedal sector, chosen by the output
 file's extension:
 
 ```bash

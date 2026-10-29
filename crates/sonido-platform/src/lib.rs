@@ -33,7 +33,7 @@
 //!
 //! ```toml
 //! [dependencies]
-//! sonido-platform = { version = "0.1", default-features = false }
+//! sonido-platform = { version = "0.2", default-features = false }
 //! ```
 //!
 //! # Example

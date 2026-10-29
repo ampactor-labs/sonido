@@ -8,17 +8,17 @@ Every Sonido plugin is the same arcade cabinet, lit in its effect family's color
 
 A vector-display arcade machine at night (Tempest, Battlezone): thin beams of light with a white-hot core and a colored halo, on a violet-black void, behind curved glass. Three references shaped it:
 
-- **Vector displays.** Lines, bloom and phosphor persistence are the whole look. The halo carries the hue; the core of the beam is near-white. That one detail is what makes a line look lit rather than painted.
+- **Vector displays.** The whole look comes from lines, bloom and phosphor persistence. The halo carries the hue; the core of the beam is near-white. The near-white core makes a line look lit rather than painted.
 - **An instrument panel.** The screen is one instrument, a cockpit sits in the foreground (the control deck), and primary actions are fixed to the edges. Nothing on the glass is scenery.
-- **The OP-1 rule: show, don't describe.** The screen is the effect itself: what a knob does is visible on its picture.
+- **The OP-1 rule: show, don't describe.** The screen shows the effect's own picture, so what a knob does is visible on it.
 
 ## Principles
 
 1. **One structure, six lights.** Layout, components and behavior are identical across all 36 effects. Only the family accent changes, so knowing one plugin means knowing all of them.
-2. **The screen shows the real signal.** The screen is the effect's own picture, measured from its kernel or drawn from the audio thread's tap. Nothing on the screen is decoration, and nothing is decoration pretending to be data.
+2. **The screen shows the real signal.** The screen is the effect's own picture, measured from its kernel or drawn from the audio thread's tap. Nothing on the screen is decoration, and nothing is decoration made to look like data.
 3. **Fixed edges.** Power is always top-right, the status line is always bottom-left, and meters are always IN on the left and OUT on the right.
-4. **Light carries meaning, text carries values.** Values are bright neutral text; labels are muted. Color marks family, level and state, in short marks, never in body text.
-5. **Readable through the glass.** Curvature, scanlines and aberration apply only inside the screen. Every control and every value stays outside it, crisp.
+4. **Light carries meaning, text carries values.** Values are bright neutral text; labels are muted. Color shows family, level and state, and it appears only in short marks, never in body text.
+5. **Readable through the glass.** Curvature, scanlines and aberration apply only inside the screen. Every control and every value sits outside it, so they stay crisp.
 6. **Bypass is "game over", not hidden.** A bypassed cabinet dims the screen and shows INSERT COIN, lit and still; every control stays visible and live.
 
 ## Tokens
@@ -36,7 +36,7 @@ A vector-display arcade machine at night (Tempest, Battlezone): thin beams of li
 | `text_secondary` | `#ABA5CF` | labels | 8.1:1 |
 | `text_dim` | `#7A74A3` | facts and hints nobody needs to read | 4.4:1 |
 
-Text meets WCAG AA (4.5:1) and every label clears AAA (7:1). `text_dim` is for nothing the user needs.
+Text meets WCAG AA (4.5:1) and every label clears AAA (7:1). `text_dim` is only for text the user does not need.
 
 ### Families
 
@@ -62,7 +62,7 @@ Every accent clears 3:1 for graphics and 4.5:1 for text. `Family::of_effect(id)`
 | `yellow` | `#FFE14D` | meter −9 to 0 dBFS |
 | `red` | `#FF2D55` | above 0 dBFS; the CLIP latch |
 
-Level is never color alone: segments have position, the CLIP latch says CLIP, and the tuner's needle position is the reading, with green only confirming it.
+Level is never shown by color alone: segments have position, the CLIP latch shows the word CLIP, and the tuner's needle position is the reading, with green only confirming it.
 
 ### Type
 
@@ -75,11 +75,11 @@ Level is never color alone: segments have position, the CLIP latch says CLIP, an
 | Status line | Share Tech Mono | 11 | accent name, `text_primary` value |
 | Facts | Share Tech Mono | 10 | `text_dim` |
 
-**Sonido Vector** is the system's own display face: a stroke font on a 4 × 6 grid in the manner of the 1979–83 vector arcade games, drawn with neon lines so it blooms like a trace. It is code, not a font file, so it scales to any size and costs nothing to ship. It sets titles only; it is never used for values.
+**Sonido Vector** is the system's own display face: a stroke font on a 4 × 6 grid in the manner of the vector arcade games of 1979 to 1983, drawn with neon lines so it blooms like a trace. It is code, not a font file, so it scales to any size and costs nothing to ship. It sets titles only; it is never used for values.
 
 ### Shape and light
 
-- **Chamfers, not radii.** Panels cut their corners at 45° (`chamfer()`); chips and screens keep a 2–3 pt radius.
+- **Chamfers, not radii.** Panels cut their corners at 45° (`chamfer()`); chips and screens keep a 2 to 3 pt radius.
 - **Neon strokes.** `glow::neon_polyline`: a halo at `bloom_alpha`, the line, then a white-hot core (`hot_core`: 55% toward white). Every lit element uses it, and nothing unlit does.
 - **Spacing.** A 10 pt outer pad, 8 pt gaps; knob cells are 86 × 98 pt; selector rows are 50 pt.
 
@@ -87,7 +87,7 @@ Level is never color alone: segments have position, the CLIP latch says CLIP, an
 
 **Cabinet** (`cabinet::Cabinet`): the whole plugin window, top to bottom:
 
-- **Marquee.** The SONIDO wordmark over `FX//<FAMILY>`, a partner-colored slash, the effect name in slanted Sonido Vector, speed stripes graded partner→accent, and the power button.
+- **Marquee.** The SONIDO wordmark over `FX//<FAMILY>`, a partner-colored slash, the effect name in slanted Sonido Vector, speed stripes graded from partner to accent, and the power button.
 - **Screen**, between the IN and OUT meters. The whole glass is the family's picture ([`picture.rs`](../crates/sonido-gui-core/src/picture.rs)) on the dark tube, with its own axes, each labelled, plus any read-only readouts (e.g. GR on the compressor). There is no scenery: every line is an axis or a value. Every picture is real data: measured from a private copy of the effect's own kernel with the plugin's current values, or computed from the live tap, and the live signal moves inside it (the distortion's signal traces along its curve, the compressor's dot rides its curve, the spectrum is the signal).
 
   | Family | Picture | Source |
@@ -102,10 +102,10 @@ Level is never color alone: segments have position, the CLIP latch says CLIP, an
 
   The kernel pictures re-measure when a value changes, at most ten times a second while a knob moves.
 - **Deck.** Selectors first, flowed left to right, then a centered grid of knobs.
-- **Rig HUD** (graph player only, `Cabinet::set_rig`). The rig's name and its chain as chips in each effect's family color, top-left of the sky. With no rig loaded, the screen says NO RIG LOADED and where rigs come from.
+- **Rig HUD** (graph player only, `Cabinet::set_rig`). The rig's name and its chain as chips in each effect's family color, top-left of the sky. With no rig loaded, the screen shows NO RIG LOADED and where rigs come from.
 - **Footer.** The status line on the left: the name and value of whatever is under the pointer, otherwise the effect's description. Engine facts and the CRT switch sit on the right.
 
-`Cabinet::new(effect_id)` lights a cabinet from the registry; `Cabinet::custom(id, title, description, family)` builds one for something that isn't a single effect, as the graph player does. `cabinet::preferred_size(&descriptors)` gives the window size: 720 pt wide, and tall enough to fit the deck with no scrolling.
+`Cabinet::new(effect_id)` lights a cabinet from the registry; `Cabinet::custom(id, title, description, family)` builds one for something that isn't a single effect, as the graph player does. `cabinet::preferred_size(&descriptors)` returns the window size: 720 pt wide, and tall enough to fit the deck with no scrolling.
 
 **Chip** (`widgets::chip`, `chip_button`): the one text button, in the editor's header, menus and toggles. Uppercase Share Tech Mono 11 on a tint of its own color (10%, 22% when active), outlined in that color, at least 22 pt tall. Color carries state: amber stopped, green playing, red bypassed or destructive, `text_dim` unavailable.
 
@@ -116,13 +116,13 @@ Level is never color alone: segments have position, the CLIP latch says CLIP, an
 - Up/Down while focused
 - double-click to reset
 
-The value is shown in the host's own formatting (`ParamDescriptor::format_value`), so the plugin and the DAW never disagree.
+The value is shown in the host's own formatting (`ParamDescriptor::format_value`), so the plugin and the DAW always display a value the same way.
 
 **Selector.** For stepped parameters. Up to four short options render as a segmented control, with the active segment filled and underlined in the accent. More or longer options render as a ◀ value ▶ stepper: the arrows step, a click on the value advances, and scrolling steps.
 
 **Meter.** Two segmented bars from −54 to +6 dBFS. Attack is instant and the fall is 26 dB/s, with a 1.2 s peak hold, a 0 dBFS tick and a numeric peak under the bars. A CLIP latch above the bars is also its own reset button.
 
-**Power.** IEC power glyph in a ring. Lit accent = playing; dim = bypassed. Same place in every plugin.
+**Power.** An IEC power glyph in a ring, lit in the accent while the plugin plays and dim when it is bypassed. It sits in the same place in every plugin.
 
 ## Motion
 
@@ -142,7 +142,7 @@ Hosts with a GPU pass (the plugin's OpenGL bridge) render egui offscreen and com
   - scanlines that bright beams bleed over, as on a real tube
   - an aperture-grille mask, a vignette, a slow refresh band and grain
 
-The UI tells the renderer where the glass is through `crt::CrtFrame`. Renderers without the pass (the eframe editor, the browser) fall back to painter scanlines.
+The UI passes the location of the glass to the renderer through `crt::CrtFrame`. Renderers without the pass (the eframe editor, the browser) fall back to painter scanlines.
 
 **CRT OFF** in the footer turns the pass off for anyone who finds it tiring or wants maximum sharpness; the cabinet stays fully usable without it.
 

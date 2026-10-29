@@ -49,7 +49,7 @@
 //! let adapter = Adapter::new(ShelvingEqKernel::new(48000.0), 48000.0);
 //! let mut effect: Box<dyn Effect> = Box::new(adapter);
 //!
-//! // Embedded / Daisy Seed — zero-smoothing adapter, as the pedal firmware uses
+//! // Embedded / Daisy Seed — zero-smoothing adapter for single-effect firmware examples (the pedal itself uses `Adapter::new`)
 //! let effect = Adapter::new_direct(ShelvingEqKernel::new(48000.0), 48000.0);
 //!
 //! // Or drive the kernel directly with a typed params struct (no adapter)
@@ -81,6 +81,14 @@ const CHANGE_EPSILON: f32 = 0.001;
 // ═══════════════════════════════════════════════════════════════════════════
 //  Shelf coefficient helpers
 // ═══════════════════════════════════════════════════════════════════════════
+
+/// Clamps a shelf frequency to `[floor, 0.475 · sample_rate]`. Below about
+/// 2.1 kHz the ceiling falls under the high shelf's 1 kHz floor, and the
+/// ceiling wins, so `clamp` never sees a minimum above its maximum.
+fn shelf_frequency(freq: f32, floor: f32, sample_rate: f32) -> f32 {
+    let ceiling = sample_rate * 0.475;
+    freq.clamp(floor.min(ceiling), ceiling)
+}
 
 /// Compute RBJ low-shelf biquad coefficients (shelf slope S = 1).
 ///
@@ -336,12 +344,12 @@ impl ShelvingEqKernel {
         let defaults = ShelvingEqParams::default();
 
         let compute_low = |freq: f32, gain_db: f32, sr: f32| -> [f32; 6] {
-            let f = freq.clamp(20.0, sr * 0.475);
+            let f = shelf_frequency(freq, 20.0, sr);
             let (b0, b1, b2, a0, a1, a2) = low_shelf_coefficients(f, gain_db, sr);
             [b0, b1, b2, a0, a1, a2]
         };
         let compute_high = |freq: f32, gain_db: f32, sr: f32| -> [f32; 6] {
-            let f = freq.clamp(1000.0, sr * 0.475);
+            let f = shelf_frequency(freq, 1000.0, sr);
             let (b0, b1, b2, a0, a1, a2) = high_shelf_coefficients(f, gain_db, sr);
             [b0, b1, b2, a0, a1, a2]
         };
@@ -437,7 +445,7 @@ impl DspKernel for ShelvingEqKernel {
                 &[params.low_freq_hz, params.low_gain_db],
                 CHANGE_EPSILON,
                 |inputs| {
-                    let freq = inputs[0].clamp(20.0, sr * 0.475);
+                    let freq = shelf_frequency(inputs[0], 20.0, sr);
                     let (b0, b1, b2, a0, a1, a2) = low_shelf_coefficients(freq, inputs[1], sr);
                     [b0, b1, b2, a0, a1, a2]
                 },
@@ -448,7 +456,7 @@ impl DspKernel for ShelvingEqKernel {
                 &[params.high_freq_hz, params.high_gain_db],
                 CHANGE_EPSILON,
                 |inputs| {
-                    let freq = inputs[0].clamp(1000.0, sr * 0.475);
+                    let freq = shelf_frequency(inputs[0], 1000.0, sr);
                     let (b0, b1, b2, a0, a1, a2) = high_shelf_coefficients(freq, inputs[1], sr);
                     [b0, b1, b2, a0, a1, a2]
                 },
@@ -500,6 +508,25 @@ mod tests {
         let (l, r) = kernel.process_stereo(0.0, 0.0, &params);
         assert!(l.abs() < 1e-6, "Expected silence on left, got {l}");
         assert!(r.abs() < 1e-6, "Expected silence on right, got {r}");
+    }
+
+    #[test]
+    fn odd_sample_rates_stay_finite() {
+        // Steinberg's VST3 validator processes at 1234.5678 Hz, where the
+        // shelves' Nyquist ceiling (586 Hz) is below the high shelf's 1 kHz floor.
+        for sr in [1234.5678_f32, 12345.678, 123456.78, 1234567.8] {
+            let mut kernel = ShelvingEqKernel::new(sr);
+            kernel.set_sample_rate(sr);
+            let params = ShelvingEqParams::default();
+            for i in 0..256 {
+                let s = libm::sinf(i as f32 * 0.05);
+                let (l, r) = kernel.process_stereo(s, s, &params);
+                assert!(
+                    l.is_finite() && r.is_finite(),
+                    "non-finite output at {sr} Hz"
+                );
+            }
+        }
     }
 
     #[test]

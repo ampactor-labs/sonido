@@ -56,7 +56,7 @@ start target/criterion/report/index.html
 
 ### Baseline Comparisons
 
-Compare against a saved baseline to detect regressions:
+Compare against a saved baseline to detect regressions.
 
 Criterion flags such as `--save-baseline` need `--benches`: without it, `cargo bench`
 also runs each library's libtest harness, which rejects them.
@@ -84,7 +84,7 @@ crates/sonido-analysis/benches/analysis_bench.rs  # FFT, spectral analysis, dyna
 
 `all_effects.rs` benchmarks every registered effect (all 36) at its default
 parameters, so a newly registered effect is covered with no extra code.
-`effects_bench.rs` goes deeper on 19 of them (the original set: Distortion,
+`effects_bench.rs` benchmarks 19 of them in more detail (the original set: Distortion,
 Compressor, Chorus, Delay, LowPassFilter, Vibrato, Tape, CleanPreamp, Reverb, Flanger,
 Phaser, Gate, Tremolo, Wah, Eq, Limiter, Bitcrusher, RingMod, Stage), each wrapped as
 `Adapter<XxxKernel>`. It also has stereo groups (`Chorus_Stereo`, `Reverb_Stereo`,
@@ -154,13 +154,13 @@ Measured 2026-10-22 on an Intel i5-6300U (2 cores / 4 threads, 2.4 GHz base, 3.0
 
 The distortion, amp and tape rows predate the soft-clipper fix later the same day (`soft_clip_ad` and `tape_sat_ad` rewritten to stay precise near zero). Re-run alongside the other 33 on a busier machine, those three moved by −8%, +6% and +7% relative to the rest of that run.
 
-All 36 fit easily on the desktop. The heaviest, the tuner (YIN pitch detection over a 2048-sample frame every 1024 samples at a 24 kHz analysis rate) and the reverb (an 8-line FDN with modulated lines and early reflections), each take about 3.4–3.5% of one core.
+All 36 fit easily on the desktop. The heaviest, the tuner (YIN pitch detection over a 2048-sample frame every 1024 samples at a 24 kHz analysis rate) and the reverb (an 8-line FDN with modulated lines and early reflections), each take about 3.4 to 3.5% of one core.
 
 ### Cortex-M7, measured on a Daisy Seed
 
 Measured 2026-10-22 on a Daisy Seed (STM32H750, Cortex-M7 at 480 MHz, the `Performance` clock profile) with `crates/sonido-daisy/examples/bench_kernels.rs`, loaded into AXI SRAM over SWD (`probe-rs run`; the same memory placement as the bootloader's BOOT_SRAM mode), D-cache on, effect state heap-allocated in SDRAM as on the pedal, built with the firmware's shipping profile (fat LTO, size-optimized HAL). The budget is 320,000 cycles per block (32 samples at 48 kHz).
 
-The benchmark makes two passes over all 36 effects, each 8 warm-up blocks then 128 timed 32-sample stereo blocks of a 220 Hz sine, read with the DWT cycle counter. The first times the bare kernel on `XxxParams::default()` (`kernel=<name> mean=… worst=…` lines). The second times the **rig path**: the effect as `EffectRegistry::create` builds it (the smoothed adapter `PatchPlayer` runs on the pedal), one `process_block_stereo` per block, every parameter re-set to its own value every 15th block like the pedal's 100 Hz control tick (`rig=<name> mean=… worst=…` lines). The rig path costs 2–13 k cycles more per effect than the bare kernel, and it is what a rig runs, so its worst block is what the pedal budgets with.
+The benchmark makes two passes over all 36 effects, each 8 warm-up blocks then 128 timed 32-sample stereo blocks of a 220 Hz sine, read with the DWT cycle counter. The first times the bare kernel on `XxxParams::default()` (`kernel=<name> mean=… worst=…` lines). The second times the **rig path**: the effect as `EffectRegistry::create` builds it (the smoothed adapter `PatchPlayer` runs on the pedal), one `process_block_stereo` per block, every parameter re-set to its own value every 15th block like the pedal's 100 Hz control tick (`rig=<name> mean=… worst=…` lines). The rig path costs 2 to 13 k cycles more per effect than the bare kernel, and it is what a rig runs, so its worst block is what the pedal budgets with.
 
 The table is the rig path's worst block, as recorded in `sonido_platform::cycle_table::EFFECT_CYCLES` (`crates/sonido-platform/src/cycle_table.rs`), which stores each rounded up to the next 1,000 cycles:
 
@@ -207,11 +207,11 @@ A rebuild alone moves an unchanged effect by up to ±8% through code layout, whi
 
 Every effect fits a block on its own, worst block included; the reverb (62%) is the heaviest jam effect and the tuner (64%) the heaviest overall.
 
-**The pedal's rule.** One rule decides whether a rig runs on the pedal, shared by the editor's export check and the CLI (`sonido_patch::validate::validate_for_daisy`) and the pedal itself (which refuses rigs sent over USB, and jam picks, that would break it): the `EFFECT_CYCLES` of a rig's effects plus `NODE_OVERHEAD_CYCLES` (400) per node must stay within `CHAIN_FRACTION` (80%) of the block budget (`chain_cycles`, `chain_fits`); the editor warns past `WARN_FRACTION` (70%). The heaviest three-effect jams that fit are reverb and distortion with filter, ringmod or bitcrusher (79–80%); reverb, distortion and delay (86%) does not. The pedal running distortion → reverb → ringmod in a Hothouse measured 74.7% mean and 84–85% at its slowest callbacks, with no block over budget ([Embedded](EMBEDDED.md#chain-configurations)).
+**The pedal's rule.** One rule decides whether a rig runs on the pedal, shared by the editor's export check and the CLI (`sonido_patch::validate::validate_for_daisy`) and the pedal itself (which refuses rigs sent over USB, and jam picks, that would break it): the `EFFECT_CYCLES` of a rig's effects plus `NODE_OVERHEAD_CYCLES` (400) per node must stay within `CHAIN_FRACTION` (80%) of the block budget (`chain_cycles`, `chain_fits`); the editor warns past `WARN_FRACTION` (70%). The heaviest three-effect jams that fit are reverb and distortion with filter, ringmod or bitcrusher (79 to 80%); reverb, distortion and delay (86%) does not. The pedal running distortion → reverb → ringmod in a Hothouse measured 74.7% mean and 84 to 85% at its slowest callbacks, with no block over budget ([Embedded](EMBEDDED.md#chain-configurations)).
 
 The tuner's mean and worst differ because its pitch analysis is periodic. The first on-device run found it doing a whole analysis inside one block: 9,166,077 cycles, 29× that block's budget (an audible dropout every 43 ms on the pedal). It now spreads the analysis one lag per decimated sample across each hop and analyzes its ring in place, which brought the worst block to about 63%.
 
-**The ×25 estimate, checked.** The first on-device run (bare kernels, before the rig-path pass existed) checked the estimate described below (desktop ns/frame × 25 against the per-sample budget) against each kernel's measured mean: the ratio had a median of 1.14 and ran from 0.76 (wah) to 3.13 (tuner), with 28 of the 36 kernels within the ±50% the model claims. Of the eight outside it, all on the pessimistic side, pitch shift, reverb and bitcrusher (1.54–1.62) barely missed; the model overstated the rest by 1.7–3.1×: cabinet 1.7, drone 1.9, time stretch 2.4, texture and tuner 3.1, kernels whose work is periodic, grain-based or convolution. Use the measured table; keep the model for kernels not yet measured.
+**The ×25 estimate, checked.** The first on-device run (bare kernels, before the rig-path pass existed) checked the estimate described below (desktop ns/frame × 25 against the per-sample budget) against each kernel's measured mean: the ratio had a median of 1.14 and ran from 0.76 (wah) to 3.13 (tuner), with 28 of the 36 kernels within the ±50% the model claims. Of the eight outside it, all on the pessimistic side, pitch shift, reverb and bitcrusher (1.54 to 1.62) barely missed; the model overstated the rest by 1.7 to 3.1×: cabinet 1.7, drone 1.9, time stretch 2.4, texture and tuner 3.1. These kernels do periodic, grain-based or convolution work. Use the measured table; keep the model for kernels not yet measured.
 
 ### Updating the cycle table
 
@@ -240,7 +240,7 @@ From `effects_bench` (256-frame blocks; mono groups through `process_block`, ste
 
 Mono costs the same as stereo because the adapter runs each kernel's stereo `process_stereo` either way. Oversampling cost tracks the factor, with the 48-tap Kaiser downsampler on top. The Preamp → Distortion → Chorus → Delay `EffectChain` takes 91.7 µs per 256 frames (1.7% of one core). No shipping path oversamples; `Oversampled<N>` is opt-in.
 
-Run `cargo bench -p sonido-effects` to reproduce (`--bench all_effects` for the table above); reports land in `target/criterion/report/index.html`. Record the CPU, date and commit with any numbers you add here.
+Run `cargo bench -p sonido-effects` to reproduce (`--bench all_effects` for the table above); reports are written to `target/criterion/report/index.html`. Record the CPU, date and commit with any numbers you add here.
 
 For measured cost on the Daisy Seed itself, the firmware example
 `crates/sonido-daisy/examples/bench_kernels.rs` reads the Cortex-M7 DWT cycle
@@ -282,13 +282,13 @@ Est. cycles/sample = desktop_ns/sample × (desktop_GHz / cortex_GHz) × arch_pen
 These estimates have significant uncertainty (±50%):
 - The 4x architecture penalty is a rough heuristic. Actual penalty depends on
   memory access patterns, branch prediction, and FPU utilization.
-- Cortex-M7 has a single-precision FPU, which helps f32 DSP, but no floating-point SIMD.
+- The Cortex-M7 has a hardware FPU (single and double precision), which helps f32 DSP, but no floating-point SIMD.
 - Cache effects differ: the i5-6300U has a 3 MB L3; the STM32H750's Cortex-M7 has
   16 KB I-cache + 16 KB D-cache.
 - The Daisy Seed runs at 480 MHz but memory access to AXI SRAM has wait
   states; DTCM is zero-wait-state.
-- **Real measurement on hardware is essential.** These estimates guide chain
-  planning, not replace profiling.
+- Measure on the hardware: these estimates are for planning a chain and do not
+  replace profiling.
 
 ## Writing New Benchmarks
 
@@ -388,12 +388,12 @@ instruments -t "Time Profiler" target/release/sonido process input.wav output.wa
 
 ### DSP Performance Tips
 
-1. **Avoid allocations in process loops**: Pre-allocate buffers
-2. **Let the Adapter smooth parameters**: kernels declare a `SmoothingStyle`; settled `SmoothedParam`s short-circuit
-3. **Batch operations**: `process_block()` over `process()` when possible
-4. **Minimize function calls**: Inline hot paths
-5. **Use SIMD when available**: Compiler auto-vectorization helps
-6. **Place hot data in DTCM on embedded**: Zero wait-state access at 480 MHz
+1. Avoid allocations in process loops; pre-allocate buffers.
+2. Let the Adapter smooth parameters: kernels declare a `SmoothingStyle`, and settled `SmoothedParam`s short-circuit.
+3. Batch operations: prefer `process_block()` over `process()` when possible.
+4. Minimize function calls by inlining hot paths.
+5. Use SIMD when available; compiler auto-vectorization helps.
+6. On embedded, place hot data in DTCM, which has zero wait-state access at 480 MHz.
 
 ### Measuring Optimization Impact
 
@@ -405,7 +405,7 @@ cargo bench --benches -- Reverb --save-baseline before
 cargo bench --benches -- Reverb --baseline before
 ```
 
-Criterion will show percentage improvement/regression.
+Criterion shows the percentage improvement or regression.
 
 ## CI Benchmarks
 
@@ -417,12 +417,12 @@ gh workflow run ci-manual.yml -f job=bench
 
 The CI bench job runs all 4 crates (core, effects, synth, analysis) and uses `critcmp` for cross-run comparison:
 
-1. **Restore** — `actions/cache` restores the previous `target/criterion/` baseline
-2. **Run** — Each crate's benchmarks save results with `--save-baseline current`
-3. **Compare** — `critcmp` diffs the cached baseline against the current run
-4. **Upload** — Bencher-format text, comparison report, and criterion data stored as artifacts (90-day retention)
+1. `actions/cache` restores the previous `target/criterion/` baseline.
+2. Each crate's benchmarks run and save their results with `--save-baseline current`.
+3. `critcmp` diffs the cached baseline against the current run.
+4. The job uploads the Bencher-format text, the comparison report and the criterion data as artifacts, kept for 90 days.
 
-The comparison report (`bench-comparison.txt`) shows percentage changes per benchmark group. No regression gate — reporting only for human review. Cache key uses `github.sha`; GitHub LRU-evicts old entries within the 10 GB limit.
+The comparison report (`bench-comparison.txt`) shows percentage changes per benchmark group. There is no regression gate: the report is only for a person to review. The cache key uses `github.sha`, and GitHub evicts the least recently used entries to stay within its 10 GB limit.
 
 ### Local comparison
 
@@ -467,7 +467,7 @@ High outlier counts may indicate system interference.
 
 ## See Also
 
-- [Testing](TESTING.md) - Test guide
-- [Contributing](CONTRIBUTING.md) - Development guidelines
-- [Architecture](ARCHITECTURE.md) - System design
-- [Embedded](EMBEDDED.md) - Embedded target details
+- [Testing](TESTING.md): Test guide
+- [Contributing](CONTRIBUTING.md): Development guidelines
+- [Architecture](ARCHITECTURE.md): System design
+- [Embedded](EMBEDDED.md): Embedded target details

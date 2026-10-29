@@ -81,7 +81,7 @@
 //!
 //! ```toml
 //! [dependencies]
-//! sonido-core = { version = "0.1", default-features = false }
+//! sonido-core = { version = "0.2", default-features = false }
 //! ```
 //!
 //! # Example
@@ -143,6 +143,7 @@ pub mod envelope;
 pub mod fast_math;
 pub mod gain;
 pub mod graph;
+pub mod grid;
 pub mod kernel;
 pub mod level;
 pub mod lfo;
@@ -189,6 +190,7 @@ pub use graph::{
     GraphSnapshot, NodeId, NodeKind, NodeRate, ProcessStep, ProcessingGraph, SnapshotEntry,
     SnapshotTopology, StereoBuffer, StereoSamples, TopoNode,
 };
+pub use grid::{GridEar, GridReading};
 pub use kernel::{
     Adapter, ChainMorph, DirectPolicy, DspKernel, KernelParams, MorphCurve, MorphMode, MorphSpace,
     SmoothedPolicy, SmoothingPolicy, SmoothingStyle, curve_lerp,

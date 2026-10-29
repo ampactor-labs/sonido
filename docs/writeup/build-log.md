@@ -62,7 +62,7 @@ The chip has several kinds of memory, and they run at different speeds:
 | SDRAM (external chip) | 64 MB | 4 to 8 wait states | every delay line, reverb tank and looper buffer |
 | QSPI flash (external chip) | 8 MB | slow, for storage | the program at rest, 15 rig slots, the saved state |
 
-At power-on the Electrosmith bootloader copies the program from QSPI flash into SRAM and runs it from there. That puts a hard limit on the program's size: 491,520 bytes. The firmware is now within about 10 KB of that limit (482,016 bytes when built on 2026-10-29), and CI fails any build that doesn't fit.
+At power-on the Electrosmith bootloader copies the program from QSPI flash into SRAM and runs it from there. That puts a hard limit on the program's size: 491,520 bytes. The firmware is now within about 10 KB of that limit (482,024 bytes when built on 2026-10-29), and CI fails any build that doesn't fit.
 
 The effects' memory lives in the 64 MB SDRAM. A two-second stereo delay takes 776 KB, the reverb 118 KB, and the looper 23 MB (60 seconds of stereo). SDRAM is slow, but the processor's data cache helps a lot here, because a delay line reads and writes memory in order. In practice memory is almost never the limit on this pedal (only a rig with three loopers would outgrow it). CPU time is.
 
@@ -177,7 +177,7 @@ Over USB, the pedal shows up as a serial device named "Sonido Pedal". It checks 
 
 1. **Build the Hothouse kit** following Cleveland Music Co.'s guide, and seat the Daisy Seed.
 2. **Check the bootloader.** Press RESET on the Seed. If the LED pulses slowly for about 2.5 seconds, the Electrosmith bootloader is installed. If not, start the chip's ROM bootloader (hold BOOT while you press and release RESET), open [flash.daisy.audio](https://flash.daisy.audio/) in Chrome, and use "Flash Latest Bootloader". After that, use a plain RESET.
-3. **Get the firmware.** CI builds `sonido_pedal.bin` on every push to `main` and every pull request, and keeps it as a downloadable artifact named `sonido_pedal`. The release workflow attaches it to releases, but the one release so far (v0.1.0) came out before that was added. To build it yourself instead:
+3. **Get the firmware.** Download `sonido_pedal.bin` and its SHA-256 checksum from the latest release on the [releases page](https://github.com/ampactor-labs/sonido/releases); v0.2.0 is the first release that includes it. CI also builds it on every push to `main` and every pull request, as a downloadable artifact named `sonido_pedal`. To build it yourself instead:
 
    ```sh
    rustup target add thumbv7em-none-eabihf

@@ -119,7 +119,7 @@
 //!
 //! ```toml
 //! [dependencies]
-//! sonido-synth = { version = "0.1", default-features = false }
+//! sonido-synth = { version = "0.2", default-features = false }
 //! ```
 //!
 //! # Example: Simple Polyphonic Synth

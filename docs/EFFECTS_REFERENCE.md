@@ -4,9 +4,9 @@ Complete parameter reference for all Sonido effects.
 
 ## Kernel Architecture
 
-All 36 effects have kernel-architecture implementations in `crates/sonido-effects/src/kernels/`. Each effect defines `XxxKernel` (`DspKernel` impl) and `XxxParams` (`KernelParams` impl). The registry creates `Adapter<XxxKernel, SmoothedPolicy>` — all consumers (GUI, CLI, plugins and the pedal firmware, which plays every rig through `PatchPlayer`) use kernel-backed effects transparently.
+All 36 effects have kernel-architecture implementations in `crates/sonido-effects/src/kernels/`. Each effect defines `XxxKernel` (`DspKernel` impl) and `XxxParams` (`KernelParams` impl). The registry creates `Adapter<XxxKernel, SmoothedPolicy>`. All consumers (GUI, CLI, plugins and the pedal firmware, which plays every rig through `PatchPlayer`) use kernel-backed effects transparently.
 
-The classic per-effect `Effect` structs have been removed; every effect is kernel-only.
+Every effect is kernel-only; there are no per-effect `Effect` structs.
 
 ```rust
 // Plugins, editor, CLI and pedal (what the registry builds): Adapter<K, SmoothedPolicy>
@@ -53,7 +53,7 @@ Every effect exposes an `output` level parameter in dB, default 0.0 dB. Most use
 
 **Level contract** (`crates/sonido-core/src/level.rs`): at its defaults every effect plays at the loudness of its input, and its mix control does not change that loudness. Each kernel declares `const LEVEL: Level` (`DspKernel::LEVEL`), taken from the generated table in `crates/sonido-effects/src/calibration.rs`. `Level { trim, mix_correlation: Option<f32> }` holds a gain and, for an effect with a mix control, the measured correlation `ρ` between its wet signal and the dry input. Kernels with a mix control blend through `Self::blend` / `Self::blend_stereo`: the wet is multiplied by `trim`, then dry and wet are combined with sine/cosine constant-power gains (`cos(πm/2)`, `sin(πm/2)`) normalized by the blend's power for that correlation, `1/√(1 + ρ·sin(πm))`, so the blend's loudness is the same at every mix setting (`ρ = 0`, as for reverbs and echoes, is the plain constant-power crossfade; `ρ = 1`, as for saturation, keeps amplitude like a linear one). Effects without a mix control apply the trim themselves (`Self::level` / `Self::level_stereo`), before their output level and any safety limiter. Because the trim is fixed, gain-type controls are relative to their defaults: the preamp at its default 15 dB `gain` plays at the input's loudness, and more gain is louder.
 
-The table is measured, never hand-tuned: `cargo run -p sonido-effects --example calibrate --release` plays a reference strummed guitar (`sonido_analysis::signals::reference_guitar`, peaking at `NOMINAL_PEAK_DBFS` = -20 dBFS) through every effect, fully wet when it has a mix control and at its defaults otherwise, measures integrated loudness (LUFS, ITU-R BS.1770-4), and regenerates `calibration.rs`. `crates/sonido-effects/tests/level_contract.rs` holds every effect to it: within 0.5 dB of the dry loudness in that measurement and, for an effect with a mix control, within 1.5 dB at 0, 25, 50, and 75% mix and at its default mix. The looper and tuner are uncalibrated utilities (unity `Level`). Rerun the calibrate example after changing a kernel's sound or defaults. See `docs/DSP_QUALITY_STANDARD.md` for the full quality rules and compliance table.
+The table comes from measurement and is not edited by hand: `cargo run -p sonido-effects --example calibrate --release` plays a reference strummed guitar (`sonido_analysis::signals::reference_guitar`, peaking at `NOMINAL_PEAK_DBFS` = -20 dBFS) through every effect, fully wet when it has a mix control and at its defaults otherwise, measures integrated loudness (LUFS, ITU-R BS.1770-4), and regenerates `calibration.rs`. `crates/sonido-effects/tests/level_contract.rs` checks every effect against it: within 0.5 dB of the dry loudness in that measurement and, for an effect with a mix control, within 1.5 dB at 0, 25, 50, and 75% mix and at its default mix. The looper and tuner are uncalibrated utilities (unity `Level`). Rerun the calibrate example after changing a kernel's sound or defaults. See `docs/DSP_QUALITY_STANDARD.md` for the full quality rules and compliance table.
 
 ---
 
@@ -79,16 +79,16 @@ The distortion applies a static nonlinear transfer function (waveshaper) to the 
 
 ### Waveshape Types and Their Harmonic Character
 
-- **softclip** (`tanh`): Hyperbolic tangent soft clipping. Produces primarily odd harmonics (3rd, 5th, 7th...) with a smooth rolloff. The gentle compression curve means the signal transitions gradually into saturation, mimicking tube amplifier behavior. Odd harmonics are musically consonant (octave + fifth, etc.).
+- **softclip** (`tanh`): Hyperbolic tangent soft clipping. Produces primarily odd harmonics (3rd, 5th, 7th...) with a smooth rolloff. The gentle compression curve means the signal transitions gradually into saturation, similar to a tube amplifier. Odd harmonics are musically consonant (octave + fifth, etc.).
 - **hardclip**: Flat clipping at +/-1.0. Produces a dense series of odd harmonics with slower rolloff than tanh, giving a harsher, more aggressive character. Equivalent to transistor clipping stages.
-- **foldback**: When the signal exceeds a fixed threshold of 0.8, it folds back toward zero rather than clipping. This creates both even and odd harmonics with a complex, sometimes unpredictable spectral signature. The resulting timbres are buzzy and metallic -- useful for synth processing and experimental sound design.
+- **foldback**: When the signal exceeds a fixed threshold of 0.8, it folds back toward zero rather than clipping. This creates both even and odd harmonics with a complex, sometimes unpredictable spectrum. The resulting buzzy, metallic timbres are useful for synth processing and experimental sound design.
 - **asymmetric**: Different clipping curves for positive (`tanh(x)`) and negative (`tanh(1.5x) / 1.5 × 1.2`) half-cycles. Asymmetric nonlinearities generate even harmonics (2nd, 4th...) in addition to odd harmonics. Even harmonics add warmth and are characteristic of single-ended tube amplifier stages (Class A).
 
 ### Tone Filter
 
-The tone control is a peaking EQ biquad (1 kHz, Q 0.7) placed after the waveshaper. The `tone` parameter in dB boosts or cuts around 1 kHz, taming harsh high-frequency harmonics (negative values) or adding brightness (positive values). This is essential because nonlinear processing can generate significant energy above the original signal's bandwidth.
+The tone control is a peaking EQ biquad (1 kHz, Q 0.7) placed after the waveshaper. The `tone` parameter in dB boosts or cuts around 1 kHz, reducing harsh high-frequency harmonics (negative values) or adding brightness (positive values). The control is needed because nonlinear processing can generate significant energy above the original signal's bandwidth.
 
-**Stereo processing**: In stereo mode (`process_stereo`), each channel has its own independent tone filter state. This ensures proper dual-mono behavior -- each channel's filtering history is independent, preventing cross-channel artifacts that would occur if a single filter state were shared between channels.
+**Stereo processing**: In stereo mode (`process_stereo`), each channel has its own independent tone filter state, so the two channels behave as dual mono. A single filter state shared between channels would cause cross-channel artifacts.
 
 **ADAA**: All four waveshape modes use first-order Antiderivative Anti-Aliasing (ADAA, `sonido_core::Adaa1`), which suppresses aliasing from the waveshaper without the CPU cost of oversampling.
 
@@ -107,7 +107,7 @@ sonido process in.wav --effect distortion \
 
 Dynamics compressor with soft knee.
 
-**Architecture** (`crates/sonido-effects/src/kernels/compressor.rs`): Feed-forward design — sidechain highpass, dual envelope follower, soft-knee gain computer, makeup gain, parallel mix.
+**Architecture** (`crates/sonido-effects/src/kernels/compressor.rs`): A feed-forward design with a sidechain highpass, a dual envelope follower, a soft-knee gain computer, makeup gain, and a parallel mix.
 
 ```
 Input -> mid (L+R)/2 -> SC HPF -> Dual Envelope (fast + slow) -> Gain Computer -> Gain Reduction
@@ -115,11 +115,11 @@ Input -> mid (L+R)/2 -> SC HPF -> Dual Envelope (fast + slow) -> Gain Computer -
                                                        Makeup (manual or auto) -> Wet/Dry Mix -> Soft Limit -> Output
 ```
 
-The gain computer (`compute_gain_db()`) implements a soft-knee transfer curve. Below the knee region, no gain reduction occurs. Within the knee (default 6 dB wide), compression increases quadratically -- this smooth transition avoids the audible "threshold artifact" of hard-knee compressors. Above the knee, full ratio compression applies.
+The gain computer (`compute_gain_db()`) implements a soft-knee transfer curve. Below the knee region, no gain reduction occurs. Within the knee (default 6 dB wide), compression increases quadratically. This smooth transition avoids the audible "threshold artifact" of hard-knee compressors. Above the knee, full ratio compression applies.
 
-**Program-dependent release** (`dual_envelope()`): two envelope followers run on the sidechain — a fast one with a fixed 50 ms release and a slow one with the user-set release — and the larger of the two drives the gain computer, so new transients are caught even during a long release.
+**Program-dependent release** (`dual_envelope()`): two envelope followers run on the sidechain, a fast one with a fixed 50 ms release and a slow one with the user-set release. The larger of the two drives the gain computer, so new transients are caught even during a long release.
 
-**Stereo linking**: The detector runs on the mid signal `(L+R)/2`, and identical gain reduction is applied to both channels. This preserves the stereo image -- independent per-channel compression would cause phantom center shifts when one channel is louder than the other. `process_stereo_with_sidechain()` replaces the internal detector input with an external key signal (bypassing the sidechain HPF).
+**Stereo linking**: The detector runs on the mid signal `(L+R)/2`, and identical gain reduction is applied to both channels. This preserves the stereo image. Independent per-channel compression would cause phantom center shifts when one channel is louder than the other. `process_stereo_with_sidechain()` replaces the internal detector input with an external key signal (bypassing the sidechain HPF).
 
 **Auto makeup**: when enabled, makeup is `-threshold * (1 - 1/ratio) * 0.5` dB and the `makeup` parameter is ignored.
 
@@ -201,7 +201,7 @@ Feedback delay with optional ping-pong stereo mode.
 
 **Architecture** (`crates/sonido-effects/src/kernels/delay.rs`): Two `InterpolatedDelay` lines (left/right, up to 2 s) whose feedback path runs through a one-pole lowpass (`feedback_lp`), a biquad highpass (`feedback_hp`), and an optional diffuser of two true Schroeder allpasses (13 ms and 7 ms; `AllpassFilter` in `crates/sonido-core/src/allpass.rs`, feedback = diffusion × 0.6) for smeared, tape-like repeats. The allpasses have unity gain at every frequency, so diffusion inside the feedback loop never raises the loop gain. The delay time uses `Slow` (20 ms) smoothing to avoid zipper noise and pitch clicks when changed during playback.
 
-**Ping-pong mode**: When enabled, the feedback path crosses channels -- the left delay line's output feeds back into the right delay line, and vice versa. This creates alternating left-right echoes that "bounce" across the stereo field. The effect reports `is_true_stereo() -> true` only when ping-pong is active.
+**Ping-pong mode**: When enabled, the feedback path crosses channels: the left delay line's output feeds back into the right delay line, and vice versa. This creates alternating left-right echoes that "bounce" across the stereo field. The effect reports `is_true_stereo() -> true` only when ping-pong is active.
 
 **Gain compensation**: The wet signal is scaled by `(1-feedback)` to exactly cancel comb-filter peak gain at resonance. At fb=0.35 (default), compensation = 0.65; the wet signal at resonance equals the input. At high feedback the wet signal is quieter but the decay tail is longer. The calibrated level trim then sets the wet signal's loudness (see [Output Level Convention](#output-level-convention)), and the `output` parameter provides makeup gain if needed.
 
@@ -225,7 +225,7 @@ Feedback delay with optional ping-pong stereo mode.
 - **Slapback**: time=80-120ms, feedback=20, mix=40
 - **Quarter note** (120 BPM): time=500ms
 - **Dotted eighth** (120 BPM): time=375ms
-- **Long washes**: feedback > 90 — repeats take 65+ echoes to fall 60 dB (feedback is capped at 95%, so the delay never self-oscillates)
+- **Long washes**: feedback > 90, where repeats take 65+ echoes to fall 60 dB (feedback is capped at 95%, so the delay never self-oscillates)
 
 ### Example
 
@@ -238,7 +238,7 @@ sonido process in.wav --effect delay \
 
 ## filter
 
-Multimode RBJ biquad filter — LPF, HPF, BPF, and Notch — followed by a soft limiter and output level (`crates/sonido-effects/src/kernels/filter.rs`). Also available as `lowpass` (LPF is the default mode).
+Multimode RBJ biquad filter with LPF, HPF, BPF, and Notch modes, followed by a soft limiter and output level (`crates/sonido-effects/src/kernels/filter.rs`). Also available as `lowpass` (LPF is the default mode).
 
 | Parameter | Description | Default | Range |
 |-----------|-------------|---------|-------|
@@ -249,10 +249,10 @@ Multimode RBJ biquad filter — LPF, HPF, BPF, and Notch — followed by a soft 
 
 ### Filter Types
 
-- **LPF** (0): Low-pass — attenuates frequencies above cutoff. Standard tone-shaping filter.
-- **HPF** (1): High-pass — attenuates frequencies below cutoff. Useful for removing rumble and mud.
-- **BPF** (2): Band-pass — passes a band around the center frequency, attenuates above and below. Width controlled by Q.
-- **Notch** (3): Band-reject — removes a narrow band at the center frequency. Opposite of bandpass.
+- **LPF** (0): Low-pass. It attenuates frequencies above cutoff and is the standard tone-shaping filter.
+- **HPF** (1): High-pass. It attenuates frequencies below cutoff and is useful for removing rumble and mud.
+- **BPF** (2): Band-pass. It passes a band around the center frequency and attenuates above and below it. Q controls the width.
+- **Notch** (3): Band-reject, the opposite of bandpass. It removes a narrow band at the center frequency.
 
 ### Tips
 
@@ -283,10 +283,10 @@ Simulates the complex pitch modulation of analog tape machines with 6 independen
 
 ### Tips
 
-- **Subtle**: depth=50 (default) - Adds gentle movement
-- **Medium**: depth=100 - Classic tape sound
-- **Heavy**: depth=200 - Obvious warble effect
-- **Extreme**: depth=400 - Maximum wow/flutter
+- **Subtle**: depth=50 (default) for gentle movement
+- **Medium**: depth=100 for a classic tape sound
+- **Heavy**: depth=200 for an obvious warble
+- **Extreme**: depth=400 for maximum wow/flutter
 
 ### Example
 
@@ -318,10 +318,10 @@ Tape machine model (`crates/sonido-effects/src/kernels/tape.rs`): wow/flutter de
 - **Subtle warmth**: drive=3, saturation=20
 - **Tape compression**: drive=6, saturation=30
 - **Saturated tape**: drive=12, saturation=70
-- **Dark tape**: hf_rolloff=4000 — rolls off high frequencies earlier
+- **Dark tape**: hf_rolloff=4000 rolls off high frequencies earlier
 - **Bias offset**: Small bias values add asymmetric harmonic content
-- **Wow/flutter**: wow=0.3, flutter=0.2 — classic tape transport instability
-- **Head bump**: head_bump=0.5, bump_freq=80 — tape machine low-frequency resonance
+- **Wow/flutter**: wow=0.3, flutter=0.2 for classic tape transport instability
+- **Head bump**: head_bump=0.5, bump_freq=80 for a tape machine's low-frequency resonance
 
 ### Example
 
@@ -382,9 +382,9 @@ Damping maps logarithmically to the per-line lowpass cutoff: `200 * 100^(1 - dam
 
 **Early reflections**: The mono pre-delayed signal feeds a tapped delay with 14 prime-spaced taps (131-1009 samples at 44.1 kHz). Tap spacing scales with room size by `0.5 + room_size * 1.5`, so the last reflection lands between about 11 ms (room 0%) and 46 ms (room 100%). Even taps go left, odd taps right, each weighted by `0.3 / sqrt(i+1)`.
 
-**Diffusion**: The FDN output passes through four modulated allpasses per channel (feedback 0.6, 0.15 ms modulation depth), on Freeverb's allpass tunings — 556, 441, 341, 225 samples on the left, offset by +23 samples on the right (579, 464, 364, 248).
+**Diffusion**: The FDN output passes through four modulated allpasses per channel (feedback 0.6, 0.15 ms modulation depth), using Freeverb's allpass tunings: 556, 441, 341, 225 samples on the left, offset by +23 samples on the right (579, 464, 364, 248).
 
-**Gain compensation:** The FDN output is scaled by `sqrt(1-feedback)` — moderate compensation that keeps the wet level roughly constant as decay grows, rather than the exact `(1-fb)` used by single-comb effects (delay, flanger). See `docs/DSP_FUNDAMENTALS.md` (Feedback Resonance Compensation) and ADR-019. The calibrated level trim then sets the wet signal's loudness (see [Output Level Convention](#output-level-convention)).
+**Gain compensation:** The FDN output is scaled by `sqrt(1-feedback)`. This moderate compensation keeps the wet level roughly constant as decay grows; single-comb effects (delay, flanger) use the exact `(1-fb)` instead. See `docs/DSP_FUNDAMENTALS.md` (Feedback Resonance Compensation) and ADR-019. The calibrated level trim then sets the wet signal's loudness (see [Output Level Convention](#output-level-convention)).
 
 **Stereo width**: A mid/side matrix scales the side signal of the wet mix. At width=0% both channels receive the mid (mono); at 100% the wet L/R pass unchanged.
 
@@ -401,14 +401,14 @@ Damping maps logarithmically to the per-line lowpass cutoff: `200 * 100^(1 - dam
 
 ### Tips
 
-- **Small room**: room_size=30, decay=40, damping=60 - Tight, intimate sound
-- **Medium room**: room_size=50, decay=60, damping=40 - Balanced, natural
-- **Large hall**: room_size=80, decay=85, damping=25 - Spacious, epic
-- **Dark reverb**: damping=70-90 - Muffled, vintage sound
-- **Bright reverb**: damping=10-30 - Shimmery, modern sound
-- **Early reflections**: er_level=70-100 — more defined room shape; 0 = tail only
+- **Small room**: room_size=30, decay=40, damping=60 for a tight, intimate sound
+- **Medium room**: room_size=50, decay=60, damping=40 for a balanced, natural sound
+- **Large hall**: room_size=80, decay=85, damping=25 for a spacious, epic sound
+- **Dark reverb**: damping=70-90 for a muffled, vintage sound
+- **Bright reverb**: damping=10-30 for a shimmery, modern sound
+- **Early reflections**: er_level=70-100 for a more defined room shape; 0 = tail only
 - **Pre-delay**: 10-30ms for clarity, keeps source separate from reverb
-- **Latency**: Reverb reports 0 latency samples. Predelay is a musical parameter, not processing latency (per CLAP/VST3 spec)
+- **Latency**: Reverb reports 0 latency samples. Predelay is a musical parameter and does not count as processing latency (per CLAP/VST3 spec)
 - **Tail**: Reverb reports `decay × 3 s` of tail (up to 3 s at decay=100%) so hosts keep processing after the input stops
 
 ### Example
@@ -452,9 +452,9 @@ Amplitude modulation with multiple waveforms.
 
 ### Tips
 
-- **Subtle tremolo**: rate=4, depth=30 - Gentle pulsing
-- **Classic tremolo**: rate=6, depth=50 - Vintage amp sound
-- **Choppy tremolo**: rate=8, depth=80, waveform=2 - Rhythmic gating
+- **Subtle tremolo**: rate=4, depth=30 for gentle pulsing
+- **Classic tremolo**: rate=6, depth=50 for a vintage amp sound
+- **Choppy tremolo**: rate=8, depth=80, waveform=2 for rhythmic gating
 
 ### Example
 
@@ -533,7 +533,7 @@ All three are modulation effects, but they differ in mechanism:
 
 - **Subtle flanger**: rate=0.2, depth=30, feedback=30
 - **Classic flanger**: rate=0.5, depth=50, feedback=50
-- **Jet flanger**: rate=0.1, depth=80, feedback=80 - Slow, dramatic sweep
+- **Jet flanger**: rate=0.1, depth=80, feedback=80 for a slow, dramatic sweep
 - **Metallic**: high feedback (70%+) creates resonant metallic tones
 
 ### Example
@@ -595,7 +595,7 @@ sonido process in.wav --effect phaser \
 
 Auto-wah and manual wah with envelope follower. Also available as `autowah`.
 
-**Architecture** (`crates/sonido-effects/src/kernels/wah.rs`): State Variable Filter in bandpass mode with an envelope follower for auto-wah. In auto mode, the envelope follower tracks input amplitude (5 ms attack, 50 ms release) and sweeps the SVF cutoff upward from the base frequency across a 200–2000 Hz range proportionally to the sensitivity setting. In manual mode, the frequency parameter directly sets the SVF cutoff.
+**Architecture** (`crates/sonido-effects/src/kernels/wah.rs`): State Variable Filter in bandpass mode with an envelope follower for auto-wah. In auto mode, the envelope follower tracks input amplitude (5 ms attack, 50 ms release) and sweeps the SVF cutoff upward from the base frequency across a 200 to 2000 Hz range proportionally to the sensitivity setting. In manual mode, the frequency parameter directly sets the SVF cutoff.
 
 ```
 Input → EnvelopeFollower (auto-wah) → Target Frequency → SVF Bandpass → Normalize → Mix (80/20 wet/dry) → Soft Limit → Output Level
@@ -848,14 +848,14 @@ highs remain stereo. Prevents sub-bass phase cancellation on playback systems.
 
 ### Haas Delay
 
-A short delay (0–30 ms) on one channel creates a spatial impression without
+A short delay (0 to 30 ms) on one channel creates a spatial impression without
 altering frequency content. Named after Helmut Haas (1951).
 
 ### Tips
 
-- **Width 0%**: Instant mono fold-down — useful before mono bass processing
+- **Width 0%**: Instant mono fold-down, useful before mono bass processing
 - **Bass Mono + 120 Hz**: Standard crossover for club/festival playback
-- **Haas 8–15 ms**: Natural-sounding stereo widening without M/S artifacts
+- **Haas 8 to 15 ms**: Natural-sounding stereo widening without M/S artifacts
 - **Phase invert one channel**: Check for mono compatibility issues
 - **Channel Swap**: Quick A/B for stereo image debugging
 
@@ -954,7 +954,7 @@ sonido process in.wav --effect transient_shaper --param attack=50 --param sustai
 
 ## amp
 
-Amp simulator — dual gain stage + interactive tone stack + sag.
+Amp simulator with a dual gain stage, an interactive tone stack, and sag.
 
 **Signal flow** (`crates/sonido-effects/src/kernels/amp.rs`):
 
@@ -990,7 +990,7 @@ sonido process in.wav --effect amp --param gain=70 --param bass=60 --param trebl
 
 ## cabinet
 
-Cabinet IR simulator — direct convolution with 3 factory impulse responses.
+Cabinet IR simulator using direct convolution with 3 factory impulse responses.
 
 **Signal flow** (`crates/sonido-effects/src/kernels/cabinet.rs`):
 
@@ -1021,7 +1021,7 @@ sonido process in.wav --effect cabinet --param ir_select=1 --param low_cut=100
 
 ## deesser
 
-De-esser — wideband sibilance reduction via sidechain HPF.
+De-esser: wideband sibilance reduction via a sidechain HPF.
 
 **Signal flow** (`crates/sonido-effects/src/kernels/deesser.rs`):
 
@@ -1051,7 +1051,7 @@ sonido process vocal.wav --effect deesser --param freq=7000 --param threshold=-1
 
 ## drone
 
-Sympathetic resonance generator — harmonically-related sustaining tones.
+Sympathetic resonance generator that produces harmonically related sustaining tones.
 
 **Signal flow** (`crates/sonido-effects/src/kernels/drone.rs`):
 
@@ -1061,7 +1061,7 @@ Input → Envelope Follower → gate tones → Zero-Crossing Detector
       → Decay Envelope → add to dry → Output
 ```
 
-Detects input amplitude and generates harmonically-related sine tones (root, perfect fifth, octave) at a pitch estimated from rising zero-crossings (estimates outside 50–2000 Hz are ignored). Tones sustain independently after input stops, controlled by the `decay` time constant; the kernel reports `decay × 6.9 × sample_rate` samples (the time to fall 60 dB) as its tail, so hosts keep processing until the drone has died away.
+Detects input amplitude and generates harmonically related sine tones (root, perfect fifth, octave) at a pitch estimated from rising zero-crossings (estimates outside 50 to 2000 Hz are ignored). Tones sustain independently after input stops, controlled by the `decay` time constant; the kernel reports `decay × 6.9 × sample_rate` samples (the time to fall 60 dB) as its tail, so hosts keep processing until the drone has died away.
 
 **Parameters:**
 
@@ -1084,7 +1084,7 @@ sonido process guitar.wav --effect drone --param root_mix=40 --param decay=5
 
 ## glitch
 
-Buffer manipulation — stutter, tape-stop, reverse, shuffle.
+Buffer manipulation: stutter, tape-stop, reverse, shuffle.
 
 **Signal flow** (`crates/sonido-effects/src/kernels/glitch.rs`):
 
@@ -1117,7 +1117,7 @@ sonido process drums.wav --effect glitch --param mode=0 --param rate=8 --param p
 
 ## harmonic_habitat
 
-Pitch-aware modal reverb — an FDN tail colored by a resonant bank tuned to the input's pitch.
+Pitch-aware modal reverb: an FDN tail colored by a resonant bank tuned to the input's pitch.
 
 **Signal flow** (`crates/sonido-effects/src/kernels/harmonic_habitat.rs`):
 
@@ -1127,7 +1127,7 @@ Input → Predelay L/R → mono sum ─┬→ 8-line FDN (Hadamard feedback, dam
 wet L/R → 6-band modal bank (center × Mode ratios) → M/S Width → Mix → Output → Soft Limit
 ```
 
-The predelayed input is summed to mono and feeds an 8-line feedback delay network with Hadamard mixing, slowly modulated delay lengths, and a one-pole lowpass per line (cutoff 18 kHz at 0% damping down to 180 Hz at 100%). Room Size and Decay together set the feedback, capped at 0.985. A zero-crossing tracker estimates the input's fundamental (55–1200 Hz; 220 Hz before any input and whenever Tracking is 0). Six peaking filters per channel are tuned to that center times the selected Mode's ratios and color the wet signal. Coloration strength is Harmonicity × Tracking, scaled from 25% up to 100% by the tracker's confidence, so with Tracking at 0 the modal bank is bypassed and the effect is a plain FDN reverb.
+The predelayed input is summed to mono and feeds an 8-line feedback delay network with Hadamard mixing, slowly modulated delay lengths, and a one-pole lowpass per line (cutoff 18 kHz at 0% damping down to 180 Hz at 100%). Room Size and Decay together set the feedback, capped at 0.985. A zero-crossing tracker estimates the input's fundamental (55 to 1200 Hz; 220 Hz before any input and whenever Tracking is 0). Six peaking filters per channel are tuned to that center times the selected Mode's ratios and color the wet signal. Coloration strength is Harmonicity × Tracking, scaled from 25% up to 100% by the tracker's confidence, so with Tracking at 0 the modal bank is bypassed and the effect is a plain FDN reverb.
 
 **Parameters:**
 
@@ -1170,7 +1170,7 @@ Input ─┬─ 2× LP @ low_xover ───────────────
        └─ 2× HP @ high_xover ────────────────────── [High Comp] → × high_gain ─┘
 ```
 
-Splits the signal into low, mid, and high bands with Linkwitz-Riley crossovers — each split is two cascaded Butterworth biquads (Q = 1/√2), i.e. a 4th-order LR slope. Each band is independently compressed (peak envelope, 10 ms attack, 100 ms release, hard knee) and scaled by its own gain before the bands are summed.
+Splits the signal into low, mid, and high bands with Linkwitz-Riley crossovers, each split made of two cascaded Butterworth biquads (Q = 1/√2), i.e. a 4th-order LR slope. Each band is independently compressed (peak envelope, 10 ms attack, 100 ms release, hard knee) and scaled by its own gain before the bands are summed.
 
 **Parameters:**
 
@@ -1199,7 +1199,7 @@ sonido process mix.wav --effect multiband_comp --param low_xover=200 --param hig
 
 ## pitch_shift
 
-Granular pitch shifter — overlapping Hann-windowed grain crossfade.
+Granular pitch shifter that crossfades overlapping Hann-windowed grains.
 
 **Signal flow** (`crates/sonido-effects/src/kernels/pitch_shift.rs`):
 
@@ -1242,7 +1242,7 @@ Input → mono sum → Bandwidth LP → Pre-delay → 4 Input Diffusers (allpass
       → Dattorro output taps: wet_L = tank0 − tank1, wet_R = tank1 − tank0 → Mix → Output
 ```
 
-Models the classic EMT 140 plate reverb: highly diffuse, colorless tail with smooth decay and natural density. The input is summed to mono, band-limited by a one-pole `bandwidth` filter (200 Hz at 0% up to 20 kHz at 100%), pre-delayed, and smeared by four series input allpasses (feedback 0.1–0.85 from `diffusion`). The tank has two halves; each runs a slowly modulated allpass (feedback 0.7) into a delay line with one-pole damping (20 kHz at 0% `damping` down to 200 Hz at 100%), and each half's delay output feeds the other half's input. All allpasses are true Schroeder allpasses (`crates/sonido-core/src/allpass.rs`), unity gain at every frequency, so the decay gain alone sets the tank's loop gain (the damping filters only take away highs).
+Models the classic EMT 140 plate reverb: highly diffuse, colorless tail with smooth decay and natural density. The input is summed to mono, band-limited by a one-pole `bandwidth` filter (200 Hz at 0% up to 20 kHz at 100%), pre-delayed, and smeared by four series input allpasses (feedback 0.1 to 0.85 from `diffusion`). The tank has two halves; each runs a slowly modulated allpass (feedback 0.7) into a delay line with one-pole damping (20 kHz at 0% `damping` down to 200 Hz at 100%), and each half's delay output feeds the other half's input. All allpasses are true Schroeder allpasses (`crates/sonido-core/src/allpass.rs`), unity gain at every frequency, so the decay gain alone sets the tank's loop gain (the damping filters only take away highs).
 
 **Decay** is an RT60 in seconds: the cross-feedback gain per pass is `10^(-3 · loop_len / (decay · sample_rate))`, where `loop_len` is one tank half (the average of the two halves' delay plus allpass lengths), so the tail falls 60 dB in `decay` seconds at any `size` (gain capped at 0.995). `size` scales the tank delays from 0.5× (0%) to 2× (100%).
 
@@ -1301,7 +1301,7 @@ sonido process mix.wav --effect shelving_eq --param low_gain=3 --param high_gain
 
 ## spring_reverb
 
-Allpass dispersion chain — models physical spring reverb character.
+Allpass dispersion chain that models the character of a physical spring reverb.
 
 **Signal flow** (`crates/sonido-effects/src/kernels/spring_reverb.rs`):
 
@@ -1311,7 +1311,7 @@ Input → mono sum → Drip (soft clip) → (+ feedback) → 6 Dispersion Allpas
                                         └→ × decay gain → back to the allpass input
 ```
 
-Models the distinctive boingy, splashy character of a physical spring reverb unit. Six true Schroeder allpasses (feedback 0.7) in series disperse the signal; `tension` sets their lengths, from twice their base (0%, loose and boingy) to half of it (100%, tight and bright), and the decay keeps its RT60 as the loop length changes. The chain feeds a one-pole damping filter (20 kHz at 0% `damping` down to 200 Hz at 100%) and a feedback delay (4800 samples at 44.1 kHz, about 109 ms, at the 2 s default, scaled by `decay / 2`) whose output is the wet signal and, scaled by the decay gain, recirculates to the chain input. A soft limiter (ceiling 1.5) inside the loop guards against runaway.
+Models the distinctive boingy, splashy character of a physical spring reverb unit. Six true Schroeder allpasses (feedback 0.7) in series disperse the signal; `tension` sets their lengths, from twice their base (0%, loose and boingy) to half of it (100%, tight and bright), and the decay keeps its RT60 as the loop length changes. The chain feeds a one-pole damping filter (20 kHz at 0% `damping` down to 200 Hz at 100%) and a feedback delay (4800 samples at 44.1 kHz, about 109 ms, at the 2 s default, scaled by `decay / 2`) whose output is the wet signal and, scaled by the decay gain, recirculates to the chain input. A soft limiter (ceiling 1.5) inside the loop prevents runaway.
 
 **Decay** is an RT60 in seconds: the gain per trip around the loop is `10^(-3 · loop_len / (decay · sample_rate))` (capped at 0.99), where `loop_len` is the allpass chain plus the feedback delay, so the tail falls 60 dB in `decay` seconds.
 
@@ -1431,7 +1431,7 @@ Decouples time and pitch using independently controlled granular read heads. Ref
 - **Pitch Ratio**: independent of time. 0.5 = octave down, 2.0 = octave up.
 - **Freeze**: holds the current buffer contents, stops writing.
 - **Density**: number of overlapping grains, 1 at 0% up to 8 at 100%.
-- **Sync**: reserved for tempo sync; currently has no effect on the audio.
+- **Sync**: snaps the grain length to the power-of-two beat subdivision (1/2, 1/4, 1/8, … of a beat) nearest Grain Size, at the host tempo (120 BPM until the host reports one).
 
 **CLI:**
 
@@ -1443,7 +1443,7 @@ sonido process vocal.wav --effect time_stretch --param time_ratio=0.75 --param p
 
 ## tuner
 
-Chromatic tuner — YIN pitch detection with diagnostic outputs.
+Chromatic tuner using YIN pitch detection, with diagnostic outputs.
 
 **Signal flow** (`crates/sonido-effects/src/kernels/tuner.rs`):
 
@@ -1465,7 +1465,7 @@ Mono-sums the input, box-averages it down to roughly 24 kHz, and keeps the lates
 | 3 | Detected Hz | 0–5000 | 0.0 | Hz | Linear | None | HIDDEN, READ_ONLY |
 | 4 | Cents | −50–+50 | 0.0 | cents | Linear | None | HIDDEN, READ_ONLY |
 
-Mute labels: "Off", "On". Detected Hz and Cents are diagnostic readbacks — not knob-writable.
+Mute labels: "Off", "On". Detected Hz and Cents are diagnostic readbacks, and no knob can write them.
 
 **CLI:**
 

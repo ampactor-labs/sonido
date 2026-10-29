@@ -48,7 +48,7 @@
 //! let adapter = Adapter::new(ReverbKernel::new(48000.0), 48000.0);
 //! let mut effect: Box<dyn Effect> = Box::new(adapter);
 //!
-//! // Embedded / Daisy Seed — zero-smoothing adapter, as the pedal firmware uses
+//! // Embedded / Daisy Seed — zero-smoothing adapter for single-effect firmware examples (the pedal itself uses `Adapter::new`)
 //! let effect = Adapter::new_direct(ReverbKernel::new(48000.0), 48000.0);
 //!
 //! // Or drive the kernel directly with a typed params struct (no adapter)
@@ -424,7 +424,7 @@ kernel_params! {
 ///
 /// ## DSP State
 ///
-/// - **8 FDN delay lines** (`InterpolatedDelay`, Cubic): the core reverb tank.
+/// - **8 FDN delay lines** (`InterpolatedDelay`, Linear): the core reverb tank.
 ///   Each line has a sinusoidal LFO that modulates the read position to break
 ///   metallic resonances.
 /// - **8 one-pole damping filters**: one per FDN line. Applied after Hadamard

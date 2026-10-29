@@ -44,9 +44,9 @@ impl Default for GainParams {
 }
 ```
 
-Defaults are the effect's voiced sweet spot: a freshly opened plugin starts at
-the descriptor defaults, and a pedal knob at noon selects them, so choose the
-setting you want heard first. `Default` must return the same values as the
+The defaults should be the setting where the effect sounds best: a freshly
+opened plugin starts at the descriptor defaults, and a pedal knob at noon
+selects them, so choose the setting you want heard first. `Default` must return the same values as the
 descriptors (Step 2); `crates/sonido-effects/tests/default_parity.rs` checks
 every kernel, so add a `check::<GainParams>("mygain", &mut v)` line there.
 
@@ -93,10 +93,10 @@ impl KernelParams for GainParams {
 - `ParamId` must be unique across all effects. Each effect owns a block of 100
   (distortion 200.., reverb 1500.., harmonic_habitat 3600..); grep
   `crates/sonido-effects/src/kernels` for `ParamId(` and take the next free block.
-- `string_id` is the serialization key — never rename once shipped.
+- `string_id` is the serialization key, so never rename it once shipped.
 - Use `SmoothingStyle::None` for stepped/enum params, `Slow` (20ms) for filter coefficients.
 - When a factory descriptor's default doesn't suit the effect (`ParamDescriptor::mix()`
-  and `depth()` default to 50%), set its sweet spot with `.with_default(v)`.
+  and `depth()` default to 50%), set the effect's own default with `.with_default(v)`.
 
 ## Step 3: Implement DspKernel
 
@@ -134,8 +134,8 @@ impl DspKernel for GainKernel {
 ```
 
 **Rules:**
-- Use `libm::sinf()` / `libm::expf()` — never `f32::sin()` (breaks `no_std`).
-- `reset()` must clear ALL mutable state: filter memories, delay buffers, LFO phases.
+- Use `libm::sinf()` / `libm::expf()`, never `f32::sin()` (it breaks `no_std`).
+- `reset()` must clear all mutable state: filter memories, delay buffers, LFO phases.
 - `set_sample_rate()` must invalidate cached coefficients (set the cache to `NaN`
   and test it with `needs_update`, or call `Cached::invalidate`; see
   [Cached Filter Coefficients](#cached-filter-coefficients)).
@@ -224,14 +224,15 @@ impl DspKernel for GainKernel {
 ```
 
 Do this before running the example again: it scales the trim already in the
-table by the error it measures, so it assumes the kernel applies that trim.
+table by the error it measures, which is only correct if the kernel applies that
+trim.
 
 `Level` holds a `trim` and, for an effect with a mix control, the measured
 correlation of its wet signal with the dry input (`mix_correlation`).
 `Self::blend` applies the trim to the wet signal. An effect without a mix
 control passes its sound through `Self::level` (or `Self::level_stereo`) where
 it leaves the processing: before the output knob and any `soft_limit`, so the
-limiter guards the final level. Either way the kernel itself is calibrated,
+limiter acts on the final level. Either way the kernel itself is calibrated,
 with or without an `Adapter`.
 
 Run the example again whenever you change a kernel's sound or its defaults.

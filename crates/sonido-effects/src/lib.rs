@@ -120,7 +120,7 @@
 //!
 //! ```toml
 //! [dependencies]
-//! sonido-effects = { version = "0.1", default-features = false }
+//! sonido-effects = { version = "0.2", default-features = false }
 //! ```
 
 #![cfg_attr(not(feature = "std"), no_std)]

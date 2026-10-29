@@ -46,7 +46,7 @@ Architecture Decision Records (ADRs) for the Sonido DSP framework. Each record c
 
 ### Context
 
-Audio effects libraries typically start with a mono `process(f32) -> f32` interface and add stereo support later. This creates friction for effects that require cross-channel interaction (reverb, ping-pong delay, stereo widener) because the mono interface cannot express them.
+Audio effects libraries typically start with a mono `process(f32) -> f32` interface and add stereo support later. That causes problems for effects that require cross-channel interaction (reverb, ping-pong delay, stereo widener), because the mono interface cannot express them.
 
 ### Decision
 
@@ -93,7 +93,7 @@ Core crates (`sonido-core`, `sonido-effects`, `sonido-synth`, `sonido-registry`,
 ### Rationale
 
 - **Compile-time enforcement**: `#![cfg_attr(not(feature = "std"), no_std)]` at the crate level means any accidental `std` dependency is a compile error
-- **Embedded-first, not embedded-afterthought**: Adding `no_std` support retroactively is painful; designing for it from the start is cleaner
+- **Embedded support from the start**: Adding `no_std` support to existing code is difficult; designing for it from the start is cleaner
 - **Minimal cost on desktop**: Using `libm` instead of `std::f32` has negligible performance impact (the compiler often inlines to the same hardware instructions)
 
 ### Tradeoffs
@@ -132,7 +132,7 @@ Each oversampling factor has a precomputed `[FACTOR][8]` kernel array. Each row 
 
 The Kaiser beta of 8.0 was chosen via Kaiser's empirical formula to achieve >80 dB stopband attenuation with 48 taps. Three coefficient sets target different normalized cutoffs: 0.45 (2x), 0.225 (4x), 0.1125 (8x) of the oversampled Nyquist. All sets are symmetric (linear phase).
 
-**Why Kaiser beta = 8.0:** The Kaiser window provides a direct, well-characterized tradeoff between main-lobe width (transition bandwidth) and sidelobe level (stopband attenuation). At beta=8.0, sidelobe suppression exceeds 80 dB — sufficient to keep alias products inaudible even for aggressive waveshaping. Higher beta (e.g., 10.0) would improve rejection but widen the transition band, requiring more taps to maintain the same passband flatness.
+**Why Kaiser beta = 8.0:** The Kaiser window provides a direct, well-characterized tradeoff between main-lobe width (transition bandwidth) and sidelobe level (stopband attenuation). At beta=8.0, sidelobe suppression exceeds 80 dB, which keeps alias products inaudible even for aggressive waveshaping. Higher beta (e.g., 10.0) would improve rejection but widen the transition band, requiring more taps to maintain the same passband flatness.
 
 **Why polyphase decomposition for upsampling:** The textbook approach to upsampling (zero-stuff then filter) wastes computation multiplying zeros. Polyphase decomposition evaluates only the non-zero tap positions for each sub-sample, reducing work by a factor of FACTOR while producing identical results.
 
@@ -242,7 +242,7 @@ The virtual dispatch overhead (~2-3 ns per effect per sample) is negligible for 
 **Status:** Accepted
 **Source:** `crates/sonido-core/src/param.rs`
 
-> **Note (2026-10-22):** `SmoothedParam` now settles exactly: it snaps to its target once within one part in a million of the target's magnitude (never tighter than 1e-6), or once a step no longer changes the `f32` value. With the old absolute 1e-6 threshold a smoother could stall a few representable values short of a large target (a 4 kHz parameter never settled; test `large_values_settle_exactly`) and keep its adapter re-writing every parameter every sample. The "equal-power crossfades" use listed below for `LinearSmoothedParam` did not materialize: it has no users in the workspace, and effects' wet/dry blends follow the correlation-normalized constant-power law of `sonido_core::level` (ADR-031).
+> **Note (2026-10-22):** `SmoothedParam` now settles exactly: it snaps to its target once within one part in a million of the target's magnitude (never tighter than 1e-6), or once a step no longer changes the `f32` value. With the old absolute 1e-6 threshold a smoother could stall a few representable values short of a large target (a 4 kHz parameter never settled; test `large_values_settle_exactly`) and keep its adapter re-writing every parameter every sample. The "equal-power crossfades" use listed below for `LinearSmoothedParam` was never adopted: it has no users in the workspace, and effects' wet/dry blends follow the correlation-normalized constant-power law of `sonido_core::level` (ADR-031).
 
 ### Context
 
@@ -280,7 +280,7 @@ This is derived from the one-pole lowpass time constant: after `smoothing_time_m
 
 ## ADR-007: Transposed Direct Form II for Biquad Filters
 
-**Status:** Accepted (revised — originally Direct Form I, changed to TDF-II)
+**Status:** Accepted (revised: originally Direct Form I, changed to TDF-II)
 **Source:** `crates/sonido-core/src/biquad.rs`
 
 ### Context
@@ -307,7 +307,7 @@ s2   = b2 * x[n] - a2 * y[n]
 
 ### Tradeoffs
 
-- **Modulation tolerance**: DF-I is slightly more graceful when coefficients change mid-stream, because its delay lines store raw input/output history. TDF-II state depends on current coefficients, so rapid coefficient changes can produce transients. This is mitigated by using the SVF (ADR-008) for audio-rate modulation.
+- **Modulation tolerance**: DF-I handles coefficient changes mid-stream slightly better, because its delay lines store raw input/output history. TDF-II state depends on current coefficients, so rapid coefficient changes can produce transients. This is mitigated by using the SVF (ADR-008) for audio-rate modulation.
 - **For audio-rate modulation**: The SVF topology (ADR-008) remains preferred over biquad when filter parameters change at audio rate.
 
 ### Supersedes
@@ -356,7 +356,7 @@ Both topologies are available because each has strengths:
 **Status:** Superseded
 **Source:** `crates/sonido-effects/src/kernels/reverb.rs`
 
-> **Note (2026-10-22):** The reverb is no longer a pair of Freeverb comb/allpass tanks. `ReverbKernel` is now one 8-line FDN with a Hadamard feedback matrix, on Freeverb's comb lengths (`FDN_TUNINGS_44K`), followed by separate L/R allpass diffusion chains (`ALLPASS_TUNINGS_44K` / `ALLPASS_TUNINGS_44K_R`, the 23-sample offset survives there) and a 14-tap early-reflection delay. The params are now `room_size_pct`, `decay_pct`, `damping_pct`, `predelay_ms`, `mix_pct`, `width_pct` (index 5), `er_level_pct`, `output_db`; there is no `reverb_type` param. See the header of `reverb.rs` and `docs/EFFECTS_REFERENCE.md`. The record below describes the original design.
+> **Note (2026-10-22):** The reverb is no longer a pair of Freeverb comb/allpass tanks. `ReverbKernel` is now one 8-line FDN with a Hadamard feedback matrix, on Freeverb's comb lengths (`FDN_TUNINGS_44K`), followed by separate L/R allpass diffusion chains (`ALLPASS_TUNINGS_44K` / `ALLPASS_TUNINGS_44K_R`, which keep the 23-sample offset) and a 14-tap early-reflection delay. The params are now `room_size_pct`, `decay_pct`, `damping_pct`, `predelay_ms`, `mix_pct`, `width_pct` (index 5), `er_level_pct`, `output_db`; there is no `reverb_type` param. See the header of `reverb.rs` and `docs/EFFECTS_REFERENCE.md`. The record below describes the original design.
 
 ### Context
 
@@ -376,7 +376,7 @@ The offset is approximately 23 samples (~0.5 ms at 44.1 kHz).
 ### Rationale
 
 - **Decorrelation**: Offset delay times ensure the left and right reverb tails are uncorrelated, producing a convincing stereo image. Identical tanks would produce a mono reverb panned to center.
-- **Width control**: A `stereo_width` parameter (exposed via `ParameterInfo` at index 5, range 0.0–1.0, default 1.0) blends between the decorrelated channels (full stereo) and their average (mono), using mid-side processing. This gives users continuous control from mono to wide stereo.
+- **Width control**: A `stereo_width` parameter (exposed via `ParameterInfo` at index 5, range 0.0 to 1.0, default 1.0) blends between the decorrelated channels (full stereo) and their average (mono), using mid-side processing. This gives users continuous control from mono to wide stereo.
 - **Type presets**: A `reverb_type` parameter (index 6) selects between Room (0), Hall (1), and Plate (2) presets, each with tuned defaults for room size, decay, and damping. The default Room preset uses room_size 0.5 for a medium, natural-sounding space.
 - **No cross-feed**: Each channel has its own processing path. The left input excites only the left tank. This is simpler than cross-coupled topologies and avoids feedback loops between channels.
 
@@ -404,7 +404,7 @@ Use `f32` exclusively for all audio processing, state storage, and parameter val
 - **Sufficient precision**: `f32` provides ~144 dB of dynamic range, exceeding 24-bit audio converters (~144 dB theoretical) and far exceeding the ~120 dB range of human hearing.
 - **Cache efficiency**: `f32` uses half the memory bandwidth of `f64`. For delay lines (potentially tens of thousands of samples), this translates directly to fewer cache misses.
 - **SIMD alignment**: Four `f32` values fit in a 128-bit SIMD register (SSE/NEON), enabling future vectorization. Only two `f64` values fit, halving throughput.
-- **Embedded compatibility**: ARM Cortex-M7 (Daisy Seed) has a single-precision FPU. Double-precision operations would require software emulation, dramatically reducing performance.
+- **Embedded speed**: The Daisy Seed's Cortex-M7 (STM32H750) has a double-precision FPU, but double-precision arithmetic is slower than single-precision there, and `f64` state takes twice the memory and twice the cache space. (This record used to say the M7 had no double-precision FPU; ST's product page for the STM32H750 lists one.)
 
 ### Where f64 Could Help
 
@@ -429,7 +429,7 @@ A centralized `EffectRegistry` that maps string names to factory functions, retu
 
 - **Decoupling**: Application code does not need to import every effect type
 - **Categorization**: Effects are organized by `EffectCategory` (Dynamics, Distortion, Modulation, etc.) for UI grouping
-- **Metadata**: Each registry entry includes name, description, category, and parameter count — currently 36 effects with param counts ranging from 3 to 12
+- **Metadata**: Each registry entry includes name, description, category, and parameter count. There are currently 36 effects, with param counts ranging from 3 to 12
 - **Parameter discovery**: `param_index_by_name()` enables CLI and config systems to resolve parameter names to indices at runtime
 - **`no_std` compatible**: The registry uses `alloc` (for `Box` and `Vec`) but not `std`
 
@@ -460,7 +460,7 @@ A `ControlMapper` bridges between `ControlId` values and `ParameterInfo` indices
 ### Rationale
 
 - **Unified mapping**: The same effect code works whether controlled by a physical knob, GUI slider, MIDI CC, or automation lane
-- **Priority/conflict resolution**: The namespace makes it clear which control source has authority when multiple sources control the same parameter
+- **Priority/conflict resolution**: The namespace makes it clear which control source takes precedence when multiple sources control the same parameter
 - **Compact**: 16-bit IDs fit in embedded memory constraints while supporting up to 256 controls per namespace
 - **Extensible**: New namespaces (e.g., OSC, network) can be added without changing existing code
 
@@ -487,7 +487,7 @@ Provide two implementations:
 - **`InterpolatedDelay`** is appropriate when the delay size depends on sample rate (computed at runtime) or when multiple effects with different delay requirements share code
 - **`FixedDelayLine<N>`** eliminates all heap allocation, making it suitable for bare-metal embedded where `alloc` may not be available
 - Both share the same circular buffer concept and similar API, reducing cognitive overhead
-- Both implementations offer cubic (Lagrange 3rd-order) interpolation, which is valuable for effects like chorus and flanger where modulated delay smoothness matters. JUCE uses Lagrange3rd as the default for modulated delays
+- Both implementations offer cubic (Lagrange 3rd-order) interpolation, which helps effects like chorus and flanger, where the smoothness of the modulated delay matters. JUCE uses Lagrange3rd as the default for modulated delays
 
 ---
 
@@ -571,7 +571,7 @@ This is a building block for the `ModulationMatrix` in the synthesis engine, whe
 
 ### Context
 
-IEEE 754 subnormal (denormalized) floating-point numbers cause severe CPU performance degradation -- up to 100x slower processing on x86 and ARM architectures. In audio DSP, subnormals arise naturally when feedback loops (comb filters, allpass chains, IIR filters) decay toward zero. A reverb tail fading to silence can spike CPU usage dramatically if subnormals are not handled.
+IEEE 754 subnormal (denormalized) floating-point numbers cause severe CPU performance degradation: processing can be up to 100x slower on x86 and ARM architectures. In audio DSP, subnormals arise naturally when feedback loops (comb filters, allpass chains, IIR filters) decay toward zero. A reverb tail fading to silence can spike CPU usage dramatically if subnormals are not handled.
 
 ### Options Considered
 
@@ -598,7 +598,7 @@ pub fn flush_denormal(x: f32) -> f32 {
 
 **Precision**: The flush is applied only where needed (feedback paths, IIR state) rather than globally. FTZ/DAZ flags affect all floating-point operations in the thread, which could interfere with other libraries or computation running alongside the audio engine.
 
-**Safety**: FTZ/DAZ flag manipulation requires `unsafe` code (inline assembly or intrinsics) and is thread-global state. Changing it can affect other code in the same thread without their knowledge. The explicit flush has no such side effects.
+**Safety**: FTZ/DAZ flag manipulation requires `unsafe` code (inline assembly or intrinsics) and is thread-global state. Changing it can silently affect other code in the same thread. The explicit flush has no such side effects.
 
 **DC offset rejection**: Unlike DC injection (option 2), the flush strategy does not add any DC content to the signal. DC injection can accumulate through cascaded effects and reduce headroom. A separate `DcBlocker` filter is provided for cases where DC offset from other sources (asymmetric waveshaping) needs to be removed.
 
@@ -632,7 +632,7 @@ After implementing 15 effects, a codebase audit revealed significant duplication
 
 Extract a shared vocabulary into `sonido-core` consisting of:
 
-1. **`gain.rs`**: Universal output level contract — `output_level_param()`, `set_output_level_db()`, `output_param_descriptor()`. All 15 effects expose an output param at the last `ParameterInfo` index.
+1. **`gain.rs`**: A universal output level contract (`output_level_param()`, `set_output_level_db()`, `output_param_descriptor()`). All 15 effects expose an output param at the last `ParameterInfo` index.
 
 2. **`SmoothedParam` presets**: Named constructors (`fast`, `standard`, `slow`, `interpolated`) replacing magic numbers with documented semantics.
 
@@ -652,21 +652,21 @@ Fix gain staging bugs at the root:
 
 **Single source of truth**: When the smoothing time convention changes, it changes in one place. When a new effect is added, it uses the vocabulary instead of reinventing it. The vocabulary enforces the project's DSP conventions at the API level.
 
-**Root fixes over compensation**: The Wah's gain bug is fixed by normalizing the transfer function (`filtered / Q`), not by adding an output trim. The Tape fix matches the Distortion's established drive/level compensation pattern.
+**Root-cause fixes**: The Wah's gain bug is fixed by normalizing the transfer function (`filtered / Q`) instead of by adding an output trim. The Tape fix matches the Distortion's established drive/level compensation pattern.
 
-**Industry alignment**: NIH-plug uses `SmoothingStyle::Linear(10.0)` parameter presets, JUCE uses `NormalisableRange` with centralized param definitions, FunDSP uses shared smoothing filters. Our `SmoothedParam::standard()` / `ParamDescriptor::mix()` factories mirror these approaches without macro complexity.
+**Precedent in other frameworks**: NIH-plug uses `SmoothingStyle::Linear(10.0)` parameter presets, JUCE uses `NormalisableRange` with centralized param definitions, and FunDSP uses shared smoothing filters. Our `SmoothedParam::standard()` / `ParamDescriptor::mix()` factories follow the same approach without the complexity of macros.
 
 ### Alternatives Considered
 
 - **Macro-based param generation**: Would reduce boilerplate further but adds compile-time complexity and makes debugging harder. The factory method approach is simpler and equally effective.
-- **ParamGroup container**: A struct holding N `SmoothedParam`s that forwards `set_sample_rate()` and `snap_to_target()`. Deferred — requires a design decision on representation (Vec vs tuple vs macro) and the current per-field approach is explicit and clear.
+- **ParamGroup container**: A struct holding N `SmoothedParam`s that forwards `set_sample_rate()` and `snap_to_target()`. Deferred: it requires a design decision on representation (Vec vs tuple vs macro), and the current per-field approach is explicit and clear.
 
 ### Consequences
 
 - 15 effects migrated to vocabulary, reducing total lines of DSP boilerplate by ~30%
 - Default-parameter golden regression tests (15 new) lock down factory defaults
 - Adding a new effect requires less copy-paste and automatically gets the output level contract
-- Param index stability is preserved — output is always the last index
+- Param index stability is preserved: output is always the last index
 
 ---
 
@@ -675,7 +675,7 @@ Fix gain staging bugs at the root:
 **Status:** Superseded by ADR-019
 **Source:** `crates/sonido-effects/src/kernels/reverb.rs`
 
-Original reverb-only quadratic compensation (`1 - x² * 0.88`). Superseded by ADR-019 which generalizes feedback compensation across all comb-based effects using topology-aware formulas.
+Original reverb-only quadratic compensation (`1 - x² * 0.88`). Superseded by ADR-019, which generalizes feedback compensation to all comb-based effects with topology-aware formulas.
 
 ---
 
@@ -684,11 +684,11 @@ Original reverb-only quadratic compensation (`1 - x² * 0.88`). Superseded by AD
 **Status:** Accepted
 **Source:** `crates/sonido-core/src/gain.rs`, `crates/sonido-effects/src/kernels/reverb.rs`
 
-> **Note (2026-10-22):** The reverb's parallel comb bank was later replaced by an 8-line Hadamard FDN (see the note on ADR-009). It keeps the `sqrt(1 − feedback)` wet compensation, now as `fdn_compensation` in `reverb.rs`. The peak measurements below are from the 15-effect era.
+> **Note (2026-10-22):** The reverb's parallel comb bank was later replaced by an 8-line Hadamard FDN (see the note on ADR-009). It keeps the `sqrt(1 − feedback)` wet compensation, now as `fdn_compensation` in `reverb.rs`. The peak measurements below were taken when Sonido had 15 effects.
 
 ### Context
 
-After applying `sqrt(1-fb)` wet-signal compensation to delay, flanger, phaser, and reverb, measurement showed 2/4 still exceeded the -1 dBFS peak ceiling on 440 Hz sine:
+After applying `sqrt(1-fb)` wet-signal compensation to delay, flanger, phaser, and reverb, measurements showed that 2 of the 4 still exceeded the -1 dBFS peak ceiling on a 440 Hz sine:
 
 | Effect | Peak with sqrt | Status |
 |--------|---------------|--------|
@@ -697,36 +697,36 @@ After applying `sqrt(1-fb)` wet-signal compensation to delay, flanger, phaser, a
 | phaser (fb=0.5) | -1.1 dBFS | pass |
 | reverb | -1.6 dBFS | pass |
 
-**Root cause:** For a feedback comb filter with coefficient `g`, peak gain at resonance = `1/(1-g)`. With `c = sqrt(1-g)`, output at mix `m` = `(1-m) + m/sqrt(1-g)` > 1 for all g > 0. The `sqrt` form is mathematically guaranteed insufficient for comb topologies.
+**Root cause:** For a feedback comb filter with coefficient `g`, peak gain at resonance = `1/(1-g)`. With `c = sqrt(1-g)`, output at mix `m` = `(1-m) + m/sqrt(1-g)` > 1 for all g > 0. The `sqrt` form therefore can never be sufficient for comb topologies.
 
 ### Decision
 
 Topology-aware compensation:
 
-1. **Single comb filters** (delay, flanger, phaser): `c = (1-fb)` — exact peak-gain cancellation. Implemented in `gain::feedback_wet_compensation()`.
+1. **Single comb filters** (delay, flanger, phaser): `c = (1-fb)`, which cancels the peak gain exactly. Implemented in `gain::feedback_wet_compensation()`.
 
-2. **Parallel comb banks** (reverb): `c = sqrt(1-fb)` — moderate compensation, inlined in `reverb.rs`. The 1/8 parallel averaging provides ~18 dB additional headroom, making exact compensation unnecessarily aggressive.
+2. **Parallel comb banks** (reverb): `c = sqrt(1-fb)`, a moderate compensation, inlined in `reverb.rs`. The 1/8 parallel averaging provides ~18 dB of additional headroom, so exact compensation would be unnecessarily aggressive.
 
 ### Rationale
 
-**Why `(1-fb)` is exact:** At resonance, a comb filter amplifies by `1/(1-fb)`. Scaling by `(1-fb)` gives: `(1-fb) × 1/(1-fb) = 1.0`. The compensated wet signal equals the dry signal — perfect crossfade, zero amplification at any mix setting.
+**Why `(1-fb)` is exact:** At resonance, a comb filter amplifies by `1/(1-fb)`. Scaling by `(1-fb)` gives: `(1-fb) × 1/(1-fb) = 1.0`. The compensated wet signal equals the dry signal, so the crossfade is exact and adds no amplification at any mix setting.
 
-**Why reverb keeps `sqrt`:** 8 parallel combs with mutually-prime delay lengths means only 1–2 resonate at any frequency. The 1/8 averaging absorbs the overshoot that `sqrt` leaves. Using exact `(1-fb)` at hall settings (fb≈0.98) would attenuate the wet signal to 0.02 (−34 dB), producing an inaudibly quiet reverb.
+**Why reverb keeps `sqrt`:** With 8 parallel combs of mutually prime delay lengths, only 1 or 2 resonate at any frequency. The 1/8 averaging absorbs the overshoot that `sqrt` leaves. Using exact `(1-fb)` at hall settings (fb≈0.98) would attenuate the wet signal to 0.02 (−34 dB), producing an inaudibly quiet reverb.
 
-**Why phaser passes with `(1-fb)`:** Allpass cascades have unity magnitude at all frequencies. Resonance is narrowband (3 notch-peak pairs). Exact compensation is conservative but keeps the effect well within ceiling.
+**Why phaser passes with `(1-fb)`:** Allpass cascades have unity magnitude at all frequencies. Resonance is narrowband (3 notch-peak pairs). Exact compensation is conservative but keeps the effect well within the ceiling.
 
 ### Alternatives Considered
 
-- **Dynamic AGC**: Per-sample envelope tracking would adapt to any topology. Rejected — too expensive for embedded targets (Daisy Seed, Hothouse). Static compensation is the industry standard for pedal/embedded DSP.
-- **Fixed input attenuation**: Global -6 dB input pad. Rejected — unnecessarily quiet at low feedback, doesn't scale with the actual problem.
-- **Soft clipper on wet output**: Would prevent overshoot but introduces unwanted nonlinearity into clean effects (delay, phaser). Defeats the purpose of a transparent modulation effect.
+- **Dynamic AGC**: Per-sample envelope tracking would adapt to any topology. Rejected as too expensive for embedded targets (Daisy Seed, Hothouse). Static compensation is the industry standard for pedal/embedded DSP.
+- **Fixed input attenuation**: Global -6 dB input pad. Rejected: it is unnecessarily quiet at low feedback and does not scale with the actual problem.
+- **Soft clipper on wet output**: Would prevent overshoot, but it introduces unwanted nonlinearity into clean effects (delay, phaser) that are meant to be transparent.
 
 ### Consequences
 
-- All 15 effects pass -1 dBFS peak ceiling (15/15)
+- All 15 effects pass the -1 dBFS peak ceiling (15/15)
 - delay: -0.8 → -2.0 dBFS, flanger: -0.5 → -2.1 dBFS, phaser: -1.1 → -2.6 dBFS
 - Reverb unchanged at -1.6 dBFS (topology-specific `sqrt` preserved)
-- At high feedback, wet signal is quieter but decay tail is longer — this IS the character of high feedback. The `output` param provides makeup gain.
+- At high feedback, the wet signal is quieter but the decay tail is longer, which is the expected character of high feedback. The `output` param provides makeup gain.
 - Golden files regenerated for delay, flanger, phaser, reverb
 
 ---
@@ -738,7 +738,7 @@ Topology-aware compensation:
 
 ### Context
 
-Cortex-M7 targets (Daisy Seed, Hothouse) lack hardware transcendental instruction support. Standard `libm` implementations of `logf`, `expf`, `sinf`, and `tanf` consume 100-200 cycles each — significant when called per-sample in DSP loops running at 48 kHz with tight deadline budgets.
+Cortex-M7 targets (Daisy Seed, Hothouse) lack hardware transcendental instruction support. Standard `libm` implementations of `logf`, `expf`, `sinf`, and `tanf` take 100-200 cycles each, which is significant when they are called per sample in DSP loops running at 48 kHz with tight deadline budgets.
 
 Profiling identified transcendental calls as the dominant cost in: LFO tick, compressor envelope detection, parametric EQ coefficient updates, and phaser allpass tuning.
 
@@ -746,12 +746,12 @@ Profiling identified transcendental calls as the dominant cost in: LFO tick, com
 
 1. Implement purpose-built approximations in `sonido-core::fast_math` with documented error bounds
 2. Use IEEE 754 bit manipulation (log2/exp2), Bhaskara parabolic (sin), and Padé rational (tan) techniques
-3. Keep approximations in a dedicated module — callers opt in explicitly via `fast_log2()` etc.
-4. Maintain the standard `libm` functions as the default; fast_math is for embedded hot paths only
+3. Keep approximations in a dedicated module; callers opt in explicitly via `fast_log2()` etc.
+4. Keep the standard `libm` functions as the default; fast_math is for embedded hot paths only
 
 ### Rationale
 
-- **Explicit opt-in** prevents accidental precision loss — callers choose fast_* when they've verified error tolerance
+- **Explicit opt-in** prevents accidental precision loss: callers choose fast_* when they have verified the error tolerance
 - **Dedicated module** keeps approximation code isolated and auditable
 - **Error bounds < audible threshold** for all documented use cases (< 0.05 dB for gain, < 0.001 for LFO)
 - **10-15x speedup** on Cortex-M7 justifies the precision trade-off for embedded targets
@@ -765,7 +765,7 @@ Profiling identified transcendental calls as the dominant cost in: LFO tick, com
 ### Consequences
 
 - Effects using fast_math have slightly different output than libm versions (within documented error bounds)
-- Golden file regression tests use libm — fast_math output verified via dedicated unit tests with tolerance assertions
+- Golden file regression tests use libm; fast_math output is verified by dedicated unit tests with tolerance assertions
 - New effects targeting embedded should prefer fast_math for transcendental calls in per-sample loops
 
 ---
@@ -781,7 +781,7 @@ Profiling identified transcendental calls as the dominant cost in: LFO tick, com
 
 The `Effect` trait provides default `process_block_stereo` implementations that call `process_stereo` per sample. While correct, this prevents the compiler from optimizing across sample boundaries (loop hoisting, autovectorization) and forces per-sample virtual dispatch overhead for any branching logic.
 
-A technical debt audit identified block processing as the single largest performance gap — 4-8x potential improvement on the hot path for effects with branch-heavy per-sample logic.
+A technical debt audit identified block processing as the single largest performance gap, with a potential 4-8x improvement on the hot path for effects with branch-heavy per-sample logic.
 
 ### Decision
 
@@ -817,19 +817,19 @@ The per-sample `process()` and `process_stereo()` shared significant copy-paste 
 
 ### Bit-Identical Constraint
 
-All block overrides are verified to produce identical output to the per-sample path. This is enforced by the existing golden-file regression tests, which compare sample-by-sample against reference WAV files with MSE < 1e-6. The block overrides must not change the DSP algorithm — only the iteration structure.
+All block overrides are verified to produce identical output to the per-sample path. This is enforced by the existing golden-file regression tests, which compare sample-by-sample against reference WAV files with MSE < 1e-6. The block overrides may change only the iteration structure, not the DSP algorithm.
 
 ### Rationale
 
-- **Compiler optimization boundary**: Per-sample dispatch prevents the compiler from seeing across sample boundaries. Block processing exposes the full loop to the optimizer.
+- **Compiler optimization boundary**: Per-sample dispatch stops the compiler from optimizing across sample boundaries. Block processing exposes the full loop to the optimizer.
 - **Branch hoisting**: Match-once-per-block eliminates per-sample branching. For Distortion's 4 waveshaper modes, this removes 3 dead branches per sample.
-- **Autovectorization opportunity**: Tight inner loops over contiguous buffers are the ideal pattern for LLVM's autovectorizer. The `SmoothedParam::advance()` call per sample limits full vectorization but the gain/filter math benefits.
-- **Selective override**: Only 5 of 15 effects got overrides — those where profiling or structural analysis showed clear benefit. The remaining 10 effects are simple enough that the per-sample default is adequate.
+- **Autovectorization opportunity**: Tight inner loops over contiguous buffers are the ideal pattern for LLVM's autovectorizer. The `SmoothedParam::advance()` call per sample limits full vectorization, but the gain/filter math benefits.
+- **Selective override**: Only 5 of 15 effects got overrides: those where profiling or structural analysis showed a clear benefit. The remaining 10 effects are simple enough that the per-sample default is adequate.
 
 ### Alternatives Considered
 
 - **SIMD intrinsics**: Explicit SIMD would provide guaranteed vectorization but requires `unsafe`, is platform-specific, and breaks `no_std` portability. Deferred until profiling shows autovectorization is insufficient.
-- **Overriding all 15 effects**: Diminishing returns for simple effects (Preamp, Gate, Filter) where the per-sample cost is already minimal. Maintenance burden outweighs benefit.
+- **Overriding all 15 effects**: Little gain for simple effects (Preamp, Gate, Filter), where the per-sample cost is already minimal. The maintenance burden outweighs the benefit.
 
 ## ADR-022: Parameter System Hardening for Plugin Integration
 
@@ -837,8 +837,8 @@ All block overrides are verified to produce identical output to the per-sample p
 
 Sonido's parameter system was designed for standalone GUI use (runtime name-based lookup, per-sample smoothing, index-based access). Plugin hosts (CLAP, VST3) impose stricter requirements:
 
-- **Stable identity**: Parameters must survive reordering and persist across sessions. CLAP requires `clap_id` (u32), VST3 requires `ParamID` (u32).
-- **Scaling metadata**: Hosts need to know the normalization curve to render parameter arcs and handle mouse gestures. CLAP has `CLAP_PARAM_IS_STEPPED`, `CLAP_PARAM_IS_AUTOMATABLE`, etc.
+- **Stable identity**: Parameter IDs must not change when parameters are reordered, and must persist across sessions. CLAP requires `clap_id` (u32), VST3 requires `ParamID` (u32).
+- **Scaling metadata**: Hosts need the normalization curve to render parameter arcs and handle mouse gestures. CLAP has `CLAP_PARAM_IS_STEPPED`, `CLAP_PARAM_IS_AUTOMATABLE`, etc.
 - **Text display**: CLAP mandates `value_to_text()` / `text_to_value()` callbacks. VST3 has `getParamStringByValue()` / `getParamValueByString()`. Without these, hosts display raw floats with no units.
 - **Modulation routing**: CLAP supports non-destructive modulation (`CLAP_PARAM_IS_MODULATABLE`) where the base value is preserved. This requires a per-parameter modulation ID.
 
@@ -849,10 +849,10 @@ Extend `ParamDescriptor` with plugin-oriented metadata and methods:
 | Addition | Purpose | CLAP mapping | VST3 mapping |
 |----------|---------|-------------|-------------|
 | `ParamId(u32)` | Stable identity | `clap_id` | `ParamID` |
-| `string_id: &'static str` | Debug/serialization | — | — |
+| `string_id: &'static str` | Debug/serialization | None | None |
 | `ParamScale` (Linear/Log/Power) | Normalization curve | `CLAP_PARAM_IS_STEPPED` (implicit) | `stepCount` |
 | `ParamFlags` (AUTOMATABLE, STEPPED, HIDDEN, READ_ONLY, MODULATABLE) | Host capability bits | `clap_param_info_flags` | `ParameterInfo::flags` |
-| `modulation_id: Option<u32>` | CLAP modulation routing | `CLAP_PARAM_IS_MODULATABLE` | — (no equivalent) |
+| `modulation_id: Option<u32>` | CLAP modulation routing | `CLAP_PARAM_IS_MODULATABLE` | No equivalent |
 | `step_labels: Option<&'static [&'static str]>` | Enum text display | `value_to_text()` | `getParamStringByValue()` |
 | `format_value() → String` | Generic text display | `value_to_text()` | `getParamStringByValue()` |
 | `parse_value() → Option<f32>` | Text-to-value parsing | `text_to_value()` | `getParamValueByString()` |
@@ -862,12 +862,12 @@ Stable IDs follow a base+offset convention per effect (Preamp=100, Distortion=20
 ### Rationale
 
 - **ParamId is u32, not string**: Both CLAP and VST3 use numeric IDs. String IDs are supplementary for debugging. Numeric IDs are cheaper to compare and hash.
-- **ParamFlags as bitflags**: Direct mapping to CLAP's `clap_param_info_flags`. Custom bitflag type (not `bitflags` crate) keeps `no_std` and zero-dep.
+- **ParamFlags as bitflags**: Direct mapping to CLAP's `clap_param_info_flags`. A custom bitflag type (not the `bitflags` crate) keeps the code `no_std` with zero dependencies.
 - **step_labels is `&'static [&'static str]`**: Static lifetime matches the param descriptor's `&'static str` fields. No allocation for label storage. Labels are known at compile time for all current effects.
 - **format_value/parse_value on ParamDescriptor**: Methods live on the descriptor, not a separate trait, because all formatting info (unit, min, max, step, labels) is already in the descriptor. No vtable dispatch needed.
 - **alloc, not std**: `format_value()` returns `alloc::string::String`, which is available in both `std` and `no_std` (with `extern crate alloc`). No feature gate needed.
-- **MODULATABLE flag**: CLAP-specific. VST3 treats all parameter changes as automation. The flag is harmless in VST3 wrappers (simply ignored).
-- **modulation_id**: Separate from ParamId because CLAP's modulation routing needs its own namespace. Mirrors nih-plug's `poly_modulation_id()`.
+- **MODULATABLE flag**: CLAP-specific. VST3 treats all parameter changes as automation. VST3 wrappers simply ignore the flag, so it does no harm there.
+- **modulation_id**: Separate from ParamId because CLAP's modulation routing needs its own namespace. This follows nih-plug's `poly_modulation_id()`.
 
 ### Alternatives Considered
 
@@ -878,7 +878,7 @@ Stable IDs follow a base+offset convention per effect (Preamp=100, Distortion=20
 
 ### Tradeoffs
 
-- `step_labels` is static — effects with runtime-dynamic enum lists would need to override `effect_format_value()` on the `EffectWithParams` trait.
+- `step_labels` is static, so effects with runtime-dynamic enum lists would need to override `effect_format_value()` on the `EffectWithParams` trait.
 - `format_value()` returns `String` (heap allocation), acceptable for GUI/host display paths but not audio-thread safe. Plugin wrappers should call it from the main thread or cache results.
 
 ---
@@ -898,32 +898,32 @@ Meanwhile, sonido's DSP core is deliberately platform-agnostic (`no_std`, buffer
 
 Introduce an `AudioBackend` trait in `sonido-io` that abstracts over platform audio APIs. Provide `CpalBackend` as the default implementation.
 
-**Key design choices:**
+**Design choices:**
 
-1. **Boxed closures for callbacks** — `OutputCallback = Box<dyn FnMut(&mut [f32]) + Send>` makes the trait object-safe, enabling `Box<dyn AudioBackend>` for runtime backend selection.
+1. **Boxed closures for callbacks**: `OutputCallback = Box<dyn FnMut(&mut [f32]) + Send>` makes the trait object-safe, which allows `Box<dyn AudioBackend>` for runtime backend selection.
 
-2. **Type-erased stream handles** — `StreamHandle` wraps `Box<dyn Send>` via RAII. Backend-specific stream types (cpal `Stream`, ALSA `pcm_t*`, etc.) stay internal. Dropping the handle stops playback.
+2. **Type-erased stream handles**: `StreamHandle` wraps `Box<dyn Send>` via RAII. Backend-specific stream types (cpal `Stream`, ALSA `pcm_t*`, etc.) stay internal. Dropping the handle stops playback.
 
-3. **Interleaved f32 buffers** — Consistent with sonido's f32-throughout design (ADR-010) and the callback signatures of cpal, WASAPI, CoreAudio, and WebAudio.
+3. **Interleaved f32 buffers**: Consistent with sonido's f32-throughout design (ADR-010) and the callback signatures of cpal, WASAPI, CoreAudio, and WebAudio.
 
-4. **`BackendStreamConfig` separate from `StreamConfig`** — The new config struct adds `channels` and is purpose-built for the trait. The existing `StreamConfig` (with device name strings and input/output separation) remains for backward compatibility.
+4. **`BackendStreamConfig` separate from `StreamConfig`**: The new config struct adds `channels` and is purpose-built for the trait. The existing `StreamConfig` (with device name strings and input/output separation) remains for backward compatibility.
 
-5. **Additive, non-breaking** — The existing `AudioStream` still works unchanged. The new trait is a parallel path that consumers can adopt incrementally.
+5. **Additive, non-breaking**: The existing `AudioStream` still works unchanged. The new trait is a parallel path that consumers can adopt incrementally.
 
 ### Alternatives Considered
 
 - **Generic type parameter on `AudioStream<B: AudioBackend>`**: Compile-time backend selection, zero-cost dispatch. Rejected because it makes `AudioStream` generic everywhere it's stored, complicating GUI and CLI code. Runtime backend selection (important for testing and embedded targets) would require `Box<dyn AudioBackend>` anyway.
 
-- **Trait with associated types for stream handles**: `type StreamHandle: Send + 'static` on the trait. More type-safe than `Box<dyn Send>`, but breaks object safety — you can't use `Box<dyn AudioBackend>` because the associated type is unknown. The type erasure overhead (one `Box` allocation per stream creation) is negligible for audio setup.
+- **Trait with associated types for stream handles**: `type StreamHandle: Send + 'static` on the trait. More type-safe than `Box<dyn Send>`, but it breaks object safety: you can't use `Box<dyn AudioBackend>` because the associated type is unknown. The type erasure overhead (one `Box` allocation per stream creation) is negligible for audio setup.
 
 - **Remove cpal entirely, implement direct platform backends**: Maximally independent, but high effort per platform (ALSA, CoreAudio, WASAPI, AAudio all require separate unsafe FFI). cpal already provides tested implementations. The trait abstraction means we can add direct backends later without changing application code.
 
-- **Feature-gated cpal in `sonido-io`**: Make cpal optional via `features = ["cpal-backend"]`. Valid future step, but premature now while cpal is the only implementation. The module structure (`cpal_backend.rs`) is already isolated for this.
+- **Feature-gated cpal in `sonido-io`**: Make cpal optional via `features = ["cpal-backend"]`. A valid future step, but premature while cpal is the only implementation. The module structure (`cpal_backend.rs`) is already isolated for this.
 
 ### Tradeoffs
 
-- **One `Box` allocation per callback**: Boxed closures for `OutputCallback`/`InputCallback`/`ErrorCallback` each allocate. This happens once at stream setup, not per audio buffer. Negligible.
-- **`StreamHandle` is opaque**: Application code can't inspect or downcast the inner stream. This is intentional — it prevents backend types from leaking. If a consumer truly needs backend-specific access, they can use `CpalBackend` directly instead of `dyn AudioBackend`.
+- **One `Box` allocation per callback**: Boxed closures for `OutputCallback`/`InputCallback`/`ErrorCallback` each allocate. This happens once at stream setup, not per audio buffer, so the cost is negligible.
+- **`StreamHandle` is opaque**: Application code can't inspect or downcast the inner stream. This is intentional, because it prevents backend types from leaking. If a consumer truly needs backend-specific access, they can use `CpalBackend` directly instead of `dyn AudioBackend`.
 - **No duplex stream method**: The trait exposes `build_output_stream` and `build_input_stream` separately. Full-duplex (simultaneous I/O with shared buffer) is a future extension. Current users bridge input/output via channels, which is adequate for non-pro-audio latency requirements.
 
 ### Future Directions
@@ -948,15 +948,15 @@ Sonido needed DAW integration to be usable in professional music production work
 
 ### Decision
 
-**CLAP over VST3, `clack` over `nih-plug`.** One plugin per effect, generated via the `sonido_effect_entry!` macro. A custom egui bridge for the GUI rather than the `egui-baseview` crate.
+Use CLAP instead of VST3, and `clack` instead of `nih-plug`. Build one plugin per effect, generated by the `sonido_effect_entry!` macro. Use a custom egui bridge for the GUI instead of the `egui-baseview` crate.
 
 ### Key Choices
 
 **`clack` over `nih-plug`:**
-`nih-plug` is an opinionated framework that owns parameter management. It provides macros like `#[id = "..."]` and `#[range = ...]` that define parameters in Rust structs. Sonido already has `ParameterInfo` and `ParamDescriptor` doing this work — adopting `nih-plug` would require either abandoning the existing system or maintaining a parallel one. `clack` provides direct, low-level access to the CLAP C API with Rust safety guarantees and no opinions about parameter representation. Sonido's `ParameterInfo` system maps directly to CLAP's `clap_param_info` without translation.
+`nih-plug` is a framework that imposes its own conventions and owns parameter management. It provides macros like `#[id = "..."]` and `#[range = ...]` that define parameters in Rust structs. Sonido already has `ParameterInfo` and `ParamDescriptor` doing this work, so adopting `nih-plug` would require either abandoning the existing system or maintaining a parallel one. `clack` provides direct, low-level access to the CLAP C API with Rust safety guarantees, and it does not impose a parameter representation. Sonido's `ParameterInfo` system maps directly to CLAP's `clap_param_info` without translation.
 
 **One plugin per effect (not a single multi-effect plugin):**
-The simplest mapping — each plugin is exactly one `Effect` + one `ParameterInfo` implementation. The host sees a single-purpose plugin with a known parameter count and stable IDs. This matches the mental model of guitar pedal plugins (one amp sim, one reverb, one delay). A multi-effect container plugin requires the DAG routing engine and is planned for v0.2.
+This is the simplest mapping: each plugin is exactly one `Effect` + one `ParameterInfo` implementation. The host loads a single-purpose plugin with a known parameter count and stable IDs. This matches the mental model of guitar pedal plugins (one amp sim, one reverb, one delay). A multi-effect container plugin requires the DAG routing engine and is planned for v0.2.
 
 The `sonido_effect_entry!` macro generates the complete CLAP plugin entry point from a single invocation:
 ```rust
@@ -967,19 +967,19 @@ sonido_effect_entry! {
     features: [AUDIO_EFFECT, DISTORTION, STEREO],
 }
 ```
-This expands to the CLAP descriptor, factory, `PluginAudioProcessor` impl, parameter handling (`get_count`, `get_info`, `get_value`, `set_value`, `value_to_text`, `text_to_value`), and GUI bridge — roughly 300 lines of boilerplate per plugin, generated zero-cost at compile time.
+This expands to the CLAP descriptor, factory, `PluginAudioProcessor` impl, parameter handling (`get_count`, `get_info`, `get_value`, `set_value`, `value_to_text`, `text_to_value`), and GUI bridge: roughly 300 lines of boilerplate per plugin, generated at compile time with no runtime cost.
 
 **Custom egui bridge over `egui-baseview`:**
 `egui-baseview` is an existing crate that integrates egui with baseview window handles. It was not usable here for two reasons: (1) it was version-locked to an older egui and had not tracked egui 0.31 at the time of implementation; (2) it imposes a specific render loop structure that conflicted with the plugin's need to share `SonidoShared` state between the GUI and audio threads. The custom bridge uses `baseview` + `egui_glow` directly, giving explicit control over the OpenGL context, frame timing, and shared-state access patterns. The `gui.rs` module's `#![allow(unsafe_code)]` is scoped specifically to the `ParentWindow` / `HasRawWindowHandle` implementation required for `baseview`.
 
 **Resizable GUI via atomic channel:**
-Plugin windows are resizable (320×240 to 1920×1080, default 480×380). The host calls `set_size()` on the main thread, which packs the new dimensions into an `AtomicU64` (`PendingResize`). The baseview `WindowHandler::on_frame()` reads the atomic each frame and calls `window.resize()` when changed. This avoids any cross-thread locking — the main thread writes, the render thread reads, both lock-free. `adjust_size()` clamps to bounds, `get_resize_hints()` reports free resize with no aspect ratio constraint.
+Plugin windows are resizable (320×240 to 1920×1080, default 480×380). The host calls `set_size()` on the main thread, which packs the new dimensions into an `AtomicU64` (`PendingResize`). The baseview `WindowHandler::on_frame()` reads the atomic each frame and calls `window.resize()` when changed. This avoids any cross-thread locking: the main thread writes, the render thread reads, and neither takes a lock. `adjust_size()` clamps to the bounds, and `get_resize_hints()` reports free resizing with no aspect ratio constraint.
 
 **`ParamBridge` gesture protocol (`begin_set` / `end_set`):**
-CLAP's automation recording protocol requires explicit gesture delimiters: `ParamGestureBeginEvent` before the first value change, `ParamGestureEndEvent` after the user releases the control. Without these, the DAW cannot distinguish a user drag (record this gesture) from a programmatic update (do not record). The `ParamBridge` trait exposes `begin_set(param_id)` and `end_set(param_id)` that map directly to these events. The GUI wraps every knob interaction in begin/end pairs. The same `ParamBridge` trait is used in the standalone GUI (`AtomicParamBridge`) with no-op begin/end implementations — the protocol is shared infrastructure.
+CLAP's automation recording protocol requires explicit gesture delimiters: `ParamGestureBeginEvent` before the first value change, `ParamGestureEndEvent` after the user releases the control. Without these, the DAW cannot distinguish a user drag (record this gesture) from a programmatic update (do not record). The `ParamBridge` trait exposes `begin_set(param_id)` and `end_set(param_id)` that map directly to these events. The GUI wraps every knob interaction in begin/end pairs. The same `ParamBridge` trait is used in the standalone GUI (`AtomicParamBridge`) with no-op begin/end implementations, so the plugin and the standalone GUI share one protocol.
 
 **`SonidoShared` as `Arc<_>` (Clone):**
-Three threads need access to shared state: audio processor (real-time), GUI (render thread), main thread (parameter state, host communication). `Arc<SonidoShared>` is cloned into each. Fields inside `SonidoShared` use `parking_lot::RwLock` for effect state and `Arc<AtomicParamBridge>` for lock-free parameter reads in the audio thread. No `Mutex` in the audio path.
+Three threads need access to shared state: audio processor (real-time), GUI (render thread), main thread (parameter state, host communication). `Arc<SonidoShared>` is cloned into each. Fields inside `SonidoShared` use `parking_lot::RwLock` for effect state and `Arc<AtomicParamBridge>` for lock-free parameter reads in the audio thread. There is no `Mutex` in the audio path.
 
 **Plugin crate excluded from workspace `default-members`:**
 Building plugins requires the `clack`, `baseview`, and `egui_glow` dependencies, which add non-trivial compile time and introduce system OpenGL requirements. `cargo build --workspace` does not build plugins by default. `make plugins` (or `cargo build -p sonido-plugin`) builds the packaged single-effect plugins explicitly.
@@ -989,8 +989,8 @@ Building plugins requires the `clack`, `baseview`, and `egui_glow` dependencies,
 - 19 separate `.clap` shared library files are produced from one cargo build command
 - GUI code (widgets, effect panels, theme) lives in `sonido-gui-core` and is shared between standalone and plugin, with no duplication
 - `SonidoShared` is the coupling point between plugin threads; adding shared state means adding a field here
-- Plugin-host parameter negotiation bypasses `ParameterInfo` defaults — plugin host sets initial values via `set_value`, not via `ParamDescriptor::default`
-- `#![allow(unsafe_code)]` is scoped to `gui.rs` only — all other plugin code is safe Rust
+- Plugin-host parameter negotiation bypasses `ParameterInfo` defaults: the plugin host sets initial values via `set_value`, not via `ParamDescriptor::default`
+- `#![allow(unsafe_code)]` is scoped to `gui.rs` only; all other plugin code is safe Rust
 
 ### Alternatives Considered
 
@@ -1026,25 +1026,25 @@ The multi-effect CLAP plugin, synth-effects hybrid, and spectral parallel proces
 
 ### Decisions
 
-1. **Directed acyclic graph (DAG)** — nodes are effects, edges are audio connections. The `Effect` trait is node-agnostic; no trait changes needed.
+1. **Directed acyclic graph (DAG)**: nodes are effects, and edges are audio connections. The `Effect` trait is node-agnostic, so no trait changes are needed.
 
 2. **Two-object split** (adapted from Tracktion Engine):
-   - `ProcessingGraph` — owned by mutation thread. Holds topology, performs mutations, runs `compile()`.
-   - `CompiledSchedule` — immutable snapshot shared with audio thread via `Arc`. Holds flat `Vec<ProcessStep>`, `BufferPool`, and compensation delay lines.
+   - `ProcessingGraph`: owned by the mutation thread. Holds the topology, performs mutations, and runs `compile()`.
+   - `CompiledSchedule`: an immutable snapshot shared with the audio thread via `Arc`. Holds a flat `Vec<ProcessStep>`, the `BufferPool`, and the compensation delay lines.
 
-3. **Compiled schedule (flat instruction list)** — Kahn's topological sort at mutation time (O(V+E)). The audio thread executes a linear list of `ProcessStep` variants, never traverses the graph.
+3. **Compiled schedule (flat instruction list)**: Kahn's topological sort runs at mutation time (O(V+E)). The audio thread executes a linear list of `ProcessStep` variants and never traverses the graph.
 
-4. **Buffer liveness analysis (register allocation)** — instead of one buffer per edge (O(edges) memory), compute liveness intervals: first-write to last-read per virtual buffer. Greedy free-list assignment reuses slots. Result: 20-node linear chain = 2 buffers (ping-pong). Diamond = 3 buffers.
+4. **Buffer liveness analysis (register allocation)**: instead of one buffer per edge (O(edges) memory), compute a liveness interval for each virtual buffer, from its first write to its last read. Greedy free-list assignment reuses slots. As a result, a 20-node linear chain uses 2 buffers (ping-pong), and a diamond uses 3.
 
-5. **Latency compensation** — each node reports `latency_samples()`. During compilation, compute longest-path latency to each Merge node. Insert `CompensationDelay` steps for shorter parallel paths. Matches the universal algorithm in JUCE, Tracktion, Ardour, and REAPER.
+5. **Latency compensation**: each node reports `latency_samples()`. During compilation, the longest-path latency to each Merge node is computed, and `CompensationDelay` steps are inserted for shorter parallel paths. This is the standard algorithm, used in JUCE, Tracktion, Ardour, and REAPER.
 
-6. **Click-free schedule swap** — when `compile()` produces a new schedule, both old and new run simultaneously during a ~5ms crossfade (via `SmoothedParam`). No audible clicks from topology changes.
+6. **Click-free schedule swap**: when `compile()` produces a new schedule, the old and new schedules run simultaneously during a ~5ms crossfade (via `SmoothedParam`), so topology changes cause no audible clicks.
 
-7. **Cycle detection at insertion time** — DFS reachability check in `connect()`. Defensive Kahn sort validation at `compile()` time catches any edge case.
+7. **Cycle detection at insertion time**: `connect()` runs a DFS reachability check. A defensive Kahn sort validation at `compile()` time catches any edge case.
 
-8. **Hand-rolled implementation** — surveyed 9 major systems (JUCE, Tracktion, Ardour, REAPER, SuperCollider, Faust, Max/gen~, Bitwig, VCV Rack) and 8 Rust crates (fundsp, dasp_graph, auxide, klingt, audiograph, glicol_synth, dsp-chain, pp-audiograph). No crate serves sonido's combination of stereo-first + `no_std` + live mutation + native `Effect` trait + `ParameterInfo` introspection + `TempoContext` broadcast + variable block size.
+8. **Hand-rolled implementation**: we surveyed 9 major systems (JUCE, Tracktion, Ardour, REAPER, SuperCollider, Faust, Max/gen~, Bitwig, VCV Rack) and 8 Rust crates (fundsp, dasp_graph, auxide, klingt, audiograph, glicol_synth, dsp-chain, pp-audiograph). No crate supports sonido's combination of stereo-first + `no_std` + live mutation + native `Effect` trait + `ParameterInfo` introspection + `TempoContext` broadcast + variable block size.
 
-9. **`no_std` with alloc** — entire graph module compiles without std. `Arc` from `alloc::sync`. Embeddable on Daisy Seed / Hothouse.
+9. **`no_std` with alloc**: the entire graph module compiles without std, with `Arc` from `alloc::sync`, so it can run on the Daisy Seed / Hothouse.
 
 ### Node Types
 
@@ -1076,19 +1076,19 @@ All consumers now use `GraphEngine` (CLI, GUI) or `ProcessingGraph` directly (pl
 
 ### Alternatives Considered
 
-- **dasp_graph / fundsp Net** — generic graph abstractions that don't support sonido's stereo-first `Effect` trait or `ParameterInfo`. Wrapping would add complexity without benefit.
-- **One buffer per edge** — simple but O(edges) memory. Liveness analysis gives O(max-live) which is much smaller for practical topologies.
-- **Multi-threaded parallel execution** — Tracktion's activation-count work-stealing pattern. Deferred to v0.4; the `CompiledSchedule` architecture supports it without structural changes (steps become work units with activation counters).
+- **dasp_graph / fundsp Net**: generic graph abstractions that don't support sonido's stereo-first `Effect` trait or `ParameterInfo`. Wrapping them would add complexity without benefit.
+- **One buffer per edge**: simple, but uses O(edges) memory. Liveness analysis gives O(max-live), which is much smaller for practical topologies.
+- **Multi-threaded parallel execution**: Tracktion's activation-count work-stealing pattern. Deferred to v0.4; the `CompiledSchedule` architecture supports it without structural changes (steps become work units with activation counters).
 
 ### References
 
-- `crates/sonido-core/src/graph/` — implementation (processing.rs, node.rs, edge.rs, buffer.rs, schedule.rs)
-- `crates/sonido-io/src/graph_engine.rs` — `GraphEngine` integration layer
-- `docs/ROADMAP.md` — DAG Routing Engine section (v0.3+)
-- `docs/ARCHITECTURE.md` — DAG data flow section
-- ADR-005 — original linear chain decision (remains the record for v0.1 architecture)
-- JUCE AudioProcessorGraph — compiled schedule + liveness analysis reference
-- Tracktion Engine — immutable graph + atomic swap pattern reference
+- `crates/sonido-core/src/graph/`: implementation (processing.rs, node.rs, edge.rs, buffer.rs, schedule.rs)
+- `crates/sonido-io/src/graph_engine.rs`: `GraphEngine` integration layer
+- `docs/ROADMAP.md`: DAG Routing Engine section (v0.3+)
+- `docs/ARCHITECTURE.md`: DAG data flow section
+- ADR-005: original linear chain decision (remains the record for v0.1 architecture)
+- JUCE AudioProcessorGraph: compiled schedule + liveness analysis reference
+- Tracktion Engine: immutable graph + atomic swap pattern reference
 
 ---
 
@@ -1104,35 +1104,35 @@ Single-effect plugins (ADR-024) work well individually, but DAW users need a mul
 
 ### Decision
 
-Pre-allocate a flat parameter space: **16 slots × 32 params = 512 CLAP parameter IDs**. Slot metadata (effect ID, descriptors, active flag) is published via `ArcSwap` for wait-free reads. Structural mutations (add/remove/reorder) flow through a `Mutex<VecDeque<ChainCommand>>` drained by the audio thread.
+Pre-allocate a flat parameter space of 16 slots × 32 params = 512 CLAP parameter IDs. Slot metadata (effect ID, descriptors, active flag) is published via `ArcSwap` for wait-free reads. Structural mutations (add/remove/reorder) flow through a `Mutex<VecDeque<ChainCommand>>` drained by the audio thread.
 
-**Key design choices:**
+**Design choices:**
 
-1. **`ClapParamId` validated newtype** — encodes `slot * 32 + local_param_index` in a `u32`. Validated at construction; all flat-space access goes through this type. `const fn` methods are zero-cost.
+1. **`ClapParamId` validated newtype**: encodes `slot * 32 + local_param_index` in a `u32`. It is validated at construction, and all flat-space access goes through this type. Its `const fn` methods are zero-cost.
 
-2. **GraphEngine-backed chain** — the audio processor delegates to `GraphEngine` (ADR-027), which owns all effect instances via `ProcessingGraph` with full `EffectWithParams` vtable access. Plugin slot indices (sparse, 0..MAX_SLOTS) map to engine slot positions (dense, 0..n) via a `slot_map: Vec<usize>` bridge.
+2. **GraphEngine-backed chain**: the audio processor delegates to `GraphEngine` (ADR-027), which owns all effect instances via `ProcessingGraph` with full `EffectWithParams` vtable access. Plugin slot indices (sparse, 0..MAX_SLOTS) map to engine slot positions (dense, 0..n) via a `slot_map: Vec<usize>` bridge.
 
-3. **Param cache diffing** — the audio processor maintains a `param_cache: Vec<f32>` mirroring the last-seen shared values. Each process cycle, it diffs against `ChainShared` atomics and emits CLAP `ParamValueEvent` (with gesture begin/end) only for changed parameters. This correctly attributes GUI-originated changes to the host.
+3. **Param cache diffing**: the audio processor keeps a `param_cache: Vec<f32>` that holds a copy of the shared values as last read. Each process cycle, it diffs against `ChainShared` atomics and emits CLAP `ParamValueEvent` (with gesture begin/end) only for changed parameters. This reports GUI-originated changes to the host correctly.
 
-4. **`ChainMutator` trait** — abstraction over chain reorder operations shared between standalone GUI (`AtomicParamBridge`) and plugin GUI (`ChainParamBridge`). Minimal surface: `get_order()` + `move_effect()`.
+4. **`ChainMutator` trait**: an abstraction over chain reorder operations, shared between the standalone GUI (`AtomicParamBridge`) and the plugin GUI (`ChainParamBridge`). Its surface is minimal: `get_order()` + `move_effect()`.
 
-5. **`&'static str` for effect IDs** — `SlotSnapshot::effect_id` is `&'static str` (not `String`) because all effect IDs come from `EffectDescriptor::id` which is `&'static str`. This avoids lifetime issues when `ParamBridge::effect_id()` returns `&str` through an `ArcSwap` guard.
+5. **`&'static str` for effect IDs**: `SlotSnapshot::effect_id` is `&'static str` (not `String`) because all effect IDs come from `EffectDescriptor::id` which is `&'static str`. This avoids lifetime issues when `ParamBridge::effect_id()` returns `&str` through an `ArcSwap` guard.
 
-6. **Host callbacks** — `ChainShared` stores both `request_process` (for GUI param changes) and `request_callback` (for structural mutations requiring main-thread rescan). `needs_rescan` atomic flag coordinates rescan dispatch.
+6. **Host callbacks**: `ChainShared` stores both `request_process` (for GUI param changes) and `request_callback` (for structural mutations requiring main-thread rescan). The `needs_rescan` atomic flag coordinates rescan dispatch.
 
 ### Alternatives Considered
 
-- **Dynamic parameter registration** — CLAP supports `CLAP_PARAM_RESCAN_ALL` to add/remove params at runtime. Rejected: many hosts don't handle this well, and pre-allocation with hidden unused params is the standard approach (CLAP spec §params recommends it for multi-slot instruments).
-- **ProcessingGraph for chain** — initially rejected (v0.2) because `effect_mut()` returned `&mut dyn Effect` without `ParameterInfo`. Resolved in v0.3: `ProcessingGraph` gained `effect_with_params_mut()` returning `&mut (dyn EffectWithParams + Send)`, enabling `GraphEngine` as the universal chain host (ADR-027).
-- **One parameter map per slot** — cleaner but requires runtime HashMap lookup per param access. The flat array with `ClapParamId` encoding is O(1) with zero allocation.
+- **Dynamic parameter registration**: CLAP supports `CLAP_PARAM_RESCAN_ALL` to add/remove params at runtime. Rejected: many hosts don't handle this well, and pre-allocation with hidden unused params is the standard approach (CLAP spec §params recommends it for multi-slot instruments).
+- **ProcessingGraph for chain**: initially rejected (v0.2) because `effect_mut()` returned `&mut dyn Effect` without `ParameterInfo`. Resolved in v0.3: `ProcessingGraph` gained `effect_with_params_mut()`, which returns `&mut (dyn EffectWithParams + Send)` and lets `GraphEngine` act as the universal chain host (ADR-027).
+- **One parameter map per slot**: cleaner, but requires a runtime HashMap lookup per param access. The flat array with `ClapParamId` encoding is O(1) with zero allocation.
 
 ### References
 
-- `crates/sonido-plugin/src/chain/` — implementation removed (chain plugin superseded by GraphEngine-backed approach)
-- `docs/ARCHITECTURE.md` — plugin section
-- ADR-024 — single-effect CLAP plugin architecture (foundation)
-- ADR-027 — GraphEngine as universal chain host
-- CLAP specification §params — parameter pre-allocation pattern for multi-slot instruments
+- `crates/sonido-plugin/src/chain/`: implementation removed (chain plugin superseded by GraphEngine-backed approach)
+- `docs/ARCHITECTURE.md`: plugin section
+- ADR-024: single-effect CLAP plugin architecture (foundation)
+- ADR-027: GraphEngine as universal chain host
+- CLAP specification §params: parameter pre-allocation pattern for multi-slot instruments
 
 ---
 
@@ -1140,49 +1140,49 @@ Pre-allocate a flat parameter space: **16 slots × 32 params = 512 CLAP paramete
 
 **Status:** Accepted
 
-> **Note (2026-10-22):** The CLAP consumer described here (`ChainAudioProcessor`, `slot_map`) went away with the chain plugin (see ADR-026). `crates/sonido-plugin/src/audio.rs` now hosts a single effect. The GUI (`crates/sonido-gui/src/audio_processor.rs`) and CLI still use `GraphEngine`, and the embedded consumer exists: the pedal firmware and the graph-player plugin both run rigs on a `GraphEngine` inside `sonido_patch::PatchPlayer` (`crates/sonido-patch/src/runtime.rs`).
+> **Note (2026-10-22):** The CLAP consumer described here (`ChainAudioProcessor`, `slot_map`) was removed with the chain plugin (see ADR-026). `crates/sonido-plugin/src/audio.rs` now hosts a single effect. The GUI (`crates/sonido-gui/src/audio_processor.rs`) and CLI still use `GraphEngine`, and the embedded consumer exists: the pedal firmware and the graph-player plugin both run rigs on a `GraphEngine` inside `sonido_patch::PatchPlayer` (`crates/sonido-patch/src/runtime.rs`).
 
 ### Context
 
-Four consumers manage linear effect chains independently: GUI (`AudioProcessor` + `node_map`), CLAP plugin (`ChainAudioProcessor` + raw `ProcessingGraph` + parallel arrays), CLI (already clean via `GraphEngine`), and embedded (future Daisy Seed). Each consumer re-implements the same topology management (add/remove/reorder/reconnect/recompile), duplicating ~80 LOC of graph wiring per consumer. A linear chain IS a linear graph — there should be one type for this.
+Four consumers manage linear effect chains independently: GUI (`AudioProcessor` + `node_map`), CLAP plugin (`ChainAudioProcessor` + raw `ProcessingGraph` + parallel arrays), CLI (already clean via `GraphEngine`), and embedded (future Daisy Seed). Each consumer re-implements the same topology management (add/remove/reorder/reconnect/recompile), duplicating ~80 LOC of graph wiring per consumer. A linear chain is a linear graph, so one type should handle both.
 
-`GraphEngine` (sonido-core, `no_std + alloc`) already handles topology, add/remove/reorder, and block processing. What was missing: effect registry IDs per slot, slot-indexed parameter/bypass access, and state snapshot/restore.
+`GraphEngine` (sonido-core, `no_std + alloc`) already handles topology, add/remove/reorder, and block processing. It lacked effect registry IDs per slot, slot-indexed parameter/bypass access, and state snapshot/restore.
 
 ### Decision
 
-Extend `GraphEngine` with a **slot-indexed API** rather than create a separate `ChainEngine`. All consumers use one type.
+Extend `GraphEngine` with a slot-indexed API instead of creating a separate `ChainEngine`. All consumers use one type.
 
 **Slot extensions added to `GraphEngine`:**
 
-1. **`effect_ids: Vec<&'static str>`** — parallel to `chain_order`, stores registry effect IDs per slot.
-2. **`add_effect_named(effect, id) -> usize`** — returns slot index (not `NodeId`), stores the registry ID.
-3. **`remove_at(slot) -> Option<Box<dyn EffectWithParams + Send>>`** — positional remove (elements shift left).
-4. **Slot-indexed accessors** — `set_param_at()`, `get_param_at()`, `param_count_at()`, `param_descriptor_at()`, `effect_at()`, `effect_at_mut()`, `set_bypass_at()`, `is_bypassed_at()`.
-5. **`snapshot() -> GraphSnapshot`** — captures all effect IDs, parameter values, and bypass states for save/restore.
-6. **`reorder_slots(&[usize])`** — reorder by slot index (translates to `NodeId`s internally).
-7. **`clear()`** — drops all effects, rebuilds empty Input → Output passthrough.
+1. **`effect_ids: Vec<&'static str>`**: parallel to `chain_order`, stores registry effect IDs per slot.
+2. **`add_effect_named(effect, id) -> usize`**: returns the slot index (not a `NodeId`) and stores the registry ID.
+3. **`remove_at(slot) -> Option<Box<dyn EffectWithParams + Send>>`**: positional remove (elements shift left).
+4. **Slot-indexed accessors**: `set_param_at()`, `get_param_at()`, `param_count_at()`, `param_descriptor_at()`, `effect_at()`, `effect_at_mut()`, `set_bypass_at()`, `is_bypassed_at()`.
+5. **`snapshot() -> GraphSnapshot`**: captures all effect IDs, parameter values, and bypass states for save/restore.
+6. **`reorder_slots(&[usize])`**: reorders by slot index (translates to `NodeId`s internally).
+7. **`clear()`**: drops all effects and rebuilds an empty Input → Output passthrough.
 
 **Consumer migrations:**
 
 - **GUI `AudioProcessor`**: removed `node_map: Vec<NodeId>` shadow array. All slot access goes through `GraphEngine` slot API. `AtomicParamBridge::remove_slot()` changed from `swap_remove` to positional `remove` to match engine semantics.
 - **CLAP `ChainAudioProcessor`**: replaced raw `ProcessingGraph` + `slot_node_ids: [Option<NodeId>; 16]` + `slot_ids` + `input_node` + `output_node` with `GraphEngine` + `slot_map: Vec<usize>` (engine_slot → plugin_slot). Removed `reconnect_and_compile()` (~40 LOC). Added `ChainCommand::Restore` for deferred param/bypass restoration during state load.
-- **CLI**: already used `GraphEngine` — no changes needed.
+- **CLI**: already used `GraphEngine`, so no changes were needed.
 
-**Dual API principle:** `GraphEngine` exposes both `NodeId`-based methods (for arbitrary DAG topologies) and slot-indexed methods (for linear chains). The slot API is a convenience layer — it translates to `NodeId` operations internally.
+**Dual API principle:** `GraphEngine` exposes both `NodeId`-based methods (for arbitrary DAG topologies) and slot-indexed methods (for linear chains). The slot API is a convenience layer that translates to `NodeId` operations internally.
 
 ### Alternatives Considered
 
-- **Separate `ChainEngine` type** — cleaner separation between linear and DAG use cases. Rejected: would duplicate graph management code that `GraphEngine` already provides. The slot API is a thin layer (~100 LOC) that doesn't compromise the DAG API.
-- **Trait-based abstraction** — define a `ChainHost` trait implemented by both standalone and plugin contexts. Rejected: trait would need to abstract over both topology management AND parameter access, leading to a wide trait surface. Concrete `GraphEngine` is simpler.
-- **Keep consumer-specific wiring** — each consumer manages its own topology. Rejected: bug-prone (the GUI's `swap_remove` vs. engine's positional `remove` mismatch was a real issue) and duplicates ~80 LOC per consumer.
+- **Separate `ChainEngine` type**: cleaner separation between linear and DAG use cases. Rejected because it would duplicate graph management code that `GraphEngine` already provides. The slot API is a thin layer (~100 LOC) that leaves the DAG API unchanged.
+- **Trait-based abstraction**: define a `ChainHost` trait implemented by both standalone and plugin contexts. Rejected: the trait would need to abstract over both topology management and parameter access, which makes the trait surface wide. The concrete `GraphEngine` is simpler.
+- **Keep consumer-specific wiring**: each consumer manages its own topology. Rejected: bug-prone (the GUI's `swap_remove` vs. engine's positional `remove` mismatch was a real issue) and duplicates ~80 LOC per consumer.
 
 ### References
 
-- `crates/sonido-core/src/graph/engine.rs` — `GraphEngine`, `GraphSnapshot`, `SnapshotEntry`
-- `crates/sonido-gui/src/audio_processor.rs` — standalone consumer (slot API)
-- `crates/sonido-plugin/src/audio.rs` — CLAP consumer (slot_map bridge)
-- ADR-025 — DAG Routing Engine (foundation)
-- ADR-026 — Multi-Effect Chain CLAP Plugin (parameter space design)
+- `crates/sonido-core/src/graph/engine.rs`: `GraphEngine`, `GraphSnapshot`, `SnapshotEntry`
+- `crates/sonido-gui/src/audio_processor.rs`: standalone consumer (slot API)
+- `crates/sonido-plugin/src/audio.rs`: CLAP consumer (slot_map bridge)
+- ADR-025: DAG Routing Engine (foundation)
+- ADR-026: Multi-Effect Chain CLAP Plugin (parameter space design)
 
 ## ADR-028: Kernel Architecture — DSP/Parameter Separation
 
@@ -1192,33 +1192,33 @@ Extend `GraphEngine` with a **slot-indexed API** rather than create a separate `
 
 ### Context
 
-The original `Effect` trait couples DSP math with parameter ownership — each effect struct owns `SmoothedParam` instances and manages their targets internally. This creates tension when deploying the same effect across platforms:
+The original `Effect` trait couples DSP math with parameter ownership: each effect struct owns `SmoothedParam` instances and manages their targets internally. This causes problems when the same effect is deployed across platforms:
 
 - **Embedded (Daisy Seed):** ADC inputs have hardware RC filtering; software smoothing is redundant and wastes cycles. `SmoothedParam` and `Vec` require `alloc`.
 - **Plugin hosts (CLAP/VST3):** Parameters live in atomic stores shared with the host; the effect's internal smoothers duplicate the host's own smoothing.
 - **Preset recall:** Parameters should snap instantly, not smooth through a transition.
 - **Preset morphing:** Interpolating between two effect states requires extracting all parameter values, which `SmoothedParam` makes awkward.
 
-Additionally, `impl_params!` macro and the `ParameterInfo` trait impl are manually synchronized with the effect struct — a maintenance burden and source of subtle bugs.
+The `impl_params!` macro and the `ParameterInfo` trait impl also have to be kept in sync with the effect struct by hand, which is a maintenance burden and a source of subtle bugs.
 
 ### Decision
 
 Introduce a three-layer kernel architecture:
 
-1. **`DspKernel` trait** — Pure DSP processing. Receives `&Params` each sample. Contains ONLY filter state, delay buffers, ADAA processors, LFO phases. No `SmoothedParam`, no atomics, no platform types.
+1. **`DspKernel` trait**: Pure DSP processing. Receives `&Params` each sample. Contains only filter state, delay buffers, ADAA processors, and LFO phases, with no `SmoothedParam`, no atomics, and no platform types.
 
-2. **`KernelParams` trait** — Typed parameter struct. Fields in user-facing units (dB, %, ms, index). Provides `descriptor()`, `smoothing()`, `get()`/`set()`, plus `lerp()` (preset morphing), `from_normalized()` (CLAP bridge), `from_knobs()` (embedded ADC bridge).
+2. **`KernelParams` trait**: Typed parameter struct. Fields in user-facing units (dB, %, ms, index). Provides `descriptor()`, `smoothing()`, `get()`/`set()`, plus `lerp()` (preset morphing), `from_normalized()` (CLAP bridge), `from_knobs()` (embedded ADC bridge).
 
-3. **`Adapter<K, SmoothedPolicy>`** — Platform bridge. Owns per-parameter `SmoothedParam` instances. Implements `Effect + ParameterInfo` automatically. The **only** `Effect` implementor for audio effects.
+3. **`Adapter<K, SmoothedPolicy>`**: Platform bridge. Owns per-parameter `SmoothedParam` instances and implements `Effect + ParameterInfo` automatically. It is the only `Effect` implementor for audio effects.
 
 ### Consequences
 
 **Positive:**
-- Identical DSP binary on x86_64 and ARM Cortex-M7 — kernel code is platform-independent
+- The same DSP source builds for x86_64 and ARM Cortex-M7 (kernel code is platform-independent)
 - One parameter definition serves all platforms (GUI, plugin, preset, embedded)
-- Preset morphing via `KernelParams::lerp()` falls out for free
-- `impl_params!` macro still used by `Adapter` for `ParameterInfo` — `KernelParams` provides the underlying data
-- Adapter is invisible to consumers — `Box<dyn EffectWithParams + Send>` works unchanged
+- Preset morphing works through `KernelParams::lerp()` with no extra code
+- The `impl_params!` macro is still used by `Adapter` for `ParameterInfo`; `KernelParams` provides the underlying data
+- The adapter is transparent to consumers: `Box<dyn EffectWithParams + Send>` works unchanged
 
 **Negative:**
 - Every effect requires migration (one-time cost, 18 effects)
@@ -1226,18 +1226,18 @@ Introduce a three-layer kernel architecture:
 - Manual `get()/set()` match arms until proc macro `#[derive(KernelParams)]` is built
 
 **Invariants:**
-- Kernels must NOT contain `SmoothedParam`, atomics, `Arc`, or platform types
+- Kernels must not contain `SmoothedParam`, atomics, `Arc`, or platform types
 - `ParamId` and `string_id` values must match classic effects exactly (plugin API contract)
 - Params store user-facing units; kernels convert internally
 - After migration: classic effect structs deleted, `impl_params!` retained for `Adapter` ParameterInfo bridging
 
 ### References
 
-- `crates/sonido-core/src/kernel/traits.rs` — `DspKernel`, `KernelParams`, `SmoothingStyle`
-- `crates/sonido-core/src/kernel/adapter.rs` — `Adapter<K, P>`
-- `crates/sonido-effects/src/kernels/` — kernel implementations, one per effect (19 at the time of this ADR, 36 as of 2026-10-22)
-- `crates/sonido-registry/src/lib.rs` — registry creates `Adapter<XxxKernel, SmoothedPolicy>`
-- `docs/KERNEL_ARCHITECTURE.md` — full architecture reference, patterns, and new-effect checklist
+- `crates/sonido-core/src/kernel/traits.rs`: `DspKernel`, `KernelParams`, `SmoothingStyle`
+- `crates/sonido-core/src/kernel/adapter.rs`: `Adapter<K, P>`
+- `crates/sonido-effects/src/kernels/`: kernel implementations, one per effect (19 at the time of this ADR, 36 as of 2026-10-22)
+- `crates/sonido-registry/src/lib.rs`: registry creates `Adapter<XxxKernel, SmoothedPolicy>`
+- `docs/KERNEL_ARCHITECTURE.md`: full architecture reference, patterns, and new-effect checklist
 
 ---
 
@@ -1255,45 +1255,45 @@ As Sonido expands onto embedded hardware (Daisy Seed, Hothouse), decisions arise
 
 ### Decision
 
-**All hardware decisions must serve and empower the kernel architecture — not the reverse. The kernel is the system. Hardware is a delivery mechanism.**
+Every hardware decision must serve and support the kernel architecture; the kernel architecture is never shaped to suit the hardware. The kernel defines what the system does, and the hardware only delivers it.
 
-This is not a statement about dependency direction (that's already enforced by the crate graph). It's a statement about *design priority*: when a hardware tradeoff exists, the choice that best enables clean kernel use wins.
+The crate graph already enforces the dependency direction. This principle sets a design priority: when a hardware tradeoff exists, the option that best enables clean kernel use is chosen.
 
 ### Concrete Rules
 
 1. **`from_knobs()` is the canonical ADC bridge.** Every hardware knob/CV input maps to `KernelParams` via `from_knobs(adc_0..adc_N)`. Signature: all inputs are `f32` in `[0.0, 1.0]`; output is a fully-populated `KernelParams`. No HAL types cross this boundary.
 
-2. **Audio format conversion at the hardware boundary, never inside kernels.** SAI delivers `u32` (24-bit left-justified in 32 bits). Convert to `f32` before calling `DspKernel::process_stereo(left: f32, right: f32)`. The kernel always sees normalized float audio.
+2. **Audio format conversion at the hardware boundary, never inside kernels.** SAI delivers `u32` (24-bit left-justified in 32 bits). Convert to `f32` before calling `DspKernel::process_stereo(left: f32, right: f32)`. The kernel always receives normalized float audio.
 
 3. **Sample rate is a runtime parameter, never hardcoded.** Hardware determines the actual rate; `DspKernel::set_sample_rate()` and `Adapter::new(kernel, sr)` accept it at init. Hardcoding 48000 anywhere is a bug.
 
-4. **No HAL types in kernel code.** `DspKernel`, `KernelParams`, and all DSP logic are `no_std`, HAL-free. Firmware crates import kernel crates; kernel crates never import firmware crates.
+4. **No HAL types in kernel code.** `DspKernel`, `KernelParams`, and all DSP logic are `no_std` and HAL-free. Firmware crates import kernel crates; kernel crates never import firmware crates.
 
-5. **Smoothing belongs to the platform layer.** `Adapter<K, SmoothedPolicy>` owns `SmoothedParam`. Direct kernel use on embedded skips smoothing — ADC values are hardware RC-filtered. Duplicating software smoothing on hardware is waste.
+5. **Smoothing belongs to the platform layer.** `Adapter<K, SmoothedPolicy>` owns `SmoothedParam`. Direct kernel use on embedded skips smoothing, because the hardware already RC-filters the ADC values. Smoothing them again in software would be wasted work.
 
-6. **Hardware diagnostics drive kernel validation.** The tier system (blinky → passthrough → single_effect → audio_input_diag → tone_out) is structured to validate kernel integration at each layer, not just hardware function.
+6. **Hardware diagnostics drive kernel validation.** The tier system (blinky → passthrough → single_effect → audio_input_diag → tone_out) is structured to validate kernel integration at each layer, as well as hardware function.
 
 ### Rationale
 
-The kernel architecture (ADR-028) was designed so the same kernel runs identically on embedded and desktop. This only holds if hardware code stays subordinate — if hardware shapes the kernel API, the kernel loses its platform independence and the architecture collapses to yet another port-per-platform design.
+The kernel architecture (ADR-028) was designed so the same kernel runs identically on embedded and desktop. That holds only while hardware code stays subordinate. If hardware shapes the kernel API, the kernel loses its platform independence, and the design turns into a separate port for each platform.
 
 ### Alternatives Considered
 
-- **Hardware-native parameter types** (e.g., passing raw ADC counts into the kernel): Rejected — couples DSP math to hardware resolution and range, breaks desktop/plugin use.
-- **Platform-specific kernel variants**: Rejected — the kernel's value is its universality. `from_knobs()` is the single variability point.
+- **Hardware-native parameter types** (e.g., passing raw ADC counts into the kernel): Rejected because it couples DSP math to hardware resolution and range and breaks desktop/plugin use.
+- **Platform-specific kernel variants**: Rejected: the point of the kernel is that one version runs on every platform. `from_knobs()` is the only part that varies.
 
 ### Consequences
 
-- New hardware peripherals require a `from_knobs()` impl and an audio format conversion shim — nothing else.
+- New hardware peripherals require only a `from_knobs()` impl and an audio format conversion shim.
 - Adding a new effect is hardware-agnostic: implement `DspKernel` + `KernelParams`, add `from_knobs()`, deploy everywhere.
-- Hardware diagnostic examples (`tone_out`, `square_out`, `audio_input_diag`) are first-class validation of the kernel boundary.
+- Hardware diagnostic examples (`tone_out`, `square_out`, `audio_input_diag`) are a primary means of validating the kernel boundary.
 
 ### References
 
-- `crates/sonido-core/src/kernel/traits.rs` — `DspKernel::process_stereo()`, `KernelParams::from_knobs()`
-- `crates/sonido-daisy/examples/single_reverb.rs` — reference `from_knobs()` usage on hardware
-- `docs/EMBEDDED.md` — Hardware Context governing principle, tier validation system
-- ADR-028 — Kernel Architecture (the system this principle protects)
+- `crates/sonido-core/src/kernel/traits.rs`: `DspKernel::process_stereo()`, `KernelParams::from_knobs()`
+- `crates/sonido-daisy/examples/single_reverb.rs`: reference `from_knobs()` usage on hardware
+- `docs/EMBEDDED.md`: Hardware Context governing principle, tier validation system
+- ADR-028: Kernel Architecture (the system this principle protects)
 
 ## ADR-030: Noon Mapping Belongs in the Embedded Layer
 
@@ -1305,13 +1305,13 @@ The kernel architecture (ADR-028) was designed so the same kernel runs identical
 
 ### Context
 
-The Hothouse 6-knob pedal has a "noon = sweet spot" convention: when all knobs are at their physical center (12 o'clock), the effect should sound musically useful. An initial implementation achieved this by calling `.noon_aligned()` on `ParamDescriptor` builders, which narrowed descriptor ranges so the arithmetic midpoint equaled the default. This worked for embedded but had an unintended consequence: plugin hosts, GUIs, and all other consumers also saw narrowed ranges, preventing access to the full parameter space.
+The Hothouse 6-knob pedal has a "noon = sweet spot" convention: when all knobs are at their physical center (12 o'clock), the effect should sound musically useful. An initial implementation achieved this by calling `.noon_aligned()` on `ParamDescriptor` builders, which narrowed descriptor ranges so the arithmetic midpoint equaled the default. This worked for embedded but had an unintended consequence: plugin hosts, GUIs, and all other consumers also got narrowed ranges, preventing access to the full parameter space.
 
-Research into hardware pedals (Boss DS-1, Rat, TS-808, Klon, MXR Phase 90, Cry Baby, etc.) and Ableton Live 12 confirmed that the "noon = sweet spot" convention is about **tone**, not about narrowing ranges. Commercial hardware achieves this through potentiometer tapers and circuit design — the parameter ranges remain full; only the mapping curve is biased.
+Research into hardware pedals (Boss DS-1, Rat, TS-808, Klon, MXR Phase 90, Cry Baby, etc.) and Ableton Live 12 confirmed that the "noon = sweet spot" convention concerns the tone at noon and does not require narrowing ranges. Commercial hardware achieves it through potentiometer tapers and circuit design: the parameter ranges stay full, and only the mapping curve is biased.
 
 ### Decision
 
-**Noon mapping is an embedded concern handled by `adc_to_param_biased()` in `sonido-platform` (originally `sonido-daisy`), not by narrowing descriptor ranges in `sonido-core`.**
+Noon mapping is an embedded concern. `adc_to_param_biased()` in `sonido-platform` (originally `sonido-daisy`) handles it, and descriptor ranges in `sonido-core` are not narrowed.
 
 `ParamDescriptor` defines the full musical range for every consumer. The embedded layer biases the ADC-to-parameter curve so that knob center maps to the effect's sweet spot, which is the descriptor default: effect authors set each default to the voiced sweet spot.
 
@@ -1329,7 +1329,7 @@ Unchanged for all consumers            │  ADC 0.0→0, ADC 0.5→26, ADC 1.0�
 - `[0.0, 0.5]` maps `desc.min` → `noon`
 - `[0.5, 1.0]` maps `noon` → `desc.max`
 
-Both halves respect the descriptor's `ParamScale` (Linear, Logarithmic, Power) for musically consistent response curves. STEPPED parameters use the same split, rounded to whole steps.
+Both halves use the descriptor's `ParamScale` (Linear, Logarithmic, Power) for musically consistent response curves. STEPPED parameters use the same split, rounded to whole steps.
 
 `knob_to_param(effect_id, param_idx, desc, normalized)` passes `desc.default` as `noon`. On the pedal it maps the jam's knobs; a rig's knobs are its macros.
 
@@ -1338,7 +1338,7 @@ Both halves respect the descriptor's `ParamScale` (Linear, Logarithmic, Power) f
 1. **Layer separation:** Descriptor ranges are a property of the DSP algorithm. Knob mapping is a property of the hardware interface. Mixing them violates ADR-029 ("hardware serves the kernel").
 2. **Full range for all consumers:** Plugin hosts (CLAP/VST), GUIs (egui), and CLI tools should expose the full parameter range. Only embedded knobs need biased mapping.
 3. **Hardware precedent:** No commercial pedal narrows its circuit's range to achieve noon alignment. They use potentiometer tapers (audio/log/reverse-log) and circuit topology.
-4. **Composability:** `adc_to_param_biased()` composes with any descriptor — it reads scale, min, max, and noon externally. No descriptor modification needed.
+4. **Composability:** `adc_to_param_biased()` composes with any descriptor: it reads scale, min, max, and noon from outside, so no descriptor needs to change.
 
 ### Alternatives Considered
 
@@ -1349,7 +1349,7 @@ Both halves respect the descriptor's `ParamScale` (Linear, Logarithmic, Power) f
 
 ### Consequences
 
-- `ParamDescriptor` defines the full musical range — effect authors don't need to think about hardware mapping.
+- `ParamDescriptor` defines the full musical range, so effect authors don't need to think about hardware mapping.
 - A new effect needs no noon entry: its descriptor default is its noon. Changing a default changes the pedal's noon, the plugin's initial state and the level calibration (ADR-031) together.
 - The `noon_aligned()` builder method remains available for ad-hoc use but is not applied to production descriptors.
 - `adc_to_param()` (linear mapping) remains available for effects that don't need biased mapping.
@@ -1360,27 +1360,27 @@ Both halves respect the descriptor's `ParamScale` (Linear, Logarithmic, Power) f
 
 `adc_to_param_biased` now automatically falls back to `adc_to_param` (linear mapping) in two cases:
 
-1. **STEPPED parameters** — discrete selectors (waveshape, mode, filter type) need equal knob travel per option. Biasing wastes half the travel on one option.
-2. **Noon at or near a range extreme** — when noon is within 5% of either end, biased mapping creates a dead zone where half the knob travel produces no change. Fallback to linear gives full range with no wasted travel.
+1. **STEPPED parameters**: discrete selectors (waveshape, mode, filter type) need equal knob travel per option, and biasing wastes half the travel on one option.
+2. **Noon at or near a range extreme**: when noon is within 5% of either end, biased mapping creates a dead zone where half the knob travel produces no change. Fallback to linear gives full range with no wasted travel.
 
-Additionally, noon preset values for mix parameters were changed from 100% (plugin insert convention) to 50% (pedal blend knob convention), and reverb presets were corrected from stale [0,1]-range values to the actual [0,100] parameter ranges.
+Noon preset values for mix parameters were also changed from 100% (plugin insert convention) to 50% (pedal blend knob convention), and reverb presets were corrected from stale [0,1]-range values to the actual [0,100] parameter ranges.
 
 ### Revision: Noon Is the Default (2026-10-22)
 
 - **No noon table.** `knob_to_param` uses `desc.default` as noon; `sonido_platform::noon` and its firmware re-export are deleted. Defaults were re-voiced as the sweet spots (`ParamDescriptor::with_default` sets one on top of a factory method such as `::mix()`), so the pedal at noon and a freshly opened plugin start identical, and both play at the input's loudness (ADR-031).
-- **Noon at a range end still selects noon.** A parameter voiced at its maximum (distortion's mix, default 100%) sweeps its whole range in the left half of the travel and holds there in the right. The 5% linear fallback is gone: it put noon mid-range, off the voicing.
-- **STEPPED parameters are biased too.** Noon selects the default option; the options below it share the left half of the travel and those above it the right half. A default on the first option keeps the whole left half there. Linear stepping put the middle option at noon whatever the voicing asked for.
+- **Noon at a range end still selects noon.** A parameter voiced at its maximum (distortion's mix, default 100%) sweeps its whole range in the left half of the travel and holds there in the right. The 5% linear fallback is gone: it put noon in the middle of the range instead of at the voiced default.
+- **STEPPED parameters are biased too.** Noon selects the default option; the options below it share the left half of the travel and those above it the right half. A default on the first option keeps the whole left half there. Linear stepping put the middle option at noon regardless of the voiced default.
 - **Knob floors.** `knob_min_override` raises the knob's minimum for three parameters without touching the descriptor: delay time 30 ms, filter cutoff 150 Hz, bitcrusher bit depth 5.
-- **Tests.** `crates/sonido-effects/tests/noon_mapping.rs` runs `adc_to_param_biased` over every writable parameter of every registered effect (the ends reach min/max, noon is the default, the mapping never reverses); `crates/sonido-platform/tests/knob_calibration.rs` holds each jam effect within ±1.5 dB of the dry guitar with every knob at noon.
+- **Tests.** `crates/sonido-effects/tests/noon_mapping.rs` runs `adc_to_param_biased` over every writable parameter of every registered effect (the ends reach min/max, noon is the default, the mapping never reverses); `crates/sonido-platform/tests/knob_calibration.rs` checks that each jam effect stays within ±1.5 dB of the dry guitar with every knob at noon.
 
 ### References
 
-- `crates/sonido-platform/src/param_map.rs` — `adc_to_param()`, `adc_to_param_biased()`
-- `crates/sonido-platform/src/knob_mapping.rs` — `knob_map()`, `knob_to_param()` (noon = `desc.default`), knob floors
+- `crates/sonido-platform/src/param_map.rs`: `adc_to_param()`, `adc_to_param_biased()`
+- `crates/sonido-platform/src/knob_mapping.rs`: `knob_map()`, `knob_to_param()` (noon = `desc.default`), knob floors
 - `crates/sonido-effects/tests/noon_mapping.rs`, `crates/sonido-platform/tests/knob_calibration.rs`
-- ADR-028 — Kernel Architecture (parameter ownership)
-- ADR-029 — Hardware Serves the Kernel (design priority)
-- ADR-031 — One Measured Level Contract (defaults are where levels are calibrated)
+- ADR-028: Kernel Architecture (parameter ownership)
+- ADR-029: Hardware Serves the Kernel (design priority)
+- ADR-031: One Measured Level Contract (defaults are where levels are calibrated)
 
 ---
 
@@ -1392,21 +1392,21 @@ Additionally, noon preset values for mix parameters were changed from 100% (plug
 
 ### Context
 
-Level matching was a per-effect choice: each kernel set its own output default and makeup gain (ADR-017, ADR-019), and mixed with a linear crossfade. Neither held up. Fully wet, the plate reverb measured 7.5 dB and Harmonic Habitat 10.4 dB under the dry signal, so turning their mix up made them quieter (regression note in `crates/sonido-effects/tests/reverb_decay.rs`). A linear crossfade of an uncorrelated wet (a reverb, an echo) loses 3 dB at 50% mix, while a plain constant-power crossfade of a correlated one (saturation) gains 3 dB. On the pedal, where the jam scrolls between effects and a knob at noon selects the defaults (ADR-030), every level mismatch is a volume jump.
+Level matching was a per-effect choice: each kernel set its own output default and makeup gain (ADR-017, ADR-019), and mixed with a linear crossfade. Both approaches failed. Fully wet, the plate reverb measured 7.5 dB and Harmonic Habitat 10.4 dB under the dry signal, so turning their mix up made them quieter (regression note in `crates/sonido-effects/tests/reverb_decay.rs`). A linear crossfade of an uncorrelated wet (a reverb, an echo) loses 3 dB at 50% mix, while a plain constant-power crossfade of a correlated one (saturation) gains 3 dB. On the pedal, where the jam scrolls between effects and a knob at noon selects the defaults (ADR-030), every level mismatch is a volume jump.
 
 ### Decision
 
 One measured level contract, `sonido_core::level` (`crates/sonido-core/src/level.rs`): at its defaults every effect plays at the loudness of its input, and its mix control does not change that loudness.
 
 1. **One declaration per kernel.** `DspKernel::LEVEL` is a `Level { trim, mix_correlation }`, and every kernel sets `const LEVEL: Level = crate::calibration::NAME;`. `trim` brings the wet signal (or, without a mix control, the output) to the input's loudness; `mix_correlation` is the measured correlation `ρ` of the wet signal with the dry input, `None` without a mix control.
-2. **One mix law.** Kernels with a mix control blend through `Self::blend` / `Self::blend_stereo`: the wet is trimmed, then mixed with the constant-power gains `cos(πm/2)`, `sin(πm/2)` normalized by `1/√(1 + ρ·sin(πm))`, constant loudness at any mix for that correlation. Kernels without one pass their sound through `Self::level` / `Self::level_stereo` before their output knob and any safety limiter (the trim used to be applied by the `Adapter` after everything, which let a +12 dB trim defeat the wah's limiter).
+2. **One mix law.** Kernels with a mix control blend through `Self::blend` / `Self::blend_stereo`: the wet is trimmed, then mixed with the constant-power gains `cos(πm/2)`, `sin(πm/2)` normalized by `1/√(1 + ρ·sin(πm))`, which keeps the loudness constant at any mix for that correlation. Kernels without one pass their sound through `Self::level` / `Self::level_stereo` before their output knob and any safety limiter (the trim used to be applied by the `Adapter` after everything, which let a +12 dB trim bypass the wah's limiter).
 3. **Measured, never hand-tuned.** `cargo run -p sonido-effects --example calibrate --release` generates `crates/sonido-effects/src/calibration.rs`: it plays `sonido_analysis::signals::reference_guitar` (a strummed guitar peaking at `NOMINAL_PEAK_DBFS` = -20 dBFS, the median measured from a humbucker into the Hothouse) through every registered effect, fully wet if it has a mix control and at its defaults otherwise, and measures integrated LUFS (ITU-R BS.1770-4, `sonido_analysis::loudness::effect_gain_db`). The looper and tuner are utilities and stay uncalibrated.
-4. **Held by a test.** `crates/sonido-effects/tests/level_contract.rs`: within 0.5 dB of the dry loudness fully wet (or at the defaults), and within 1.5 dB at 0/25/50/75% mix and at the default mix.
+4. **Checked by a test.** `crates/sonido-effects/tests/level_contract.rs` checks that each effect is within 0.5 dB of the dry loudness fully wet (or at the defaults), and within 1.5 dB at 0/25/50/75% mix and at the default mix.
 5. **Rigs too.** The factory rigs (`crates/sonido-rigs`) get master trims generated into `crates/sonido-rigs/src/trims.rs` by `cargo run -p sonido-rigs --example calibrate --release` and checked by `crates/sonido-rigs/tests/factory.rs`.
 
 ### Rationale
 
-- **Measured beats chosen:** a hand-set output default is right only until the kernel's sound changes; a generated table with a failing test cannot drift silently.
+- **Measured values:** a hand-set output default is right only until the kernel's sound changes; a generated table with a failing test cannot drift silently.
 - **Correlation-normalized law:** two signals with correlation `ρ` at gains `a`, `b` sum to power `a² + b² + 2ρab`, so one law covers reverbs (`ρ = 0`, the plain constant-power crossfade), saturation (`ρ = 1`, amplitude kept like a linear crossfade) and partly cancelling wets (`ρ < 0`, boosted). The sine law (not `√m`) has a finite slope at both ends, so the first turn of a mix knob fades the wet in instead of jumping to -20 dB.
 - **Cheap on the Cortex-M7:** `level::mix_gains` runs per sample in every effect, so it uses no transcendentals (libm's `sqrtf` is a software routine there): a polynomial quarter-sine within 6e-4 of the sine and a bit-trick inverse square root within 5 ppm.
 - **A realistic reference:** -20 dBFS peaks is what a humbucker measured into the Hothouse's converter, and close to a DI guitar recorded in a DAW, so the trims are right for what the pedal and the plugins actually play rather than for a full-scale test tone.
@@ -1415,24 +1415,24 @@ One measured level contract, `sonido_core::level` (`crates/sonido-core/src/level
 
 - **Hand-tuned output defaults per effect** (the previous state): drift with every DSP change and are never re-checked.
 - **A per-kernel choice of mix law**: each effect would still need its own level check, and a law that suits one correlation is off for others.
-- **Runtime loudness matching (AGC)**: rejected for the same reason as in ADR-019, cost on the embedded targets.
+- **Runtime loudness matching (AGC)**: rejected for the same reason as in ADR-019: its cost on the embedded targets.
 
 ### Consequences
 
 - Changing a kernel's sound or defaults means re-running the `calibrate` example (`level_contract` fails until you do), then regenerating the golden files, since the trim is part of the output.
-- Levels hold for the reference signal; a saturating effect fed a much hotter or quieter input will measure differently.
+- The levels are correct for the reference signal; a saturating effect fed a much hotter or quieter input will measure differently.
 - A kernel called directly, without the `Adapter`, and without a mix control plays without its trim.
 - `sonido_core::math::wet_dry_mix()` stays for the graph engine's bypass crossfade; kernels do not use it.
 
 ### References
 
-- `crates/sonido-core/src/level.rs` — `Level`, `mix_gains`, `blend`, `NOMINAL_PEAK_DBFS`
-- `crates/sonido-core/src/kernel/traits.rs` — `DspKernel::LEVEL`, `blend`, `blend_stereo`
+- `crates/sonido-core/src/level.rs`: `Level`, `mix_gains`, `blend`, `NOMINAL_PEAK_DBFS`
+- `crates/sonido-core/src/kernel/traits.rs`: `DspKernel::LEVEL`, `blend`, `blend_stereo`
 - `crates/sonido-effects/examples/calibrate.rs`, `crates/sonido-effects/src/calibration.rs`
 - `crates/sonido-effects/tests/level_contract.rs`
 - `crates/sonido-rigs/examples/calibrate.rs`, `crates/sonido-rigs/src/trims.rs`, `crates/sonido-rigs/tests/factory.rs`
-- ADR-017 — Shared DSP Vocabulary (`wet_dry_mix()`, superseded for kernels)
-- ADR-030 — Noon Mapping (noon selects the default, where levels are calibrated)
+- ADR-017: Shared DSP Vocabulary (`wet_dry_mix()`, superseded for kernels)
+- ADR-030: Noon Mapping (noon selects the default, where levels are calibrated)
 
 ---
 
@@ -1444,49 +1444,49 @@ One measured level contract, `sonido_core::level` (`crates/sonido-core/src/level
 
 ### Context
 
-The pedal has six knobs in two rows of three, three toggles, two footswitches and no display. Its controls had grown per mode. In the jam with T2 on A or B, footswitch taps scrolled the T1 slot's effect and a second FS1 tap within 350 ms cleared it; on a rig, an FS2 tap set the tempo; in Morph (then T2 down), held footswitches ramped toward A or B; both footswitches together toggled bypass, and held for 3 s restarted the pedal into its bootloader (raised from 1.5 s after a bypass stomp rebooted it). The knob roles ran from K1 "primary" to K6 "level", so the jam's volume knob sat bottom right, while the factory rigs put input, morph time and master on K4–K6. What a footswitch did depended on the rig and the T2 position, and the one action that silences the pedal, a restart into DFU, sat on a gesture a stomp can make by accident.
+The pedal has six knobs in two rows of three, three toggles, two footswitches and no display. Each mode had added controls of its own. In the jam with T2 on A or B, footswitch taps scrolled the T1 slot's effect and a second FS1 tap within 350 ms cleared it; on a rig, an FS2 tap set the tempo; in Morph (then T2 down), held footswitches ramped toward A or B; both footswitches together toggled bypass, and held for 3 s restarted the pedal into its bootloader (raised from 1.5 s after a bypass stomp rebooted it). The knob roles ran from K1 "primary" to K6 "level", so the jam's volume knob sat bottom right, while the factory rigs put input, morph time and master on K4 to K6. What a footswitch did depended on the rig and the T2 position, and the one action that silences the pedal, a restart into DFU, was mapped to a gesture that a stomp can trigger by accident.
 
 ### Decision
 
-One rule for the footswitches and one for the knobs, in every rig and every T2 position. They live in `crates/sonido-patch/src/controls.rs` as functions the firmware's control tick dispatches through (`control_tick()` in `crates/sonido-daisy/examples/sonido_pedal.rs`) and `sonido pedal controls` draws as an illustrated guide (`sonido_rigs::guide`), so the description can't drift from the pedal:
+Use one rule for the footswitches and one for the knobs, in every rig and every T2 position. The rules are functions in `crates/sonido-patch/src/controls.rs`. The firmware's control tick dispatches through them (`control_tick()` in `crates/sonido-daisy/examples/sonido_pedal.rs`), and `sonido pedal controls` draws them as an illustrated guide (`sonido_rigs::guide`), so the guide always matches what the pedal does:
 
-1. **Footswitches: left on/off, right time, hold = rig.** An FS1 tap toggles bypass, a 5 ms crossfade to the dry input while the rig keeps running. An FS2 tap is tap tempo, and in the jam the delay's time follows it; with T2 in the middle it glides between A and B instead (the morph's time), and a tap mid-glide turns back. Either footswitch held for 0.4 s changes rig right then, while still held: FS1 back, FS2 forward.
+1. **Footswitches: left on/off, right time, hold = rig.** An FS1 tap toggles bypass, a 5 ms crossfade to the dry input while the rig keeps running. An FS2 tap is tap tempo, and in the jam the delay's time follows it; with T2 in the middle it glides between A and B instead (the morph's time), and a tap during a glide reverses it. Holding either footswitch for 0.4 s changes the rig at that moment, while the footswitch is still held: FS1 goes back, FS2 forward.
 2. **T2: up A, middle Morph, down B**, so Morph sits between the two sounds it moves between.
 3. **Each LED shows what the footswitch below it does.** LED 1 (FS1, on/off) is lit while on and blinks the rig's number after a change; LED 2 (FS2, time) flashes the tempo, or, with T2 in the middle where FS2 glides, shows the morph (dark at A, lit at B, flickering while gliding).
-4. **Knobs: the top row is levels, the bottom row is the sound.** K1 K2 K3 are levels and extras, and K3 (top right) is always a volume: an effect's output on the jam's effect pages, the master on the jam's setup page and in the factory rigs. K4 K5 K6 are the three controls that shape the sound most, K4 the main one. Every `knob_map` (`crates/sonido-platform/src/knob_mapping.rs`), the factory rigs (K1 input, K2 morph time, K3 master, K4–K6 the rig's own controls; `crates/sonido-rigs/src/lib.rs`) and the jam's setup page (K1 input, K2 morph time, K3 master, K4–K6 pick slot 1–3's effect) follow it.
-5. **No dangerous mid-song gesture.** The bootloader is a power-on gesture (both footswitches held) or a USB request (`Request::Bootloader`, sent by `sonido pedal update`), never a hold during play. Footswitch scrolling and the FS1 slot clear are gone: effects are picked with the setup page's knobs, a pick loads only once its knob has rested for 0.3 s, and a pick that would break the CPU rule is refused.
+4. **Knobs: the top row is levels, the bottom row is the sound.** K1 K2 K3 are levels and extras, and K3 (top right) is always a volume: an effect's output on the jam's effect pages, the master on the jam's setup page and in the factory rigs. K4 K5 K6 are the three controls that shape the sound most, K4 the main one. Every `knob_map` (`crates/sonido-platform/src/knob_mapping.rs`), the factory rigs (K1 input, K2 morph time, K3 master, K4 to K6 the rig's own controls; `crates/sonido-rigs/src/lib.rs`) and the jam's setup page (K1 input, K2 morph time, K3 master, K4 to K6 pick the effects for slots 1 to 3) follow it.
+5. **No dangerous mid-song gesture.** The bootloader is a power-on gesture (both footswitches held) or a USB request (`Request::Bootloader`, sent by `sonido pedal update`), never a hold during play. Footswitch scrolling and the FS1 slot clear are gone: effects are picked with the setup page's knobs, a pick loads only after its knob has stayed still for 0.3 s, and a pick that would break the CPU rule is rejected.
 
 ### Rationale
 
-- **Muscle memory without a display.** A control that means the same thing in every rig and mode can be used without looking, and the pedal has no screen to say which mode is active.
-- **On/off and time are what a player stomps mid-song.** A rig change is rarer, so it costs a hold, which acts at 0.4 s while the footswitch is still down rather than at release.
-- **One volume knob in one place.** Whatever plays, K3 fixes a level jump.
+- **Muscle memory without a display.** A control that means the same thing in every rig and mode can be used without looking, and the pedal has no screen to show which mode is active.
+- **On/off and time are what a player stomps mid-song.** A rig change is rarer, so it requires a hold, which takes effect at 0.4 s while the footswitch is still down rather than at release.
+- **One volume knob in one place.** Whatever is playing, K3 corrects a level jump.
 - **Knobs pick absolutely.** A pick knob's zones are fixed (fully left empty, then each jam effect), so a slot's effect is chosen directly instead of stepped through, and no effect is built for each step on the way.
-- **Nothing on stage reboots the pedal.** A gesture during play that restarts into DFU is one stomp from silence, whatever its hold time; a power-on gesture or a USB request cannot happen mid-song.
+- **Nothing on stage reboots the pedal.** If a gesture during play can restart the pedal into DFU, a single accidental stomp can silence it, whatever the hold time; a power-on gesture or a USB request cannot happen mid-song.
 
 ### Alternatives Considered
 
 - **Per-mode footswitch meanings** (the previous state): more functions on two switches, at the cost of knowing the mode before stomping.
-- **A longer bootloader hold**: 1.5 s was already raised to 3 s after an accidental reboot; a longer hold is rarer, not impossible.
+- **A longer bootloader hold**: 1.5 s was already raised to 3 s after an accidental reboot; a longer hold makes an accidental reboot rarer but still possible.
 - **Scrolling effects on the footswitches**: kept the knobs free for the sound, but made the footswitches modal and built every effect passed on the way.
 - **Parameter pages on a footswitch hold** (`docs/ROADMAP.md`, Embedded Hardening): the hold now changes rig; the jam's setup page sits on T2's middle position instead.
 
 ### Consequences
 
-- Every `knob_map` was reordered. `knob_mapping.rs`'s tests hold each jam effect to the rule (K3 mapped, K4 = param 0), and `crates/sonido-platform/tests/knob_calibration.rs` gives K3 the level knob's wider range.
-- The factory rigs' macros moved: K1 input, K2 morph time, K3 master, K4–K6 the rig. Rigs from the editor map their six macros however their author did; the rule binds the pedal's own pages and the factory rigs.
-- The jam needed levels of its own: `JamSettings` (input, master, morph time, `crates/sonido-patch/src/pedal.rs`) travels in the jam patch's globals and is saved in the state sector.
+- Every `knob_map` was reordered. `knob_mapping.rs`'s tests check each jam effect against the rule (K3 mapped, K4 = param 0), and `crates/sonido-platform/tests/knob_calibration.rs` gives K3 the level knob's wider range.
+- The factory rigs' macros moved: K1 input, K2 morph time, K3 master, K4 to K6 the rig. Rigs from the editor map their six macros however their author did; the rule applies to the pedal's own pages and the factory rigs.
+- The jam needed levels of its own: `JamSettings` (input, master, morph time, `crates/sonido-patch/src/pedal.rs`) is carried in the jam patch's globals and is saved in the state sector.
 - The jam's effect list, renamed `JAM_EFFECT_IDS`, is the pick knobs' zone order and is no longer append-only, since jams are stored by effect UID.
 - A newly picked effect starts at its voiced defaults, not at the knobs' positions.
 - Tap tempo is not available with T2 in the middle, where FS2 glides.
-- In a rig, T1 and T3 are the rig's own (`Patch::toggles`, `controls::toggle_role`): each is a three-way switch that sets the targets mapped to it to a value per position, applied after the morph and before the knobs, so a knob on the same parameter wins. A toggle may set effect parameters, the input gain or the master volume, never the morph (T2 and FS2 own it), and starts in the middle. Every factory rig gives both a job (Shimmer Cathedral's interval, Fuzz Lab's clipping and filter type, …), each setting only what its morph and knobs leave alone, with the rig's own value in the middle so its level trim holds; `tests/factory.rs` holds every position within 4 dB and requires each one to change the sound. In the editor, a parameter's right-click menu maps it to T1 or T3, and turning it records into the toggle's current position. The firmware learned this at link protocol 3; `sonido pedal push` and the editor's Send to pedal say so when older firmware would play a rig without its toggles.
+- In a rig, T1 and T3 are the rig's own (`Patch::toggles`, `controls::toggle_role`): each is a three-way switch that sets the targets mapped to it to a value per position, applied after the morph and before the knobs, so a knob on the same parameter overrides the toggle. A toggle may set effect parameters, the input gain or the master volume, never the morph (T2 and FS2 control it), and starts in the middle. Every factory rig maps something to both toggles (Shimmer Cathedral's interval, Fuzz Lab's clipping and filter type, …), each setting only what its morph and knobs leave alone, with the rig's own value in the middle so its level trim stays valid; `tests/factory.rs` checks that every position stays within 4 dB and that each one changes the sound. In the editor, a parameter's right-click menu maps it to T1 or T3, and turning it records into the toggle's current position. Firmware supports this from link protocol 3; `sonido pedal push` and the editor's Send to pedal warn when older firmware would play a rig without its toggles.
 - A firmware update needs the power-on gesture or a USB host; without either, the bootloader is reached with the Seed's RESET and BOOT buttons, inside the enclosure (`docs/EMBEDDED.md`, Bootloader Behavior).
 
 ### References
 
-- `crates/sonido-daisy/examples/sonido_pedal.rs` — the module docs' control tables, `controls()`, `setup_page()`, `tap_tempo()`, `enter_daisy_bootloader()`
-- `crates/sonido-platform/src/knob_mapping.rs` — `knob_map()` and its rule test
-- `crates/sonido-rigs/src/lib.rs` — the factory rigs' macros
-- `crates/sonido-patch/src/pedal.rs` — `JamSettings`; `crates/sonido-patch/src/link.rs` — `Request::Bootloader`
-- `docs/EMBEDDED.md` — The Pedal: Controls, The Jam, Bypass and Bootloader
-- ADR-030 — Noon Mapping (the curve every knob page uses)
+- `crates/sonido-daisy/examples/sonido_pedal.rs`: the module docs' control tables, `controls()`, `setup_page()`, `tap_tempo()`, `enter_daisy_bootloader()`
+- `crates/sonido-platform/src/knob_mapping.rs`: `knob_map()` and its rule test
+- `crates/sonido-rigs/src/lib.rs`: the factory rigs' macros
+- `crates/sonido-patch/src/pedal.rs`: `JamSettings`; `crates/sonido-patch/src/link.rs`: `Request::Bootloader`
+- `docs/EMBEDDED.md`, under The Pedal: Controls, The Jam, Bypass and Bootloader
+- ADR-030: Noon Mapping (the curve every knob page uses)

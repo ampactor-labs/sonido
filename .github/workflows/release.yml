@@ -201,9 +201,19 @@ jobs:
         with:
           path: artifacts
 
+      # The release body is the tag's section of docs/CHANGELOG.md; a tag
+      # without one fails here rather than publishing empty notes.
+      - name: Release notes from the changelog
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          awk -v v="$version" 'index($0, "## [" v "]") == 1 {on = 1; next} on && /^## \[/ {exit} on {print}' \
+            docs/CHANGELOG.md > release-notes.md
+          test -s release-notes.md
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          body_path: release-notes.md
           files: |
             artifacts/**/*.tar.gz
             artifacts/**/*.zip

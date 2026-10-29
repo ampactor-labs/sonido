@@ -162,11 +162,11 @@ The rule lives in one Rust module (`crates/sonido-patch/src/controls.rs`). The f
 - **One file per effect.** The first plugins shipped as one `.clap` file per plugin, 21 files by the time I replaced them (20 effects and the graph player). I replaced them with the single bundle; the IDs stayed the same, so saved projects still load.
 - **Native VST3.** A native VST3 adapter in Rust would remove the C++ build, but it would mean maintaining a second plugin-format adapter beside the CLAP one. I went with the shim instead.
 
-**What it cost.** The VST3 shim is only a loader: it works only next to its matching `.clap`, and building it needs a C++ toolchain and the VST3 SDK. In July, two of the old per-effect shims (delay and EQ) passed all 47 tests of Steinberg's validator on Linux, run by hand. The current single-bundle shim hasn't been through it, and no CI job runs it. The CLAP plugins are checked by clap-validator 0.3.2 in a manually triggered CI workflow.
+**What it cost.** The VST3 shim is only a loader: it works only next to its matching `.clap`, and building it needs a C++ toolchain and the VST3 SDK. Steinberg's validator passed the v0.2.0 shim on Linux, run by hand: 1,739 tests across the 37 plugins, none failed. Its first run found a crash. At the validator's 1,234.5678 Hz test rate, the shelving EQ's frequency clamp got a ceiling below its 1 kHz floor and panicked, which would take the whole host down; the clamp now lets the ceiling win. No CI job runs the validator, so a later change could break this unnoticed. The CLAP plugins are checked by clap-validator 0.3.2 in a manually triggered CI workflow.
 
 ## 11. How I check it
 
-The tree has 2,002 `#[test]` functions (counted 2026-10-29). The ones that matter most for the decisions above:
+The tree has 2,011 `#[test]` functions (counted 2026-10-29). The ones that matter most for the decisions above:
 
 - **Golden files.** The output of 32 of the 36 effects is compared against checked-in reference files. A test fails on a mean squared error above 10⁻⁶, a signal-to-noise ratio below 60 dB, or a spectral correlation under 0.9999. Changing the biquads from Direct Form I to Transposed Direct Form II meant regenerating the golden files it changed.
 - **The aliasing suite** (section 2).

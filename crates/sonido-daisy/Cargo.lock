@@ -895,7 +895,7 @@ dependencies = [
 
 [[package]]
 name = "sonido-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "libm",
  "serde",
@@ -903,7 +903,7 @@ dependencies = [
 
 [[package]]
 name = "sonido-daisy"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "cortex-m",
  "cortex-m-rt",
@@ -931,7 +931,7 @@ dependencies = [
 
 [[package]]
 name = "sonido-effects"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "libm",
  "sonido-core",
@@ -939,7 +939,7 @@ dependencies = [
 
 [[package]]
 name = "sonido-patch"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "serde",
  "sonido-core",
@@ -948,7 +948,7 @@ dependencies = [
 
 [[package]]
 name = "sonido-platform"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "libm",
  "sonido-core",
@@ -956,7 +956,7 @@ dependencies = [
 
 [[package]]
 name = "sonido-registry"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "sonido-core",
  "sonido-effects",
@@ -964,7 +964,7 @@ dependencies = [
 
 [[package]]
 name = "sonido-rigs"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "sonido-core",
  "sonido-patch",

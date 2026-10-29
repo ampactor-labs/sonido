@@ -1,6 +1,6 @@
 # Doc-to-Code Mapping Table
 
-When you modify a source file, you **must** update every documentation target listed in the same row.
+When you modify a source file, you must update every documentation target listed in the same row.
 
 | Source File(s) | Documentation Target(s) | What to Update |
 |---|---|---|
@@ -12,7 +12,7 @@ When you modify a source file, you **must** update every documentation target li
 | `crates/sonido-core/src/tempo.rs` | `docs/DSP_FUNDAMENTALS.md` (Tempo Synchronization) | NoteDivision variants, BPM conversion, TempoContext fields |
 | `crates/sonido-core/src/biquad.rs` | `docs/DSP_FUNDAMENTALS.md` (Biquad), `docs/DESIGN_DECISIONS.md` ADR-007 | Filter types, coefficient formulas, Direct Form choice |
 | `crates/sonido-core/src/svf.rs` | `docs/DSP_FUNDAMENTALS.md` (SVF), `docs/DESIGN_DECISIONS.md` ADR-008 | SVF topology, modulation stability notes |
-| `crates/sonido-core/src/comb.rs`, `allpass.rs`, `cached.rs` (`needs_update`) | `docs/DSP_FUNDAMENTALS.md` (Reverb: Feedback Delay Network — Allpass Diffusion), `docs/EFFECTS_REFERENCE.md` (reverb, spring_reverb, plate_reverb) | Delay lengths, feedback structure |
+| `crates/sonido-core/src/comb.rs`, `allpass.rs`, `cached.rs` (`needs_update`) | `docs/DSP_FUNDAMENTALS.md` (Allpass Diffusion under Reverb: Feedback Delay Network), `docs/EFFECTS_REFERENCE.md` (reverb, spring_reverb, plate_reverb) | Delay lengths, feedback structure |
 | `crates/sonido-core/src/delay.rs` | `docs/DSP_FUNDAMENTALS.md` (Delay Lines and Interpolation), `docs/DESIGN_DECISIONS.md` ADR-013 | Interpolation methods, buffer sizing |
 | `crates/sonido-core/src/oversample.rs` | `docs/DSP_FUNDAMENTALS.md` (Oversampling), `docs/DESIGN_DECISIONS.md` ADR-003 | Const generic design, filter coefficients |
 | `crates/sonido-core/src/lfo.rs` | `docs/DSP_FUNDAMENTALS.md` (Modulation Effects) | Waveform shapes, phase accumulator |
@@ -29,7 +29,7 @@ When you modify a source file, you **must** update every documentation target li
 | `crates/sonido-effects/src/kernels/*.rs` (any new effect) | `docs/EFFECTS_REFERENCE.md`, `README.md` (features + count), `docs/ARCHITECTURE.md` (effect table), `crates/sonido-plugin/src/bundle.rs` `CATALOG` (enforced by `tests/plugin_inventory.rs`) | Full effect entry with parameters, DSP theory, example; plugin catalog entry |
 | `crates/sonido-core/src/math.rs` | `docs/DSP_FUNDAMENTALS.md` (Gain Staging, Soft Limiting) | Mix/gain helpers, safety limiters, dB conversions |
 | `crates/sonido-effects/src/kernels/*.rs`, `crates/sonido-core/src/gain.rs` | `docs/DSP_QUALITY_STANDARD.md` | Quality rules, compliance table, measurement protocol |
-| `crates/sonido-effects/examples/dsp_report.rs` | `docs/DSP_MEASUREMENTS.md` (regenerate: `cargo run --release --example dsp_report -p sonido-effects`) | Generated measurement tables — never hand-edit |
+| `crates/sonido-effects/examples/dsp_report.rs` | `docs/DSP_MEASUREMENTS.md` (regenerate: `cargo run --release --example dsp_report -p sonido-effects`) | Generated measurement tables (never hand-edit) |
 | `crates/sonido-effects/src/calibration.rs`, `examples/calibrate.rs`, `tests/level_contract.rs` | `docs/EFFECT_SDK.md`, `docs/KERNEL_ARCHITECTURE.md`, `docs/TESTING.md`, `docs/EFFECTS_REFERENCE.md` (Output Level Convention) | Generated level table (regenerate: `cargo run -p sonido-effects --example calibrate --release`, never hand-edit), contract tolerances |
 | `crates/sonido-effects/tests/reverb_decay.rs` | `docs/TESTING.md`, `docs/EFFECTS_REFERENCE.md` (plate_reverb, spring_reverb) | Decay → RT60 checks |
 | `crates/sonido-analysis/src/signals.rs`, `loudness.rs` (`effect_gain_db`) | `docs/ARCHITECTURE.md` (sonido-analysis), `docs/TESTING.md` | Reference guitar, nominal level, the loudness measurement behind the level contract |
@@ -53,7 +53,7 @@ When you modify a source file, you **must** update every documentation target li
 | `crates/sonido-patch/src/*.rs` | `docs/PATCH_PLATFORM.md` | Patch model, binary codec, `PatchPlayer`, `build_graph_from_patch` |
 | `crates/sonido-patch/src/pedal.rs`, `link.rs` | `docs/EMBEDDED.md` (The Pedal: The Jam, Flash, USB Rig Link), `docs/PATCH_PLATFORM.md` | `PedalState` sector layout, jam patch, `JamSettings`, `RigRef` bytes, link frame/requests (incl. `Bootloader`)/error codes |
 | `crates/sonido-patch/src/client.rs`, `dfu.rs` (moved from `sonido-gui`), `validate.rs` (`validate_for_daisy`) | `docs/EMBEDDED.md` (USB Rig Link, Bypass and Bootloader), `docs/PATCH_PLATFORM.md`, `docs/ARCHITECTURE.md` (sonido-patch), `docs/CLI_GUIDE.md` (pedal), `docs/GUI.md` (Export) | `LinkClient`, `send_rig` slot rule, `open_pedal`/`pedal_ports` (`serial` feature, USB id), firmware DFU (Daisy bootloader only, `FIRMWARE_ADDR`), the one pedal check |
-| `crates/sonido-rigs/src/*.rs`, `examples/calibrate.rs`, `tests/factory.rs` | `docs/EMBEDDED.md` (Factory Rigs), `docs/ARCHITECTURE.md` (sonido-rigs), `docs/PATCH_PLATFORM.md`, `README.md` | Rig list, signal paths, K1–K6 macros, generated trims (regenerate: `cargo run -p sonido-rigs --example calibrate --release`), test tolerances |
+| `crates/sonido-rigs/src/*.rs`, `examples/calibrate.rs`, `tests/factory.rs` | `docs/EMBEDDED.md` (Factory Rigs), `docs/ARCHITECTURE.md` (sonido-rigs), `docs/PATCH_PLATFORM.md`, `README.md` | Rig list, signal paths, K1 to K6 macros, generated trims (regenerate: `cargo run -p sonido-rigs --example calibrate --release`), test tolerances |
 | `crates/sonido-gui/src/graph_view.rs` | `docs/GUI.md`, `docs/ARCHITECTURE.md` | Visual node-graph editor, Snarl topology, compile_to_engine |
 | `crates/sonido-gui/src/pedal_panel.rs`, `crates/sonido-gui/src/web_serial.rs` | `docs/GUI.md` (The pedal window, Web) | The PEDAL window (controls guide, the pedal over USB) and Send to pedal over Web Serial |
 | `crates/sonido-gui/src/morph_state.rs` | `docs/GUI.md`, `docs/PATCH_PLATFORM.md` | A/B morph poses, per-effect locks, `curve_lerp` interpolation |

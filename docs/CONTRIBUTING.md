@@ -30,7 +30,7 @@ CI runs on GitHub Actions in the public `ampactor-labs/sonido` repo. Workflows l
 
 ### Jobs
 
-`ci.yml` — runs on push and pull request to `main` (and manual dispatch), with
+`ci.yml` runs on push and pull request to `main` (and on manual dispatch), with
 `RUSTFLAGS=-D warnings`:
 
 | Job | Runner | Steps |
@@ -40,7 +40,7 @@ CI runs on GitHub Actions in the public `ampactor-labs/sonido` repo. Workflows l
 | `wasm` | ubuntu-latest | `cargo build` and `cargo clippy --target wasm32-unknown-unknown -p sonido-gui`, with `RUSTFLAGS` adding `--cfg=web_sys_unstable_apis` (Web Serial) |
 | `firmware` | ubuntu-latest | In `crates/sonido-daisy`: clippy (`--lib --example sonido_pedal`), build `sonido_pedal.bin` with `llvm-objcopy`, fail if it exceeds the 480 KB BOOT_SRAM, upload it as the `sonido_pedal` artifact |
 
-`ci-manual.yml` — manual dispatch only (`gh workflow run ci-manual.yml -f job=<check|bench|coverage|plugin|all>`):
+`ci-manual.yml` runs on manual dispatch only (`gh workflow run ci-manual.yml -f job=<check|bench|coverage|plugin|all>`):
 
 | Job | Timeout | Steps |
 |-----|---------|-------|
@@ -57,7 +57,7 @@ GUI, CLAP bundle, VST3 shim and factory presets per platform, plus the pedal fir
 ### Infrastructure
 
 - **Caching**: `ci.yml` uses `Swatinem/rust-cache`; `ci-manual.yml` uses the composite action below.
-- **Composite action**: `.github/actions/setup-rust/action.yml` — toolchain, sccache (`mozilla-actions/sccache-action`), Linux system deps, and cargo registry/git cache via `actions/cache`.
+- **Composite action**: `.github/actions/setup-rust/action.yml` sets up the toolchain, sccache (`mozilla-actions/sccache-action`), Linux system deps, and the cargo registry/git cache via `actions/cache`.
 - **System deps** (Ubuntu): `libasound2-dev` plus the GL/X11 dev stack (`libgl-dev`, `libx11-dev`, `libxkbcommon-dev`, `libwayland-dev`, …); the composite action also installs `mold`. The exact lists are in `ci.yml` (`SYSTEM_DEPS`) and the composite action.
 - **Plugin validation**: clap-validator 0.3.2 validates the single `sonido.clap` bundle (manual dispatch).
 - **Coverage**: cargo-llvm-cov, artifact upload (no threshold gate, manual dispatch).
@@ -88,7 +88,7 @@ in the same commit or PR. This section defines exactly what to update and when.
 ### Documentation-to-Code Mapping
 
 The following table maps each documentation file to the source code it describes.
-When you change code in the "Source Files" column, you **must** update the corresponding doc.
+When you change code in the "Source Files" column, you must update the corresponding doc.
 The per-source-file version of this table is [DOC_CODE_MAPPING.md](DOC_CODE_MAPPING.md).
 
 | Documentation File | Source Files | What to Update |
@@ -154,7 +154,7 @@ The per-source-file version of this table is [DOC_CODE_MAPPING.md](DOC_CODE_MAPP
 
 #### Module-level docs
 
-Every module file should start with a `//!` doc comment explaining purpose and key concepts:
+Every module file should start with a `//!` doc comment that explains its purpose and main concepts:
 
 ```rust
 //! # Biquad Filter
@@ -233,11 +233,11 @@ done
 
 When introducing a new DSP algorithm (filter topology, waveshaper, modulation technique, etc.):
 
-1. **Inline docs**: Add `///` comments explaining the mathematical basis, not just what variables mean
-2. **Reference the source**: Cite the paper, textbook, or reference implementation (e.g., "Based on RBJ Audio EQ Cookbook")
-3. **Document trade-offs**: Why this algorithm over alternatives? (e.g., "SVF chosen over biquad for modulation stability")
-4. **Update DSP_FUNDAMENTALS.md**: Add a theory section if the algorithm introduces a new concept
-5. **Update DESIGN_DECISIONS.md**: Add an ADR if the choice has architectural implications
+1. Add `///` comments that explain the mathematical basis, not just what the variables mean
+2. Cite the paper, textbook, or reference implementation (e.g., "Based on RBJ Audio EQ Cookbook")
+3. Document the trade-offs: why this algorithm over the alternatives (e.g., "SVF chosen over biquad for modulation stability")
+4. Add a theory section to DSP_FUNDAMENTALS.md if the algorithm introduces a new concept
+5. Add an ADR to DESIGN_DECISIONS.md if the choice has architectural implications
 
 ## Commit Guidelines
 
