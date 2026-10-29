@@ -19,7 +19,7 @@ This page is written in layers. Each layer is complete on its own and points dow
 
 ## 1. What it is
 
-Sonido is my DSP project; I write it alone. It holds 36 effects: distortion, a preamp, an amp and a cabinet, tape, delay, four reverbs, chorus, flanger, phaser, vibrato, tremolo, wah, filters and EQs, dynamics processors, a bitcrusher and a ring modulator, pitch shifting, granular and drone effects, stereo tools, a looper and a tuner. Each effect is a small piece of code I call a kernel, and the same kernels run in three places:
+Sonido is my DSP project, and I'm the only person working on it. It holds 36 effects: distortion, a preamp, an amp and a cabinet, tape, delay, four reverbs, chorus, flanger, phaser, vibrato, tremolo, wah, filters and EQs, dynamics processors, a bitcrusher and a ring modulator, pitch shifting, granular and drone effects, stereo tools, a looper and a tuner. Each effect is a small piece of code I call a kernel, and the same kernels run in three places:
 
 - **In a DAW.** One `sonido.clap` bundle holds 37 plugins: the 36 effects, plus a graph player that runs a whole rig as one plugin. A `sonido.vst3` shim offers the same set to VST3 hosts.
 - **In a web browser.** A node-graph editor at <https://ampactor.dev/sonido/> lets you wire effects together and hear them, with nothing to install.
@@ -97,7 +97,7 @@ Some of these are decisions, and the rest are gaps. I list them both because a l
 
 - **No oversampling on any shipping path.** The distortion, amp and tape kernels use antiderivative anti-aliasing (ADAA) instead. An oversampling wrapper exists in the code, but at 4× it costs nearly four times as much CPU, and the pedal can't spare that. [Why](decisions.md#2-aliasing-adaa-instead-of-oversampling).
 - **No automatic gain control.** Levels are measured offline and fixed, because a per-sample loudness tracker costs CPU on the pedal.
-- **No 64-bit floats.** Everything runs in `f32`. The Cortex-M7 has a single-precision FPU, so `f64` would run in software there.
+- **No 64-bit floats.** Everything runs in `f32`, which halves the memory of every delay line and keeps to the Cortex-M7's faster single-precision arithmetic.
 - **No screen and no modes on the pedal.** One control rule replaces them.
 - **No way to restart into the bootloader during play.** A firmware update starts only from a power-on gesture or a USB request.
 
@@ -109,7 +109,7 @@ Some of these are decisions, and the rest are gaps. I list them both because a l
 - **The cabinet IRs are synthesized.** The code generates them as exponentially decaying filtered noise; they are not measurements of real cabinets. You can't load your own IR yet.
 - **Pitch shifting is granular**, with two or four overlapping grains. It is not a phase vocoder, and there is no harmonizer.
 - **The distortion's dynamics control changes the drive, not the shape of the clipping curve.** Level-dependent waveshaping, which is what makes a guitar's volume knob clean up an analog circuit, is on the roadmap.
-- **Hardware testing is manual.** CI builds, lints and size-checks the firmware, but only I test it, by flashing it and playing. The VST3 shims passed Steinberg's validator (47/47) once, by hand; CI validates only the CLAP plugins.
+- **Hardware testing is manual.** CI builds, lints and size-checks the firmware, but only I test it, by flashing it and playing. Two of the earlier per-effect VST3 shims passed Steinberg's validator (47/47) once, by hand; the current shim hasn't been through it, and CI validates only the CLAP plugins.
 - **Not a product.** The API is unstable, nothing is on crates.io, and the one tagged release (v0.1.0, July 2026) predates both the VST3 shims and the firmware in the release workflow.
 
 ## 5. The long write-ups
@@ -141,4 +141,4 @@ Some of these are decisions, and the rest are gaps. I list them both because a l
 | 80% | the most of a block a rig's measured worst blocks may add up to | `CHAIN_FRACTION` in `crates/sonido-platform/src/cycle_table.rs` |
 | 74.7% mean, 84–85% slowest | the whole pedal, measured in a Hothouse with a guitar, running distortion, reverb and ring modulator | [EMBEDDED.md](../EMBEDDED.md#chain-configurations), 2026-10-22 |
 | 0.5 dB | the most any effect may differ from the dry guitar's loudness | `crates/sonido-effects/tests/level_contract.rs` |
-| 1,954 | `#[test]` functions in the tree | `grep -rho '#\[test\]' crates \| wc -l`, 2026-10-22 |
+| 2,002 | `#[test]` functions in the tree | `grep -rho '#\[test\]' crates \| wc -l`, 2026-10-29 |

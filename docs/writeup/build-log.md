@@ -117,7 +117,7 @@ These are the problems I hit, in order. Each one says what I saw or heard, what 
 
 - The cabinet simulator built its impulse response a second time inside its first audio block: 12,288 software sine and cosine calls, about 4 ms. It now keeps the response it was built with.
 - Reading one 4 KB sector from flash blocked for 1.3 ms, so every save of the pedal's state dropped audio. Flash reads now go 256 bytes at a time, about 80 µs each, and let other work run in between.
-- A newly loaded rig started every parameter at its default and smoothed toward the knob positions. Every filter coefficient was recalculated on every sample at once, and the first block hit 116% of the budget. A new rig now starts at its values instead of sweeping to them.
+- A newly loaded rig started every parameter at its default and smoothed toward the knob positions. Every filter coefficient was recalculated on every sample at once, and the load meter showed a 116% peak at boot. A new rig now starts at its values instead of sweeping to them.
 
 After those fixes I ran two rounds through every factory rig and the jam, plus writing and erasing a rig over USB. The codec reported zero overruns, and the worst block was 91.4%.
 
